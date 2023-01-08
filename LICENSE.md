@@ -4,4 +4,4 @@ May Lord Vishwakarma enlighten you to create beautiful world, happy homes and sa
 This software and it's source codes, or any contribution to this repositary are property of Engineers India Limited (A public sector undertaking, under Ministry of Petrochemicals, Government of India). Dependencies (external codes) used in the software have their own licenses.
 
 
-ALL ENGINEERING OUTPUT CREATED USING THIS SUITE OF SOFTWARES REMAIN PROPERTY OF THE RESPECITVE ENGINEER / ORGANIZATION.
+ALL ENGINEERING MODEL CREATED USING THIS SUITE OF SOFTWARES REMAIN PROPERTY OF THE RESPECITVE ENGINEER / ORGANIZATION.
