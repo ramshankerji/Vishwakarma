@@ -1,6 +1,6 @@
 ## Welcome, स्वागत, வரவேற்பு, സ്വാഗതം, స్వాగతం, ಸ್ವಾಗತ, خوش آمدید, स्वागत आहे 
 
-Vishwakarma, named after the God of Architectural Creation, is a self-educational *Engineering* software. To help myself (Ram Shanker) learn various engineering approaches, algorithms, technology trends etc. It is NOT a validated or commercial software. You are free to look around and learn. My current explorations include (A) Pressure Vessel, (B) Process Piping and (C) Structural Engineeing. This software can not open/interoperate with any commercial software generated files !
+Vishwakarma, named after the God of Architectural Creation, is a self-educational *Engineering* software. To help myself (Ram Shanker) learn various engineering approaches, algorithms, technology trends etc. It is NOT a validated or commercial software. You are free to look around and learn. My current explorations include (A) Pressure Vessel, (B) Process Piping and (C) Structural Engineering. This software can not open/interoperate with any commercial software generated files !
 
 
 ## Engineering Scope. 
@@ -8,22 +8,22 @@ As I learn fundamental of engineering concepts, more and more exclusions shall s
 
 ### Broad Scope of the software.
 2D Drafting  
-Piping & Instrumentation Diagrams (Intilegent 2D)  
-Pressure Vessels / Equipment Modeling and Anylysis  
+Piping & Instrumentation Diagrams (Intelligent 2D)  
+Pressure Vessels / Equipment Modeling and Analysis  
 Shell Development Drawing Extraction (2D)  
-Process Piping Modeling and Anylysis  
+Process Piping Modeling and Analysis  
 Isometrics Extraction (2D)  
 ASME / API Code checking  
 Heater Modeling and Analysis  
-Structural Modeling and Anylysis. Little Architecture modeling  
+Structural Modeling and Analysis. Little Architecture modeling  
 Structural Code Checking  
-Structrual GA Drawings (2D)  
+Structural GA Drawings (2D)  
 Local File Support. Data Server Support  
 Collaboration Support   
 User Manual / Documentation  
 Developer Manual / Documentation  
 
-### Exclusions  
+### Exclusions  / Future Scope
 Training Curriculum.  
 Web API.  
 Response Spectrum Analysis.  
@@ -38,6 +38,7 @@ Fabrication Drawing.
 Pre-stressing tendons.  
 Composite Section.  
 Architectural Rendering.  
+IFC Export. 
 
 ## Philosophy
 Some philosophy / guiding principle of this project. At least during the first two years of development.  
@@ -49,7 +50,7 @@ Some philosophy / guiding principle of this project. At least during the first t
 
 Following technology choices are under consideration. In no particular order. I take inspiration from other free & open source softwares.  
 
-* Chromium : For Speed. Speed & Responsiveness of our software is very high priority. As much as accuracy of calculation. C++ 17.   
+* Chromium : For Speed. Speed & Responsiveness of our software is very high priority. b  
 * SQLite : For robustness and care. This is the database we use for local file storage.
 * Postgres SQL : For network based data storage and Multi-User collaboration.  
 * Blender : For 3D Rending.  
@@ -57,10 +58,9 @@ Following technology choices are under consideration. In no particular order. I 
   
 ### Technology Choices:
 * Protocol Buffer : For data class modeling and storage in database.  
-* Riben Interface : All the latest desktop softwares use to it.  
-* IFC Format : Open file format for interoperability with other software.  
+* Ribbon Interface : All the latest desktop softwares use to it.   
 * HTML Format & PDF Format : For design report generation.  
-* ULID : All our objects / data-entries shall be identified by ULID. This is to assist easy copy-paste / merging / integration / interoperability between models.  
+* 64bit Local IDs / ULID.  
 * All strings are UTF-8 encoded UNICODE strings.  
 * No Commercial database is planned to be officially supported.  
 
@@ -83,7 +83,7 @@ Following technology choices are under consideration. In no particular order. I 
 | Gray   | TooOld  | Too old to be acted upon. Automatically assigned after 6 month of inactivity. |
 
 ### General Coding Guidelines
-* This being a new Green-Field software project, we intend to avoid too much old / legacy technology. We intend to support LATEST and LATEST-1 version of all operating systems. Accordingly we shall support Windows 10 / 11 onwards only. MAC OS 13 (latest only). Linux Ubuntu 22.04 (latest only). Android 12 / 13, iOS 16 (latest only).  
+* This being a new Green-Field software project, we intend to avoid too much old / legacy technology. We intend to support LATEST and LATEST-1 version of all operating systems. Accordingly we shall support Windows 10 / 11 onwards only. MAC OS 13 (latest only). Linux Ubuntu 24.04 (latest only). Android 13 / 14, iOS 17 (latest only).  
 
 * Few things, we intend to Re-Invent intentionally, for educational, responsiveness and fine-grained control over UI. Attempt shall be made to avoid as much dependencies. I understand this shall slowdown the development, but we are taking this decision for future velocity.  
 
@@ -91,5 +91,5 @@ Following technology choices are under consideration. In no particular order. I 
 
 * Data compression is prioritized, even at the expense of ignoring programmatic flexibility. 
 
-## About Developers 
-This project is being developed by me (Ram Shanker) in my personal time. I am employed by Engineers India Limited. For Life. :-) We are one of the best Refinery & Petrochemical consultancy in the world. If you wish to setup a Grass-root oil refinery, or modernize an existing one, get in touch with EIL. https://engineersindia.com/
+## About Developer 
+I am Ram Shanker, a civil-engineering graduate from IIT Guwahati, working in Refinery & Petrochemical industry since last 14 years.
