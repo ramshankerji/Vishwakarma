@@ -1,0 +1,3 @@
+[submodule "code-external/freetype"]
+	path = code-external/freetype
+	url = https://gitlab.freedesktop.org/freetype/freetype.git
