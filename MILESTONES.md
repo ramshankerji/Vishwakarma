@@ -23,6 +23,6 @@ This file lists the current / completed development tasks. New tasks are added a
 
 ☐ Draw few hard-coded lines in 2D Drafting mode.
 
-☐ Display a single Character on the screen. Integrate TrueType library and few Fonts.
+20240618 ✅ Display a single Character on the screen using Integrate TrueType library.
 
 20240609 ✅ Setup this milestone page / status tracker.

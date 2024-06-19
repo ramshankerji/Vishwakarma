@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <tchar.h>
+#include "ft2build.h"
+#include FT_FREETYPE_H
+#include <iostream>
 
 // Global variables
 
@@ -19,6 +22,9 @@ HINSTANCE hInst;
 
 // Forward declarations of functions included in this code module:
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
+// Forward declaration of the RenderText function
+void RenderText(HDC hdc, FT_Face face, const char* text, int x, int y);
+
 
 int WINAPI WinMain(
     _In_ HINSTANCE hInstance,
@@ -72,7 +78,7 @@ int WINAPI WinMain(
         szTitle,
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        500, 100,
+        1280, 720, //Corresponds to 720p screen resolution. We expect at least this much. :)
         NULL,
         NULL,
         hInstance,
@@ -96,6 +102,21 @@ int WINAPI WinMain(
         nCmdShow);
     UpdateWindow(hWnd);
 
+    FT_Library ft;
+    FT_Face face;
+
+    if (FT_Init_FreeType(&ft)) {
+        std::cerr << "Could not initialize FreeType library" << std::endl;
+        return -1;
+    }
+
+    if (FT_New_Face(ft, "C:\\Windows\\Fonts\\arial.ttf", 0, &face)) {
+        std::cerr << "Could not open font" << std::endl;
+        return -1;
+    }
+
+    FT_Set_Pixel_Sizes(face, 0, 48); // Set font size to 48 pixels high
+
     // Main message loop:
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0))
@@ -103,6 +124,10 @@ int WINAPI WinMain(
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+
+    //Cleanup Freetype library.
+    FT_Done_Face(face);
+    FT_Done_FreeType(ft);
 
     return (int)msg.wParam;
 }
@@ -119,9 +144,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     HDC hdc;
     TCHAR greeting[] = _T("Hello, Vishwakarma!");
 
+    static FT_Face face;
+    static const char* text = "Hello, Vishwakarma!";
+    static bool initialized = false;
+
     switch (message)
     {
     case WM_PAINT:
+    {
         hdc = BeginPaint(hWnd, &ps);
 
         // Here your application is laid out.
@@ -132,8 +162,46 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             greeting, _tcslen(greeting));
         // End application-specific layout section.
 
+        // Initialize FreeType face only once
+        if (!initialized) {
+            FT_Library ft;
+            if (FT_Init_FreeType(&ft)) {
+                std::cerr << "Could not initialize FreeType library" << std::endl;
+                return -1;
+            }
+
+            if (FT_New_Face(ft, "C:\\Windows\\Fonts\\arial.ttf", 0, &face)) {
+                std::cerr << "Could not open font" << std::endl;
+                return -1;
+            }
+
+            FT_Set_Pixel_Sizes(face, 0, 48); // Set font size to 48 pixels high
+            initialized = true;
+        }
+
+        // Get the dimensions of the client area
+        RECT rect;
+        GetClientRect(hWnd, &rect);
+
+        // Calculate the position to start drawing the text to center it
+        int x = (rect.right - rect.left) / 2;
+        int y = (rect.bottom - rect.top) / 2;
+
+        // Calculate width of the text to properly center it
+        int text_width = 0;
+        for (const char* p = text; *p; p++) {
+            if (FT_Load_Char(face, *p, FT_LOAD_RENDER)) {
+                continue; // Ignore errors
+            }
+            text_width += face->glyph->advance.x >> 6;
+        }
+        x -= text_width / 2; // Adjust x to start text from the center
+
+        RenderText(hdc, face, text, x, y);
+
         EndPaint(hWnd, &ps);
         break;
+    }
     case WM_DESTROY:
         PostQuitMessage(0);
         break;
@@ -143,4 +211,25 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
 
     return 0;
+}
+
+void RenderText(HDC hdc, FT_Face face, const char* text, int x, int y) {
+    FT_GlyphSlot g = face->glyph;
+
+    for (const char* p = text; *p; p++) {
+        if (FT_Load_Char(face, *p, FT_LOAD_RENDER)) {
+            continue; // Ignore errors
+        }
+
+        // Draw the character here
+        for (int row = 0; row < g->bitmap.rows; ++row) {
+            for (int col = 0; col < g->bitmap.width; ++col) {
+                if (g->bitmap.buffer[row * g->bitmap.width + col]) {
+                    SetPixel(hdc, x + col + g->bitmap_left, y + row - g->bitmap_top, RGB(0, 0, 0));
+                }
+            }
+        }
+
+        x += g->advance.x >> 6; // Advance to the next character
+    }
 }

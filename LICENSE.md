@@ -7,3 +7,10 @@ For the reasons explained above, source-code contribution (pull request in githu
 It is to be noted that even though this software is free, many engineering design codes are not free / public domain document. You agree to obtain separate authorization / purchase the code from respective standards body.
 
 ALL ENGINEERING MODELS CREATED USING THIS SOFTWARES REMAIN PROPERTY OF THE RESPECTIVE ENGINEER / ORGANIZATION.
+
+This software is made possible by the Great Open Source Authors of following libraries.
+
+
+| Library Name | License         | Homepage                              |
+|--------------|-----------------|---------------------------------------|
+| FreeType     | FTL / GPLv2| [https://freetype.org/](https://freetype.org/) |
