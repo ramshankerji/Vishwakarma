@@ -8,6 +8,8 @@
 #include "ft2build.h"
 #include FT_FREETYPE_H
 #include <iostream>
+#include <vishwakarma-2D.h>
+#include <random>
 
 // Global variables
 
@@ -58,31 +60,25 @@ int WINAPI WinMain(
         return 1;
     }
 
+    // Define the window style without WS_CAPTION, but include WS_THICKFRAME and WS_SYSMENU
+    DWORD windowStyle = WS_OVERLAPPED | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
+
     // Store instance handle in our global variable
     hInst = hInstance;
 
-    // The parameters to CreateWindowEx explained:
-    // WS_EX_OVERLAPPEDWINDOW : An optional extended window style.
-    // szWindowClass: the name of the application
-    // szTitle: the text that appears in the title bar
-    // WS_OVERLAPPEDWINDOW: the type of window to create
-    // CW_USEDEFAULT, CW_USEDEFAULT: initial position (x, y)
-    // 500, 100: initial size (width, length)
-    // NULL: the parent of this window
-    // NULL: this application does not have a menu bar
-    // hInstance: the first parameter from WinMain
-    // NULL: not used in this application
     HWND hWnd = CreateWindowEx(
-        WS_EX_OVERLAPPEDWINDOW,
-        szWindowClass,
-        szTitle,
-        WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT,
+        WS_EX_OVERLAPPEDWINDOW,  //An optional extended window style.
+        szWindowClass,           // Window class: The name of the application
+        szTitle,       // The text that appears in the title bar
+        // The type of window to create
+        WS_OVERLAPPEDWINDOW | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
+        // Size and position
+        CW_USEDEFAULT, CW_USEDEFAULT, // Initial position (x, y)
         1280, 720, //Corresponds to 720p screen resolution. We expect at least this much. :)
-        NULL,
-        NULL,
-        hInstance,
-        NULL
+        NULL,      // The parent of this window
+        NULL,      // This application does not have a menu bar, we create our own Menu.
+        hInstance, // Instance handle, the first parameter from WinMain
+        NULL       // Additional application data, not used in this application
     );
 
     if (!hWnd)
@@ -150,6 +146,42 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     switch (message)
     {
+     /*
+    case WM_NCCALCSIZE: //Override the WM_NCCALCSIZE message to extend the client area into the title bar space.
+        if (wParam == TRUE) {
+            // Extend the client area to cover the title bar
+            NCCALCSIZE_PARAMS* pncsp = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
+            pncsp->rgrc[0].top -= GetSystemMetrics(SM_CYCAPTION);
+            return 0;
+        }
+        break;
+        */
+    case WM_LBUTTONDOWN: {
+        int x = LOWORD(lParam);
+        int y = HIWORD(lParam);
+        //MessageBox(hWnd, L"Left button clicked", L"Mouse Click", MB_OK);
+        return 0;
+    }
+    case WM_RBUTTONDOWN: {
+        int x = LOWORD(lParam);
+        int y = HIWORD(lParam);
+        //MessageBox(hWnd, L"Right button clicked", L"Mouse Click", MB_OK);
+        return 0;
+    }
+    case WM_MBUTTONDOWN: {
+        MessageBox(hWnd, L"Middle button clicked", L"Mouse Click", MB_OK);
+        return 0;
+    }
+    case WM_MOUSEWHEEL: {
+        int zDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+        if (zDelta > 0) {
+            MessageBox(hWnd, L"Mouse wheel scrolled up", L"Mouse Scroll", MB_OK);
+        }
+        else {
+            MessageBox(hWnd, L"Mouse wheel scrolled down", L"Mouse Scroll", MB_OK);
+        }
+        return 0;
+    }
     case WM_PAINT:
     {
         hdc = BeginPaint(hWnd, &ps);
@@ -199,6 +231,19 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
         RenderText(hdc, face, text, x, y);
 
+        // Create a random device and a random number generator
+        std::random_device rd;  // Obtain a random number from hardware
+        std::mt19937 gen(rd()); // Seed the generator
+
+        // Define the distribution range
+        std::uniform_int_distribution<> distr(100, 500);
+
+        Draw2DLine(hdc, 100, 100, 500, 500); //The limits.
+        for (int i = 0; i < 100; i++)
+        {
+            Draw2DLine(hdc, distr(gen), distr(gen), distr(gen), distr(gen));
+        }
+        
         EndPaint(hWnd, &ps);
         break;
     }
