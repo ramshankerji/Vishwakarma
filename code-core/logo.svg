@@ -1,0 +1,16 @@
+<svg width="256" height="256" xmlns="http://www.w3.org/2000/svg">
+    <!-- Metadata section for author and copyright information -->
+  <metadata>
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+             xmlns:dc="http://purl.org/dc/elements/1.1/">
+      <rdf:Description rdf:about="">
+        <dc:title>Official Logo for Mission Vishwakarma</dc:title>
+        <dc:creator>Ram Shanker</dc:creator>
+        <dc:description>A Bolt camoflouged in Indian Tri-colors.</dc:description>
+        <dc:rights>©2024 Ram Shanker. All rights reserved.</dc:rights>
+      </rdf:Description>
+    </rdf:RDF>
+  </metadata>
+  <!-- Circle with radius 64 pixels (128 px diameter) centered at (128, 128) -->
+  <circle cx="128" cy="128" r="64" fill="blue" />
+</svg>
