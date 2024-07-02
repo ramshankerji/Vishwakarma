@@ -1,5 +1,10 @@
 ## Welcome, स्वागत, வரவேற்பு, സ്വാഗതം, స్వాగతం, ಸ್ವಾಗತ, خوش آمدید, स्वागत आहे 
 
+<div style="text-align: center;">
+<img src="code-core/logo.svg"  style="width: 128px; height: auto;" 
+    alt="Official LOGO of Mission Vishwakarma. © 2024, Ram Shanker" />
+</div>
+
 Vishwakarma, named after the God of Architectural Creation, is a self-educational *Engineering* software. To help myself (Ram Shanker) learn various engineering approaches, algorithms, technology trends etc. It is NOT a validated or commercial software. You are free to look around and learn. My current explorations include (A) Pressure Vessel, (B) Process Piping and (C) Structural Engineering. This software can not open/interoperate with any commercial software generated files !
 
 
