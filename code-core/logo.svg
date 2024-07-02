@@ -1,5 +1,5 @@
 <svg width="256" height="256" xmlns="http://www.w3.org/2000/svg">
-    <!-- Metadata section for author and copyright information -->
+  <!-- Metadata section for author and copyright information -->
   <metadata>
     <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
              xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -11,6 +11,62 @@
       </rdf:Description>
     </rdf:RDF>
   </metadata>
+  <!-- Define the gradient. We use only vertical gradient. Horizontly color remains same.-->
+  <defs>
+    <!--From Top Face to Bottom Face crossing center in-between.-->
+    <linearGradient id="OrangeToGreen" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#F97F51;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:white;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#58B19F;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!--
+  Our logo is a combination of Bolt camoflauged in Indian Tri-Colour. 
+  Center of the bolt is located at Co-ordinate (128,128).
+  Colour is picked from the Indian Pallatte on https://flatuicolors.com/palette/in
+  Each side of the Hexagon from one vertex to another is of length = S = 112 Unit.
+  (256 x 7 / 8 ) / 2 = 112. i.e Cover 87.5% of the available screen.
+  Smoothening offset is 4 Units from perfect hexagonal corner.
+
+  Explanations of the magic numbers in this SVG file.
+  128-112/2-112/4 = 44, 
+  128-112/2-4/2   = 70, 
+  128-sqrt(3)/2*112/2              = 79.502577
+  128-sqrt(3)/2*112 + sqrt(3)/2*4  = 34.469256
+  128-sqrt(3)/2*112                = 31.005154
+  -->
+  <path d="M  44.0  79.502577  
+           L  70.0  34.469256
+           Q  72.0  31.005154  76.0  31.005154
+           L 180.0  31.005154
+           Q 184.0  31.005154 186.0  34.469256
+           L 212.0  79.502577 
+           Z" fill="#F97F51" stroke="#F97F51" stroke-width="1"/>
+  <!--
+  128-sqrt(3)/2*4     = 124.535898 
+  128+sqrt(3)/2*4     = 131.464101
+  128+sqrt(3)/2*112/2 = 176.497422 
+  -->
+  <path d="M  44.0  79.502577  
+           L 212.0  79.502577 
+           L 238.0 124.535898
+           Q 240.0 128.0 238.0 131.464101
+           L 212.0 176.497422 
+           L  44.0 176.497422
+           L  18.0 131.464101
+           Q  16.0 128.0 18.0 124.535898
+           Z" fill="url(#OrangeToGreen)" stroke="url(#OrangeToGreen)" stroke-width="1"/>
+  
+  <path d="M  44.0 176.497422 
+           L  70.0 222.396769
+           Q  72.0 224.994845  76.0 224.994845
+           L 180.0 224.994845
+           Q 184.0 224.994845  186.0 222.396769
+           L 212.0 176.497422 
+           Z" fill="#58B19F" stroke="#58B19F"  stroke-width="1"/>
   <!-- Circle with radius 64 pixels (128 px diameter) centered at (128, 128) -->
-  <circle cx="128" cy="128" r="64" fill="blue" />
+  <circle cx="128" cy="128" r="64" fill="#1B9CFC" stroke="#1B9CFC" />
+  <!--TODO: Impliment edge smoothening using the concept of Squircle
+  https://www.figma.com/blog/desperately-seeking-squircles/
+  -->
 </svg>

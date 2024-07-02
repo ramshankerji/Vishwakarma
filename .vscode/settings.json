@@ -1,7 +1,14 @@
 {
     "cSpell.words": [
         "freetype",
-        "Vulkan"
+        "Vulkan",
+        "آمدید",
+        "स्वागत",
+        "வரவேற்பு",
+        "స్వాగతం",
+        "ಸ್ವಾಗತ",
+        "സ്വാഗതം"
     ],
-    "cmake.configureOnOpen": false
+    "cmake.configureOnOpen": false,
+    "dotnet.defaultSolution": "api-direct3d12/Vishwakarma.sln"
 }
