@@ -12,13 +12,20 @@
 #include <random>
 #include <png.h>
 
-#pragma comment(lib, "libpng16.lib")
-#pragma comment(lib, "zlib.lib")
+#pragma comment(lib, "libpng16_staticd.lib")
+#pragma comment(lib, "zlibd.lib")
 
+std::wstring GetExecutablePath() {
+    wchar_t buffer[MAX_PATH];
+    GetModuleFileNameW(NULL, buffer, MAX_PATH);
+    std::wstring::size_type pos = std::wstring(buffer).find_last_of(L"\\/");
+
+    return std::wstring(buffer).substr(0, pos);
+}
 
 void LoadPngImage(const char* filename, unsigned char** image_data, int* width, int* height)
 {
-    /*
+    #pragma warning(disable: 4996)
     FILE* fp = fopen(filename, "rb");
     if (!fp) abort();
 
@@ -73,7 +80,7 @@ void LoadPngImage(const char* filename, unsigned char** image_data, int* width, 
     fclose(fp);
     free(row_pointers);
     png_destroy_read_struct(&png, &info, NULL);
-    */
+    
 }
 
 void DisplayImage(HDC hdc, const unsigned char* image_data, int width, int height)
@@ -222,6 +229,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     static const char* text = "Hello, Vishwakarma!";
     static bool initialized = false;
 
+    static unsigned char* image_data = NULL;
+    static int width, height;
+    std::wstring exePath = GetExecutablePath();
+    int size_needed = WideCharToMultiByte(
+        CP_UTF8, 0, &exePath[0], static_cast<int>(exePath.size()), NULL, 0, NULL, NULL);
+    std::string str(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, &exePath[0], static_cast<int>(exePath.size()), &str[0], size_needed, NULL, NULL);
+
+    std::string fullPath = str + "\\logo.png";
+
     switch (message)
     {
      /*
@@ -231,9 +248,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             NCCALCSIZE_PARAMS* pncsp = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
             pncsp->rgrc[0].top -= GetSystemMetrics(SM_CYCAPTION);
             return 0;
-        }
+        },,,,
         break;
         */
+    case WM_CREATE:
+        
+        std::cout << "Full path to logo.png: " << fullPath << std::endl;
+
+        LoadPngImage(fullPath.c_str(), &image_data, &width, &height);
+        //LoadPngImage("C:\\RAM\\CODE\\Vishwakarma\\api-direct3d12\\x64\\Debug\\logo.png", &image_data, &width, &height);
+        break;
+
     case WM_LBUTTONDOWN: {
         int x = LOWORD(lParam);
         int y = HIWORD(lParam);
@@ -322,6 +347,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             Draw2DLine(hdc, distr(gen), distr(gen), distr(gen), distr(gen));
         }
         
+        if (image_data)
+        {
+            DisplayImage(hdc, image_data, width, height);
+        }
+
         EndPaint(hWnd, &ps);
         break;
     }
