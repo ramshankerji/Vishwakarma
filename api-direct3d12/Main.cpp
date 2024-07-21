@@ -226,7 +226,28 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     TCHAR greeting[] = _T("Hello, Vishwakarma!");
 
     static FT_Face face;
-    static const char* text = "Hello, Vishwakarma!";
+    static const char* uiText001 = "Vishwakarma!";
+    static const char* uiText002 = "Name";
+    static const char* uiText003 = "Level 21";
+    static const char* uiText004 = "Create New";
+    static const char* uiText005 = "2D Drawing";
+    static const char* uiText006 = "2D P&ID";
+    static const char* uiText007 = "2D SLD";
+    static const char* uiText008 = "3D Pipes";
+    static const char* uiText009 = "3D Structure";
+    static const char* uiText010 = "Pressure Vessel";
+    static const char* uiText011 = "Heat Exchanger";
+    static const char* uiText016 = "3D Gen. Eq.";
+    static const char* uiText017 = "Filter";
+    static const char* uiText018 = "Air Cooler";
+    static const char* uiText019 = "Compressor";
+    static const char* uiText020 = "Pump";
+
+    static const char* uiText012 = "Recently Opened files";
+    static const char* uiText013 = "Extensions";
+    static const char* uiText014 = "Training";
+    static const char* uiText015 = "Medals";
+
     static bool initialized = false;
 
     static unsigned char* image_data = NULL;
@@ -290,12 +311,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         hdc = BeginPaint(hWnd, &ps);
 
         // Here your application is laid out.
-        // For this introduction, we just print out "Hello, Vishwakarma!"
-        // in the top left corner.
-        TextOut(hdc,
-            5, 5,
-            greeting, _tcslen(greeting));
-        // End application-specific layout section.
+        // For this introduction, we just print out "Hello, Vishwakarma!" in the top left corner.
+        // TextOut(hdc, 5, 5, greeting, _tcslen(greeting));
+        // We are no longer using TextOut function to render text, instead we use Freetype.
 
         // Initialize FreeType face only once
         if (!initialized) {
@@ -310,7 +328,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 return -1;
             }
 
-            FT_Set_Pixel_Sizes(face, 0, 48); // Set font size to 48 pixels high
+            FT_Set_Pixel_Sizes(face, 0, 24); // Set font size to 48 pixels high
             initialized = true;
         }
 
@@ -322,17 +340,65 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         int x = (rect.right - rect.left) / 2;
         int y = (rect.bottom - rect.top) / 2;
 
-        // Calculate width of the text to properly center it
-        int text_width = 0;
-        for (const char* p = text; *p; p++) {
-            if (FT_Load_Char(face, *p, FT_LOAD_RENDER)) {
-                continue; // Ignore errors
-            }
-            text_width += face->glyph->advance.x >> 6;
-        }
-        x -= text_width / 2; // Adjust x to start text from the center
+        RenderText(hdc, face, uiText001, 10, 20);
 
-        RenderText(hdc, face, text, x, y);
+        if (1) // Homepage of the application.
+        {
+            RenderText(hdc, face, uiText002, 10, 60);
+            RenderText(hdc, face, uiText003, 10, 80);
+            RenderText(hdc, face, uiText015, 10, 120);
+
+            RenderText(hdc, face, uiText004, 200, 80);
+
+            RenderText(hdc, face, uiText005, 200, 120);
+            RenderText(hdc, face, uiText006, 400, 120);
+            RenderText(hdc, face, uiText007, 600, 120);
+
+            RenderText(hdc, face, uiText008, 200, 220);
+            RenderText(hdc, face, uiText009, 400, 220);
+            RenderText(hdc, face, uiText016, 600, 220);
+            RenderText(hdc, face, uiText010, 200, 320);
+            RenderText(hdc, face, uiText011, 400, 320);
+            RenderText(hdc, face, uiText017, 600, 320);
+            RenderText(hdc, face, uiText018, 200, 420);
+            RenderText(hdc, face, uiText019, 400, 420);
+            RenderText(hdc, face, uiText020, 600, 420);
+
+            RenderText(hdc, face, uiText012, 200, 520);
+
+            RenderText(hdc, face, uiText013, 1000, 60);
+            RenderText(hdc, face, uiText014, 1000, 320);
+        }
+
+        if (0) //2D Drafting module
+        {
+            RenderText(hdc, face, "I am 2D Drafting Module", 200, 80);
+
+            RenderText(hdc, face, "Line", 200, 320);
+            Draw2DLine(hdc, 150, 250, 250, 150);
+
+            RenderText(hdc, face, "Polyline", 400, 320);
+            Draw2DLine(hdc, 350, 250, 400, 200);
+            Draw2DLine(hdc, 400, 200, 450, 250);
+            Draw2DLine(hdc, 450, 250, 500, 150);
+
+            RenderText(hdc, face, "Triangle", 600, 320);
+            Draw2DLine(hdc, 650, 250, 700, 150);
+            Draw2DLine(hdc, 700, 150, 750, 250);
+            Draw2DLine(hdc, 750, 250, 650, 250);
+
+            RenderText(hdc, face, "Rectangle", 200, 620);
+            Draw2DLine(hdc, 150, 550, 150, 450);
+            Draw2DLine(hdc, 150, 450, 300, 450);
+            Draw2DLine(hdc, 300, 450, 300, 550);
+            Draw2DLine(hdc, 300, 550, 150, 550);
+
+            RenderText(hdc, face, "Circle", 400, 620);
+
+            RenderText(hdc, face, "Text", 600, 620);
+            RenderText(hdc, face, "EIL :-)", 600, 520);
+            
+        }
 
         // Create a random device and a random number generator
         std::random_device rd;  // Obtain a random number from hardware
@@ -340,16 +406,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
         // Define the distribution range
         std::uniform_int_distribution<> distr(100, 500);
-
-        Draw2DLine(hdc, 100, 100, 500, 500); //The limits.
-        for (int i = 0; i < 100; i++)
-        {
-            Draw2DLine(hdc, distr(gen), distr(gen), distr(gen), distr(gen));
-        }
         
         if (image_data)
         {
-            DisplayImage(hdc, image_data, width, height);
+            //DisplayImage(hdc, image_data, width, height);
         }
 
         EndPaint(hWnd, &ps);

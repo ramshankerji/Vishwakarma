@@ -3,7 +3,7 @@
 struct {
 	int tabsCount; // First tab is numbered 0. So there is at least 1 tab always.
 	int activeTabNo;
-};
+}india;
 
 /*
 Different tabs represent different files opened in the software.
