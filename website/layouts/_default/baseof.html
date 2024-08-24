@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!--Icon Generator Credit goes to https://favicon.io/favicon-converter/-->
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+    <link rel="manifest" href="/site.webmanifest">
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-4BHXRJ3P18"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', 'G-4BHXRJ3P18');
+    </script>
+    <title>{{ .Title }}</title>
+    <style type="text/css">
+        body{
+            margin:40px auto;
+            max-width:720px;
+            padding:0 10px;
+
+            -webkit-text-size-adjust: 100%; /* For Safari based browsers. */
+            font-feature-settings: normal;
+            /*-webkit-tap-highlight-color: transparent;*/
+            font-family: ui-sans-serif,-apple-system,system-ui,Segoe UI,Helvetica,Apple Color Emoji,Arial,sans-serif,Segoe UI Emoji,Segoe UI Symbol;
+            font-variation-settings: normal;
+            font-size:18px;
+            color:#444;
+            line-height: 1.5;
+            tab-size: 4;
+            text-align: justify;
+        }
+        h1,h2,h3{
+          line-height:1.2
+        }
+    </style>
+</head>
+<body>
+    <header>
+        
+    </header>
+    <main>
+        {{ block "main" . }}{{ end }}
+    </main>
+    <footer>
+        <p>&copy; {{ now.Year }} Ram Shanker</p>
+    </footer>
+</body>
+</html>

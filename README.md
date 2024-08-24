@@ -5,45 +5,13 @@
     alt="Official LOGO of Mission Vishwakarma. © 2024, Ram Shanker" />
 </div>
 
-Vishwakarma, named after the God of Architectural Creation, is a self-educational *Engineering* software. To help myself (Ram Shanker) learn various engineering approaches, algorithms, technology trends etc. It is NOT a validated or commercial software. You are free to look around and learn. My current explorations include (A) Pressure Vessel, (B) Process Piping and (C) Structural Engineering. This software can not open/interoperate with any commercial software generated files !
+Official Website: https://mv.ramshanker.in  
+
+Vishwakarma, named after the God of Architectural Creation, is a self-educational *Engineering* software. To help myself (Ram Shanker) learn various engineering approaches, algorithms, technology trends etc. It is NOT a validated or commercial software. You are free to look around and learn. This software can not open/interoperate with any commercial software generated files !
 
 
 ## Engineering Scope. 
-As I learn fundamental of engineering concepts, more and more exclusions shall shift to Inclusion as years progress. Usually, higher in the list, higher the priority!
-
-### Broad Scope of the software.
-2D Drafting  
-Piping & Instrumentation Diagrams (Intelligent 2D)  
-Pressure Vessels / Equipment Modeling and Analysis  
-Shell Development Drawing Extraction (2D)  
-Process Piping Modeling and Analysis  
-Isometrics Extraction (2D)  
-ASME / API Code checking  
-Heater Modeling and Analysis  
-Structural Modeling and Analysis. Little Architecture modeling  
-Structural Code Checking  
-Structural GA Drawings (2D)  
-Local File Support. Data Server Support  
-Collaboration Support   
-User Manual / Documentation  
-Developer Manual / Documentation  
-
-### Exclusions  / Future Scope
-Training Curriculum.  
-Web API.  
-Response Spectrum Analysis.  
-Cluster / Remote server analysis.  
-Interoperability with other softwares.  
-Connection Design.  
-Foundation Design.  
-PEB Design.  
-Non-isotropic Material.  
-Reinforcement Detailing.  
-Fabrication Drawing.  
-Pre-stressing tendons.  
-Composite Section.  
-Architectural Rendering.  
-IFC Export. 
+Please see our homepage for currently planned scope of this project.
 
 ## Philosophy
 Some philosophy / guiding principle of this project. At least during the first two years of development.  
@@ -53,7 +21,7 @@ Some philosophy / guiding principle of this project. At least during the first t
 
 ### Our Inspirations of Open Source Softwares
 
-Following technology choices are under consideration. In no particular order. I take inspiration from other free & open source softwares.  
+I take inspiration from other free & open source softwares.  
 
 * Chromium : For Speed. Speed & Responsiveness of our software is very high priority. b  
 * SQLite : For robustness and care. This is the database we use for local file storage.
@@ -92,7 +60,7 @@ Following technology choices are under consideration. In no particular order. I 
 
 * Few things, we intend to Re-Invent intentionally, for educational, responsiveness and fine-grained control over UI. Attempt shall be made to avoid as much dependencies. I understand this shall slowdown the development, but we are taking this decision for future velocity.  
 
-* I am restring the initial scope to ensure focus. However some architectural decisions can be made considering future scope. Nevertheless, it is our explicit goal NOT to be interoperable with other commercial softwares.  
+* I am restricting the initial scope to ensure focus. However some architectural decisions can be made considering future scope. Nevertheless, it is our explicit goal NOT to be interoperable with other commercial softwares.  
 
 * Data compression is prioritized, even at the expense of ignoring programmatic flexibility. 
 

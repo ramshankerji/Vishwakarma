@@ -1,0 +1,6 @@
+baseURL = 'https://mv.ramshanker.in/'
+languageCode = 'en-IN'
+title = 'Mission Vishwakarma 2035'
+
+[minify]
+enable = true
