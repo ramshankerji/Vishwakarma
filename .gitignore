@@ -402,3 +402,10 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+##########################################################
+# Vishwakarma Specific Custom ignore commands.
+
+# Ignore HUGO build files.
+website/public
+website/.hugo_build.lock
