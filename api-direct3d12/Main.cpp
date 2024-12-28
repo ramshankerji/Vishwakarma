@@ -1,7 +1,8 @@
 // HelloWindowsDesktop.cpp : The beginning of Vishwakarma Desktop Application.
 // compile with: /D_UNICODE /DUNICODE /DWIN32 /D_WINDOWS /c
 
-#include <windows.h>
+#include "preCompiledHeadersWindows.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <tchar.h>
@@ -11,6 +12,7 @@
 #include <vishwakarma-2D.h>
 #include <random>
 #include <png.h>
+#include <vishwakarmaMainUI.h>
 
 #pragma comment(lib, "libpng16_staticd.lib")
 #pragma comment(lib, "zlibd.lib")
