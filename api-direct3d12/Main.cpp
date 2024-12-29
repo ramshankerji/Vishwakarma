@@ -14,6 +14,7 @@
 #include <png.h>
 #include <vishwakarmaMainUI.h>
 #include "resource.h"
+#include <shellscalingapi.h> // For PROCESS_PER_MONITOR_DPI_AWARE.
 
 #pragma comment(lib, "libpng16_staticd.lib")
 #pragma comment(lib, "zlibd.lib")
@@ -123,7 +124,10 @@ int WINAPI WinMain(
     _In_ int       nCmdShow
 )
 {
+    // Enable per Monitor DPI Awareness. Works Windows 8.1 and latter only.
+    SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
 
+    //Create Windows Class.
     WNDCLASSEX wcex;
 
     wcex.cbSize = sizeof(WNDCLASSEX);
