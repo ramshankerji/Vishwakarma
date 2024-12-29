@@ -13,6 +13,7 @@
 #include <random>
 #include <png.h>
 #include <vishwakarmaMainUI.h>
+#include "resource.h"
 
 #pragma comment(lib, "libpng16_staticd.lib")
 #pragma comment(lib, "zlibd.lib")
@@ -122,6 +123,7 @@ int WINAPI WinMain(
     _In_ int       nCmdShow
 )
 {
+
     WNDCLASSEX wcex;
 
     wcex.cbSize = sizeof(WNDCLASSEX);
@@ -135,7 +137,9 @@ int WINAPI WinMain(
     wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wcex.lpszMenuName = NULL;
     wcex.lpszClassName = szWindowClass;
-    wcex.hIconSm = LoadIcon(wcex.hInstance, IDI_APPLICATION);
+    wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
+    //wcex.hIconSm = LoadIcon(wcex.hInstance, IDI_APPLICATION);
+    wcex.hIconSm = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
 
     if (!RegisterClassEx(&wcex))
     {
