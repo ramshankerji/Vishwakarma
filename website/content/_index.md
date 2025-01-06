@@ -7,6 +7,7 @@ draft = false
 
 Join us to improve the module useful for your field of expertise. This website is our home page. All the documentations and user manuals shall be added here. This website is developed like a book, where you can read chapter by chapter. In future we will have dedicated tutorial section as well. All the coding (software development) related design documents are also published here. It is free open source  Made-In-India software.  
 
+Signup to our Monthly/Weekly updates E-mail / Messages using this link. [Join Mission Vishwakarma](https://forms.gle/uFFDMuXBShLXhZYH6)
 
 Various modules of different disciplines are alphabetically listed below.
 
