@@ -13,6 +13,13 @@ Vishwakarma, named after the God of Architectural Creation, is a self-educationa
 ## Engineering Scope. 
 Please see our homepage for currently planned scope of this project.
 
+## Getting Started. 
+If you are a user of our software, you should refer to our homepage.  
+If you are a developer or just would like to contribute to some source code updates, start by installing the following softwares.  
+* Visual Studio Communit Edition 2022.
+* Install git software.
+* Open Command prompt, nevigate to a suitable folder and run command "git clone --recurse-submodules https://github.com/ramshankerji/Vishwakarma.git".
+
 ## Philosophy
 Some philosophy / guiding principle of this project. At least during the first two years of development.  
 * This software is supposed to be Jack of All trades, Master of None.  

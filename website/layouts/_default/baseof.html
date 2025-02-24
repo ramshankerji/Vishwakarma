@@ -19,10 +19,8 @@
     <title>{{ .Title }}</title>
     <style type="text/css">
         body{
-            margin:40px auto;
-            max-width:720px;
-            padding:0 10px;
-
+            margin:0;
+            padding:0;
             -webkit-text-size-adjust: 100%; /* For Safari based browsers. */
             font-feature-settings: normal;
             /*-webkit-tap-highlight-color: transparent;*/
@@ -33,21 +31,78 @@
             line-height: 1.5;
             tab-size: 4;
             text-align: justify;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
         }
         h1,h2,h3{
           line-height:1.2
+        }
+        .content-wrapper {
+            display: flex;
+            flex: 1;
+        }
+        aside#sidebar {
+            flex: 0 0 70mm;          /* Fixed width of 42mm */
+            background-color: #f0f0f0; /* Background color */
+            display: none;           /* Initially hidden */
+            overflow-x: hidden;     /* Hide horizontal overflow */
+        }
+
+        aside#sidebar ul {
+            list-style: none;       /* Remove default bullets */
+            padding: 0;             /* Remove default padding */
+            margin: 0;              /* Remove default margin */
+        }
+
+        aside#sidebar li {
+            white-space: nowrap;    /* Prevent text from wrapping */
+        }
+
+        aside#sidebar a {
+            display: block;         /* Make the link fill the list item */
+            text-decoration: none;  /* Remove underline from links */
+            color: #444;            /* Link color */
+            overflow: hidden;       /* Hide overflow within the link */
+            text-overflow: ellipsis; /* Optional: Show ellipsis for truncated text */
+            margin: 10px auto;
+        }
+        @media (min-width: 280mm) {
+            aside#sidebar {
+                display: block; /* Sidebar visible by default on wide screens */
+            }
+        }
+        body.show-sidebar aside#sidebar {
+            display: block;
+        }
+        main {
+            flex: 1;
+            max-width: 210mm; /*A4 paper is 210mm x 297mm */
+            margin: 40px auto;
+            padding: 0 10px;
         }
     </style>
 </head>
 <body>
     <header>
-        
+        <button id="menu-toggle">☰</button>
+        <a href = "/"> Mission Vishwakarma </a>
     </header>
-    <main>
-        {{ block "main" . }}{{ end }}
-    </main>
+    <div class="content-wrapper">
+        <aside id="sidebar">
+            {{ partial "sidebar.html" . }}
+        </aside>
+        <main>
+            {{ block "main" . }}{{ end }}
+        </main>
+    </div>
     <footer>
         <p>&copy; {{ now.Year }} Ram Shanker</p>
     </footer>
+    <script>
+        document.getElementById('menu-toggle').addEventListener('click', function() {
+            document.body.classList.toggle('show-sidebar');
+        });
+    </script>
 </body>
 </html>

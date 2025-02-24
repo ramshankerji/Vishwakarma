@@ -1,0 +1,12 @@
+<ul>
+  {{ range .Site.Sections.ByWeight }}
+      <li>
+          <strong><a href="{{ .RelPermalink }}" style="margin-left: 10px;">{{ .Title }}</a></strong>
+          <ul>
+              {{ range .Pages.ByWeight }}
+                  <li><a href="{{ .RelPermalink }}" style="margin-left: 20px;">{{ .Title }}</a></li>
+              {{ end }}
+          </ul>
+      </li>
+  {{ end }}
+</ul>
