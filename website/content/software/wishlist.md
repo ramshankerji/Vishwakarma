@@ -5,7 +5,9 @@ weight: 100200
 Here we are concerned with the software development wish lists. This section is not for user's wish list. User's wish lists are maintained seperately in their respective domain pages.
 
 **Wishlist (Technical)**  
-LAN / Small Office live collaboration.  
+LAN / Small Office live collaboration. 
+Ability to work offline(merge latter) or from intermittent connectivity, say from Train.  
+Ability to setup site office catching node.  
 Linux / Mac / iOS / Android port.  
 Embeded font for uniform typography. To be adopted from Google Fonts.  
 Contributor License Agreement signed by AADHAAR eSign fascility.  
