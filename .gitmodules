@@ -7,3 +7,6 @@
 [submodule "code-external/zlib"]
 	path = code-external/zlib
 	url = https://github.com/madler/zlib
+[submodule "code-external/DirectX-Headers"]
+	path = code-external/DirectX-Headers
+	url = https://github.com/microsoft/DirectX-Headers
