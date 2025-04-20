@@ -1,4 +1,4 @@
-// HelloWindowsDesktop.cpp : The beginning of Vishwakarma Desktop Application.
+﻿// HelloWindowsDesktop.cpp : The beginning of Vishwakarma Desktop Application.
 // compile with: /D_UNICODE /DUNICODE /DWIN32 /D_WINDOWS /c
 
 #include "preCompiledHeadersWindows.h"
@@ -16,8 +16,68 @@
 #include "resource.h"
 #include <shellscalingapi.h> // For PROCESS_PER_MONITOR_DPI_AWARE.
 
+//DirectX 12 headers.
+#include <windows.h>
+#include <d3d12.h>
+#include <d3dx12.h>
+#include <dxgi1_6.h>
+#include <wrl.h>
+#include <d3dcompiler.h>
+#include <DirectXMath.h>
+#include <vector>
+#include <string>
+
+using namespace Microsoft::WRL;
+using namespace DirectX;
+
+// Struct for vertex data
+struct Vertex {
+    XMFLOAT3 position;
+    XMFLOAT4 color;
+};
+
+// D3D12 objects
+const UINT FrameCount = 2;
+ComPtr<ID3D12Device> device;
+ComPtr<IDXGISwapChain3> swapChain;
+ComPtr<ID3D12CommandQueue> commandQueue;
+ComPtr<ID3D12DescriptorHeap> rtvHeap;
+ComPtr<ID3D12Resource> renderTargets[FrameCount];
+ComPtr<ID3D12CommandAllocator> commandAllocator;
+ComPtr<ID3D12GraphicsCommandList> commandList;
+ComPtr<ID3D12Fence> fence;
+UINT rtvDescriptorSize;
+UINT frameIndex;
+HANDLE fenceEvent;
+UINT64 fenceValue;
+
+// Pipeline objects
+ComPtr<ID3D12RootSignature> rootSignature;
+ComPtr<ID3D12PipelineState> pipelineState;
+ComPtr<ID3D12Resource> vertexBuffer;
+D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
+
+// App variables
+const int WindowWidth = 800;
+const int WindowHeight = 600;
+
+void InitD3D(HWND hwnd);
+void PopulateCommandList();
+void WaitForPreviousFrame();
+void CleanupD3D();
+
+
+
 #pragma comment(lib, "libpng16_staticd.lib")
 #pragma comment(lib, "zlibd.lib")
+#pragma comment(lib, "freetype.lib")
+
+//DirectX12 Libraries.
+#pragma comment(lib, "d3d12.lib")
+#pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "d3dcompiler.lib")
+#pragma comment(lib, "dxguid.lib")
+
 
 std::wstring GetExecutablePath() {
     wchar_t buffer[MAX_PATH];
@@ -193,6 +253,10 @@ int WINAPI WinMain(
         nCmdShow);
     UpdateWindow(hWnd);
 
+    // Initialize D3D12
+    InitD3D(hWnd);
+
+
     FT_Library ft;
     FT_Face face;
 
@@ -209,16 +273,44 @@ int WINAPI WinMain(
     FT_Set_Pixel_Sizes(face, 0, 48); // Set font size to 48 pixels high
 
     // Main message loop:
-    MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0))
-    {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+    MSG msg = {};
+    // OLD Message loop before implimenting DirectX12.
+    //while (GetMessage(&msg, NULL, 0, 0))
+    //{
+    //    TranslateMessage(&msg);
+    //    DispatchMessage(&msg);
+    //}
+
+    while (msg.message != WM_QUIT) {
+        if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+        else {
+            // Render frame
+            PopulateCommandList();
+
+            // Execute command list
+            ID3D12CommandList* ppCommandLists[] = { commandList.Get() };
+            commandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
+
+            // Present
+            swapChain->Present(1, 0);
+
+            // Wait for GPU
+            WaitForPreviousFrame();
+        }
     }
 
     //Cleanup Freetype library.
     FT_Done_Face(face);
     FT_Done_FreeType(ft);
+
+    // Wait for GPU to finish all commands
+    WaitForPreviousFrame();
+
+    // Clean up D3D resources
+    CleanupD3D();
 
     return (int)msg.wParam;
 }
@@ -455,4 +547,345 @@ void RenderText(HDC hdc, FT_Face face, const char* text, int x, int y) {
 
         x += g->advance.x >> 6; // Advance to the next character
     }
+}
+
+
+void InitD3D(HWND hwnd) {
+    UINT dxgiFactoryFlags = 0;
+
+#if defined(_DEBUG)
+    // Enable debug layer in debug mode
+    ComPtr<ID3D12Debug> debugController;
+    if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)))) {
+        debugController->EnableDebugLayer();
+        dxgiFactoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
+    }
+#endif
+
+    // Create DXGI factory
+    ComPtr<IDXGIFactory4> factory;
+    CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&factory));
+
+    // Create device
+    ComPtr<IDXGIAdapter1> hardwareAdapter;
+    for (UINT adapterIndex = 0; SUCCEEDED(factory->EnumAdapters1(adapterIndex, &hardwareAdapter)); ++adapterIndex) {
+        if (SUCCEEDED(D3D12CreateDevice(hardwareAdapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
+            break;
+        }
+    }
+
+    // Create command queue
+    D3D12_COMMAND_QUEUE_DESC queueDesc = {};
+    queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&commandQueue));
+
+    // Create swap chain
+    DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
+    swapChainDesc.BufferCount = FrameCount;
+    swapChainDesc.Width = WindowWidth;
+    swapChainDesc.Height = WindowHeight;
+    swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    swapChainDesc.SampleDesc.Count = 1;
+
+    ComPtr<IDXGISwapChain1> tempSwapChain;
+    factory->CreateSwapChainForHwnd(
+        commandQueue.Get(),
+        hwnd,
+        &swapChainDesc,
+        nullptr,
+        nullptr,
+        &tempSwapChain
+    );
+
+    tempSwapChain.As(&swapChain);
+    frameIndex = swapChain->GetCurrentBackBufferIndex();
+
+    // Create descriptor heap for render target views
+    D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
+    rtvHeapDesc.NumDescriptors = FrameCount;
+    rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&rtvHeap));
+
+    rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+    // Create render target views
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(rtvHeap->GetCPUDescriptorHandleForHeapStart());
+    for (UINT i = 0; i < FrameCount; i++) {
+        swapChain->GetBuffer(i, IID_PPV_ARGS(&renderTargets[i]));
+        device->CreateRenderTargetView(renderTargets[i].Get(), nullptr, rtvHandle);
+        rtvHandle.Offset(1, rtvDescriptorSize);
+    }
+
+    // Create command allocator
+    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator));
+
+    // Create empty root signature
+    CD3DX12_ROOT_SIGNATURE_DESC rootSignatureDesc;
+    rootSignatureDesc.Init(0, nullptr, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+    ComPtr<ID3DBlob> signature;
+    ComPtr<ID3DBlob> error;
+    D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error);
+    device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&rootSignature));
+
+    // Create the shader
+    ComPtr<ID3DBlob> vertexShader;
+    ComPtr<ID3DBlob> pixelShader;
+
+#if defined(_DEBUG)
+    UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#else
+    UINT compileFlags = 0;
+#endif
+
+    // Simple shader code
+    const char* vertexShaderCode = R"(
+        struct PSInput {
+            float4 position : SV_POSITION;
+            float4 color : COLOR;
+        };
+
+        PSInput VSMain(float3 position : POSITION, float4 color : COLOR) {
+            PSInput result;
+            result.position = float4(position, 1.0f);
+            result.color = color;
+            return result;
+        }
+    )";
+
+    const char* pixelShaderCode = R"(
+        struct PSInput {
+            float4 position : SV_POSITION;
+            float4 color : COLOR;
+        };
+
+        float4 PSMain(PSInput input) : SV_TARGET {
+            return input.color;
+        }
+    )";
+
+    D3DCompile(vertexShaderCode, strlen(vertexShaderCode), nullptr, nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &vertexShader, nullptr);
+    D3DCompile(pixelShaderCode, strlen(pixelShaderCode), nullptr, nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &pixelShader, nullptr);
+
+    // Define the vertex input layout
+    D3D12_INPUT_ELEMENT_DESC inputElementDescs[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+    };
+
+    // Create the pipeline state object
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
+    psoDesc.pRootSignature = rootSignature.Get();
+    psoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader.Get());
+    psoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader.Get());
+    psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    psoDesc.DepthStencilState.DepthEnable = FALSE;
+    psoDesc.DepthStencilState.StencilEnable = FALSE;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.SampleDesc.Count = 1;
+    device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pipelineState));
+
+    // Create the command list
+    device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.Get(), pipelineState.Get(), IID_PPV_ARGS(&commandList));
+    commandList->Close();
+
+    // Create vertex buffer
+    Vertex triangleVertices[] = {
+        { XMFLOAT3(0.0f, 0.5f, 0.0f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) },    // Top vertex (red)
+        { XMFLOAT3(0.5f, -0.5f, 0.0f), XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f) },   // Bottom right vertex (green)
+        { XMFLOAT3(-0.5f, -0.5f, 0.0f), XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f) }   // Bottom left vertex (blue)
+    };
+
+    const UINT vertexBufferSize = sizeof(triangleVertices);
+
+    // Create upload heap and copy vertex data
+    ComPtr<ID3D12Resource> vertexBufferUpload;
+
+    // Create default heap for vertex buffer
+    // Define the heap properties for the default heap
+    auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+    // Define the resource description for the vertex buffer
+    auto resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
+
+    device->CreateCommittedResource(
+        &heapProps,                   // Correct: Pass address of the local variable
+        D3D12_HEAP_FLAG_NONE,
+        &resourceDesc,                // Correct: Pass address of the local variable
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&vertexBuffer));
+
+    // Create upload heap
+
+    // Define the heap properties for the UPLOAD heap
+    auto uploadHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+
+    // Define the resource description for the upload buffer (same size as the destination)
+    auto uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
+
+    device->CreateCommittedResource(
+        &uploadHeapProps,              // Correct: Pass address of the local variable
+        D3D12_HEAP_FLAG_NONE,
+        &uploadBufferDesc,             // Correct: Pass address of the local variable
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&vertexBufferUpload));
+
+    // Copy data to upload heap
+    D3D12_SUBRESOURCE_DATA vertexData = {};
+    vertexData.pData = triangleVertices;
+    vertexData.RowPitch = vertexBufferSize;
+    vertexData.SlicePitch = vertexData.RowPitch;
+
+    // Open command list and record copy commands
+    commandAllocator->Reset();
+    commandList->Reset(commandAllocator.Get(), pipelineState.Get());
+    UpdateSubresources<1>(commandList.Get(), vertexBuffer.Get(), vertexBufferUpload.Get(), 0, 0, 1, &vertexData);
+    
+    //Following line error removed by Gemini.
+    //commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(vertexBuffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER));
+    // Define the resource barrier to transition the vertex buffer
+    auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+        vertexBuffer.Get(),                     // The resource to transition
+        D3D12_RESOURCE_STATE_COPY_DEST,         // The state before the transition
+        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER // The state after the transition
+    );
+
+    // Record the barrier command in the command list
+    commandList->ResourceBarrier(1, &barrier); // Correct: Pass the address of the local 'barrier' variable
+
+    // Close command list and execute
+    commandList->Close();
+    ID3D12CommandList* ppCommandLists[] = { commandList.Get() };
+    commandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
+
+    // Create vertex buffer view
+    vertexBufferView.BufferLocation = vertexBuffer->GetGPUVirtualAddress();
+    vertexBufferView.StrideInBytes = sizeof(Vertex);
+    vertexBufferView.SizeInBytes = vertexBufferSize;
+
+    // Create synchronization objects
+    device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence));
+    fenceValue = 1;
+    fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+
+    // Wait for initialization to complete
+    WaitForPreviousFrame();
+}
+
+/*
+void PopulateCommandList() {
+    // Reset allocator and command list
+    commandAllocator->Reset();
+    commandList->Reset(commandAllocator.Get(), pipelineState.Get());
+
+    // Set necessary state
+    commandList->SetGraphicsRootSignature(rootSignature.Get());
+    commandList->RSSetViewports(1, &CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(WindowWidth), static_cast<float>(WindowHeight)));
+    commandList->RSSetScissorRects(1, &CD3DX12_RECT(0, 0, WindowWidth, WindowHeight));
+
+    // Indicate that the back buffer will be used as a render target
+    commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));
+
+    // Record commands
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(rtvHeap->GetCPUDescriptorHandleForHeapStart(), frameIndex, rtvDescriptorSize);
+    commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+
+    // Clear render target
+    const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };
+    commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+
+    // Draw triangle
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+    commandList->DrawInstanced(3, 1, 0, 0);
+
+    // Indicate that the back buffer will now be used to present
+    commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT));
+
+    // Close command list
+    commandList->Close();
+}
+*/
+
+void PopulateCommandList() {
+    // Reset allocator and command list
+    commandAllocator->Reset();
+    commandList->Reset(commandAllocator.Get(), pipelineState.Get());
+
+    // Set necessary state
+    commandList->SetGraphicsRootSignature(rootSignature.Get());
+    
+    //Following 2 error lines fixed by ChatGPT.
+    //commandList->RSSetViewports(1, &CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(WindowWidth), static_cast<float>(WindowHeight)));
+    //commandList->RSSetScissorRects(1, &CD3DX12_RECT(0, 0, WindowWidth, WindowHeight));
+    // 1) Create named variables (l‑values)
+    CD3DX12_VIEWPORT viewport(0.0f, 0.0f,
+        static_cast<float>(WindowWidth),
+        static_cast<float>(WindowHeight)
+    );
+
+    CD3DX12_RECT scissorRect(0, 0, WindowWidth, WindowHeight);
+
+    // 2) Now you can take their addresses and call the methods
+    commandList->RSSetViewports(1, &viewport);
+    commandList->RSSetScissorRects(1, &scissorRect);
+
+
+    // Indicate that the back buffer will be used as a render target
+    // Correct: Create barrier1 variable
+    auto barrier1 = CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    commandList->ResourceBarrier(1, &barrier1); // Pass address of barrier1
+
+    // Record commands
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(rtvHeap->GetCPUDescriptorHandleForHeapStart(), frameIndex, rtvDescriptorSize);
+    commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+
+    // Clear render target
+    const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f }; // Example color, adjust as needed
+    commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+
+    // Draw triangle
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+    commandList->DrawInstanced(3, 1, 0, 0);
+
+    // Indicate that the back buffer will now be used to present
+    // Correct: Create barrier2 variable
+    auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+    commandList->ResourceBarrier(1, &barrier2); // Pass address of barrier2
+
+    // Close command list
+    commandList->Close();
+}
+
+void WaitForPreviousFrame() {
+    // Signal and increment the fence value
+    const UINT64 currentFenceValue = fenceValue;
+    commandQueue->Signal(fence.Get(), currentFenceValue);
+    fenceValue++;
+
+    // Wait until the previous frame is finished
+    if (fence->GetCompletedValue() < currentFenceValue) {
+        fence->SetEventOnCompletion(currentFenceValue, fenceEvent);
+        WaitForSingleObject(fenceEvent, INFINITE);
+    }
+
+    // Update the frame index
+    frameIndex = swapChain->GetCurrentBackBufferIndex();
+}
+
+void CleanupD3D() {
+    // Wait for the GPU to be done with all resources
+    WaitForPreviousFrame();
+
+    CloseHandle(fenceEvent);
 }
