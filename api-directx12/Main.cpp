@@ -18,12 +18,16 @@
 
 //DirectX 12 headers.
 #include <windows.h>
-#include <d3d12.h>
+//Tell the HLSL compiler to include debug information into the shader blob.
+#define D3DCOMPILE_DEBUG 1 //TODO: Remove from production build.
+#include <d3d12.h> //Main DirectX12 API. Included from %WindowsSdkDir\Include%WindowsSDKVersion%\\um
+//helper structures Library. MIT Licensed. Added to the project as git submodule.
+//https://github.com/microsoft/DirectX-Headers/blob/main/include/directx/d3dx12.h
 #include <d3dx12.h>
 #include <dxgi1_6.h>
 #include <wrl.h>
 #include <d3dcompiler.h>
-#include <DirectXMath.h>
+#include <DirectXMath.h> //Where from? https://github.com/Microsoft/DirectXMath ?
 #include <vector>
 #include <string>
 
@@ -73,7 +77,7 @@ void CleanupD3D();
 #pragma comment(lib, "freetype.lib")
 
 //DirectX12 Libraries.
-#pragma comment(lib, "d3d12.lib")
+#pragma comment(lib, "d3d12.lib") //%WindowsSdkDir\Lib%WindowsSDKVersion%\\um\arch
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "dxguid.lib")
@@ -446,6 +450,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
         if (1) // Homepage of the application.
         {
+            /*
             RenderText(hdc, face, uiText002, 10, 60);
             RenderText(hdc, face, uiText003, 10, 80);
             RenderText(hdc, face, uiText015, 10, 120);
@@ -470,10 +475,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
             RenderText(hdc, face, uiText013, 1000, 60);
             RenderText(hdc, face, uiText014, 1000, 320);
+            */
         }
 
         if (0) //2D Drafting module
         {
+            /*
             RenderText(hdc, face, "I am 2D Drafting Module", 200, 80);
 
             RenderText(hdc, face, "Line", 200, 320);
@@ -499,7 +506,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
             RenderText(hdc, face, "Text", 600, 620);
             RenderText(hdc, face, "EIL :-)", 600, 520);
-            
+            */
         }
 
         // Create a random device and a random number generator
@@ -528,6 +535,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     return 0;
 }
 
+//RenderText is GDI. Not DirectX12. It is to be phased out as soon as we have UI working in DirectX12.
 void RenderText(HDC hdc, FT_Face face, const char* text, int x, int y) {
     FT_GlyphSlot g = face->glyph;
 
@@ -549,6 +557,15 @@ void RenderText(HDC hdc, FT_Face face, const char* text, int x, int y) {
     }
 }
 
+/*
+IID_PPV_ARGS is a MACRO used in DirectX (and COM programming in general) to help safely and correctly 
+retrieve interface pointers during object creation or querying. It helps reduce repetative typing of codes.
+COM interfaces are identified by unique GUIDs. Than GUID pointer is converted to appropriate pointer type.
+
+Ex: IID_PPV_ARGS(&device) expands to following:
+IID iid = __uuidof(ID3D12Device);
+void** ppv = reinterpret_cast<void**>(&device);
+*/
 
 void InitD3D(HWND hwnd) {
     UINT dxgiFactoryFlags = 0;
