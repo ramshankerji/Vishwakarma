@@ -8,6 +8,8 @@ For all legal matters, only the Jurisdiction of Courts is South Delhi District C
 
 Export / Download / Use of this software outside India is prohibited. This restriction is in place to minimize legal risk and ensure long term sustainability of the project. However anyone outside india can download at their own risk. There is no technological blockage for the same.
 
+We need not worry about US export controls. Explained brilliently by [Linux Foundation](https://www.linuxfoundation.jp/blog/2020/07/understanding-us-export-controls-with-open-source-projects/)
+
 This software has been developed independently by Ram Shanker (initially). Latter on many volunteers shall join the effort.
 
 This core software is planned to be a FREE Open-Source software. To sustain the software development momentum, we will charge for support services in future.
