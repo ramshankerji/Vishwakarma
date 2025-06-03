@@ -16,7 +16,11 @@
 #include "resource.h"
 #include <shellscalingapi.h> // For PROCESS_PER_MONITOR_DPI_AWARE.
 
-//DirectX 12 headers.
+//DirectX 12 headers. Best Place to learn DirectX12 is original microsoft documentation.
+// https://learn.microsoft.com/en-us/windows/win32/direct3d12/direct3d-12-graphics
+// You need a good dose of prior C++ knowledge and Computer Fundamentals before learning DirectX12.
+// Expect to read at least 2 times before you start grasping it !
+
 #include <windows.h>
 //Tell the HLSL compiler to include debug information into the shader blob.
 #define D3DCOMPILE_DEBUG 1 //TODO: Remove from production build.
@@ -253,8 +257,7 @@ int WINAPI WinMain(
     // The parameters to ShowWindow explained:
     // hWnd: the value returned from CreateWindow
     // nCmdShow: the fourth parameter from WinMain
-    ShowWindow(hWnd,
-        nCmdShow);
+    ShowWindow(hWnd, nCmdShow);
     UpdateWindow(hWnd);
 
     // Initialize D3D12
@@ -278,15 +281,10 @@ int WINAPI WinMain(
 
     // Main message loop:
     MSG msg = {};
-    // OLD Message loop before implimenting DirectX12.
-    //while (GetMessage(&msg, NULL, 0, 0))
-    //{
-    //    TranslateMessage(&msg);
-    //    DispatchMessage(&msg);
-    //}
 
     while (msg.message != WM_QUIT) {
-        if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+        if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) { //Does not block. Returns immediately.
+            //We can not use alternate GetMessage() since that one block waiting for windows.
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
@@ -307,8 +305,8 @@ int WINAPI WinMain(
     }
 
     //Cleanup Freetype library.
-    FT_Done_Face(face);
-    FT_Done_FreeType(ft);
+    //FT_Done_Face(face);
+    //FT_Done_FreeType(ft);
 
     // Wait for GPU to finish all commands
     WaitForPreviousFrame();
@@ -414,12 +412,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
     case WM_PAINT:
     {
-        hdc = BeginPaint(hWnd, &ps);
+        // We're not using GDI for rendering anymore - DirectX12 handles all rendering
+        // Just validate the paint message to prevent Windows from continuously sending WM_PAINT
+        // TODO: Figure out why can't we remove BeginPaint & EndPaint commands also.
 
-        // Here your application is laid out.
-        // For this introduction, we just print out "Hello, Vishwakarma!" in the top left corner.
-        // TextOut(hdc, 5, 5, greeting, _tcslen(greeting));
-        // We are no longer using TextOut function to render text, instead we use Freetype.
+        hdc = BeginPaint(hWnd, &ps);
+        /*
 
         // Initialize FreeType face only once
         if (!initialized) {
@@ -446,11 +444,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         int x = (rect.right - rect.left) / 2;
         int y = (rect.bottom - rect.top) / 2;
 
-        RenderText(hdc, face, uiText001, 10, 20);
-
+        //RenderText(hdc, face, uiText001, 10, 20);
+        
         if (1) // Homepage of the application.
         {
-            /*
+            
             RenderText(hdc, face, uiText002, 10, 60);
             RenderText(hdc, face, uiText003, 10, 80);
             RenderText(hdc, face, uiText015, 10, 120);
@@ -475,12 +473,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
             RenderText(hdc, face, uiText013, 1000, 60);
             RenderText(hdc, face, uiText014, 1000, 320);
-            */
+            
         }
 
         if (0) //2D Drafting module
         {
-            /*
+            
             RenderText(hdc, face, "I am 2D Drafting Module", 200, 80);
 
             RenderText(hdc, face, "Line", 200, 320);
@@ -506,9 +504,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
             RenderText(hdc, face, "Text", 600, 620);
             RenderText(hdc, face, "EIL :-)", 600, 520);
-            */
+            
         }
 
+        
         // Create a random device and a random number generator
         std::random_device rd;  // Obtain a random number from hardware
         std::mt19937 gen(rd()); // Seed the generator
@@ -520,8 +519,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         {
             //DisplayImage(hdc, image_data, width, height);
         }
-
+        */
         EndPaint(hWnd, &ps);
+        
         break;
     }
     case WM_DESTROY:
@@ -710,7 +710,9 @@ void InitD3D(HWND hwnd) {
     psoDesc.SampleDesc.Count = 1;
     device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pipelineState));
 
-    // Create the command list
+    // Create the command list. Note that this is default pipelineStete for the command list.
+    // It can be changed inside command list also by calling ID3D12GraphicsCommandList::SetPipelineState.
+    // CommandList is : List of various Commands including repeated calls of many CommandBundles.
     device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.Get(), pipelineState.Get(), IID_PPV_ARGS(&commandList));
     commandList->Close();
 
@@ -779,8 +781,11 @@ void InitD3D(HWND hwnd) {
     // Record the barrier command in the command list
     commandList->ResourceBarrier(1, &barrier); // Correct: Pass the address of the local 'barrier' variable
 
-    // Close command list and execute
+    // Close command list. It mostly runs synchronously with little work deferred. Completes quickly. 
+    // Close():  Transitions the command list from recording mode to execution-ready mode.
+    // Validates Commands / Catch errors, Compress (driver-specific optimization), to Immutable (Read-Only).
     commandList->Close();
+    // Exicute the command list.
     ID3D12CommandList* ppCommandLists[] = { commandList.Get() };
     commandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
 
@@ -797,41 +802,6 @@ void InitD3D(HWND hwnd) {
     // Wait for initialization to complete
     WaitForPreviousFrame();
 }
-
-/*
-void PopulateCommandList() {
-    // Reset allocator and command list
-    commandAllocator->Reset();
-    commandList->Reset(commandAllocator.Get(), pipelineState.Get());
-
-    // Set necessary state
-    commandList->SetGraphicsRootSignature(rootSignature.Get());
-    commandList->RSSetViewports(1, &CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(WindowWidth), static_cast<float>(WindowHeight)));
-    commandList->RSSetScissorRects(1, &CD3DX12_RECT(0, 0, WindowWidth, WindowHeight));
-
-    // Indicate that the back buffer will be used as a render target
-    commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));
-
-    // Record commands
-    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(rtvHeap->GetCPUDescriptorHandleForHeapStart(), frameIndex, rtvDescriptorSize);
-    commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
-
-    // Clear render target
-    const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };
-    commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-
-    // Draw triangle
-    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
-    commandList->DrawInstanced(3, 1, 0, 0);
-
-    // Indicate that the back buffer will now be used to present
-    commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(renderTargets[frameIndex].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT));
-
-    // Close command list
-    commandList->Close();
-}
-*/
 
 void PopulateCommandList() {
     // Reset allocator and command list
