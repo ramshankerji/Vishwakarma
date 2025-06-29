@@ -33,11 +33,13 @@ If you initiate legal proceedings against the Licensor (patent-related or softwa
 If you develop proprietary software that reads or writes to our file format, you agree that the Licensor may implement reverse compatibility, including reverse engineering your format to the extent permitted by applicable law.
 15. Lawful Use:  
 You agree not to use the Software for any activity that is unlawful under applicable local, national, or international law including but not limited to activities that infringe intellectual property rights, violate privacy laws, or constitute cybercrime.
-16. Governing Law:  
+16. Business Usage and Attribution  
+If you are a business entity or organization and use the Software for any purpose, you grant the Licensor a perpetual, worldwide, royalty-free, non-exclusive right to use your name and logo in the Licensor’s website, presentations, and marketing materials, for the sole purpose of indicating that your organization uses the Software. You represent and warrant that you have the authority to grant this permission on behalf of your organization.
+17. Governing Law:  
 This Agreement shall be governed by and construed in accordance with the laws of India, without regard to its conflict of law provisions. Any dispute arising out of or in connection with this Agreement shall be subject to the exclusive jurisdiction of the courts located in New Delhi, India.
-17. Severability:  
+18. Severability:  
 If any provision of this Agreement is found invalid or unenforceable, the remaining provisions shall remain in full force and effect.
-18. Entire Agreement:  
+19. Entire Agreement:  
 This EULA constitutes the entire agreement between you and the Licensor and supersedes all prior understandings. Nothing in this Agreement affects your statutory consumer rights that cannot be excluded or limited by law.
-19. EULA Updates:  
+20. EULA Updates:  
 We may update this EULA occasionally to reflect changes in law or software functionality. We will notify you of significant changes through the software interface or other reasonable means. Your continued use of the Software after such notification constitutes acceptance of the updated terms.
