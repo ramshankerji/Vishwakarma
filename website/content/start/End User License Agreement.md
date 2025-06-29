@@ -20,7 +20,7 @@ You agree to install and use the Software only on systems where you have the leg
 8. Export Control:  
 You acknowledge that the Software may be subject to export control laws and agree to comply with all applicable international and national export control regulations.
 9. Data Collection and Use:  
-By installing or using the Software, you consent to the collection of usage data, including but not limited to system specifications and usage logs. This data may be used for product improvement, marketing, research, statistical analysis, and may be shared with third parties, including government entities, where legally required. Data collection is subject to applicable privacy laws. For more details, refer to our Privacy Policy.
+By installing or using the Software, you consent to the collection of usage data, including but not limited to system specifications and usage logs. This data may be used for product improvement, marketing, research, statistical analysis, and may be shared with third parties, including government entities, where legally required. Data collection is subject to applicable privacy laws. For more details, refer to our Privacy Policy. https://mv.ramshanker.in/start/privacy-policy/  
 10. Support Files:  
 Files submitted as part of support requests may be used to improve the Software. We reserve the right to anonymize and publish such data unless otherwise specified by you at the time of submission.
 11. Software Updates:  
