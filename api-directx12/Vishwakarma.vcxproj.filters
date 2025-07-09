@@ -13,6 +13,15 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="code-external">
+      <UniqueIdentifier>{0c56ed5d-08f8-4877-a8a1-97d54641179c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="code-external\libpng">
+      <UniqueIdentifier>{8c226d2a-fc97-4206-87a5-0da4d8aee3f4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="code-external\zlib">
+      <UniqueIdentifier>{585bd2d6-790f-4201-ad79-dc436a562b80}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Main.cpp">
@@ -20,6 +29,78 @@
     </ClCompile>
     <ClCompile Include="preCompiledHeadersWindows.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\libpng-code\png.c">
+      <Filter>code-external\libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\libpng-code\pngerror.c">
+      <Filter>code-external\libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\libpng-code\pngget.c">
+      <Filter>code-external\libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\libpng-code\pngmem.c">
+      <Filter>code-external\libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\libpng-code\pngpread.c">
+      <Filter>code-external\libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\libpng-code\pngrio.c">
+      <Filter>code-external\libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\libpng-code\pngrtran.c">
+      <Filter>code-external\libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\libpng-code\pngrutil.c">
+      <Filter>code-external\libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\libpng-code\pngset.c">
+      <Filter>code-external\libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\libpng-code\pngtrans.c">
+      <Filter>code-external\libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\libpng-code\pngwio.c">
+      <Filter>code-external\libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\libpng-code\pngwrite.c">
+      <Filter>code-external\libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\libpng-code\pngwtran.c">
+      <Filter>code-external\libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\libpng-code\pngwutil.c">
+      <Filter>code-external\libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\zlib\adler32.c">
+      <Filter>code-external\zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\zlib\crc32.c">
+      <Filter>code-external\zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\zlib\deflate.c">
+      <Filter>code-external\zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\zlib\infback.c">
+      <Filter>code-external\zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\zlib\inffast.c">
+      <Filter>code-external\zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\zlib\inflate.c">
+      <Filter>code-external\zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\zlib\inftrees.c">
+      <Filter>code-external\zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\zlib\trees.c">
+      <Filter>code-external\zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\zlib\zutil.c">
+      <Filter>code-external\zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\libpng-code\pngread.c">
+      <Filter>code-external\libpng</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

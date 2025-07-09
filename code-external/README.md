@@ -35,7 +35,9 @@ cd build
 cmake -D ZLIB_INCLUDE_DIR=../../zlib -D ZLIB_LIBRARY=../../zlib/build/Debug ..  
 cmake --build . --config Debug  
 
-The default repository of libpng does not come with "pnglibconf.h" . It needs to be created as part of configuration step. For the time being, just copy the file "pnglibconf.h.prebuilt" in the "/libpng-code/scripts" folder to "/libpng-code" and rename it to "pnglibconf.h".
+The default repository of libpng does not come with "pnglibconf.h" . It needs to be created as part of configuration step. 
+Just copy the file "pnglibconf.h.prebuilt" in the "/libpng-code/scripts" folder to "/libpng-code" and rename it to "pnglibconf.h".
+copy .\code-external\libpng-code\scripts\pnglibconf.h.prebuilt .\code-external\libpng-code\pnglibconf.h
 
 **freetype**
 It needs to be build using cmake so as to generate the "freetype.lib" which shall be statically linked in the application.

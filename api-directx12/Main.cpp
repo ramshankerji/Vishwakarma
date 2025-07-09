@@ -6,8 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <tchar.h>
-#include "ft2build.h"
-#include FT_FREETYPE_H
+//#include "ft2build.h"
+//#include FT_FREETYPE_H
 #include <iostream>
 #include <vishwakarma-2D.h>
 #include <random>
@@ -74,18 +74,15 @@ void PopulateCommandList();
 void WaitForPreviousFrame();
 void CleanupD3D();
 
-
-
-#pragma comment(lib, "libpng16_staticd.lib")
-#pragma comment(lib, "zlibd.lib")
-#pragma comment(lib, "freetype.lib")
+/* We have moved to statically compiling the .h/.c files of dependencies. 
+Hence we don't need to compile them and generate .lib file and link them separately.
+*/
 
 //DirectX12 Libraries.
 #pragma comment(lib, "d3d12.lib") //%WindowsSdkDir\Lib%WindowsSDKVersion%\\um\arch
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "dxguid.lib")
-
 
 std::wstring GetExecutablePath() {
     wchar_t buffer[MAX_PATH];
@@ -182,7 +179,7 @@ HINSTANCE hInst;
 // Forward declarations of functions included in this code module:
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 // Forward declaration of the RenderText function
-void RenderText(HDC hdc, FT_Face face, const char* text, int x, int y);
+// void RenderText(HDC hdc, FT_Face face, const char* text, int x, int y);
 
 
 int WINAPI WinMain(
@@ -264,6 +261,7 @@ int WINAPI WinMain(
     InitD3D(hWnd);
 
 
+    /*
     FT_Library ft;
     FT_Face face;
 
@@ -278,6 +276,7 @@ int WINAPI WinMain(
     }
 
     FT_Set_Pixel_Sizes(face, 0, 48); // Set font size to 48 pixels high
+    */
 
     // Main message loop:
     MSG msg = {};
@@ -329,7 +328,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     HDC hdc;
     TCHAR greeting[] = _T("Hello, Vishwakarma!");
 
-    static FT_Face face;
+    //static FT_Face face;
     static const char* uiText001 = "Vishwakarma!";
     static const char* uiText002 = "Name";
     static const char* uiText003 = "Level 21";
@@ -397,16 +396,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     }
     case WM_MBUTTONDOWN: {
-        MessageBox(hWnd, L"Middle button clicked", L"Mouse Click", MB_OK);
+        MessageBoxW(hWnd, L"Middle button clicked", L"Mouse Click", MB_OK);
         return 0;
     }
     case WM_MOUSEWHEEL: {
         int zDelta = GET_WHEEL_DELTA_WPARAM(wParam);
         if (zDelta > 0) {
-            MessageBox(hWnd, L"Mouse wheel scrolled up", L"Mouse Scroll", MB_OK);
+            MessageBoxW(hWnd, L"Mouse wheel scrolled up", L"Mouse Scroll", MB_OK);
         }
         else {
-            MessageBox(hWnd, L"Mouse wheel scrolled down", L"Mouse Scroll", MB_OK);
+            MessageBoxW(hWnd, L"Mouse wheel scrolled down", L"Mouse Scroll", MB_OK);
         }
         return 0;
     }
@@ -536,6 +535,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 }
 
 //RenderText is GDI. Not DirectX12. It is to be phased out as soon as we have UI working in DirectX12.
+/*
 void RenderText(HDC hdc, FT_Face face, const char* text, int x, int y) {
     FT_GlyphSlot g = face->glyph;
 
@@ -556,6 +556,7 @@ void RenderText(HDC hdc, FT_Face face, const char* text, int x, int y) {
         x += g->advance.x >> 6; // Advance to the next character
     }
 }
+*/
 
 /*
 IID_PPV_ARGS is a MACRO used in DirectX (and COM programming in general) to help safely and correctly 
