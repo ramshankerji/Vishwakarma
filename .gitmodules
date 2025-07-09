@@ -3,7 +3,7 @@
 	url = https://gitlab.freedesktop.org/freetype/freetype.git
 [submodule "code-external/libpng-code"]
 	path = code-external/libpng-code
-	url = https://git.code.sf.net/p/libpng/code
+	url = https://github.com/pnggroup/libpng.git
 [submodule "code-external/zlib"]
 	path = code-external/zlib
 	url = https://github.com/madler/zlib
