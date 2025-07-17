@@ -50,8 +50,9 @@
       <PreprocessorDefinitions>PNG_READ_SUPPORTED</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>..\code-external\DirectX-Headers\include\directx;..\code-external\zlib;..\code-core;..\code-external\libpng-code;..\code-external\freetype\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PrecompiledHeader>Create</PrecompiledHeader>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>preCompiledHeadersWindows.h</PrecompiledHeaderFile>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -76,8 +77,9 @@
       <PreprocessorDefinitions>PNG_READ_SUPPORTED</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>..\code-external\DirectX-Headers\include\directx;..\code-external\zlib;..\code-core;..\code-external\libpng-code;..\code-external\freetype\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PrecompiledHeader>Create</PrecompiledHeader>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>preCompiledHeadersWindows.h</PrecompiledHeaderFile>
+      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -96,6 +98,7 @@
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\code-core\विश्वकर्मा.cpp" />
     <ClCompile Include="..\code-external\libpng-code\png.c">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
@@ -200,12 +203,15 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="जीपीयू-नियंत्रक.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="preCompiledHeadersWindows.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\code-core\विश्वकर्मा.h" />
     <ClInclude Include="preCompiledHeadersWindows.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="जीपीयू-नियंत्रक.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Vishwakarma.rc" />

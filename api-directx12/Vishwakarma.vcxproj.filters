@@ -22,6 +22,9 @@
     <Filter Include="code-external\zlib">
       <UniqueIdentifier>{585bd2d6-790f-4201-ad79-dc436a562b80}</UniqueIdentifier>
     </Filter>
+    <Filter Include="code-core">
+      <UniqueIdentifier>{68182463-fd52-4702-81c4-57347c918c61}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Main.cpp">
@@ -102,6 +105,12 @@
     <ClCompile Include="..\code-external\libpng-code\pngread.c">
       <Filter>code-external\libpng</Filter>
     </ClCompile>
+    <ClCompile Include="जीपीयू-नियंत्रक.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-core\विश्वकर्मा.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="preCompiledHeadersWindows.h">
@@ -109,6 +118,12 @@
     </ClInclude>
     <ClInclude Include="resource.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\विश्वकर्मा.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="जीपीयू-नियंत्रक.h">
+      <Filter>Source Files</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
