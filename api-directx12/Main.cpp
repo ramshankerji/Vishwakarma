@@ -106,6 +106,11 @@ void DisplayImage(HDC hdc, const unsigned char* image_data, int width, int heigh
     StretchDIBits(hdc, 0, 0, width, height, 0, 0, width, height, image_data, &bmi, DIB_RGB_COLORS, SRCCOPY);
 }
 
+void GetMaxScreenResolution(int& maxWidth, int& maxHeight) {
+    maxWidth = GetSystemMetrics(SM_CXSCREEN);
+    maxHeight = GetSystemMetrics(SM_CYSCREEN);
+}
+
 // Global variables
 
 // The main window class name.
@@ -160,6 +165,9 @@ int WINAPI WinMain(
         return 1;
     }
 
+    int screenWidth = 1000, screenHeight = 100; //Smallest resize we will allow !
+    GetMaxScreenResolution(screenWidth, screenHeight);
+
     // Define the window style without WS_CAPTION, but include WS_THICKFRAME and WS_SYSMENU
     DWORD windowStyle = WS_OVERLAPPED | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
 
@@ -174,7 +182,7 @@ int WINAPI WinMain(
         WS_OVERLAPPEDWINDOW | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
         // Size and position
         CW_USEDEFAULT, CW_USEDEFAULT, // Initial position (x, y)
-        1280, 720, //Corresponds to 720p screen resolution. We expect at least this much. :)
+        screenWidth / 2, screenHeight / 2, // Window size devided by 2 when user press un-maximize button. 
         NULL,      // The parent of this window
         NULL,      // This application does not have a menu bar, we create our own Menu.
         hInstance, // Instance handle, the first parameter from WinMain
@@ -191,10 +199,10 @@ int WINAPI WinMain(
         return 1;
     }
 
-    // The parameters to ShowWindow explained:
-    // hWnd: the value returned from CreateWindow
-    // nCmdShow: the fourth parameter from WinMain
-    ShowWindow(hWnd, nCmdShow);
+    // By default we always initilize application in maximized state.
+    // Intentionally we don't remember last closed size and slowdown startup time retriving that value.
+    ShowWindow(hWnd, SW_MAXIMIZE); // hWnd: the value returned from CreateWindow
+    //ShowWindow(hWnd, nCmdShow); // nCmdShow: the fourth parameter from WinMain
     UpdateWindow(hWnd);
 
     // Initialize D3D12
