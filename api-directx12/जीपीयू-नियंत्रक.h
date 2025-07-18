@@ -70,7 +70,9 @@ struct OneMonitorControler {
     ComPtr<ID3D12RootSignature> rootSignature;
     ComPtr<ID3D12PipelineState> pipelineState;
     ComPtr<ID3D12Resource> vertexBuffer;
+    ComPtr<ID3D12Resource> indexBuffer;
     D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
+    D3D12_INDEX_BUFFER_VIEW indexBufferView;
 };
 
 // 4 is the maximum number of simultaneous screen we are ever going to support. DO NOT CHANGE EVER.

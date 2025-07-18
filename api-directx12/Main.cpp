@@ -165,7 +165,7 @@ int WINAPI WinMain(
         return 1;
     }
 
-    int screenWidth = 1000, screenHeight = 100; //Smallest resize we will allow !
+    int screenWidth = 100, screenHeight = 100; //Smallest resize we will allow !
     GetMaxScreenResolution(screenWidth, screenHeight);
 
     // Define the window style without WS_CAPTION, but include WS_THICKFRAME and WS_SYSMENU

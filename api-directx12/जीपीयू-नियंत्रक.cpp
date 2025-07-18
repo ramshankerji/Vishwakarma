@@ -6,6 +6,8 @@ void InitD3D(HWND hwnd);
 void PopulateCommandList();
 void WaitForPreviousFrame();
 void CleanupD3D();
+void GenerateVertexData(Vertex** vertexData, UINT* vertexCount, UINT* vertexBufferSize);
+void GenerateIndexData(UINT16** indexData, UINT* indexCount, UINT* indexBufferSize);
 
 /*
 IID_PPV_ARGS is a MACRO used in DirectX (and COM programming in general) to help safely and correctly
@@ -19,6 +21,34 @@ void** ppv = reinterpret_cast<void**>(&device);
 
 OneMonitorControler screen[4];
 ComPtr<ID3D12Device> device;
+
+void GenerateVertexData(Vertex** vertexData, UINT* vertexCount, UINT* vertexBufferSize) {
+    static Vertex triangleVertices[] = {
+        { XMFLOAT3(0.0f, 0.5f, 0.0f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) },    // Top vertex (red)
+        { XMFLOAT3(0.5f, -0.5f, 0.0f), XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f) },   // Bottom right vertex (green)
+        { XMFLOAT3(-0.5f, -0.5f, 0.0f), XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f) },   // Bottom left vertex (blue)
+    
+        // A Rectangle.
+        { XMFLOAT3(0.6f, 0.6f, 0.0f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) },    // Top Left (red)
+        { XMFLOAT3(0.9f, 0.6f, 0.0f), XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f) },    // Top Right (green)
+        { XMFLOAT3(0.6f, 0.4f, 0.0f), XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f) },   // Bottom left vertex (blue)
+        { XMFLOAT3(0.9f, 0.4f, 0.0f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) }    // Botth right (blue)
+    };
+
+    *vertexData = triangleVertices;
+    *vertexCount = 7;
+    *vertexBufferSize = sizeof(triangleVertices);
+}
+
+void GenerateIndexData(UINT16** indexData, UINT* indexCount, UINT* indexBufferSize) {
+    static UINT16 triangleIndices[] = {
+        0, 1, 2,  // Triangle indices
+        3, 4, 5, 4, 6, 5 // Rectangle with both vertex in clockwise direction.
+    };
+    *indexData = triangleIndices;
+    *indexCount = 9;
+    *indexBufferSize = sizeof(triangleIndices);
+}
 
 void InitD3D(HWND hwnd) {
     UINT dxgiFactoryFlags = 0;
@@ -171,14 +201,17 @@ void InitD3D(HWND hwnd) {
         screen[i].pipelineState.Get(), IID_PPV_ARGS(&screen[i].commandList));
     screen[i].commandList->Close();
 
-    // Create vertex buffer
-    Vertex triangleVertices[] = {
-        { XMFLOAT3(0.0f, 0.5f, 0.0f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) },    // Top vertex (red)
-        { XMFLOAT3(0.5f, -0.5f, 0.0f), XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f) },   // Bottom right vertex (green)
-        { XMFLOAT3(-0.5f, -0.5f, 0.0f), XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f) }   // Bottom left vertex (blue)
-    };
+    // Generate vertex data
+    Vertex* triangleVertices;
+    UINT vertexCount;
+    UINT vertexBufferSize;
+    GenerateVertexData(&triangleVertices, &vertexCount, &vertexBufferSize);
 
-    const UINT vertexBufferSize = sizeof(triangleVertices);
+    // Generate index data
+    UINT16* triangleIndices;
+    UINT indexCount;
+    UINT indexBufferSize;
+    GenerateIndexData(&triangleIndices, &indexCount, &indexBufferSize);
 
     // Create upload heap and copy vertex data
     ComPtr<ID3D12Resource> vertexBufferUpload;
@@ -219,13 +252,53 @@ void InitD3D(HWND hwnd) {
     vertexData.RowPitch = vertexBufferSize;
     vertexData.SlicePitch = vertexData.RowPitch;
 
+    // Create index buffer
+    ComPtr<ID3D12Resource> indexBufferUpload;
+
+    // Create default heap for index buffer
+    // Define the heap properties for the default heap
+    auto indexHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+    // Define the resource description for the index buffer
+    auto indexResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
+
+    device->CreateCommittedResource(
+        &indexHeapProps,                   // Correct: Pass address of the local variable
+        D3D12_HEAP_FLAG_NONE,
+        & indexResourceDesc,                // Correct: Pass address of the local variable
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&screen[i].indexBuffer));
+
+    // Create upload heap for index buffer
+    // Define the heap properties for the UPLOAD heap
+    auto indexUploadHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+
+    // Define the resource description for the upload buffer (same size as the destination)
+    auto indexUploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
+
+    device->CreateCommittedResource(
+        &indexUploadHeapProps,              // Correct: Pass address of the local variable
+        D3D12_HEAP_FLAG_NONE,
+        & indexUploadBufferDesc,             // Correct: Pass address of the local variable
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&indexBufferUpload));
+
+    // Copy data to upload heap
+    D3D12_SUBRESOURCE_DATA indexData = {};
+    indexData.pData = triangleIndices;
+    indexData.RowPitch = indexBufferSize;
+    indexData.SlicePitch = indexData.RowPitch;
+
     // Open command list and record copy commands
     screen[i].commandAllocator->Reset();
     screen[i].commandList->Reset(screen[i].commandAllocator.Get(), screen[i].pipelineState.Get());
-    UpdateSubresources<1>(screen[i].commandList.Get(), screen[i].vertexBuffer.Get(), vertexBufferUpload.Get(), 0, 0, 1, &vertexData);
+    UpdateSubresources<1>(screen[i].commandList.Get(), screen[i].vertexBuffer.Get(), 
+        vertexBufferUpload.Get(), 0, 0, 1, &vertexData);
 
-    //Following line error removed by Gemini.
-    //commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(vertexBuffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER));
+    UpdateSubresources<1>(screen[i].commandList.Get(), screen[i].indexBuffer.Get(), 
+        indexBufferUpload.Get(), 0, 0, 1, &indexData);
+
     // Define the resource barrier to transition the vertex buffer
     auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
         screen[i].vertexBuffer.Get(),                     // The resource to transition
@@ -233,9 +306,17 @@ void InitD3D(HWND hwnd) {
         D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER // The state after the transition
     );
 
-    // Record the barrier command in the command list
-    screen[i].commandList->ResourceBarrier(1, &barrier); // Correct: Pass the address of the local 'barrier' variable
+    // Define the resource barrier to transition the index buffer
+    auto indexBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
+        screen[i].indexBuffer.Get(),                     // The resource to transition
+        D3D12_RESOURCE_STATE_COPY_DEST,         // The state before the transition
+        D3D12_RESOURCE_STATE_INDEX_BUFFER // The state after the transition
+    );
 
+    // Record the barrier commands in the command list
+    screen[i].commandList->ResourceBarrier(1, &barrier); // Correct: Pass the address of the local 'barrier' variable
+    screen[i].commandList->ResourceBarrier(1, &indexBarrier); // Correct: Pass the address of the local 'indexBarrier' variable
+    
     // Close command list. It mostly runs synchronously with little work deferred. Completes quickly. 
     // Close():  Transitions the command list from recording mode to execution-ready mode.
     // Validates Commands / Catch errors, Compress (driver-specific optimization), to Immutable (Read-Only).
@@ -248,6 +329,11 @@ void InitD3D(HWND hwnd) {
     screen[i].vertexBufferView.BufferLocation = screen[i].vertexBuffer->GetGPUVirtualAddress();
     screen[i].vertexBufferView.StrideInBytes = sizeof(Vertex);
     screen[i].vertexBufferView.SizeInBytes = vertexBufferSize;
+
+    // Create index buffer view
+    screen[i].indexBufferView.BufferLocation = screen[i].indexBuffer->GetGPUVirtualAddress();
+    screen[i].indexBufferView.Format = DXGI_FORMAT_R16_UINT;
+    screen[i].indexBufferView.SizeInBytes = indexBufferSize;
 
     // Create synchronization objects
     device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&screen[i].fence));
@@ -299,7 +385,9 @@ void PopulateCommandList() {
     // Draw triangle
     screen[i].commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     screen[i].commandList->IASetVertexBuffers(0, 1, &screen[i].vertexBufferView);
-    screen[i].commandList->DrawInstanced(3, 1, 0, 0);
+    //screen[i].commandList->DrawInstanced(3, 1, 0, 0);
+    screen[i].commandList->IASetIndexBuffer(&screen[i].indexBufferView);
+    screen[i].commandList->DrawIndexedInstanced(9, 1, 0, 0, 0);
 
     // Indicate that the back buffer will now be used to present
     // Correct: Create barrier2 variable
