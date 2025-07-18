@@ -1,6 +1,8 @@
 ﻿// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
 
 #include "जीपीयू-नियंत्रक.h"
+#include <random>
+#include <ctime>
 
 void InitD3D(HWND hwnd);
 void PopulateCommandList();
@@ -22,32 +24,82 @@ void** ppv = reinterpret_cast<void**>(&device);
 OneMonitorController screen[4];
 ComPtr<ID3D12Device> device;
 
-void GenerateVertexData(Vertex** vertexData, UINT* vertexCount, UINT* vertexBufferSize) {
-    static Vertex triangleVertices[] = {
-        { XMFLOAT3(0.0f, 0.5f, 0.0f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) },    // Top vertex (red)
-        { XMFLOAT3(0.5f, -0.5f, 0.0f), XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f) },   // Bottom right vertex (green)
-        { XMFLOAT3(-0.5f, -0.5f, 0.0f), XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f) },   // Bottom left vertex (blue)
-    
-        // A Rectangle.
-        { XMFLOAT3(0.6f, 0.6f, 0.0f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) },    // Top Left (red)
-        { XMFLOAT3(0.9f, 0.6f, 0.0f), XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f) },    // Top Right (green)
-        { XMFLOAT3(0.6f, 0.4f, 0.0f), XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f) },   // Bottom left vertex (blue)
-        { XMFLOAT3(0.9f, 0.4f, 0.0f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) }    // Both right (blue)
-    };
 
-    *vertexData = triangleVertices;
-    *vertexCount = 7;
-    *vertexBufferSize = sizeof(triangleVertices);
+// Global variables for dynamic triangle generation
+static std::vector<Vertex> dynamicVertices;
+static std::vector<UINT16> dynamicIndices;
+static UINT triangleCount = 0;
+
+void GenerateVertexData(Vertex** vertexData, UINT* vertexCount, UINT* vertexBufferSize) {
+    // Initialize random number generator
+    static std::mt19937 rng(static_cast<unsigned>(std::time(nullptr)));
+    std::uniform_real_distribution<float> posDist(-0.9f, 0.9f);  // Position range
+    std::uniform_real_distribution<float> sizeDist(0.02f, 0.1f); // Size range (max 0.1 as requested)
+    std::uniform_real_distribution<float> colorDist(0.0f, 1.0f); // Color range
+    std::uniform_int_distribution<int> countDist(10, 100);       // Triangle count range
+
+    // Generate random number of triangles (10-100)
+    triangleCount = countDist(rng);
+
+    // Clear previous data
+    dynamicVertices.clear();
+    dynamicVertices.reserve(triangleCount * 3);
+
+    // Generate triangles
+    for (UINT i = 0; i < triangleCount; ++i) {
+        // Random center position for the triangle
+        float centerX = posDist(rng);
+        float centerY = posDist(rng);
+
+        // Random size for the triangle
+        float triangleSize = sizeDist(rng);
+
+        // Random colors for each vertex
+        XMFLOAT4 color1(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+        XMFLOAT4 color2(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+        XMFLOAT4 color3(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+
+        // Generate triangle vertices relative to center
+        // Top vertex
+        dynamicVertices.push_back({
+            XMFLOAT3(centerX, centerY + triangleSize * 0.5f, 0.0f),
+            color1
+            });
+
+        // Bottom right vertex
+        dynamicVertices.push_back({
+            XMFLOAT3(centerX + triangleSize * 0.433f, centerY - triangleSize * 0.25f, 0.0f),
+            color2
+            });
+
+        // Bottom left vertex
+        dynamicVertices.push_back({
+            XMFLOAT3(centerX - triangleSize * 0.433f, centerY - triangleSize * 0.25f, 0.0f),
+            color3
+            });
+    }
+
+    *vertexData = dynamicVertices.data();
+    *vertexCount = triangleCount * 3;
+    *vertexBufferSize = dynamicVertices.size() * sizeof(Vertex);
 }
 
 void GenerateIndexData(UINT16** indexData, UINT* indexCount, UINT* indexBufferSize) {
-    static UINT16 triangleIndices[] = {
-        0, 1, 2,  // Triangle indices
-        3, 4, 5, 4, 6, 5 // Rectangle with both vertex in clockwise direction.
-    };
-    *indexData = triangleIndices;
-    *indexCount = 9;
-    *indexBufferSize = sizeof(triangleIndices);
+    // Clear previous data
+    dynamicIndices.clear();
+    dynamicIndices.reserve(triangleCount * 3);
+
+    // Generate indices for each triangle
+    for (UINT i = 0; i < triangleCount; ++i) {
+        UINT16 baseIndex = i * 3;
+        dynamicIndices.push_back(baseIndex);     // First vertex
+        dynamicIndices.push_back(baseIndex + 1); // Second vertex
+        dynamicIndices.push_back(baseIndex + 2); // Third vertex
+    }
+
+    *indexData = dynamicIndices.data();
+    *indexCount = triangleCount * 3;
+    *indexBufferSize = dynamicIndices.size() * sizeof(UINT16);
 }
 
 void InitD3D(HWND hwnd) {
@@ -371,12 +423,12 @@ void PopulateCommandList() {
     const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f }; // Example color, adjust as needed
     screen[i].commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
 
-    // Draw triangle
+    // Draw triangles
     screen[i].commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     screen[i].commandList->IASetVertexBuffers(0, 1, &screen[i].vertexBufferView);
     //screen[i].commandList->DrawInstanced(3, 1, 0, 0);
     screen[i].commandList->IASetIndexBuffer(&screen[i].indexBufferView);
-    screen[i].commandList->DrawIndexedInstanced(9, 1, 0, 0, 0);
+    screen[i].commandList->DrawIndexedInstanced(triangleCount * 3, 1, 0, 0, 0);
 
     // Indicate that the back buffer will now be used to present
     auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(screen[i].renderTargets[screen[i].frameIndex].Get(), 
