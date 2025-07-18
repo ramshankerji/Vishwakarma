@@ -37,13 +37,13 @@ struct Vertex {
     XMFLOAT3 position;
     XMFLOAT4 color;
 };
-const UINT FrameCount = 2; //Initially we are going with doulbe buffering. TODO: Move to triple buffering in future.
+const UINT FrameCount = 2; //Initially we are going with double buffering. TODO: Move to triple buffering in future.
 
 //extern ComPtr<ID3D12Device> device;
 
-struct OneMonitorControler {
+struct OneMonitorController {
     // System Fetched information.
-    bool isScreenInitilized = false;
+    bool isScreenInitalized = false;
     int screenPixelWidth = 800;
     int screenPixelHeight = 600;
     int screenPhysicalWidth = 0; // in mm
@@ -76,7 +76,7 @@ struct OneMonitorControler {
 };
 
 // 4 is the maximum number of simultaneous screen we are ever going to support. DO NOT CHANGE EVER.
-extern OneMonitorControler screen[4]; 
+extern OneMonitorController screen[4]; 
 
 void InitD3D(HWND hwnd);
 void PopulateCommandList();

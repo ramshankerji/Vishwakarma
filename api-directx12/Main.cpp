@@ -1,4 +1,5 @@
-﻿// HelloWindowsDesktop.cpp : The beginning of Vishwakarma Desktop Application.
+﻿// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
+
 // compile with: /D_UNICODE /DUNICODE /DWIN32 /D_WINDOWS /c
 
 #include "preCompiledHeadersWindows.h"
@@ -127,12 +128,8 @@ LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 // Forward declaration of the RenderText function
 // void RenderText(HDC hdc, FT_Face face, const char* text, int x, int y);
 
-int WINAPI WinMain(
-    _In_ HINSTANCE hInstance,
-    _In_opt_ HINSTANCE hPrevInstance,
-    _In_ LPSTR     lpCmdLine,
-    _In_ int       nCmdShow
-)
+int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
+    _In_ LPSTR lpCmdLine, _In_ int nCmdShow)
 {
     // Enable per Monitor DPI Awareness. Works Windows 8.1 and latter only.
     SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
@@ -182,7 +179,7 @@ int WINAPI WinMain(
         WS_OVERLAPPEDWINDOW | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
         // Size and position
         CW_USEDEFAULT, CW_USEDEFAULT, // Initial position (x, y)
-        screenWidth / 2, screenHeight / 2, // Window size devided by 2 when user press un-maximize button. 
+        screenWidth / 2, screenHeight / 2, // Window size divided by 2 when user press un-maximize button. 
         NULL,      // The parent of this window
         NULL,      // This application does not have a menu bar, we create our own Menu.
         hInstance, // Instance handle, the first parameter from WinMain
@@ -199,8 +196,8 @@ int WINAPI WinMain(
         return 1;
     }
 
-    // By default we always initilize application in maximized state.
-    // Intentionally we don't remember last closed size and slowdown startup time retriving that value.
+    // By default we always initialize application in maximized state.
+    // Intentionally we don't remember last closed size and slowdown startup time retrieving that value.
     ShowWindow(hWnd, SW_MAXIMIZE); // hWnd: the value returned from CreateWindow
     //ShowWindow(hWnd, nCmdShow); // nCmdShow: the fourth parameter from WinMain
     UpdateWindow(hWnd);
@@ -263,8 +260,8 @@ int WINAPI WinMain(
     return (int)msg.wParam;
 }
 
-//  PURPOSE:  Processes messages for the main window.
-// This is the function which runs whenever something changes from Operating System and we are expected to update ourselfves.
+// PURPOSE:  Processes messages for the main window.
+// This is the function which runs whenever something changes from Operating System and we are expected to update ourselves.
 // Even the user input such as keyboard presses, mouse clicks, open/close are notified to this function.
 // Remember this is not the function which keeps running every frame, that is a different infinite loop in WinMain function.
 // Question: What happens to WinMain when this function runs? Does that one pause?
@@ -384,85 +381,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         // Get the dimensions of the client area
         RECT rect;
         GetClientRect(hWnd, &rect);
-
-        // Calculate the position to start drawing the text to center it
-        int x = (rect.right - rect.left) / 2;
-        int y = (rect.bottom - rect.top) / 2;
-
-        //RenderText(hdc, face, uiText001, 10, 20);
-        
-        if (1) // Homepage of the application.
-        {
-            
-            RenderText(hdc, face, uiText002, 10, 60);
-            RenderText(hdc, face, uiText003, 10, 80);
-            RenderText(hdc, face, uiText015, 10, 120);
-
-            RenderText(hdc, face, uiText004, 200, 80);
-
-            RenderText(hdc, face, uiText005, 200, 120);
-            RenderText(hdc, face, uiText006, 400, 120);
-            RenderText(hdc, face, uiText007, 600, 120);
-
-            RenderText(hdc, face, uiText008, 200, 220);
-            RenderText(hdc, face, uiText009, 400, 220);
-            RenderText(hdc, face, uiText016, 600, 220);
-            RenderText(hdc, face, uiText010, 200, 320);
-            RenderText(hdc, face, uiText011, 400, 320);
-            RenderText(hdc, face, uiText017, 600, 320);
-            RenderText(hdc, face, uiText018, 200, 420);
-            RenderText(hdc, face, uiText019, 400, 420);
-            RenderText(hdc, face, uiText020, 600, 420);
-
-            RenderText(hdc, face, uiText012, 200, 520);
-
-            RenderText(hdc, face, uiText013, 1000, 60);
-            RenderText(hdc, face, uiText014, 1000, 320);
-            
-        }
-
-        if (0) //2D Drafting module
-        {
-            
-            RenderText(hdc, face, "I am 2D Drafting Module", 200, 80);
-
-            RenderText(hdc, face, "Line", 200, 320);
-            Draw2DLine(hdc, 150, 250, 250, 150);
-
-            RenderText(hdc, face, "Polyline", 400, 320);
-            Draw2DLine(hdc, 350, 250, 400, 200);
-            Draw2DLine(hdc, 400, 200, 450, 250);
-            Draw2DLine(hdc, 450, 250, 500, 150);
-
-            RenderText(hdc, face, "Triangle", 600, 320);
-            Draw2DLine(hdc, 650, 250, 700, 150);
-            Draw2DLine(hdc, 700, 150, 750, 250);
-            Draw2DLine(hdc, 750, 250, 650, 250);
-
-            RenderText(hdc, face, "Rectangle", 200, 620);
-            Draw2DLine(hdc, 150, 550, 150, 450);
-            Draw2DLine(hdc, 150, 450, 300, 450);
-            Draw2DLine(hdc, 300, 450, 300, 550);
-            Draw2DLine(hdc, 300, 550, 150, 550);
-
-            RenderText(hdc, face, "Circle", 400, 620);
-
-            RenderText(hdc, face, "Text", 600, 620);
-            RenderText(hdc, face, "EIL :-)", 600, 520);
-            
-        }
-
-        // Create a random device and a random number generator
-        std::random_device rd;  // Obtain a random number from hardware
-        std::mt19937 gen(rd()); // Seed the generator
-
-        // Define the distribution range
-        std::uniform_int_distribution<> distr(100, 500);
-        
-        if (image_data)
-        {
-            //DisplayImage(hdc, image_data, width, height);
-        }
         */
         EndPaint(hWnd, &ps);
         
@@ -478,28 +396,3 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     return 0;
 }
-
-//RenderText is GDI. Not DirectX12. It is to be phased out as soon as we have UI working in DirectX12.
-/*
-void RenderText(HDC hdc, FT_Face face, const char* text, int x, int y) {
-    FT_GlyphSlot g = face->glyph;
-
-    for (const char* p = text; *p; p++) {
-        if (FT_Load_Char(face, *p, FT_LOAD_RENDER)) {
-            continue; // Ignore errors
-        }
-
-        // Draw the character here
-        for (int row = 0; row < g->bitmap.rows; ++row) {
-            for (int col = 0; col < g->bitmap.width; ++col) {
-                if (g->bitmap.buffer[row * g->bitmap.width + col]) {
-                    SetPixel(hdc, x + col + g->bitmap_left, y + row - g->bitmap_top, RGB(0, 0, 0));
-                }
-            }
-        }
-
-        x += g->advance.x >> 6; // Advance to the next character
-    }
-}
-*/
-

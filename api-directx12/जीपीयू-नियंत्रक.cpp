@@ -11,7 +11,7 @@ void GenerateIndexData(UINT16** indexData, UINT* indexCount, UINT* indexBufferSi
 
 /*
 IID_PPV_ARGS is a MACRO used in DirectX (and COM programming in general) to help safely and correctly
-retrieve interface pointers during object creation or querying. It helps reduce repetative typing of codes.
+retrieve interface pointers during object creation or querying. It helps reduce repetitive typing of codes.
 COM interfaces are identified by unique GUIDs. Than GUID pointer is converted to appropriate pointer type.
 
 Ex: IID_PPV_ARGS(&device) expands to following:
@@ -19,7 +19,7 @@ IID iid = __uuidof(ID3D12Device);
 void** ppv = reinterpret_cast<void**>(&device);
 */
 
-OneMonitorControler screen[4];
+OneMonitorController screen[4];
 ComPtr<ID3D12Device> device;
 
 void GenerateVertexData(Vertex** vertexData, UINT* vertexCount, UINT* vertexBufferSize) {
@@ -32,7 +32,7 @@ void GenerateVertexData(Vertex** vertexData, UINT* vertexCount, UINT* vertexBuff
         { XMFLOAT3(0.6f, 0.6f, 0.0f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) },    // Top Left (red)
         { XMFLOAT3(0.9f, 0.6f, 0.0f), XMFLOAT4(0.0f, 1.0f, 0.0f, 1.0f) },    // Top Right (green)
         { XMFLOAT3(0.6f, 0.4f, 0.0f), XMFLOAT4(0.0f, 0.0f, 1.0f, 1.0f) },   // Bottom left vertex (blue)
-        { XMFLOAT3(0.9f, 0.4f, 0.0f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) }    // Botth right (blue)
+        { XMFLOAT3(0.9f, 0.4f, 0.0f), XMFLOAT4(1.0f, 0.0f, 0.0f, 1.0f) }    // Both right (blue)
     };
 
     *vertexData = triangleVertices;
@@ -130,7 +130,8 @@ void InitD3D(HWND hwnd) {
     ComPtr<ID3DBlob> signature;
     ComPtr<ID3DBlob> error;
     D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error);
-    device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(), IID_PPV_ARGS(&screen[i].rootSignature));
+    device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(),
+        IID_PPV_ARGS(&screen[i].rootSignature));
 
     // Create the shader
     ComPtr<ID3DBlob> vertexShader;
@@ -168,8 +169,10 @@ void InitD3D(HWND hwnd) {
         }
     )";
 
-    D3DCompile(vertexShaderCode, strlen(vertexShaderCode), nullptr, nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &vertexShader, nullptr);
-    D3DCompile(pixelShaderCode, strlen(pixelShaderCode), nullptr, nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &pixelShader, nullptr);
+    D3DCompile(vertexShaderCode, strlen(vertexShaderCode), nullptr, nullptr, nullptr,
+        "VSMain", "vs_5_0", compileFlags, 0, &vertexShader, nullptr);
+    D3DCompile(pixelShaderCode, strlen(pixelShaderCode), nullptr, nullptr, nullptr,
+        "PSMain", "ps_5_0", compileFlags, 0, &pixelShader, nullptr);
 
     // Define the vertex input layout
     D3D12_INPUT_ELEMENT_DESC inputElementDescs[] = {
@@ -194,7 +197,7 @@ void InitD3D(HWND hwnd) {
     psoDesc.SampleDesc.Count = 1;
     device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&screen[i].pipelineState));
 
-    // Create the command list. Note that this is default pipelineStete for the command list.
+    // Create the command list. Note that this is default pipelineState for the command list.
     // It can be changed inside command list also by calling ID3D12GraphicsCommandList::SetPipelineState.
     // CommandList is : List of various Commands including repeated calls of many CommandBundles.
     device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, screen[i].commandAllocator.Get(), 
@@ -223,12 +226,9 @@ void InitD3D(HWND hwnd) {
     auto resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
 
     device->CreateCommittedResource(
-        &heapProps,                   // Correct: Pass address of the local variable
-        D3D12_HEAP_FLAG_NONE,
-        &resourceDesc,                // Correct: Pass address of the local variable
-        D3D12_RESOURCE_STATE_COPY_DEST,
-        nullptr,
-        IID_PPV_ARGS(&screen[i].vertexBuffer));
+        &heapProps, D3D12_HEAP_FLAG_NONE,
+        &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr, IID_PPV_ARGS(&screen[i].vertexBuffer));
 
     // Create upload heap
 
@@ -239,12 +239,9 @@ void InitD3D(HWND hwnd) {
     auto uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
 
     device->CreateCommittedResource(
-        &uploadHeapProps,              // Correct: Pass address of the local variable
-        D3D12_HEAP_FLAG_NONE,
-        &uploadBufferDesc,             // Correct: Pass address of the local variable
-        D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr,
-        IID_PPV_ARGS(&vertexBufferUpload));
+        &uploadHeapProps, D3D12_HEAP_FLAG_NONE,
+        &uploadBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr, IID_PPV_ARGS(&vertexBufferUpload));
 
     // Copy data to upload heap
     D3D12_SUBRESOURCE_DATA vertexData = {};
@@ -262,12 +259,9 @@ void InitD3D(HWND hwnd) {
     auto indexResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
 
     device->CreateCommittedResource(
-        &indexHeapProps,                   // Correct: Pass address of the local variable
-        D3D12_HEAP_FLAG_NONE,
-        & indexResourceDesc,                // Correct: Pass address of the local variable
-        D3D12_RESOURCE_STATE_COPY_DEST,
-        nullptr,
-        IID_PPV_ARGS(&screen[i].indexBuffer));
+        &indexHeapProps, D3D12_HEAP_FLAG_NONE,
+        &indexResourceDesc, D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr, IID_PPV_ARGS(&screen[i].indexBuffer));
 
     // Create upload heap for index buffer
     // Define the heap properties for the UPLOAD heap
@@ -277,12 +271,9 @@ void InitD3D(HWND hwnd) {
     auto indexUploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
 
     device->CreateCommittedResource(
-        &indexUploadHeapProps,              // Correct: Pass address of the local variable
-        D3D12_HEAP_FLAG_NONE,
-        & indexUploadBufferDesc,             // Correct: Pass address of the local variable
-        D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr,
-        IID_PPV_ARGS(&indexBufferUpload));
+        &indexUploadHeapProps, D3D12_HEAP_FLAG_NONE,
+        &indexUploadBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr, IID_PPV_ARGS(&indexBufferUpload));
 
     // Copy data to upload heap
     D3D12_SUBRESOURCE_DATA indexData = {};
@@ -314,14 +305,14 @@ void InitD3D(HWND hwnd) {
     );
 
     // Record the barrier commands in the command list
-    screen[i].commandList->ResourceBarrier(1, &barrier); // Correct: Pass the address of the local 'barrier' variable
-    screen[i].commandList->ResourceBarrier(1, &indexBarrier); // Correct: Pass the address of the local 'indexBarrier' variable
+    screen[i].commandList->ResourceBarrier(1, &barrier);
+    screen[i].commandList->ResourceBarrier(1, &indexBarrier);
     
     // Close command list. It mostly runs synchronously with little work deferred. Completes quickly. 
     // Close():  Transitions the command list from recording mode to execution-ready mode.
     // Validates Commands / Catch errors, Compress (driver-specific optimization), to Immutable (Read-Only).
     screen[i].commandList->Close();
-    // Exicute the command list.
+    // Execute the command list.
     ID3D12CommandList* ppCommandLists[] = { screen[i].commandList.Get() };
     screen[i].commandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
 
@@ -353,9 +344,6 @@ void PopulateCommandList() {
     // Set necessary state
     screen[i].commandList->SetGraphicsRootSignature(screen[i].rootSignature.Get());
 
-    //Following 2 error lines fixed by ChatGPT.
-    //commandList->RSSetViewports(1, &CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(WindowWidth), static_cast<float>(WindowHeight)));
-    //commandList->RSSetScissorRects(1, &CD3DX12_RECT(0, 0, WindowWidth, WindowHeight));
     // 1) Create named variables (l‑values)
     CD3DX12_VIEWPORT viewport(0.0f, 0.0f,
         static_cast<float>(screen[i].WindowWidth),
@@ -370,12 +358,13 @@ void PopulateCommandList() {
 
 
     // Indicate that the back buffer will be used as a render target
-    // Correct: Create barrier1 variable
-    auto barrier1 = CD3DX12_RESOURCE_BARRIER::Transition(screen[i].renderTargets[screen[i].frameIndex].Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    auto barrier1 = CD3DX12_RESOURCE_BARRIER::Transition(screen[i].renderTargets[screen[i].frameIndex].Get(),
+        D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
     screen[i].commandList->ResourceBarrier(1, &barrier1); // Pass address of barrier1
 
     // Record commands
-    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(screen[i].rtvHeap->GetCPUDescriptorHandleForHeapStart(), screen[i].frameIndex, screen[i].rtvDescriptorSize);
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(screen[i].rtvHeap->GetCPUDescriptorHandleForHeapStart(),
+        screen[i].frameIndex, screen[i].rtvDescriptorSize);
     screen[i].commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
 
     // Clear render target
@@ -390,8 +379,8 @@ void PopulateCommandList() {
     screen[i].commandList->DrawIndexedInstanced(9, 1, 0, 0, 0);
 
     // Indicate that the back buffer will now be used to present
-    // Correct: Create barrier2 variable
-    auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(screen[i].renderTargets[screen[i].frameIndex].Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+    auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(screen[i].renderTargets[screen[i].frameIndex].Get(), 
+        D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
     screen[i].commandList->ResourceBarrier(1, &barrier2); // Pass address of barrier2
 
     // Close command list
