@@ -46,10 +46,21 @@ struct OneMonitorController {
     int screenPixelHeight = 600;
     int screenPhysicalWidth = 0; // in mm
     int screenPhysicalHeight = 0; // in mm
-
-    //Current ViewPort ( Rendering area ) size.
-    int WindowWidth = 800;
+    int WindowWidth = 800;//Current ViewPort ( Rendering area ) size.
     int WindowHeight = 600;
+
+    HMONITOR hMonitor = NULL;                    // Monitor handle
+    std::wstring deviceName;                     // Monitor device name (e.g., "\\\\.\\DISPLAY1")
+    std::wstring friendlyName;                   // Human readable name (e.g., "Dell U2720Q")
+    RECT monitorRect;                           // Full monitor rectangle
+    RECT workAreaRect;                          // Work area (excluding taskbar)
+    int dpiX = 96;                              // DPI X
+    int dpiY = 96;                              // DPI Y
+    double scaleFactor = 1.0;                   // Scale factor (100% = 1.0, 125% = 1.25, etc.)
+    bool isPrimary = false;                     // Is this the primary monitor?
+    DWORD orientation = DMDO_DEFAULT;           // Monitor orientation
+    int refreshRate = 60;                       // Refresh rate in Hz
+    int colorDepth = 32;                        // Color depth in bits per pixel
 
     // D3D12 objects
     ComPtr<IDXGISwapChain3> swapChain;
@@ -80,7 +91,11 @@ struct OneMonitorController {
 };
 
 // 4 is the maximum number of simultaneous screen we are ever going to support. DO NOT CHANGE EVER.
+extern int g_monitorCount;             // Global variable
 extern OneMonitorController screen[4]; 
+
+void FetchAllMonitorDetails();
+BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData);
 
 void InitD3D(HWND hwnd);
 void PopulateCommandList();

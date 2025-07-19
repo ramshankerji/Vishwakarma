@@ -29,6 +29,7 @@ struct ConstantBuffer {
 
 OneMonitorController screen[4];
 ComPtr<ID3D12Device> device;
+bool isGPUEngineInitialized = false; //TODO: To be implemented.
 
 // Global variables for dynamic pyramid generation
 static std::vector<Vertex> dynamicVertices;
@@ -41,7 +42,7 @@ void GenerateVertexData(Vertex** vertexData, UINT* vertexCount, UINT* vertexBuff
     std::uniform_real_distribution<float> posDist(-5.0f, 5.0f);  // 3D Position range
     std::uniform_real_distribution<float> sizeDist(0.2f, 1.0f); // Size range for pyramids
     std::uniform_real_distribution<float> colorDist(0.0f, 1.0f); // Color range
-    std::uniform_int_distribution<int> countDist(5, 25);         // Pyramid count range (reduced for 3D complexity)
+    std::uniform_int_distribution<int> countDist(25, 50);         // Pyramid count range (reduced for 3D complexity)
 
     // Generate random number of pyramids
     pyramidCount = countDist(rng);

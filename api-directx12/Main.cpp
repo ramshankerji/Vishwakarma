@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <tchar.h>
+#include <chrono>
+#include <iomanip>  // for std::setprecision
 //#include "ft2build.h"
 //#include FT_FREETYPE_H
 #include <iostream>
@@ -112,16 +114,168 @@ void GetMaxScreenResolution(int& maxWidth, int& maxHeight) {
     maxHeight = GetSystemMetrics(SM_CYSCREEN);
 }
 
-// Global variables
+int g_monitorCount = 0; // Global monitor count
+int primaryMonitorIndex = 0;
 
-// The main window class name.
-static TCHAR szWindowClass[] = _T("DesktopApp");
+// Callback function for EnumDisplayMonitors. Notice: This function is NOT async. Just runs inline.
+// But windows API design needs a separate function to be defined, which is called for each monitor.
+BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData)
+{
+    if (g_monitorCount >= 4) {
+        // We support maximum 4 monitors
+        return FALSE; // Stop enumeration
+    }
 
-// The string that appears in the application's title bar.
-static TCHAR szTitle[] = _T("Vishwakarma 0 :-) ");
+    OneMonitorController* currentScreen = &screen[g_monitorCount];
+    currentScreen->hMonitor = hMonitor; // Store monitor handle
+    MONITORINFOEXW monitorInfo = {};// Get monitor info
+    monitorInfo.cbSize = sizeof(MONITORINFOEXW);
 
-// Stored instance handle for use in Win32 API calls such as FindResource
-HINSTANCE hInst;
+    if (GetMonitorInfoW(hMonitor, &monitorInfo)) {
+        currentScreen->deviceName = std::wstring(monitorInfo.szDevice);
+        currentScreen->monitorRect = monitorInfo.rcMonitor;// Store monitor rectangle (full screen)
+        currentScreen->workAreaRect = monitorInfo.rcWork;// Store work area (screen minus taskbar/docked toolbars)
+        // Calculate pixel dimensions
+        currentScreen->screenPixelWidth = monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left;
+        currentScreen->screenPixelHeight = monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top;
+        // Check if this is the primary monitor
+        currentScreen->isPrimary = (monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0;
+
+        UINT dpiX, dpiY;// Get DPI information
+        if (SUCCEEDED(GetDpiForMonitor(hMonitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY))) {
+            currentScreen->dpiX = static_cast<int>(dpiX);
+            currentScreen->dpiY = static_cast<int>(dpiY);
+            currentScreen->scaleFactor = static_cast<double>(dpiX) / 96.0; // 96 DPI = 100% scale
+        }
+        DISPLAY_DEVICEW displayDevice = {};// Get physical dimensions and additional display properties
+        displayDevice.cb = sizeof(DISPLAY_DEVICEW);
+
+        // Find the display device that matches this monitor
+        for (DWORD deviceNum = 0; EnumDisplayDevicesW(NULL, deviceNum, &displayDevice, 0); deviceNum++) {
+            if (wcscmp(displayDevice.DeviceName, monitorInfo.szDevice) == 0) {
+                currentScreen->friendlyName = std::wstring(displayDevice.DeviceString);
+                DEVMODEW devMode = {};// Get current display mode for additional info
+                devMode.dmSize = sizeof(DEVMODEW);
+
+                if (EnumDisplaySettingsW(displayDevice.DeviceName, ENUM_CURRENT_SETTINGS, &devMode)) {
+                    currentScreen->refreshRate = devMode.dmDisplayFrequency;
+                    currentScreen->colorDepth = devMode.dmBitsPerPel;
+                    currentScreen->orientation = devMode.dmDisplayOrientation;
+
+                    // Try to get physical dimensions from device mode. Note: These might be 0 if not available from driver
+                    if (devMode.dmFields & DM_PAPERSIZE) {
+                        // Physical dimensions in 0.1mm units (if available)
+                        currentScreen->screenPhysicalWidth = devMode.dmPaperWidth / 10;
+                        currentScreen->screenPhysicalHeight = devMode.dmPaperLength / 10;
+                    }
+                }
+                break;
+            }
+        }
+
+        // If physical dimensions not available from device mode, try to calculate from DPI
+        if (currentScreen->screenPhysicalWidth == 0 || currentScreen->screenPhysicalHeight == 0) {
+            // Calculate physical size from DPI (approximate), 1 inch = 25.4 mm
+            double inchesWidth = static_cast<double>(currentScreen->screenPixelWidth) / currentScreen->dpiX;
+            double inchesHeight = static_cast<double>(currentScreen->screenPixelHeight) / currentScreen->dpiY;
+            currentScreen->screenPhysicalWidth = static_cast<int>(inchesWidth * 25.4);
+            currentScreen->screenPhysicalHeight = static_cast<int>(inchesHeight * 25.4);
+        }
+
+        // Calculate drawable area dimensions (work area)
+        currentScreen->WindowWidth = currentScreen->workAreaRect.right - currentScreen->workAreaRect.left;
+        currentScreen->WindowHeight = currentScreen->workAreaRect.bottom - currentScreen->workAreaRect.top;
+
+        currentScreen->isScreenInitalized = true;// Mark as initialized
+
+        // Debug output
+        std::wcout << L"Monitor " << g_monitorCount << L":" << std::endl;
+        std::wcout << L"  Device: " << currentScreen->deviceName << std::endl;
+        std::wcout << L"  Name: " << currentScreen->friendlyName << std::endl;
+        std::wcout << L"  Resolution: " << currentScreen->screenPixelWidth << L"x" << currentScreen->screenPixelHeight << std::endl;
+        std::wcout << L"  Physical: " << currentScreen->screenPhysicalWidth << L"x" << currentScreen->screenPhysicalHeight << L" mm" << std::endl;
+        std::wcout << L"  DPI: " << currentScreen->dpiX << L"x" << currentScreen->dpiY << std::endl;
+        std::wcout << L"  Scale: " << static_cast<int>(currentScreen->scaleFactor * 100) << L"%" << std::endl;
+        std::wcout << L"  Work Area: " << currentScreen->WindowWidth << L"x" << currentScreen->WindowHeight << std::endl;
+        std::wcout << L"  Primary: " << (currentScreen->isPrimary ? L"Yes" : L"No") << std::endl;
+        std::wcout << L"  Refresh: " << currentScreen->refreshRate << L" Hz" << std::endl;
+        std::wcout << L"  Color Depth: " << currentScreen->colorDepth << L" bits" << std::endl;
+        std::wcout << std::endl;
+    }
+
+    g_monitorCount++;
+    return TRUE; // Continue enumeration
+}
+
+void FetchAllMonitorDetails() // Main function to fetch all monitor details
+{
+    g_monitorCount = 0; // Reset monitor count and clear all screen data
+
+    // Clear all screen structures
+    for (int i = 0; i < 4; i++) {
+        // Reset monitor-specific fields but preserve D3D objects if they exist
+        screen[i].isScreenInitalized = false;
+        screen[i].screenPixelWidth = 800;
+        screen[i].screenPixelHeight = 600;
+        screen[i].screenPhysicalWidth = 0;
+        screen[i].screenPhysicalHeight = 0;
+        screen[i].hMonitor = NULL;
+        screen[i].deviceName.clear();
+        screen[i].friendlyName.clear();
+        ZeroMemory(&screen[i].monitorRect, sizeof(RECT));
+        ZeroMemory(&screen[i].workAreaRect, sizeof(RECT));
+        screen[i].dpiX = 96;
+        screen[i].dpiY = 96;
+        screen[i].scaleFactor = 1.0;
+        screen[i].isPrimary = false;
+        screen[i].orientation = DMDO_DEFAULT;
+        screen[i].refreshRate = 60;
+        screen[i].colorDepth = 32;
+        screen[i].WindowWidth = 800;
+        screen[i].WindowHeight = 600;
+    }
+
+    std::wcout << L"Enumerating monitors..." << std::endl;
+
+    // Enumerate all monitors
+    if (!EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, 0)) {
+        std::wcerr << L"Failed to enumerate monitors!" << std::endl;
+        // Set up default single monitor if enumeration fails
+        g_monitorCount = 1;
+        screen[0].isScreenInitalized = true;
+        screen[0].screenPixelWidth = GetSystemMetrics(SM_CXSCREEN);
+        screen[0].screenPixelHeight = GetSystemMetrics(SM_CYSCREEN);
+        screen[0].WindowWidth = screen[0].screenPixelWidth;
+        screen[0].WindowHeight = screen[0].screenPixelHeight;
+        screen[0].isPrimary = true;
+    }
+
+    std::wcout << L"Found " << g_monitorCount << L" monitor(s)" << std::endl;
+}
+
+void AllocateConsoleWindow() {
+    AllocConsole();// Allocate a console for this GUI application
+    // Redirect stdout, stdin, stderr to console
+    FILE* pCout;
+    FILE* pCin;
+    FILE* pCerr;
+    freopen_s(&pCout, "CONOUT$", "w", stdout);
+    freopen_s(&pCin, "CONIN$", "r", stdin);
+    freopen_s(&pCerr, "CONOUT$", "w", stderr);
+    // Make cout, wcout, cin, wcin, wcerr, cerr, wclog and clog point to console as well
+    std::ios::sync_with_stdio(true);
+    std::wcout.clear();
+    std::cout.clear();
+    std::wcerr.clear();
+    std::cerr.clear();
+    std::wcin.clear();
+    std::cin.clear();
+    SetConsoleTitleA("Vishwakarma Debug Console");
+}
+
+static TCHAR szWindowClass[] = _T("DesktopApp"); // The main window class name.
+static TCHAR szTitle[] = _T("Vishwakarma 0 :-) "); // The string that appears in the application's title bar.
+HINSTANCE hInst;// Stored instance handle for use in Win32 API calls such as FindResource
 
 // Forward declarations of functions included in this code module:
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
@@ -131,8 +285,21 @@ LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     _In_ LPSTR lpCmdLine, _In_ int nCmdShow)
 {
-    // Enable per Monitor DPI Awareness. Works Windows 8.1 and latter only.
-    SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
+#ifdef _DEBUG
+    AllocateConsoleWindow();// Only allocate console in debug builds
+#endif
+
+    // Enable per Monitor DPI Awareness. Requires Windows 10 version 1703+.
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    FetchAllMonitorDetails();
+
+    // Use the monitor details for window creation, i.e. to create window on primary monitor:
+    for (int i = 0; i < g_monitorCount; i++) {
+        if (screen[i].isPrimary) {
+            primaryMonitorIndex = i;
+            break;
+        }
+    }
 
     //Create Windows Class.
     WNDCLASSEX wcex;
@@ -179,7 +346,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
         WS_OVERLAPPEDWINDOW | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
         // Size and position
         CW_USEDEFAULT, CW_USEDEFAULT, // Initial position (x, y)
-        screenWidth / 2, screenHeight / 2, // Window size divided by 2 when user press un-maximize button. 
+        screen[primaryMonitorIndex].WindowWidth / 2,  // Half the work area width
+        screen[primaryMonitorIndex].WindowHeight / 2, // Window size divided by 2 when user press un-maximize button. 
         NULL,      // The parent of this window
         NULL,      // This application does not have a menu bar, we create our own Menu.
         hInstance, // Instance handle, the first parameter from WinMain
@@ -239,23 +407,43 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
             ID3D12CommandList* ppCommandLists[] = { screen[0].commandList.Get() };
             screen[0].commandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
 
-            // Present
-            screen[0].swapChain->Present(1, 0);
+            /*  The first parameter 1 enables VSync!This, tells the GPU to wait for the monitor's vertical blank interval before presenting the frame
+                Synchronize frame presentation with the display's refresh rate. It Throttle application to match the monitor's Hz
+                This is more energy efficient way. We are engineering application, not some 1st person shooter video game maximizing fps !
+                Without VSync, it was going 650fps(FullHD) on Laptop GPU with 25 Pyramid only geometry.
+             */
+            screen[0].swapChain->Present(1, 0); //Present. TODO: Multi Monitor window handling to be developed.
 
             // Wait for GPU
             WaitForPreviousFrame();
+
+#ifdef _DEBUG
+            // Update FPS counter (Debug build only)
+            // FPS calculation variables - add these as global or class members
+            static auto lastFpsTime = std::chrono::high_resolution_clock::now();
+            static int frameCount = 0;
+            static const double FPS_REPORT_INTERVAL = 10.0; // Report every 10 seconds
+            frameCount++;
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            auto elapsed = std::chrono::duration<double>(currentTime - lastFpsTime).count();
+            if (elapsed >= FPS_REPORT_INTERVAL) {
+                double fps = frameCount / elapsed;
+                std::wcout << L"FPS: " << std::fixed << std::setprecision(2) << fps
+                    << L" (" << frameCount << L" frames in "
+                    << std::setprecision(1) << elapsed << L" seconds)" << std::endl;
+                frameCount = 0;// Reset counters
+                lastFpsTime = currentTime;
+            }
+#endif
         }
     }
 
     //Cleanup Freetype library.
     //FT_Done_Face(face);
     //FT_Done_FreeType(ft);
-
-    // Wait for GPU to finish all commands
-    WaitForPreviousFrame();
-
-    // Clean up D3D resources
-    CleanupD3D();
+    
+    WaitForPreviousFrame(); // Wait for GPU to finish all commands
+    CleanupD3D();// Clean up D3D resources
 
     return (int)msg.wParam;
 }
@@ -386,6 +574,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         
         break;
     }
+    case WM_DISPLAYCHANGE: //When user adds or disconnects a new monitor.
+    case WM_DPICHANGED:    //When user manually changes screen resolution through windows settings.
+        std::wcout << L"Display configuration changed. Reinitializing..." << std::endl;
+        WaitForPreviousFrame();// Wait for GPU to finish all operations
+        CleanupD3D();// Clean up existing swap chains and D3D resources
+        FetchAllMonitorDetails();// Fetch updated monitor details
+        InitD3D(hWnd);// Reinitialize D3D with new monitor configuration
+        break;
     case WM_DESTROY:
         PostQuitMessage(0);
         break;
