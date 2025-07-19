@@ -7,8 +7,6 @@
 // You need a good dose of prior C++ knowledge and Computer Fundamentals before learning DirectX12.
 // Expect to read at least 2 times before you start grasping it !
 
-#define D3DCOMPILE_DEBUG 1 //TODO: Remove from production build.
-
 //Tell the HLSL compiler to include debug information into the shader blob.
 #define D3DCOMPILE_DEBUG 1 //TODO: Remove from production build.
 #include <d3d12.h> //Main DirectX12 API. Included from %WindowsSdkDir\Include%WindowsSDKVersion%\\um
@@ -73,6 +71,12 @@ struct OneMonitorController {
     ComPtr<ID3D12Resource> indexBuffer;
     D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
     D3D12_INDEX_BUFFER_VIEW indexBufferView;
+    ComPtr<ID3D12Resource> depthStencilBuffer;
+    ComPtr<ID3D12DescriptorHeap> dsvHeap;
+    ComPtr<ID3D12Resource> constantBuffer;
+    ComPtr<ID3D12DescriptorHeap> cbvHeap;
+
+    UINT8* cbvDataBegin;
 };
 
 // 4 is the maximum number of simultaneous screen we are ever going to support. DO NOT CHANGE EVER.

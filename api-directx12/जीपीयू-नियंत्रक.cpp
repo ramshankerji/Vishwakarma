@@ -21,84 +21,96 @@ IID iid = __uuidof(ID3D12Device);
 void** ppv = reinterpret_cast<void**>(&device);
 */
 
+// Structure to hold transformation matrices
+struct ConstantBuffer {
+    DirectX::XMFLOAT4X4 worldViewProjection;
+    DirectX::XMFLOAT4X4 world;
+};
+
 OneMonitorController screen[4];
 ComPtr<ID3D12Device> device;
 
-
-// Global variables for dynamic triangle generation
+// Global variables for dynamic pyramid generation
 static std::vector<Vertex> dynamicVertices;
 static std::vector<UINT16> dynamicIndices;
-static UINT triangleCount = 0;
+static UINT pyramidCount = 0;
 
 void GenerateVertexData(Vertex** vertexData, UINT* vertexCount, UINT* vertexBufferSize) {
     // Initialize random number generator
     static std::mt19937 rng(static_cast<unsigned>(std::time(nullptr)));
-    std::uniform_real_distribution<float> posDist(-0.9f, 0.9f);  // Position range
-    std::uniform_real_distribution<float> sizeDist(0.02f, 0.1f); // Size range (max 0.1 as requested)
+    std::uniform_real_distribution<float> posDist(-5.0f, 5.0f);  // 3D Position range
+    std::uniform_real_distribution<float> sizeDist(0.2f, 1.0f); // Size range for pyramids
     std::uniform_real_distribution<float> colorDist(0.0f, 1.0f); // Color range
-    std::uniform_int_distribution<int> countDist(10, 100);       // Triangle count range
+    std::uniform_int_distribution<int> countDist(5, 25);         // Pyramid count range (reduced for 3D complexity)
 
-    // Generate random number of triangles (10-100)
-    triangleCount = countDist(rng);
+    // Generate random number of pyramids
+    pyramidCount = countDist(rng);
 
     // Clear previous data
     dynamicVertices.clear();
-    dynamicVertices.reserve(triangleCount * 3);
+    dynamicVertices.reserve(pyramidCount * 4); // 4 vertices per pyramid
 
-    // Generate triangles
-    for (UINT i = 0; i < triangleCount; ++i) {
-        // Random center position for the triangle
+    // Generate pyramids
+    for (UINT i = 0; i < pyramidCount; ++i) {
+        // Random center position for the pyramid
         float centerX = posDist(rng);
         float centerY = posDist(rng);
+        float centerZ = posDist(rng);
 
         // Random size for the triangle
-        float triangleSize = sizeDist(rng);
+        float pyramidSize = sizeDist(rng);
 
         // Random colors for each vertex
         XMFLOAT4 color1(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
         XMFLOAT4 color2(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
         XMFLOAT4 color3(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+        XMFLOAT4 color4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
 
-        // Generate triangle vertices relative to center
-        // Top vertex
-        dynamicVertices.push_back({
-            XMFLOAT3(centerX, centerY + triangleSize * 0.5f, 0.0f),
-            color1
-            });
-
-        // Bottom right vertex
-        dynamicVertices.push_back({
-            XMFLOAT3(centerX + triangleSize * 0.433f, centerY - triangleSize * 0.25f, 0.0f),
-            color2
-            });
-
-        // Bottom left vertex
-        dynamicVertices.push_back({
-            XMFLOAT3(centerX - triangleSize * 0.433f, centerY - triangleSize * 0.25f, 0.0f),
-            color3
-            });
+        // Generate pyramid vertices
+        // Base vertices (forming a triangle base)
+        dynamicVertices.push_back({ XMFLOAT3(centerX - pyramidSize * 0.5f, centerY - pyramidSize * 0.5f, centerZ + pyramidSize * 0.5f), color1 });// Base vertex 1
+        dynamicVertices.push_back({ XMFLOAT3(centerX + pyramidSize * 0.5f, centerY - pyramidSize * 0.5f, centerZ + pyramidSize * 0.5f), color2 }); // Base vertex 2
+        dynamicVertices.push_back({ XMFLOAT3(centerX, centerY - pyramidSize * 0.5f, centerZ - pyramidSize * 0.5f), color3 }); // Base vertex 3
+        dynamicVertices.push_back({ XMFLOAT3(centerX, centerY + pyramidSize * 0.8f, centerZ), color4 });// Apex vertex
     }
 
     *vertexData = dynamicVertices.data();
-    *vertexCount = triangleCount * 3;
+    *vertexCount = pyramidCount * 4;
     *vertexBufferSize = dynamicVertices.size() * sizeof(Vertex);
 }
 
 void GenerateIndexData(UINT16** indexData, UINT* indexCount, UINT* indexBufferSize) {
     // Clear previous data
     dynamicIndices.clear();
-    dynamicIndices.reserve(triangleCount * 3);
+    dynamicIndices.reserve(pyramidCount * 12); // 4 triangles * 3 indices each = 12 indices per pyramid
 
-    // Generate indices for each triangle
-    for (UINT i = 0; i < triangleCount; ++i) {
-        UINT16 baseIndex = i * 3;
-        dynamicIndices.push_back(baseIndex);     // First vertex
-        dynamicIndices.push_back(baseIndex + 1); // Second vertex
-        dynamicIndices.push_back(baseIndex + 2); // Third vertex
+    // Generate indices for each pyramid (4 triangular faces)
+    for (UINT i = 0; i < pyramidCount; ++i) {
+        UINT16 baseIndex = i * 4;
+
+        // Base triangle (vertices 0, 1, 2)
+        dynamicIndices.push_back(baseIndex + 0);
+        dynamicIndices.push_back(baseIndex + 1);
+        dynamicIndices.push_back(baseIndex + 2);
+
+        // Side triangle 1 (vertices 0, 1, 3)
+        dynamicIndices.push_back(baseIndex + 0);
+        dynamicIndices.push_back(baseIndex + 1);
+        dynamicIndices.push_back(baseIndex + 3);
+
+        // Side triangle 2 (vertices 1, 2, 3)
+        dynamicIndices.push_back(baseIndex + 1);
+        dynamicIndices.push_back(baseIndex + 2);
+        dynamicIndices.push_back(baseIndex + 3);
+
+        // Side triangle 3 (vertices 2, 0, 3)
+        dynamicIndices.push_back(baseIndex + 2);
+        dynamicIndices.push_back(baseIndex + 0);
+        dynamicIndices.push_back(baseIndex + 3);
     }
 
     *indexData = dynamicIndices.data();
-    *indexCount = triangleCount * 3;
+    *indexCount = pyramidCount * 12;
     *indexBufferSize = dynamicIndices.size() * sizeof(UINT16);
 }
 
@@ -164,6 +176,39 @@ void InitD3D(HWND hwnd) {
 
     screen[i].rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
+    // Create depth stencil descriptor heap
+    D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
+    dsvHeapDesc.NumDescriptors = 1;
+    dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&screen[i].dsvHeap));
+
+    // Create depth stencil buffer
+    D3D12_CLEAR_VALUE depthOptimizedClearValue = {};
+    depthOptimizedClearValue.Format = DXGI_FORMAT_D32_FLOAT;
+    depthOptimizedClearValue.DepthStencil.Depth = 1.0f;
+    depthOptimizedClearValue.DepthStencil.Stencil = 0;
+
+    auto depthHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+    auto depthResourceDesc = CD3DX12_RESOURCE_DESC::Tex2D(
+        DXGI_FORMAT_D32_FLOAT,
+        screen[i].WindowWidth,
+        screen[i].WindowHeight,
+        1, 0, 1, 0,
+        D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+
+    device->CreateCommittedResource(
+        &depthHeapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &depthResourceDesc,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        &depthOptimizedClearValue,
+        IID_PPV_ARGS(&screen[i].depthStencilBuffer)
+    );
+
+    device->CreateDepthStencilView(screen[i].depthStencilBuffer.Get(), nullptr,
+        screen[i].dsvHeap->GetCPUDescriptorHandleForHeapStart());
+
     // Create render target views
     CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(screen[i].rtvHeap->GetCPUDescriptorHandleForHeapStart());
     for (UINT j = 0; j < FrameCount; j++) {
@@ -175,15 +220,55 @@ void InitD3D(HWND hwnd) {
     // Create command allocator
     device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&screen[i].commandAllocator));
 
-    // Create empty root signature
-    CD3DX12_ROOT_SIGNATURE_DESC rootSignatureDesc;
-    rootSignatureDesc.Init(0, nullptr, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    // Create root signature with constant buffer
+    D3D12_FEATURE_DATA_ROOT_SIGNATURE featureData = {};
+    featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_1;
+    if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_ROOT_SIGNATURE, &featureData, sizeof(featureData)))) {
+        featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
+    }
+
+    CD3DX12_DESCRIPTOR_RANGE1 ranges[1];
+    ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
+    CD3DX12_ROOT_PARAMETER1 rootParameters[1];
+    rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_VERTEX);
+    CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
+    rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters, 0, nullptr,
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
     ComPtr<ID3DBlob> signature;
     ComPtr<ID3DBlob> error;
-    D3D12SerializeRootSignature(&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1, &signature, &error);
+    D3DX12SerializeVersionedRootSignature(&rootSignatureDesc, featureData.HighestVersion, &signature, &error);
     device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(),
         IID_PPV_ARGS(&screen[i].rootSignature));
+
+    // Create constant buffer descriptor heap
+    D3D12_DESCRIPTOR_HEAP_DESC cbvHeapDesc = {};
+    cbvHeapDesc.NumDescriptors = 1;
+    cbvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    cbvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    device->CreateDescriptorHeap(&cbvHeapDesc, IID_PPV_ARGS(&screen[i].cbvHeap));
+
+    // Create constant buffer
+    auto cbHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+    auto cbResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(256); // Constant buffers must be 256-byte aligned
+
+    device->CreateCommittedResource(
+        &cbHeapProps,
+        D3D12_HEAP_FLAG_NONE,
+        &cbResourceDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&screen[i].constantBuffer));
+
+    // Create constant buffer view
+    D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
+    cbvDesc.BufferLocation = screen[i].constantBuffer->GetGPUVirtualAddress();
+    cbvDesc.SizeInBytes = 256;
+    device->CreateConstantBufferView(&cbvDesc, screen[i].cbvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    // Map constant buffer
+    CD3DX12_RANGE readRange(0, 0);
+    screen[i].constantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&screen[i].cbvDataBegin));
 
     // Create the shader
     ComPtr<ID3DBlob> vertexShader;
@@ -195,8 +280,13 @@ void InitD3D(HWND hwnd) {
     UINT compileFlags = 0;
 #endif
 
-    // Simple shader code
-    const char* vertexShaderCode = R"(
+    // 3D shader code with matrix transformations
+    static const char* const vertexShaderCode = R"(
+        cbuffer ConstantBuffer : register(b0) {
+            float4x4 worldViewProjection;
+            float4x4 world;
+        };
+
         struct PSInput {
             float4 position : SV_POSITION;
             float4 color : COLOR;
@@ -204,13 +294,13 @@ void InitD3D(HWND hwnd) {
 
         PSInput VSMain(float3 position : POSITION, float4 color : COLOR) {
             PSInput result;
-            result.position = float4(position, 1.0f);
+            result.position = mul(float4(position, 1.0f), worldViewProjection);
             result.color = color;
             return result;
         }
     )";
 
-    const char* pixelShaderCode = R"(
+    static const char* const pixelShaderCode = R"(
         struct PSInput {
             float4 position : SV_POSITION;
             float4 color : COLOR;
@@ -232,7 +322,7 @@ void InitD3D(HWND hwnd) {
         { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
     };
 
-    // Create the pipeline state object
+    // Create the pipeline state object with depth testing enabled
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
     psoDesc.pRootSignature = screen[i].rootSignature.Get();
@@ -240,12 +330,12 @@ void InitD3D(HWND hwnd) {
     psoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader.Get());
     psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
-    psoDesc.DepthStencilState.DepthEnable = FALSE;
-    psoDesc.DepthStencilState.StencilEnable = FALSE;
+    psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT); // Enable depth testing
     psoDesc.SampleMask = UINT_MAX;
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets = 1;
     psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT; // Set depth stencil format
     psoDesc.SampleDesc.Count = 1;
     device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&screen[i].pipelineState));
 
@@ -257,16 +347,16 @@ void InitD3D(HWND hwnd) {
     screen[i].commandList->Close();
 
     // Generate vertex data
-    Vertex* triangleVertices;
+    Vertex* pyramidVertices;
     UINT vertexCount;
     UINT vertexBufferSize;
-    GenerateVertexData(&triangleVertices, &vertexCount, &vertexBufferSize);
+    GenerateVertexData(&pyramidVertices, &vertexCount, &vertexBufferSize);
 
     // Generate index data
-    UINT16* triangleIndices;
+    UINT16* pyramidIndices;
     UINT indexCount;
     UINT indexBufferSize;
-    GenerateIndexData(&triangleIndices, &indexCount, &indexBufferSize);
+    GenerateIndexData(&pyramidIndices, &indexCount, &indexBufferSize);
 
     // Create upload heap and copy vertex data
     ComPtr<ID3D12Resource> vertexBufferUpload;
@@ -283,7 +373,6 @@ void InitD3D(HWND hwnd) {
         nullptr, IID_PPV_ARGS(&screen[i].vertexBuffer));
 
     // Create upload heap
-
     // Define the heap properties for the UPLOAD heap
     auto uploadHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
 
@@ -297,7 +386,7 @@ void InitD3D(HWND hwnd) {
 
     // Copy data to upload heap
     D3D12_SUBRESOURCE_DATA vertexData = {};
-    vertexData.pData = triangleVertices;
+    vertexData.pData = pyramidVertices;
     vertexData.RowPitch = vertexBufferSize;
     vertexData.SlicePitch = vertexData.RowPitch;
 
@@ -329,7 +418,7 @@ void InitD3D(HWND hwnd) {
 
     // Copy data to upload heap
     D3D12_SUBRESOURCE_DATA indexData = {};
-    indexData.pData = triangleIndices;
+    indexData.pData = pyramidIndices;
     indexData.RowPitch = indexBufferSize;
     indexData.SlicePitch = indexData.RowPitch;
 
@@ -385,6 +474,10 @@ void InitD3D(HWND hwnd) {
 
     // Wait for initialization to complete
     WaitForPreviousFrame();
+    // Once vertex buffers are uploaded to GPU memory, no need to hold them in local cpu RAM buffer.
+    vertexBufferUpload.Reset();
+    indexBufferUpload.Reset();
+
 }
 
 void PopulateCommandList() {
@@ -393,8 +486,42 @@ void PopulateCommandList() {
     screen[i].commandAllocator->Reset();
     screen[i].commandList->Reset(screen[i].commandAllocator.Get(), screen[i].pipelineState.Get());
 
+    // Update constant buffer with transformation matrices
+    static float rotationAngle = 0.0f;
+    rotationAngle += 0.02f; // Rotate over time
+
+    // Create view matrix (camera looking at scene from distance)
+    DirectX::XMVECTOR eyePosition = DirectX::XMVectorSet(0.0f, 2.0f, -10.0f, 1.0f);
+    DirectX::XMVECTOR focusPoint = DirectX::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+    DirectX::XMVECTOR upDirection = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+    DirectX::XMMATRIX viewMatrix = DirectX::XMMatrixLookAtLH(eyePosition, focusPoint, upDirection);
+
+    // Create projection matrix
+    float aspectRatio = static_cast<float>(screen[i].WindowWidth) / static_cast<float>(screen[i].WindowHeight);
+    DirectX::XMMATRIX projectionMatrix = DirectX::XMMatrixPerspectiveFovLH(DirectX::XM_PIDIV4, aspectRatio, 0.1f, 100.0f);
+
+    // Create world matrix with rotation
+    DirectX::XMMATRIX worldMatrix = DirectX::XMMatrixRotationY(rotationAngle);
+
+    // Combine matrices
+    DirectX::XMMATRIX worldViewProjectionMatrix = worldMatrix * viewMatrix * projectionMatrix;
+
+    // Update constant buffer
+    ConstantBuffer constantBufferData;
+    DirectX::XMStoreFloat4x4(&constantBufferData.worldViewProjection, DirectX::XMMatrixTranspose(worldViewProjectionMatrix));
+    DirectX::XMStoreFloat4x4(&constantBufferData.world, DirectX::XMMatrixTranspose(worldMatrix));
+
+    memcpy(screen[i].cbvDataBegin, &constantBufferData, sizeof(constantBufferData));
+
     // Set necessary state
     screen[i].commandList->SetGraphicsRootSignature(screen[i].rootSignature.Get());
+
+    // Set descriptor heaps
+    ID3D12DescriptorHeap* ppHeaps[] = { screen[i].cbvHeap.Get() };
+    screen[i].commandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
+
+    // Set root descriptor table
+    screen[i].commandList->SetGraphicsRootDescriptorTable(0, screen[i].cbvHeap->GetGPUDescriptorHandleForHeapStart());
 
     // 1) Create named variables (l‑values)
     CD3DX12_VIEWPORT viewport(0.0f, 0.0f,
@@ -408,7 +535,6 @@ void PopulateCommandList() {
     screen[i].commandList->RSSetViewports(1, &viewport);
     screen[i].commandList->RSSetScissorRects(1, &scissorRect);
 
-
     // Indicate that the back buffer will be used as a render target
     auto barrier1 = CD3DX12_RESOURCE_BARRIER::Transition(screen[i].renderTargets[screen[i].frameIndex].Get(),
         D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -417,18 +543,20 @@ void PopulateCommandList() {
     // Record commands
     CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(screen[i].rtvHeap->GetCPUDescriptorHandleForHeapStart(),
         screen[i].frameIndex, screen[i].rtvDescriptorSize);
-    screen[i].commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+    CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(screen[i].dsvHeap->GetCPUDescriptorHandleForHeapStart());
+    screen[i].commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
 
-    // Clear render target
+    // Clear render target and depth stencil
     const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f }; // Example color, adjust as needed
     screen[i].commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+    screen[i].commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-    // Draw triangles
+    // Draw pyramids
     screen[i].commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     screen[i].commandList->IASetVertexBuffers(0, 1, &screen[i].vertexBufferView);
     //screen[i].commandList->DrawInstanced(3, 1, 0, 0);
     screen[i].commandList->IASetIndexBuffer(&screen[i].indexBufferView);
-    screen[i].commandList->DrawIndexedInstanced(triangleCount * 3, 1, 0, 0, 0);
+    screen[i].commandList->DrawIndexedInstanced(pyramidCount * 12, 1, 0, 0, 0);
 
     // Indicate that the back buffer will now be used to present
     auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(screen[i].renderTargets[screen[i].frameIndex].Get(), 
@@ -461,5 +589,13 @@ void CleanupD3D() {
     int i = 0; // Latter to be iterated over number of screens.
     WaitForPreviousFrame();
 
+    // Unmap constant buffer before cleanup
+    if (screen[i].cbvDataBegin) {
+        screen[i].constantBuffer->Unmap(0, nullptr);
+        screen[i].cbvDataBegin = nullptr;
+    }
+
     CloseHandle(screen[i].fenceEvent);
+    // Reset all ComPtr objects
+    screen[i] = OneMonitorController{}; // Reset to default state
 }
