@@ -35,7 +35,11 @@ struct Vertex {
     XMFLOAT3 position;
     XMFLOAT4 color;
 };
-const UINT FrameCount = 2; //Initially we are going with double buffering. TODO: Move to triple buffering in future.
+/* Double buffering is preferred for CAD application due to low input lag.Caveat: If rendering time
+exceeds frame refresh interval, than strutting distortion will appear. However
+we low input latency outweighs the slight frame smoothness of triple buffering.
+Double buffering (2x) is also 50% more memory efficient Triple Buffering (3x). */
+const UINT FrameCount = 2; //Initially we are going with double buffering.
 
 //extern ComPtr<ID3D12Device> device;
 
@@ -46,12 +50,12 @@ struct OneMonitorController {
     int screenPixelHeight = 600;
     int screenPhysicalWidth = 0; // in mm
     int screenPhysicalHeight = 0; // in mm
-    int WindowWidth = 800;//Current ViewPort ( Rendering area ) size.
+    int WindowWidth = 800;//Current ViewPort ( Rendering area ) size. excluding taskbar etc.
     int WindowHeight = 600;
 
-    HMONITOR hMonitor = NULL;                    // Monitor handle
-    std::wstring deviceName;                     // Monitor device name (e.g., "\\\\.\\DISPLAY1")
-    std::wstring friendlyName;                   // Human readable name (e.g., "Dell U2720Q")
+    HMONITOR hMonitor = NULL;                   // Monitor handle
+    std::wstring deviceName;                    // Monitor device name (e.g., "\\\\.\\DISPLAY1")
+    std::wstring friendlyName;                  // Human readable name (e.g., "Dell U2720Q")
     RECT monitorRect;                           // Full monitor rectangle
     RECT workAreaRect;                          // Work area (excluding taskbar)
     int dpiX = 96;                              // DPI X
@@ -73,12 +77,12 @@ struct OneMonitorController {
     UINT rtvDescriptorSize;
     UINT frameIndex;
     HANDLE fenceEvent;
-    UINT64 fenceValue;
+    UINT64 fenceValue = 0;
 
     // Pipeline objects
     ComPtr<ID3D12RootSignature> rootSignature;
     ComPtr<ID3D12PipelineState> pipelineState;
-    ComPtr<ID3D12Resource> vertexBuffer;
+    ComPtr<ID3D12Resource> vertexBuffer; //TODO: Move from per monitor to per GPU for cross-monitor data sharing.
     ComPtr<ID3D12Resource> indexBuffer;
     D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
     D3D12_INDEX_BUFFER_VIEW indexBufferView;

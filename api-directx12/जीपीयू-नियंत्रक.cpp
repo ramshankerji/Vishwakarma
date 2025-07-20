@@ -140,10 +140,15 @@ void InitD3D(HWND hwnd) {
         }
     }
 
-    // Create command queue
+    // Create command queue. TODO: Ideally it should be per GPU, not per Monitor.
     D3D12_COMMAND_QUEUE_DESC queueDesc = {};
     queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&screen[i].commandQueue));
+
+    // Create command allocator. Here we are creating just 1. We will create more in future.
+    // TODO: Create a separate COPY queue for async load of data to GPU memory.
+    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&screen[i].commandAllocator));
+    // CreateCommandList is not created latter, because that one needs complete pipelineState defined.
 
     // Create swap chain
     DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
@@ -156,21 +161,15 @@ void InitD3D(HWND hwnd) {
     swapChainDesc.SampleDesc.Count = 1;
 
     ComPtr<IDXGISwapChain1> tempSwapChain;
-    factory->CreateSwapChainForHwnd(
-        screen[i].commandQueue.Get(),
-        hwnd,
-        &swapChainDesc,
-        nullptr,
-        nullptr,
-        &tempSwapChain
-    );
+    factory->CreateSwapChainForHwnd( screen[i].commandQueue.Get(),
+        hwnd, &swapChainDesc, nullptr, nullptr, &tempSwapChain );
 
     tempSwapChain.As(&screen[i].swapChain);
     screen[i].frameIndex = screen[i].swapChain->GetCurrentBackBufferIndex();
 
     // Create descriptor heap for render target views
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
-    rtvHeapDesc.NumDescriptors = FrameCount;
+    rtvHeapDesc.NumDescriptors = FrameCount; //One RTV per frame buffer for multi-buffering support
     rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&screen[i].rtvHeap));
@@ -192,20 +191,17 @@ void InitD3D(HWND hwnd) {
 
     auto depthHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
     auto depthResourceDesc = CD3DX12_RESOURCE_DESC::Tex2D(
-        DXGI_FORMAT_D32_FLOAT,
-        screen[i].WindowWidth,
-        screen[i].WindowHeight,
-        1, 0, 1, 0,
-        D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+        DXGI_FORMAT_D32_FLOAT, screen[i].WindowWidth, screen[i].WindowHeight,
+        1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
 
     device->CreateCommittedResource(
-        &depthHeapProps,
-        D3D12_HEAP_FLAG_NONE,
-        &depthResourceDesc,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE,
-        &depthOptimizedClearValue,
-        IID_PPV_ARGS(&screen[i].depthStencilBuffer)
+        &depthHeapProps,             D3D12_HEAP_FLAG_NONE,
+        &depthResourceDesc,          D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        &depthOptimizedClearValue,   IID_PPV_ARGS(&screen[i].depthStencilBuffer)
     );
+    //Observe that depthStencilBuffer has been created on D3D12_HEAP_TYPE_DEFAULT, i.e. main GPU memory
+    //dsvHeap is created on D3D12_DESCRIPTOR_HEAP_TYPE_DSV. 
+    //All DESCRIPTOR HEAPs are stored on Small Fast gpu memory. It is normal D3D12 design.
 
     device->CreateDepthStencilView(screen[i].depthStencilBuffer.Get(), nullptr,
         screen[i].dsvHeap->GetCPUDescriptorHandleForHeapStart());
@@ -218,29 +214,42 @@ void InitD3D(HWND hwnd) {
         rtvHandle.Offset(1, screen[i].rtvDescriptorSize);
     }
 
-    // Create command allocator
-    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&screen[i].commandAllocator));
-
     // Create root signature with constant buffer
     D3D12_FEATURE_DATA_ROOT_SIGNATURE featureData = {};
     featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_1;
+    //Check if the GPU supports Root Signature version 1.1 (newer, more efficient) or fall back to 1.0.
     if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_ROOT_SIGNATURE, &featureData, sizeof(featureData)))) {
         featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
     }
 
-    CD3DX12_DESCRIPTOR_RANGE1 ranges[1];
-    ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC);
-    CD3DX12_ROOT_PARAMETER1 rootParameters[1];
-    rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_VERTEX);
-    CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
-    rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters, 0, nullptr,
-        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    CD3DX12_DESCRIPTOR_RANGE1 ranges[1] = {};
+    ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 
+        1, // There will be total 1 Nos. of Constant Buffer Descriptors passed to shaders.
+        0, // Base shader register i.e register(b0) in HLSL
+        0, // Register space 0. Since we are greenfield project, we don't need separate space 1
+        D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC); //Optimization hint - data doesn't change often
 
+    CD3DX12_ROOT_PARAMETER1 rootParameters[1] = {}; //1: Number of descriptor ranges in this table
+    rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_VERTEX);
+
+    CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
+    rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters, 
+        0, nullptr, // Static samplers (none used here)
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT); //allows vertex input
+
+    //Root Signatures ( basically a data-structure storing constat buffer, descriptor table ranges etc.
+    //are required to be serialized, i.e. to be converted into a binary data GPU can understand.
+    //Root signatures are immutable once created and optimized for the GPU's command processor. 
     ComPtr<ID3DBlob> signature;
     ComPtr<ID3DBlob> error;
     D3DX12SerializeVersionedRootSignature(&rootSignatureDesc, featureData.HighestVersion, &signature, &error);
     device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(),
         IID_PPV_ARGS(&screen[i].rootSignature));
+
+    /* Note that The root signature is like a function declaration. It defines the interface but doesn't 
+    contain actual data. Now that we have declared the data layout, time to prepare for movement
+    of the data from CPU RAM to GPU RAM. This way we update the constant every frame without
+    changing the root signature. */
 
     // Create constant buffer descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC cbvHeapDesc = {};
@@ -250,16 +259,15 @@ void InitD3D(HWND hwnd) {
     device->CreateDescriptorHeap(&cbvHeapDesc, IID_PPV_ARGS(&screen[i].cbvHeap));
 
     // Create constant buffer
+    /* Our HLSL constant buffer contains: float4x4 worldViewProjection; 64 bytes (4x4 floats = 16*4=64)
+    float4x4 world; 64 bytes. Total: 128 bytes, but padded to 256 bytes for D3D12 alignment requirements */
     auto cbHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
     auto cbResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(256); // Constant buffers must be 256-byte aligned
 
     device->CreateCommittedResource(
-        &cbHeapProps,
-        D3D12_HEAP_FLAG_NONE,
-        &cbResourceDesc,
-        D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr,
-        IID_PPV_ARGS(&screen[i].constantBuffer));
+        &cbHeapProps, D3D12_HEAP_FLAG_NONE,
+        &cbResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr, IID_PPV_ARGS(&screen[i].constantBuffer));
 
     // Create constant buffer view
     D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
@@ -267,8 +275,8 @@ void InitD3D(HWND hwnd) {
     cbvDesc.SizeInBytes = 256;
     device->CreateConstantBufferView(&cbvDesc, screen[i].cbvHeap->GetCPUDescriptorHandleForHeapStart());
 
-    // Map constant buffer
-    CD3DX12_RANGE readRange(0, 0);
+    // Map constant buffer i.e. Map Constant Buffer for CPU Access
+    CD3DX12_RANGE readRange(0, 0); //CPU won't read from this buffer (write-only optimization)
     screen[i].constantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&screen[i].cbvDataBegin));
 
     // Create the shader
@@ -281,7 +289,11 @@ void InitD3D(HWND hwnd) {
     UINT compileFlags = 0;
 #endif
 
-    // 3D shader code with matrix transformations
+    /* 3D shader code with matrix transformations.
+    Shaders are like a mini sub-program, which runs on the GPU FOR EACH VERTEX. Massively parallel.
+    In the following shader code, we do only 1 transformation: Transform the vertex 3D co-ordinate
+    to screen co-ordinate. Color is passed forward as it is without change.
+    TODO: In future, we will implement index color system using some transformation here. */
     static const char* const vertexShaderCode = R"(
         cbuffer ConstantBuffer : register(b0) {
             float4x4 worldViewProjection;
@@ -301,6 +313,8 @@ void InitD3D(HWND hwnd) {
         }
     )";
 
+    /* Simple pass - through shader that outputs the interpolated vertex color for each pixel
+    No lighting calculations or texture sampling - just renders solid colors */
     static const char* const pixelShaderCode = R"(
         struct PSInput {
             float4 position : SV_POSITION;
@@ -317,7 +331,9 @@ void InitD3D(HWND hwnd) {
     D3DCompile(pixelShaderCode, strlen(pixelShaderCode), nullptr, nullptr, nullptr,
         "PSMain", "ps_5_0", compileFlags, 0, &pixelShader, nullptr);
 
-    // Define the vertex input layout
+    /* Define the vertex input layout
+    Position: 3 floats (12 bytes) starting at offset 0
+    Color: 4 floats (16 bytes) starting at offset 12 */
     D3D12_INPUT_ELEMENT_DESC inputElementDescs[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
@@ -330,7 +346,7 @@ void InitD3D(HWND hwnd) {
     psoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader.Get());
     psoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader.Get());
     psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-    psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT); //(default = replace)
     psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT); // Enable depth testing
     psoDesc.SampleMask = UINT_MAX;
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
@@ -339,6 +355,10 @@ void InitD3D(HWND hwnd) {
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT; // Set depth stencil format
     psoDesc.SampleDesc.Count = 1;
     device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&screen[i].pipelineState));
+    vertexShader.Reset(); //Release memory once we have created pipelineState.
+    pixelShader.Reset();  //Release memory suggested by Claude code review.
+    signature.Reset();
+    if (error) error.Reset();
 
     // Create the command list. Note that this is default pipelineState for the command list.
     // It can be changed inside command list also by calling ID3D12GraphicsCommandList::SetPipelineState.
@@ -347,6 +367,10 @@ void InitD3D(HWND hwnd) {
         screen[i].pipelineState.Get(), IID_PPV_ARGS(&screen[i].commandList));
     screen[i].commandList->Close();
 
+    // Upto this point, seting of Graphics Engine is complete. Now we generate the actual 
+    // vertex & index data which graphics engine will use to render things on screen.
+    // Currently we aren't changing vertex geometry frame to frame, hence we could do it here in Init3D.
+    // TODO: Move these out of Init3D function.
     // Generate vertex data
     Vertex* pyramidVertices;
     UINT vertexCount;
@@ -572,13 +596,16 @@ void WaitForPreviousFrame() {
     // Signal and increment the fence value
     int i = 0; // Latter to be iterated over number of screens.
     const UINT64 currentFenceValue = screen[i].fenceValue;
+    //Tells the GPU command queue to "signal" (mark) the fence with the current fence value when it 
+    //finishes executing all previously submitted commands.
     screen[i].commandQueue->Signal(screen[i].fence.Get(), currentFenceValue);
     screen[i].fenceValue++;
 
     // Wait until the previous frame is finished
     if (screen[i].fence->GetCompletedValue() < currentFenceValue) {
         screen[i].fence->SetEventOnCompletion(currentFenceValue, screen[i].fenceEvent);
-        WaitForSingleObject(screen[i].fenceEvent, INFINITE);
+        //This is the one halting CPU thread till fence completes.
+        WaitForSingleObject(screen[i].fenceEvent, INFINITE); 
     }
 
     // Update the frame index

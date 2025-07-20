@@ -27,7 +27,6 @@
 Hence we don't need to compile them and generate .lib file and link them separately.
 */
 
-
 std::wstring GetExecutablePath() {
     wchar_t buffer[MAX_PATH];
     GetModuleFileNameW(NULL, buffer, MAX_PATH);
@@ -107,11 +106,6 @@ void DisplayImage(HDC hdc, const unsigned char* image_data, int width, int heigh
     bmi.bmiHeader.biCompression = BI_RGB;
 
     StretchDIBits(hdc, 0, 0, width, height, 0, 0, width, height, image_data, &bmi, DIB_RGB_COLORS, SRCCOPY);
-}
-
-void GetMaxScreenResolution(int& maxWidth, int& maxHeight) {
-    maxWidth = GetSystemMetrics(SM_CXSCREEN);
-    maxHeight = GetSystemMetrics(SM_CYSCREEN);
 }
 
 int g_monitorCount = 0; // Global monitor count
@@ -255,8 +249,7 @@ void FetchAllMonitorDetails() // Main function to fetch all monitor details
 
 void AllocateConsoleWindow() {
     AllocConsole();// Allocate a console for this GUI application
-    // Redirect stdout, stdin, stderr to console
-    FILE* pCout;
+    FILE* pCout;// Redirect stdout, stdin, stderr to console
     FILE* pCin;
     FILE* pCerr;
     freopen_s(&pCout, "CONOUT$", "w", stdout);
@@ -329,9 +322,6 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
         return 1;
     }
 
-    int screenWidth = 100, screenHeight = 100; //Smallest resize we will allow !
-    GetMaxScreenResolution(screenWidth, screenHeight);
-
     // Define the window style without WS_CAPTION, but include WS_THICKFRAME and WS_SYSMENU
     DWORD windowStyle = WS_OVERLAPPED | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
 
@@ -398,10 +388,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
             //We can not use alternate GetMessage() since that one block waiting for windows.
             TranslateMessage(&msg);
             DispatchMessage(&msg);
-        }
-        else {
-            // Render frame
-            PopulateCommandList();
+        } else {
+            PopulateCommandList();// Render frame
 
             // Execute command list
             ID3D12CommandList* ppCommandLists[] = { screen[0].commandList.Get() };
@@ -413,9 +401,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
                 Without VSync, it was going 650fps(FullHD) on Laptop GPU with 25 Pyramid only geometry.
              */
             screen[0].swapChain->Present(1, 0); //Present. TODO: Multi Monitor window handling to be developed.
-
-            // Wait for GPU
-            WaitForPreviousFrame();
+            WaitForPreviousFrame(); // Wait for GPU
 
 #ifdef _DEBUG
             // Update FPS counter (Debug build only)
