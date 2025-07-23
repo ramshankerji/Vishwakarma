@@ -53,6 +53,8 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>preCompiledHeadersWindows.h</PrecompiledHeaderFile>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -80,6 +82,8 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>preCompiledHeadersWindows.h</PrecompiledHeaderFile>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -208,6 +212,16 @@
     <ClCompile Include="preCompiledHeadersWindows.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\code-core\CPURAM-Manager.h" />
+    <ClInclude Include="..\code-core\डेटा-उपकरण.h" />
+    <ClInclude Include="..\code-core\डेटा-गतिशील-मशीन.h" />
+    <ClInclude Include="..\code-core\डेटा-पाइप.h" />
+    <ClInclude Include="..\code-core\डेटा-बिजली.h" />
+    <ClInclude Include="..\code-core\डेटा-संरचना.h" />
+    <ClInclude Include="..\code-core\डेटा-सामान्य-2D.h" />
+    <ClInclude Include="..\code-core\डेटा-सामान्य-3D.h" />
+    <ClInclude Include="..\code-core\डेटा-स्थिर-मशीन.h" />
+    <ClInclude Include="..\code-core\डेटा.h" />
     <ClInclude Include="..\code-core\विश्वकर्मा.h" />
     <ClInclude Include="preCompiledHeadersWindows.h" />
     <ClInclude Include="resource.h" />

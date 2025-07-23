@@ -2,7 +2,7 @@
 
 #pragma once
 
-//DirectX 12 headers. Best Place to learn DirectX12 is original microsoft documentation.
+//DirectX 12 headers. Best Place to learn DirectX12 is original Microsoft documentation.
 // https://learn.microsoft.com/en-us/windows/win32/direct3d12/direct3d-12-graphics
 // You need a good dose of prior C++ knowledge and Computer Fundamentals before learning DirectX12.
 // Expect to read at least 2 times before you start grasping it !
@@ -50,14 +50,14 @@ struct OneMonitorController {
     int screenPixelHeight = 600;
     int screenPhysicalWidth = 0; // in mm
     int screenPhysicalHeight = 0; // in mm
-    int WindowWidth = 800;//Current ViewPort ( Rendering area ) size. excluding taskbar etc.
+    int WindowWidth = 800;//Current ViewPort ( Rendering area ) size. excluding task-bar etc.
     int WindowHeight = 600;
 
     HMONITOR hMonitor = NULL;                   // Monitor handle
     std::wstring deviceName;                    // Monitor device name (e.g., "\\\\.\\DISPLAY1")
     std::wstring friendlyName;                  // Human readable name (e.g., "Dell U2720Q")
     RECT monitorRect;                           // Full monitor rectangle
-    RECT workAreaRect;                          // Work area (excluding taskbar)
+    RECT workAreaRect;                          // Work area (excluding task bar)
     int dpiX = 96;                              // DPI X
     int dpiY = 96;                              // DPI Y
     double scaleFactor = 1.0;                   // Scale factor (100% = 1.0, 125% = 1.25, etc.)

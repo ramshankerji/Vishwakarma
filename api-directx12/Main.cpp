@@ -12,7 +12,6 @@
 //#include "ft2build.h"
 //#include FT_FREETYPE_H
 #include <iostream>
-#include <vishwakarma-2D.h>
 #include <random>
 #include <png.h>
 #include "resource.h"
@@ -20,6 +19,16 @@
 
 #include "विश्वकर्मा.h"
 #include "जीपीयू-नियंत्रक.h"
+#include "डेटा.h"
+#include "डेटा-सामान्य-2D.h"
+#include "डेटा-सामान्य-3D.h"
+#include "डेटा-संरचना.h"
+#include "डेटा-पाइप.h"
+#include "डेटा-बिजली.h"
+#include "डेटा-उपकरण.h"
+#include "डेटा-स्थिर-मशीन.h"
+#include "डेटा-गतिशील-मशीन.h"
+#include "CPURAM-Manager.h"
 
 #include <windows.h>
 

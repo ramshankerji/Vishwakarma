@@ -125,6 +125,36 @@
     <ClInclude Include="जीपीयू-नियंत्रक.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\code-core\डेटा.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\CPURAM-Manager.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-उपकरण.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-गतिशील-मशीन.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-पाइप.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-बिजली.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-संरचना.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-सामान्य-2D.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-सामान्य-3D.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-स्थिर-मशीन.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Vishwakarma.rc">

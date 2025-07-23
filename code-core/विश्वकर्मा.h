@@ -54,8 +54,8 @@ struct {
     char installationPrivateKey[57];     //ED448 Private Key
     char installationID[16]; //SHA256 of Public Key truncated to 1st 128 bits.
 
-    //***** Distinct Unique Datfile/source *****
-    // Different tabs represent different files opened in the software.Just like different website links open in different internet browser tab.
+    //***** Distinct Unique Datafile/source *****
+    // Different tabs represent different files opened in the software.Just like different website links open in different Internet browser tab.
     // Tab No. 0 Show the opening screen.i.e.Not associated with any particular opened file. 1 DATASET = 1 TAB visible to user / to website.
     uint8_t noOfOpenedDataset = 0;
     // We will allow user to open as many files simultaneously as system RAM allows.
