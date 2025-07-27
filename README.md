@@ -1,4 +1,6 @@
-## Welcome, स्वागत, வரவேற்பு, സ്വാഗതം, స్వాగతం, ಸ್ವಾಗತ, خوش آمدید, स्वागत आहे 
+![Lines of Code](https://img.shields.io/tokei/lines/github/ramshankerji/Vishwakarma)
+
+## स्वागत, வரவேற்பு, സ്വാഗതം, స్వాగతం, ಸ್ವಾಗತ, خوش آمدید, स्वागत आहे, Welcome 
 
 <div style="text-align: center;">
 <img src="code-core/logo.svg"  style="width: 128px; height: auto;" 
