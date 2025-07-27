@@ -34,17 +34,22 @@ I also want to quickly access all objects of a particular class having another f
 equal to say "2"? It will be like in-memory indexing over the table.
 We will have index only over certain fields. For others, we will do a linear scan.
 */
-
+#pragma once
 #include <cstdint>
 #include <cstddef>
 #include <vector>
 #include <cstring> // for memcpy
 #include <unordered_map>
 #include <iostream>
+#include <mutex>
 
 #include "डेटा.h"
 
 struct CPU_RAM_4MB {
+    //1 KB ( 1024 Bytes) out of 4 MB ( = 4 * 1024 * 1024 Bytes) is reserved for meta-data.
+    static const uint32_t METADATA_SIZE = 1024;
+    static const uint32_t DATA_BLOCK_SIZE = (4 * 1024 * 1024) - METADATA_SIZE;
+
     // We must not use more than 1 KB (1024 Bytes) for meta-data of this CPU RAM Chunk.
     uint32_t newDataSpace = 0;     // 4 Bytes. How much space is left starting with nextDataPointer
     uint32_t totalFreeSpace = 0;   // 4 Bytes
@@ -54,8 +59,8 @@ struct CPU_RAM_4MB {
     std::byte* nextDataLocation = nullptr;// 8 Byte. This is where new data will be appended.
 
     static const uint32_t dataBlockSize = 4 * 1024 * 1024 - 1024; // Not per Object. Global variable.
-    //1 KB ( 1024 Bytes) out of 4 MB ( = 4 * 1024 * 1024 Bytes) is reserved for meta-data.
-    std::byte dataBlock[dataBlockSize];
+    
+    std::byte dataBlock[DATA_BLOCK_SIZE];
 
     CPU_RAM_4MB() { // Constructor Function. Initialize all the fields.
         newDataSpace = dataBlockSize;
@@ -73,95 +78,57 @@ struct DATALocation {
     //We have 2 bytes margin in above definitions. We can use it latter using bit numbering.
 };
 
-// Global variables with proper initialization
-const uint64_t physicalRAMInstalled = 8ULL * 1024 * 1024 * 1024; // 8 GB.
-const uint64_t cpuRAMChunkSize = sizeof(CPU_RAM_4MB);
-uint32_t cpuRAMChunkLimit = static_cast<uint32_t>(physicalRAMInstalled / cpuRAMChunkSize);
+class CPURAMManager {
+public:
+    // Global variables with proper initialization
+    uint64_t physicalRAMInstalled = 8ULL * 1024 * 1024 * 1024; // 8 GB. TODO: Read system RAM.
+    const uint64_t cpuRAMChunkSize = sizeof(CPU_RAM_4MB);
+    uint32_t cpuRAMChunkLimit = static_cast<uint32_t>(physicalRAMInstalled / cpuRAMChunkSize);
 
-/* We try to restrict our memory limit to what is physically installed on machine.
-However our approach is of soft-limit. Users will get warning only when we have actually exceeded the system RAM limit.
-We do not take into account, other running applications, hence we may already be getting paged-out to disc when
-nearing the limit. It's not a hard limit. */
+    /* We try to restrict our memory limit to what is physically installed on machine.
+    However our approach is of soft-limit. Users will get warning only when we have actually exceeded the system RAM limit.
+    We do not take into account, other running applications, hence we may already be getting paged-out to disc when
+    nearing the limit. It's not a hard limit. */
 
-std::vector<CPU_RAM_4MB*> RAMChunks(cpuRAMChunkLimit, nullptr); // NULL identifies the chunk has not been allocated.
-uint32_t RAMChunksAllocatedCount = 0; // Just a tracker. Whenever we reach up-to cpuRAMChunkCount, we soft-warn users.
-uint32_t activeChunkIndex = 0;
+    //TODO: Standard Library unordered_map does not take advantage of SIMD capabilities.
+    // Latter on we will have our own implementation. We want this performance to be extreme.
+    // This is core operation in our application. Ask AI for better options.
+    // We use a high-performance hash map for ID-to-location mapping.
+    // NOTE: For extreme performance, consider replacing with a more specialized hash map
+    // like absl::flat_hash_map or tsl::hopscotch_map which are more cache-friendly.
+    std::unordered_map<uint64_t, DATALocation> id2ChunkMap;
 
-//TODO: Standard Library unordered_map does not take advantage of SIMD capabilities.
-// Latter on we will have our own implementation. We want this performance to be extreme.
-// This is core operation in our application. Ask AI for better options.
-std::unordered_map<uint64_t, DATALocation> id2ChunkMap;
+    CPURAMManager() { InitializeMemorySystem(); };
+    ~CPURAMManager() { CleanupMemorySystem();   };
+    void InitializeMemorySystem();
+    void CleanupMemorySystem();
 
-void InitializeMemorySystem() { // Initialize the system - should be called once at startup
-    RAMChunks.reserve(cpuRAMChunkLimit); // Overhead: 4GB RAM=>8*1024=8KB , 4TB Server=8*1024*1024=8MB : Negligible.
-    RAMChunks[0] = new CPU_RAM_4MB; // We allocate 1 chunk at the beginning itself.
-    RAMChunksAllocatedCount = 1; // Even on 16 TB system, this count will not grow to more than 2^22. (16TB/4MB)
-    activeChunkIndex = 0;
-}
+    // The main interface for the logic thread
+    bool AllocateNewObject(const CreateObjectCmd& cmd);
+    bool ModifyObject(const ModifyObjectCmd& cmd);
+    bool DeleteObject(uint64_t id);
 
-void AllocateNewObject(META_DATA& metaData, void* data, uint32_t dataSize) {
-    // WARNING: We do not yet support more than 4MB dataSize. TODO: Develop Multi Chunk data storage logic.
-    // WARNING: This will not check if the provided id is already present in hash-map. 
-    // Hence this function can be used for initial file load only.
-    // Duplicate id will be silently discarded without crashing the application.
-    if (dataSize > CPU_RAM_4MB::dataBlockSize) return;
-    if (data == nullptr) return; //Safety check to prevent data corruption / crash.
-    if (id2ChunkMap.find(metaData.id) != id2ChunkMap.end()) return;
+    // Accessors for the logic thread to inspect objects
+    std::optional<META_DATA*> GetMETA_DATA(uint64_t id);
+    std::optional<std::byte*> GetObjectPayload(uint64_t id);
 
-    // metaData = { ID: 8 Byte, Parent ID: 8 Byte, dataSize: 4 Byte, fileID: 4 Bytes}
-    uint32_t totalSpaceNeeded = sizeof(META_DATA) + dataSize;
-    uint32_t alignedSpaceNeeded = (totalSpaceNeeded + 7) & ~0x7U;
-    if (RAMChunks[activeChunkIndex]->newDataSpace < alignedSpaceNeeded)
-    {   // Means we need to allocate a new RAMChunk. 1st Check if we need to grow the vector
-        if (activeChunkIndex + 1 >= static_cast<uint32_t>(RAMChunks.size())) {
-            RAMChunks.resize(RAMChunks.size() + 16, nullptr); // Grow vector by 16 slots 
-            cpuRAMChunkLimit += 16; // and update limit.
-        }
-        RAMChunks[activeChunkIndex]->isChunkFull = true; // Mark the current RAM Chunk as full.
-        RAMChunks[activeChunkIndex + 1] = new CPU_RAM_4MB;
-        RAMChunksAllocatedCount++; // Add this line
-        activeChunkIndex++;
-    }
-    // Now that we have ensured that sufficient space is available.
-    // Copy metaData bytes starting with RAMChunks[activeChunkIndex]->nextDataLocation pointer.
-    std::memcpy(RAMChunks[activeChunkIndex]->nextDataLocation, &metaData, sizeof(META_DATA));
-    // Copy dataSize bytes starting with RAMChunks[activeChunkIndex]->nextDataLocation+24 pointer.
-    std::memcpy(RAMChunks[activeChunkIndex]->nextDataLocation + sizeof(META_DATA), data, dataSize);
+    // For iterating over all objects to find "dirty" ones
+    // Returns a copy of the map to iterate over without holding the lock.
+    std::unordered_map<uint64_t, DATALocation> GetIdMapSnapshot();
 
-    //Add the meta-data id to global map for fast retrieval.
-    id2ChunkMap[metaData.id] = DATALocation{ activeChunkIndex,
-        static_cast<uint32_t>(RAMChunks[activeChunkIndex]->nextDataLocation 
-            - RAMChunks[activeChunkIndex]->dataBlock) };
+    void DefragmentRAMChunks(uint32_t chunkIndex);
 
-    // Calculate aligned next position. x86_64 (Intel/AMD) is OK, but ARM / RISCV force 8 byte alignment.
-    uintptr_t unalignedPtr = reinterpret_cast<uintptr_t>(RAMChunks[activeChunkIndex]->nextDataLocation) +
-        sizeof(META_DATA) + dataSize;
-    uintptr_t alignedPtr = (unalignedPtr + 7) & ~0x7ULL; // Round up to next multiple of 8
-    // Update pointer and counters
-    RAMChunks[activeChunkIndex]->nextDataLocation = reinterpret_cast<std::byte*>(alignedPtr);
-    RAMChunks[activeChunkIndex]->newDataSpace    -= alignedSpaceNeeded;
-    RAMChunks[activeChunkIndex]->totalFreeSpace  -= alignedSpaceNeeded;
-    RAMChunks[activeChunkIndex]->totalUsedSpace  += alignedSpaceNeeded;
-}
+private:
+    // Helper function to find space and allocate
+    std::optional<DATALocation> FindSpaceAndAllocate(uint32_t totalSpaceNeeded);
 
-void DeleteDataFromRAM(uint64_t id) {
-    //Implement this function. Find the chunkIndex using id2ChunkMap.
-    //Update Relevant details in RAMChunks and mark it as free.
-    //Remove id from id2ChunkMap.
-}
+    // Using std::mutex for thread-safety, as this class will be called from the Main Logic thread,
+    // which is the single writer to the data repository. A mutex provides safety if we ever
+    // change this architecture.
+    std::mutex mutex;
 
-void DefragmentRAMChunks(uint32_t chunkIndex) {
-    //Compress RAMChunks to free up CPU RAM. Update id2ChunkMap for all the IDs which have moved.
-}
+    std::vector<CPU_RAM_4MB*> RAMChunks; // NULL identifies the chunk has not been allocated.
+    uint32_t RAMChunksAllocatedCount = 0; // Just a tracker. Whenever we reach up-to cpuRAMChunkCount, we soft-warn users.
+    uint32_t activeChunkIndex = 0;
 
-/* For our memory management system, since we're dealing with large chunks of RAM and is a core part of
-the application that would run until program termination, we can safely skip the cleanup function.
-The OS will handle it. However to satisfy Valgrind, AddressSanitizer, or Visual Studio's diagnostic tools,
-and make our life easier catching relevant bugs there, we do the cleanup anyway.*/
-void CleanupMemorySystem() {
-    for (auto chunk : RAMChunks) { delete chunk; }
-    RAMChunks.clear();
-    id2ChunkMap.clear();
-    RAMChunksAllocatedCount = 0;
-    activeChunkIndex = 0;
-}
+};

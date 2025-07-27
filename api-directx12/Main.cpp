@@ -9,6 +9,12 @@
 #include <tchar.h>
 #include <chrono>
 #include <iomanip>  // for std::setprecision
+#include "CPURAM-Manager.h"
+#include <iostream>
+#include <thread>
+#include <vector>
+#include <chrono>
+
 //#include "ft2build.h"
 //#include FT_FREETYPE_H
 #include <iostream>
@@ -29,12 +35,46 @@
 #include "डेटा-स्थिर-मशीन.h"
 #include "डेटा-गतिशील-मशीन.h"
 #include "CPURAM-Manager.h"
+#include "Input_UI_Network_File.h"
 
 #include <windows.h>
 
 /* We have moved to statically compiling the .h/.c files of dependencies. 
 Hence we don't need to compile them and generate .lib file and link them separately.
 */
+
+// --- Global Shared Objects ---
+std::atomic<bool> shutdownSignal = false;
+
+CPURAMManager cpuRAMManager;
+ThreadSafeQueue<InputCommand> g_inputCommandQueue;
+ThreadSafeQueue<GpuCommand> g_gpuCommandQueue;
+
+// Fences (simulated)
+std::mutex g_logicFenceMutex;
+std::condition_variable g_logicFenceCV;
+uint64_t g_logicFrameCount = -1;
+
+// Copy Thread "Fence"
+std::mutex g_copyFenceMutex;
+std::condition_variable g_copyFenceCV;
+uint64_t g_copyFrameCount = -1; // -1 indicates not yet signaled
+
+// Render Packet
+std::mutex g_renderPacketMutex;
+RenderPacket g_renderPacket;
+
+int g_monitorCount = 0; // Global monitor count
+int primaryMonitorIndex = 0;
+
+// --- Forward declarations of thread functions ---
+void UserInputThread();
+void NetworkInputThread();
+void FileInputThread();
+void विश्वकर्मा(); //Main Logic Thread. The ringmaster ! :-)
+void GpuCopyThreadFunc();
+void RenderThreadFunc(int monitorId, int refreshRate);
+
 
 std::wstring GetExecutablePath() {
     wchar_t buffer[MAX_PATH];
@@ -116,9 +156,6 @@ void DisplayImage(HDC hdc, const unsigned char* image_data, int width, int heigh
 
     StretchDIBits(hdc, 0, 0, width, height, 0, 0, width, height, image_data, &bmi, DIB_RGB_COLORS, SRCCOPY);
 }
-
-int g_monitorCount = 0; // Global monitor count
-int primaryMonitorIndex = 0;
 
 // Callback function for EnumDisplayMonitors. Notice: This function is NOT async. Just runs inline.
 // But windows API design needs a separate function to be defined, which is called for each monitor.
@@ -369,6 +406,22 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     //ShowWindow(hWnd, nCmdShow); // nCmdShow: the fourth parameter from WinMain
     UpdateWindow(hWnd);
 
+    std::cout << "Starting application..." << std::endl;
+
+    // Initialize the core memory system
+    cpuRAMManager.InitializeMemorySystem();
+
+    // Create and launch all threads
+    std::vector<std::thread> threads;
+    threads.emplace_back(UserInputThread);
+    threads.emplace_back(NetworkInputThread);
+    threads.emplace_back(FileInputThread);
+
+    threads.emplace_back(विश्वकर्मा); //Main logic thread. The ringmaster of the application.
+    threads.emplace_back(GpuCopyThreadFunc);
+    threads.emplace_back(RenderThreadFunc, 0, 60);  // Monitor 1 at 60Hz
+    threads.emplace_back(RenderThreadFunc, 1, 144); // Monitor 2 at 144Hz    
+
     // Initialize D3D12
     InitD3D(hWnd);
 
@@ -433,12 +486,31 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
         }
     }
 
+    // Let's try to gracefully shutdown all the threads we started.
+    // // Signal all threads to stop
+    shutdownSignal = true; // UI Input thread, Network Input Thread & File Handling thread listen to this.
+    g_inputCommandQueue.shutdown();
+    g_gpuCommandQueue.shutdown();
+    g_logicFenceCV.notify_all();
+    g_copyFenceCV.notify_all();
+
+    // Wait for all threads to finish
+    for (auto& t : threads) {
+        if (t.joinable()) {
+            t.join();
+        }
+    }
+    // Clean up resources before exiting the application.
+    
     //Cleanup Freetype library.
     //FT_Done_Face(face);
     //FT_Done_FreeType(ft);
     
     WaitForPreviousFrame(); // Wait for GPU to finish all commands
+    cpuRAMManager.CleanupMemorySystem();
     CleanupD3D();// Clean up D3D resources
+
+    std::cout << "Application finished cleanly." << std::endl;
 
     return (int)msg.wParam;
 }

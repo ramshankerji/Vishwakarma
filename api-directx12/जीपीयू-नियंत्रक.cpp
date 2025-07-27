@@ -1,8 +1,16 @@
 ﻿// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
 
-#include "जीपीयू-नियंत्रक.h"
 #include <random>
 #include <ctime>
+#include <iostream>
+#include <thread>
+#include <chrono>
+#include <map>
+#include <list>
+#include <unordered_map>
+
+#include "डेटा.h"
+#include "जीपीयू-नियंत्रक.h"
 
 void InitD3D(HWND hwnd);
 void PopulateCommandList();
@@ -626,4 +634,184 @@ void CleanupD3D() {
     CloseHandle(screen[i].fenceEvent);
     // Reset all ComPtr objects
     screen[i] = OneMonitorController{}; // Reset to default state
+}
+
+/////////////////////////////////////////////////////////////////////////////////
+// Initial draft of thread based program to handle GPU commands
+
+// --- Externs for communication ---
+extern std::atomic<bool> shutdownSignal;
+extern ThreadSafeQueue<GpuCommand> g_gpuCommandQueue;
+
+// Logic Thread "Fence"
+extern std::mutex g_logicFenceMutex;
+extern std::condition_variable g_logicFenceCV;
+extern uint64_t g_logicFrameCount;
+
+// Copy Thread "Fence"
+extern std::mutex g_copyFenceMutex;
+extern std::condition_variable g_copyFenceCV;
+extern uint64_t g_copyFrameCount;
+
+// Render Packet from Main Logic
+extern std::mutex g_renderPacketMutex;
+extern RenderPacket g_renderPacket;
+
+// --- VRAM Manager ---
+// This class simulates the GPU memory manager.
+class VramManager {
+public:
+    // Maps our CPU ObjectID to its resource info in VRAM
+    std::unordered_map<uint64_t, GpuResourceInfo> resourceMap;
+    
+    // Simulates a simple heap allocator with 16MB chunks
+    uint64_t m_nextFreeOffset = 0;
+    const uint64_t CHUNK_SIZE = 16 * 1024 * 1024;
+    uint64_t m_vram_capacity = 4 * CHUNK_SIZE; // Simulate 64MB VRAM
+
+    // When an object is updated, the old VRAM is put here to be freed later.
+    struct DeferredFree {
+        uint64_t frameNumber; // The frame it became obsolete
+        GpuResourceInfo resource;
+    };
+    std::list<DeferredFree> deferredFreeQueue;
+
+    // Allocate space in VRAM. Returns the handle.
+    std::optional<GpuResourceInfo> Allocate(size_t size) {
+        if (m_nextFreeOffset + size > m_vram_capacity) {
+            std::cerr << "VRAM MANAGER: Out of memory!" << std::endl;
+            // Here, the Main Logic thread would be signaled to reduce LOD.
+            return std::nullopt;
+        }
+        GpuResourceInfo info{m_nextFreeOffset, size};
+        m_nextFreeOffset += size; // Simple bump allocator
+        return info;
+    }
+
+    // Free memory that is guaranteed to be no longer in use by any rendering frame.
+    void ProcessDeferredFrees(uint64_t lastCompletedRenderFrame) {
+        // A real implementation would be more robust. This is a simple version.
+        // Free any resource that became obsolete >= 2 frames ago.
+        auto it = deferredFreeQueue.begin();
+        while (it != deferredFreeQueue.end()) {
+            if (it->frameNumber <= lastCompletedRenderFrame) {
+                //std::cout << "VRAM MANAGER: Reclaiming " << it->resource.size << " bytes." << std::endl;
+                // In a real allocator, this space would be added to a free list.
+                // In our simple bump allocator, we can't easily reuse it without compaction.
+                it = deferredFreeQueue.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+};
+
+VramManager g_vramManager;
+
+// --- GPU Thread Functions ---
+
+void GpuCopyThreadFunc() {
+    std::cout << "GPU Copy Thread started." << std::endl;
+    uint64_t lastProcessedFrame = -1;
+
+    while (!shutdownSignal) {
+        // 1. Wait for the Main Logic thread to finish a frame.
+        {
+            std::unique_lock<std::mutex> lock(g_logicFenceMutex);
+            g_logicFenceCV.wait(lock, [&]{ return g_logicFrameCount > lastProcessedFrame || shutdownSignal; });
+            if (shutdownSignal) break;
+            lastProcessedFrame = g_logicFrameCount;
+        }
+        
+        // 2. Process all pending GPU commands for this frame.
+        GpuCommand cmd;
+        while (g_gpuCommandQueue.try_pop(cmd)) {
+            std::visit([&](auto&& arg) {
+                using T = std::decay_t<decltype(arg)>;
+                if constexpr (std::is_same_v<T, GpuUploadCmd>) {
+                    // An object's data needs to be uploaded.
+                    auto newResourceOpt = g_vramManager.Allocate(arg.data.size());
+                    if (newResourceOpt) {
+                        GpuResourceInfo newResource = *newResourceOpt;
+                        // In DX12, this is where you'd record and execute the copy command list.
+                        //std::cout << "COPY THREAD: Uploaded " << newResource.size << " bytes for object " << arg.objectId << " to VRAM offset " << newResource.vramOffset << std::endl;
+
+                        // Check if this is an update to an existing resource.
+                        if (g_vramManager.resourceMap.count(arg.objectId)) {
+                            // It is an update. The old resource must be freed, but not yet!
+                            // A render thread might still be using it for the current frame.
+                            GpuResourceInfo oldResource = g_vramManager.resourceMap[arg.objectId];
+                            g_vramManager.deferredFreeQueue.push_back({lastProcessedFrame, oldResource});
+                        }
+                        // Atomically update the map to point to the new resource.
+                        g_vramManager.resourceMap[arg.objectId] = newResource;
+                    }
+                } else if constexpr (std::is_same_v<T, GpuFreeCmd>) {
+                    // An object was deleted. Free its VRAM resource (defer it).
+                     if (g_vramManager.resourceMap.count(arg.objectId)) {
+                        g_vramManager.deferredFreeQueue.push_back({lastProcessedFrame, arg.resourceToFree});
+                        g_vramManager.resourceMap.erase(arg.objectId);
+                     }
+                }
+            }, cmd);
+        }
+
+        // 3. Signal Fence: Let the Render Thread(s) know the data for this frame is in VRAM.
+        {
+            std::lock_guard<std::mutex> lock(g_copyFenceMutex);
+            g_copyFrameCount = lastProcessedFrame;
+        }
+        g_copyFenceCV.notify_all();
+    }
+    g_copyFenceCV.notify_all(); // Wake up threads for shutdown
+    std::cout << "GPU Copy Thread shutting down." << std::endl;
+}
+
+void RenderThreadFunc(int monitorId, int refreshRate) {
+    std::cout << "Render Thread (Monitor " << monitorId << ", " << refreshRate << "Hz) started." << std::endl;
+    uint64_t lastRenderedFrame = -1;
+    const auto frameDuration = std::chrono::milliseconds(1000 / refreshRate);
+
+    while (!shutdownSignal) {
+        auto frameStart = std::chrono::high_resolution_clock::now();
+
+        // 1. Wait for the GPU Copy thread to finish preparing a frame.
+        {
+            std::unique_lock<std::mutex> lock(g_copyFenceMutex);
+            g_copyFenceCV.wait(lock, [&]{ return g_copyFrameCount > lastRenderedFrame || shutdownSignal; });
+            if (shutdownSignal) break;
+            lastRenderedFrame = g_copyFrameCount;
+        }
+        
+        // 2. Get the render packet for the frame we are about to draw.
+        RenderPacket currentPacket;
+        {
+            std::lock_guard<std::mutex> lock(g_renderPacketMutex);
+            currentPacket = g_renderPacket;
+        }
+        
+        // 3. Record Draw Calls
+        // In DX12, you'd record a command list here.
+        // We just print the actions.
+        if (!currentPacket.visibleObjectIds.empty()) {
+            //std::cout << "RENDER-" << monitorId << ": Frame " << currentPacket.frameNumber << " | Drawing " << currentPacket.visibleObjectIds.size() << " objects." << std::endl;
+            for (uint64_t id : currentPacket.visibleObjectIds) {
+                if (g_vramManager.resourceMap.count(id)) {
+                    auto res = g_vramManager.resourceMap[id];
+                    // "Drawing object <id> using VRAM at offset <res.vramOffset>"
+                }
+            }
+        }
+        
+        // 4. Execute command list and Present swap chain
+        // This is simulated by sleeping to match the monitor's refresh rate.
+        std::this_thread::sleep_until(frameStart + frameDuration);
+
+        // 5. After rendering, perform garbage collection on VRAM
+        // In a real engine, the last COMPLETED GPU frame is tracked via fences.
+        if (lastRenderedFrame > 2) {
+            g_vramManager.ProcessDeferredFrees(lastRenderedFrame - 2);
+        }
+    }
+    std::cout << "Render Thread (Monitor " << monitorId << ") shutting down." << std::endl;
 }

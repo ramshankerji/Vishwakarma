@@ -3,6 +3,15 @@
 // This files defines our basic data types to be used by other domain specific data types.
 #pragma once
 #include <cstdint>
+#include <vector>
+#include <string>
+#include <variant>
+#include <any>
+#include <atomic>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <optional>
 
 /*Each data type will inherit this base struct.
 STRICT WARNING: DO NOT ADD ANY MORE FIELDS TO THIS BASE STRUCT.
@@ -11,9 +20,10 @@ The sequence of fields in this struct has been specifically planned considering
 
 For our Data-Structure design approach, reach commentary on डेटा-CPURAM-Manager.h
 */
+// Represents the meta-data stored at the beginning of each object in a RAM chunk.
 struct META_DATA {
     uint64_t id;                  // 8 bytes 
-    uint64_t parentFolderId;      // 8 bytes 
+    uint64_t parentId;      // 8 bytes 
     
     // In general our dataSize will be maximum few kilo bytes per object only.
     // The following will limit the maximum external data (ex: Image, PDF, other native files etc.)
@@ -31,6 +41,12 @@ struct META_DATA {
     uint16_t reserved3; //reserved for future use.
     
     // So we have minimum 32 Byte overhead per Object.
+
+    // --- Architecture-specific fields ---
+    std::atomic<uint64_t> dataVersion{ 1 }; // Incremented on each modification
+    uint64_t lastProcessedVersion{ 0 };     // The version last seen by the GPU processing logic
+    bool isDeleted{ false };                // Soft-delete flag
+    // Padding to ensure 8-byte alignment can be added if necessary
 };
 
 // Following are some special data types designed to be dynamically allocated by our RAM Manager.
@@ -103,5 +119,95 @@ struct FOLDER {
     //Optional Properties
     c_string displayName; // Optionally 
 };
+
+//////////////////////////////////////////////////////////
+
+// --- Thread-Safe Queue for Inter-Thread Communication ---
+
+template<typename T>
+class ThreadSafeQueue {
+public:
+    void push(T value) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_queue.push(std::move(value));
+        m_cond.notify_one();
+    }
+
+    // Non-blocking pop
+    bool try_pop(T& value) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (m_queue.empty()) {
+            return false;
+        }
+        value = std::move(m_queue.front());
+        m_queue.pop();
+        return true;
+    }
+
+    // Shuts down the queue, waking up any waiting threads
+    void shutdown() {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_shutdown = true;
+        m_cond.notify_all();
+    }
+
+private:
+    std::queue<T> m_queue;
+    std::mutex m_mutex;
+    std::condition_variable m_cond;
+    bool m_shutdown = false;
+};
+
+// --- Command Definitions for the Input->MainLogic Queue ---
+
+struct CreateObjectCmd {
+    uint64_t desiredId;
+    uint64_t parentId;
+    std::vector<std::byte> data; // The actual object data
+};
+
+struct ModifyObjectCmd {
+    uint64_t id;
+    std::vector<std::byte> newData;
+};
+
+struct DeleteObjectCmd {
+    uint64_t id;
+};
+
+// Using a variant for type-safe command storage
+using InputCommand = std::variant<CreateObjectCmd, ModifyObjectCmd, DeleteObjectCmd>;
+
+
+// --- GPU-related Definitions ---
+
+// Information about a resource currently residing in VRAM
+struct GpuResourceInfo {
+    uint64_t vramOffset; // Simulated VRAM address
+    size_t size;
+    // In a real DX12 app, this would hold ID3D12Resource*, D3D12_VERTEX_BUFFER_VIEW, etc.
+};
+
+// Commands for the MainLogic -> GpuCopy Thread Queue
+struct GpuUploadCmd {
+    uint64_t objectId;
+    uint64_t objectDataVersion;
+    std::vector<std::byte> data; // Vertex/Index data to be uploaded
+};
+
+struct GpuFreeCmd {
+    uint64_t objectId;
+    GpuResourceInfo resourceToFree; // The specific VRAM resource to be reclaimed
+};
+
+using GpuCommand = std::variant<GpuUploadCmd, GpuFreeCmd>;
+
+// Packet of work for a Render Thread for one frame
+struct RenderPacket {
+    uint64_t frameNumber;
+    std::vector<uint64_t> visibleObjectIds;
+};
+
+
 
 
