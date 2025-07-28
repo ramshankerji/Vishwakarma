@@ -46,7 +46,7 @@ struct DATASET {
 
 // Following is the main application. It is THE global variable. 
 // There will be only one instance of this class in the entire application. Hence unnamed struct type.
-struct {
+struct globals{
     //***** Installation Details. *****
     // Installation details are only loaded at application startup time. Not continuously monitored on disc.
     bool isInstallationIDGenerated = false;
@@ -66,4 +66,4 @@ struct {
 
     //***** Centralized Application Variables. *****
     //***** Centralized Application Variables. *****
-}राम;
+};

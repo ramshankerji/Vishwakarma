@@ -1,7 +1,7 @@
 // Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
 #include "CPURAM-Manager.h"
 
-void CPURAMManager::InitializeMemorySystem() { // Initialize the system - should be called once at startup
+void राम::InitializeMemorySystem() { // Initialize the system - should be called once at startup
     if (!RAMChunks.empty()) return; // Already initialized
     physicalRAMInstalled = 8ULL * 1024 * 1024 * 1024; // 8 GB
     cpuRAMChunkLimit = static_cast<uint32_t>(physicalRAMInstalled / sizeof(CPU_RAM_4MB));
@@ -20,7 +20,7 @@ void CPURAMManager::InitializeMemorySystem() { // Initialize the system - should
 the application that would run until program termination, we can safely skip the cleanup function.
 The OS will handle it. However to satisfy Valgrind, AddressSanitizer, or Visual Studio's diagnostic tools,
 and make our life easier catching relevant bugs there, we do the cleanup anyway.*/
-void CPURAMManager::CleanupMemorySystem() {
+void राम::CleanupMemorySystem() {
     std::lock_guard<std::mutex> lock(mutex);
     for (auto chunk : RAMChunks) { delete chunk; }
     RAMChunks.clear();
@@ -30,7 +30,7 @@ void CPURAMManager::CleanupMemorySystem() {
 }
 
 //void CPURAMManager::AllocateNewObject(META_DATA& metaData, void* data, uint32_t dataSize) {
-bool CPURAMManager::AllocateNewObject(const CreateObjectCmd& cmd) {
+bool राम::AllocateNewObject(const CreateObjectCmd& cmd) {
     std::lock_guard<std::mutex> lock(mutex);
     // Duplicate id will be silently discarded without crashing the application.
     if (id2ChunkMap.count(cmd.desiredId)) return false; // ID already exists
@@ -68,12 +68,12 @@ bool CPURAMManager::AllocateNewObject(const CreateObjectCmd& cmd) {
     return true;
 }
 
-std::unordered_map<uint64_t, DATALocation> CPURAMManager::GetIdMapSnapshot() {
+std::unordered_map<uint64_t, DATALocation> राम::GetIdMapSnapshot() {
     std::lock_guard<std::mutex> lock(mutex);
     return id2ChunkMap;
 }
 
-std::optional<DATALocation> CPURAMManager::FindSpaceAndAllocate(uint32_t totalSpaceNeeded) {
+std::optional<DATALocation> राम::FindSpaceAndAllocate(uint32_t totalSpaceNeeded) {
     if (totalSpaceNeeded > CPU_RAM_4MB::DATA_BLOCK_SIZE) return std::nullopt; // Object too large
 
     if (RAMChunks[activeChunkIndex]->newDataSpace < totalSpaceNeeded) {
@@ -111,7 +111,7 @@ std::optional<DATALocation> CPURAMManager::FindSpaceAndAllocate(uint32_t totalSp
     return DATALocation{ activeChunkIndex, offset };
 }
 
-bool CPURAMManager::ModifyObject(const ModifyObjectCmd& cmd) {
+bool राम::ModifyObject(const ModifyObjectCmd& cmd) {
     std::lock_guard<std::mutex> lock(mutex);
 
     auto it = id2ChunkMap.find(cmd.id);
@@ -168,7 +168,7 @@ bool CPURAMManager::ModifyObject(const ModifyObjectCmd& cmd) {
     return true;
 }
 
-bool CPURAMManager::DeleteObject(uint64_t id) {
+bool राम::DeleteObject(uint64_t id) {
     //Find the chunkIndex using id2ChunkMap.
     //Update Relevant details in RAMChunks and mark for deletion. Delegated till GPU link is freeded.
     //Remove id from id2ChunkMap.
@@ -195,7 +195,7 @@ bool CPURAMManager::DeleteObject(uint64_t id) {
     return true;
 }
 
-std::optional<META_DATA*> CPURAMManager::GetMETA_DATA(uint64_t id) {
+std::optional<META_DATA*> राम::GetMETA_DATA(uint64_t id) {
     std::lock_guard<std::mutex> lock(mutex);
     auto it = id2ChunkMap.find(id);
     if (it == id2ChunkMap.end()) return std::nullopt;
@@ -204,7 +204,7 @@ std::optional<META_DATA*> CPURAMManager::GetMETA_DATA(uint64_t id) {
     return reinterpret_cast<META_DATA*>(RAMChunks[loc.chunkIndex]->dataBlock + loc.offsetInChunk);
 }
 
-std::optional<std::byte*> CPURAMManager::GetObjectPayload(uint64_t id) {
+std::optional<std::byte*> राम::GetObjectPayload(uint64_t id) {
     std::lock_guard<std::mutex> lock(mutex);
     auto it = id2ChunkMap.find(id);
     if (it == id2ChunkMap.end()) return std::nullopt;
@@ -214,7 +214,7 @@ std::optional<std::byte*> CPURAMManager::GetObjectPayload(uint64_t id) {
     return headerPtr + sizeof(META_DATA);
 }
 
-void CPURAMManager::DefragmentRAMChunks(uint32_t chunkIndex) {
+void राम::DefragmentRAMChunks(uint32_t chunkIndex) {
     // Compress RAMChunks to free up CPU RAM. Update id2ChunkMap for all the IDs which have moved.
     // This is a highly complex operation.
     // 1. Lock the chunk to prevent any modifications.

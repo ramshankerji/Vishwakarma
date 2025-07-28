@@ -41,6 +41,13 @@ we low input latency outweighs the slight frame smoothness of triple buffering.
 Double buffering (2x) is also 50% more memory efficient Triple Buffering (3x). */
 const UINT FrameCount = 2; //Initially we are going with double buffering.
 
+// Constants
+const UINT MaxPyramids = 100; // MODIFICATION: Define a max pyramid count for pre-allocation.
+const UINT MaxVertexCount = MaxPyramids * 4;
+const UINT MaxIndexCount = MaxPyramids * 12;
+const UINT MaxVertexBufferSize = MaxVertexCount * sizeof(Vertex);
+const UINT MaxIndexBufferSize = MaxIndexCount * sizeof(UINT16);
+
 //extern ComPtr<ID3D12Device> device;
 
 struct OneMonitorController {
@@ -86,12 +93,49 @@ struct OneMonitorController {
     ComPtr<ID3D12Resource> indexBuffer;
     D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
     D3D12_INDEX_BUFFER_VIEW indexBufferView;
+
+    ComPtr<ID3D12Resource> vertexBufferUpload;
+    ComPtr<ID3D12Resource> indexBufferUpload;
+    UINT8* pVertexDataBegin = nullptr; // MODIFICATION: Pointer for mapped vertex upload buffer
+    UINT8* pIndexDataBegin = nullptr;  // MODIFICATION: Pointer for mapped index upload buffer
+
     ComPtr<ID3D12Resource> depthStencilBuffer;
     ComPtr<ID3D12DescriptorHeap> dsvHeap;
     ComPtr<ID3D12Resource> constantBuffer;
     ComPtr<ID3D12DescriptorHeap> cbvHeap;
 
     UINT8* cbvDataBegin;
+};
+
+// --- VRAM Manager ---
+// This class handles the GPU memory dynamically.
+// There will be exactly 1 object of this class in entire application. Hence the special name.
+// भगवान शंकर की कृपा बानी रहे. Corresponding object is named "gpuRAMManager".
+class शंकर{
+public:
+    UINT8* pVertexDataBegin = nullptr; // MODIFICATION: Pointer for mapped vertex upload buffer
+    UINT8* pIndexDataBegin = nullptr;  // MODIFICATION: Pointer for mapped index upload buffer
+
+    // Maps our CPU ObjectID to its resource info in VRAM
+    std::unordered_map<uint64_t, GpuResourceInfo> resourceMap;
+
+    // Simulates a simple heap allocator with 16MB chunks
+    uint64_t m_nextFreeOffset = 0;
+    const uint64_t CHUNK_SIZE = 16 * 1024 * 1024;
+    uint64_t m_vram_capacity = 4 * CHUNK_SIZE; // Simulate 64MB VRAM
+
+    // When an object is updated, the old VRAM is put here to be freed later.
+    struct DeferredFree {
+        uint64_t frameNumber; // The frame it became obsolete
+        GpuResourceInfo resource;
+    };
+    std::list<DeferredFree> deferredFreeQueue;
+
+    // Allocate space in VRAM. Returns the handle.
+    std::optional<GpuResourceInfo> Allocate(size_t size);
+
+    void ProcessDeferredFrees(uint64_t lastCompletedRenderFrame);
+    
 };
 
 // 4 is the maximum number of simultaneous screen we are ever going to support. DO NOT CHANGE EVER.

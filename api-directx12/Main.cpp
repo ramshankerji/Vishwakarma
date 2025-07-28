@@ -46,7 +46,7 @@ Hence we don't need to compile them and generate .lib file and link them separat
 // --- Global Shared Objects ---
 std::atomic<bool> shutdownSignal = false;
 
-CPURAMManager cpuRAMManager;
+राम cpuRAMManager;
 ThreadSafeQueue<InputCommand> g_inputCommandQueue;
 ThreadSafeQueue<GpuCommand> g_gpuCommandQueue;
 

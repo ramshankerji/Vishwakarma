@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
+// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
 
 #include <random>
 #include <ctime>
@@ -43,84 +43,57 @@ bool isGPUEngineInitialized = false; //TODO: To be implemented.
 static std::vector<Vertex> dynamicVertices;
 static std::vector<UINT16> dynamicIndices;
 static UINT pyramidCount = 0;
+// Add this near your other global variables
+static std::chrono::steady_clock::time_point lastPyramidAddTime;
 
 void GenerateVertexData(Vertex** vertexData, UINT* vertexCount, UINT* vertexBufferSize) {
-    // Initialize random number generator
-    static std::mt19937 rng(static_cast<unsigned>(std::time(nullptr)));
-    std::uniform_real_distribution<float> posDist(-5.0f, 5.0f);  // 3D Position range
-    std::uniform_real_distribution<float> sizeDist(0.2f, 1.0f); // Size range for pyramids
-    std::uniform_real_distribution<float> colorDist(0.0f, 1.0f); // Color range
-    std::uniform_int_distribution<int> countDist(25, 50);         // Pyramid count range (reduced for 3D complexity)
-
-    // Generate random number of pyramids
-    pyramidCount = countDist(rng);
-
-    // Clear previous data
-    dynamicVertices.clear();
-    dynamicVertices.reserve(pyramidCount * 4); // 4 vertices per pyramid
-
-    // Generate pyramids
-    for (UINT i = 0; i < pyramidCount; ++i) {
-        // Random center position for the pyramid
-        float centerX = posDist(rng);
-        float centerY = posDist(rng);
-        float centerZ = posDist(rng);
-
-        // Random size for the triangle
-        float pyramidSize = sizeDist(rng);
-
-        // Random colors for each vertex
-        XMFLOAT4 color1(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-        XMFLOAT4 color2(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-        XMFLOAT4 color3(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-        XMFLOAT4 color4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-
-        // Generate pyramid vertices
-        // Base vertices (forming a triangle base)
-        dynamicVertices.push_back({ XMFLOAT3(centerX - pyramidSize * 0.5f, centerY - pyramidSize * 0.5f, centerZ + pyramidSize * 0.5f), color1 });// Base vertex 1
-        dynamicVertices.push_back({ XMFLOAT3(centerX + pyramidSize * 0.5f, centerY - pyramidSize * 0.5f, centerZ + pyramidSize * 0.5f), color2 }); // Base vertex 2
-        dynamicVertices.push_back({ XMFLOAT3(centerX, centerY - pyramidSize * 0.5f, centerZ - pyramidSize * 0.5f), color3 }); // Base vertex 3
-        dynamicVertices.push_back({ XMFLOAT3(centerX, centerY + pyramidSize * 0.8f, centerZ), color4 });// Apex vertex
-    }
-
     *vertexData = dynamicVertices.data();
-    *vertexCount = pyramidCount * 4;
-    *vertexBufferSize = dynamicVertices.size() * sizeof(Vertex);
+    *vertexCount = dynamicVertices.size();
+    *vertexBufferSize = *vertexCount * sizeof(Vertex);
 }
 
 void GenerateIndexData(UINT16** indexData, UINT* indexCount, UINT* indexBufferSize) {
-    // Clear previous data
-    dynamicIndices.clear();
-    dynamicIndices.reserve(pyramidCount * 12); // 4 triangles * 3 indices each = 12 indices per pyramid
-
-    // Generate indices for each pyramid (4 triangular faces)
-    for (UINT i = 0; i < pyramidCount; ++i) {
-        UINT16 baseIndex = i * 4;
-
-        // Base triangle (vertices 0, 1, 2)
-        dynamicIndices.push_back(baseIndex + 0);
-        dynamicIndices.push_back(baseIndex + 1);
-        dynamicIndices.push_back(baseIndex + 2);
-
-        // Side triangle 1 (vertices 0, 1, 3)
-        dynamicIndices.push_back(baseIndex + 0);
-        dynamicIndices.push_back(baseIndex + 1);
-        dynamicIndices.push_back(baseIndex + 3);
-
-        // Side triangle 2 (vertices 1, 2, 3)
-        dynamicIndices.push_back(baseIndex + 1);
-        dynamicIndices.push_back(baseIndex + 2);
-        dynamicIndices.push_back(baseIndex + 3);
-
-        // Side triangle 3 (vertices 2, 0, 3)
-        dynamicIndices.push_back(baseIndex + 2);
-        dynamicIndices.push_back(baseIndex + 0);
-        dynamicIndices.push_back(baseIndex + 3);
-    }
-
     *indexData = dynamicIndices.data();
-    *indexCount = pyramidCount * 12;
-    *indexBufferSize = dynamicIndices.size() * sizeof(UINT16);
+    *indexCount = dynamicIndices.size();
+    *indexBufferSize = *indexCount * sizeof(UINT16);
+}
+
+void AddRandomPyramid() {
+    if (pyramidCount >= MaxPyramids) return; // Safety check to not exceed our pre-allocated buffer size
+
+    // Initialize random number generator (persistent)
+    static std::mt19937 rng(static_cast<unsigned>(std::time(nullptr)));
+    std::uniform_real_distribution<float> posDist(-5.0f, 5.0f);
+    std::uniform_real_distribution<float> sizeDist(0.2f, 1.0f);
+    std::uniform_real_distribution<float> colorDist(0.0f, 1.0f);
+
+    // Random properties for the new pyramid
+    float centerX = posDist(rng);
+    float centerY = posDist(rng);
+    float centerZ = posDist(rng);
+    float pyramidSize = sizeDist(rng);
+    XMFLOAT4 color1(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+    XMFLOAT4 color2(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+    XMFLOAT4 color3(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+    XMFLOAT4 color4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+
+    // --- Append new vertex data ---
+    dynamicVertices.push_back({ XMFLOAT3(centerX - pyramidSize * 0.5f, centerY - pyramidSize * 0.5f, centerZ + pyramidSize * 0.5f), color1 });
+    dynamicVertices.push_back({ XMFLOAT3(centerX + pyramidSize * 0.5f, centerY - pyramidSize * 0.5f, centerZ + pyramidSize * 0.5f), color2 });
+    dynamicVertices.push_back({ XMFLOAT3(centerX, centerY - pyramidSize * 0.5f, centerZ - pyramidSize * 0.5f), color3 });
+    dynamicVertices.push_back({ XMFLOAT3(centerX, centerY + pyramidSize * 0.8f, centerZ), color4 });
+
+    // --- Append new index data ---
+    UINT16 baseIndex = pyramidCount * 4;
+    // Base triangle
+    dynamicIndices.push_back(baseIndex + 0); dynamicIndices.push_back(baseIndex + 1); dynamicIndices.push_back(baseIndex + 2);
+    // Side triangles
+    dynamicIndices.push_back(baseIndex + 0); dynamicIndices.push_back(baseIndex + 1); dynamicIndices.push_back(baseIndex + 3);
+    dynamicIndices.push_back(baseIndex + 1); dynamicIndices.push_back(baseIndex + 2); dynamicIndices.push_back(baseIndex + 3);
+    dynamicIndices.push_back(baseIndex + 2); dynamicIndices.push_back(baseIndex + 0); dynamicIndices.push_back(baseIndex + 3);
+
+    // Increment the total pyramid count
+    pyramidCount++;
 }
 
 void InitD3D(HWND hwnd) {
@@ -245,7 +218,7 @@ void InitD3D(HWND hwnd) {
         0, nullptr, // Static samplers (none used here)
         D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT); //allows vertex input
 
-    //Root Signatures ( basically a data-structure storing constat buffer, descriptor table ranges etc.
+    //Root Signatures ( basically a data-structure storing constant buffer, descriptor table ranges etc.
     //are required to be serialized, i.e. to be converted into a binary data GPU can understand.
     //Root signatures are immutable once created and optimized for the GPU's command processor. 
     ComPtr<ID3DBlob> signature;
@@ -272,8 +245,7 @@ void InitD3D(HWND hwnd) {
     auto cbHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
     auto cbResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(256); // Constant buffers must be 256-byte aligned
 
-    device->CreateCommittedResource(
-        &cbHeapProps, D3D12_HEAP_FLAG_NONE,
+    device->CreateCommittedResource( &cbHeapProps, D3D12_HEAP_FLAG_NONE,
         &cbResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
         nullptr, IID_PPV_ARGS(&screen[i].constantBuffer));
 
@@ -375,142 +347,81 @@ void InitD3D(HWND hwnd) {
         screen[i].pipelineState.Get(), IID_PPV_ARGS(&screen[i].commandList));
     screen[i].commandList->Close();
 
-    // Upto this point, seting of Graphics Engine is complete. Now we generate the actual 
-    // vertex & index data which graphics engine will use to render things on screen.
-    // Currently we aren't changing vertex geometry frame to frame, hence we could do it here in Init3D.
-    // TODO: Move these out of Init3D function.
-    // Generate vertex data
-    Vertex* pyramidVertices;
-    UINT vertexCount;
-    UINT vertexBufferSize;
-    GenerateVertexData(&pyramidVertices, &vertexCount, &vertexBufferSize);
+    // Now we will now pre-allocate large buffers that can be updated every frame.
 
-    // Generate index data
-    UINT16* pyramidIndices;
-    UINT indexCount;
-    UINT indexBufferSize;
-    GenerateIndexData(&pyramidIndices, &indexCount, &indexBufferSize);
-
-    // Create upload heap and copy vertex data
-    ComPtr<ID3D12Resource> vertexBufferUpload;
-
-    // Create default heap for vertex buffer
-    // Define the heap properties for the default heap
-    auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-    // Define the resource description for the vertex buffer
-    auto resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
-
-    device->CreateCommittedResource(
-        &heapProps, D3D12_HEAP_FLAG_NONE,
-        &resourceDesc, D3D12_RESOURCE_STATE_COPY_DEST,
-        nullptr, IID_PPV_ARGS(&screen[i].vertexBuffer));
-
-    // Create upload heap
-    // Define the heap properties for the UPLOAD heap
+    // --- Create Vertex Buffer Resources (Pre-allocation) ---
+    auto defaultHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
     auto uploadHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
 
-    // Define the resource description for the upload buffer (same size as the destination)
-    auto uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
+    // Create the main vertex buffer on the default heap (GPU-only access).
+    auto vbResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(MaxVertexBufferSize);
+    device->CreateCommittedResource( &defaultHeapProps, D3D12_HEAP_FLAG_NONE,
+        &vbResourceDesc, D3D12_RESOURCE_STATE_COMMON, // Start in a common state
+        nullptr, IID_PPV_ARGS(&screen[i].vertexBuffer));
 
-    device->CreateCommittedResource(
-        &uploadHeapProps, D3D12_HEAP_FLAG_NONE,
-        &uploadBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr, IID_PPV_ARGS(&vertexBufferUpload));
+    // Create an upload heap for the vertex buffer.
+    device->CreateCommittedResource( &uploadHeapProps, D3D12_HEAP_FLAG_NONE,
+        &vbResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr, IID_PPV_ARGS(&screen[i].vertexBufferUpload));
 
-    // Copy data to upload heap
-    D3D12_SUBRESOURCE_DATA vertexData = {};
-    vertexData.pData = pyramidVertices;
-    vertexData.RowPitch = vertexBufferSize;
-    vertexData.SlicePitch = vertexData.RowPitch;
-
-    // Create index buffer
-    ComPtr<ID3D12Resource> indexBufferUpload;
-
-    // Create default heap for index buffer
-    // Define the heap properties for the default heap
-    auto indexHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-    // Define the resource description for the index buffer
-    auto indexResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
-
-    device->CreateCommittedResource(
-        &indexHeapProps, D3D12_HEAP_FLAG_NONE,
-        &indexResourceDesc, D3D12_RESOURCE_STATE_COPY_DEST,
+    // --- Create Index Buffer Resources (Pre-allocation) ---
+    // Create the main index buffer on the default heap.
+    auto ibResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(MaxIndexBufferSize);
+    device->CreateCommittedResource( &defaultHeapProps, D3D12_HEAP_FLAG_NONE,
+        &ibResourceDesc, D3D12_RESOURCE_STATE_COMMON, // Start in a common state
         nullptr, IID_PPV_ARGS(&screen[i].indexBuffer));
 
-    // Create upload heap for index buffer
-    // Define the heap properties for the UPLOAD heap
-    auto indexUploadHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+    // Create an upload heap for the index buffer.
+    device->CreateCommittedResource( &uploadHeapProps, D3D12_HEAP_FLAG_NONE,
+        &ibResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr, IID_PPV_ARGS(&screen[i].indexBufferUpload));
 
-    // Define the resource description for the upload buffer (same size as the destination)
-    auto indexUploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
+    // Persistently map the upload buffers. We won't unmap them until cleanup.
+    // This is efficient as we avoid map/unmap calls every frame.
+    CD3DX12_RANGE readRange2(0, 0); // We do not intend to read from this resource on the CPU.
+    screen[i].vertexBufferUpload->Map(0, &readRange2, reinterpret_cast<void**>(&screen[i].pVertexDataBegin));
+    screen[i].indexBufferUpload->Map(0, &readRange2, reinterpret_cast<void**>(&screen[i].pIndexDataBegin));
 
-    device->CreateCommittedResource(
-        &indexUploadHeapProps, D3D12_HEAP_FLAG_NONE,
-        &indexUploadBufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr, IID_PPV_ARGS(&indexBufferUpload));
-
-    // Copy data to upload heap
-    D3D12_SUBRESOURCE_DATA indexData = {};
-    indexData.pData = pyramidIndices;
-    indexData.RowPitch = indexBufferSize;
-    indexData.SlicePitch = indexData.RowPitch;
-
-    // Open command list and record copy commands
-    screen[i].commandAllocator->Reset();
-    screen[i].commandList->Reset(screen[i].commandAllocator.Get(), screen[i].pipelineState.Get());
-    UpdateSubresources<1>(screen[i].commandList.Get(), screen[i].vertexBuffer.Get(), 
-        vertexBufferUpload.Get(), 0, 0, 1, &vertexData);
-
-    UpdateSubresources<1>(screen[i].commandList.Get(), screen[i].indexBuffer.Get(), 
-        indexBufferUpload.Get(), 0, 0, 1, &indexData);
-
-    // Define the resource barrier to transition the vertex buffer
-    auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-        screen[i].vertexBuffer.Get(),                     // The resource to transition
-        D3D12_RESOURCE_STATE_COPY_DEST,         // The state before the transition
-        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER // The state after the transition
-    );
-
-    // Define the resource barrier to transition the index buffer
-    auto indexBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
-        screen[i].indexBuffer.Get(),                     // The resource to transition
-        D3D12_RESOURCE_STATE_COPY_DEST,         // The state before the transition
-        D3D12_RESOURCE_STATE_INDEX_BUFFER // The state after the transition
-    );
-
-    // Record the barrier commands in the command list
-    screen[i].commandList->ResourceBarrier(1, &barrier);
-    screen[i].commandList->ResourceBarrier(1, &indexBarrier);
-    
-    // Close command list. It mostly runs synchronously with little work deferred. Completes quickly. 
-    // Close():  Transitions the command list from recording mode to execution-ready mode.
-    // Validates Commands / Catch errors, Compress (driver-specific optimization), to Immutable (Read-Only).
-    screen[i].commandList->Close();
-    // Execute the command list.
-    ID3D12CommandList* ppCommandLists[] = { screen[i].commandList.Get() };
-    screen[i].commandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
-
-    // Create vertex buffer view
+    // Initialize the buffer views with default (but valid) values.
+    // The sizes will be updated each frame in PopulateCommandList.
     screen[i].vertexBufferView.BufferLocation = screen[i].vertexBuffer->GetGPUVirtualAddress();
     screen[i].vertexBufferView.StrideInBytes = sizeof(Vertex);
-    screen[i].vertexBufferView.SizeInBytes = vertexBufferSize;
+    screen[i].vertexBufferView.SizeInBytes = 0; // Will be updated per frame
 
-    // Create index buffer view
     screen[i].indexBufferView.BufferLocation = screen[i].indexBuffer->GetGPUVirtualAddress();
     screen[i].indexBufferView.Format = DXGI_FORMAT_R16_UINT;
-    screen[i].indexBufferView.SizeInBytes = indexBufferSize;
+    screen[i].indexBufferView.SizeInBytes = 0; // Will be updated per frame
 
     // Create synchronization objects
     device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&screen[i].fence));
     screen[i].fenceValue = 1;
     screen[i].fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
+    // Upto this point, setting of Graphics Engine is complete. Now we generate the actual 
+    // vertex & index data which graphics engine will use to render things on screen.
+    // Initial set of vertexes are generated here. Latter on more vertexes / indexes shall be updated each frame.
+
+    // Generate the initial 10 pyramids
+    dynamicVertices.reserve(MaxVertexBufferSize);
+    dynamicIndices.reserve(MaxIndexBufferSize);
+    for (int k = 0; k < 10; ++k) { AddRandomPyramid(); }
+    lastPyramidAddTime = std::chrono::steady_clock::now();// Initialize the timer
+
+    // Create synchronization objects
+    device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&screen[i].fence));
+
+    auto initialVertexBarrier = CD3DX12_RESOURCE_BARRIER::Transition( screen[i].vertexBuffer.Get(),
+        D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+
+    auto initialIndexBarrier = CD3DX12_RESOURCE_BARRIER::Transition( screen[i].indexBuffer.Get(),
+        D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+
+    // Execute these transitions during initialization
+    screen[i].commandList->ResourceBarrier(1, &initialVertexBarrier);
+    screen[i].commandList->ResourceBarrier(1, &initialIndexBarrier);
+
     // Wait for initialization to complete
     WaitForPreviousFrame();
-    // Once vertex buffers are uploaded to GPU memory, no need to hold them in local cpu RAM buffer.
-    vertexBufferUpload.Reset();
-    indexBufferUpload.Reset();
-
 }
 
 void PopulateCommandList() {
@@ -518,6 +429,70 @@ void PopulateCommandList() {
     int i = 0; // Latter to be iterated over number of screens.
     screen[i].commandAllocator->Reset();
     screen[i].commandList->Reset(screen[i].commandAllocator.Get(), screen[i].pipelineState.Get());
+
+    // Check timer and add a new pyramid every second ---
+    auto currentTime = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastPyramidAddTime).count() >= 1) {
+        AddRandomPyramid();
+        lastPyramidAddTime = currentTime; // Reset the timer
+    }
+
+    // --- Generate and Upload Geometry Every Frame (using the persistent vectors) ---
+
+    // 1. Get the current state of the vertex and index data.
+    Vertex* pyramidVertices;
+    UINT vertexCount;
+    UINT vertexBufferSize;
+    GenerateVertexData(&pyramidVertices, &vertexCount, &vertexBufferSize);
+
+    UINT16* pyramidIndices;
+    UINT indexCount;
+    UINT indexBufferSize;
+    GenerateIndexData(&pyramidIndices, &indexCount, &indexBufferSize);
+
+    // Early exit if no data to render
+    if (vertexCount == 0 || indexCount == 0) {
+        screen[i].commandList->Close();
+        return;
+    }
+
+    memcpy(screen[i].pVertexDataBegin, pyramidVertices, vertexBufferSize);// Copy vertex data to upload buffer
+    memcpy(screen[i].pIndexDataBegin, pyramidIndices, indexBufferSize);// Copy index data to upload buffer  
+    // Update buffer view sizes with current data
+    screen[i].vertexBufferView.SizeInBytes = vertexBufferSize;
+    screen[i].indexBufferView.SizeInBytes = indexBufferSize;
+    
+    // Add resource barriers and copy commands to transfer from upload to default heap
+    // Transition vertex buffer to copy destination
+    auto vertexBarrierToCopy = CD3DX12_RESOURCE_BARRIER::Transition( screen[i].vertexBuffer.Get(),
+        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_COPY_DEST);
+    screen[i].commandList->ResourceBarrier(1, &vertexBarrierToCopy);
+
+    // Transition index buffer to copy destination  
+    auto indexBarrierToCopy = CD3DX12_RESOURCE_BARRIER::Transition( screen[i].indexBuffer.Get(),
+        D3D12_RESOURCE_STATE_INDEX_BUFFER, D3D12_RESOURCE_STATE_COPY_DEST);
+    screen[i].commandList->ResourceBarrier(1, &indexBarrierToCopy);
+
+    // Copy vertex data from upload heap to default heap
+    screen[i].commandList->CopyBufferRegion( screen[i].vertexBuffer.Get(), 0,
+        screen[i].vertexBufferUpload.Get(), 0, vertexBufferSize);
+
+    // Copy index data from upload heap to default heap
+    screen[i].commandList->CopyBufferRegion( screen[i].indexBuffer.Get(), 0,
+        screen[i].indexBufferUpload.Get(), 0, indexBufferSize);
+
+    // Transition buffers back to their usage states
+    auto vertexBarrierToUse = CD3DX12_RESOURCE_BARRIER::Transition( screen[i].vertexBuffer.Get(),
+        D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    screen[i].commandList->ResourceBarrier(1, &vertexBarrierToUse);
+
+    auto indexBarrierToUse = CD3DX12_RESOURCE_BARRIER::Transition( screen[i].indexBuffer.Get(),
+        D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_INDEX_BUFFER);
+    screen[i].commandList->ResourceBarrier(1, &indexBarrierToUse);
+
+    // Update buffer view sizes with current data
+    screen[i].vertexBufferView.SizeInBytes = vertexBufferSize;
+    screen[i].indexBufferView.SizeInBytes = indexBufferSize;
 
     // Update constant buffer with transformation matrices
     static float rotationAngle = 0.0f;
@@ -587,9 +562,8 @@ void PopulateCommandList() {
     // Draw pyramids
     screen[i].commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     screen[i].commandList->IASetVertexBuffers(0, 1, &screen[i].vertexBufferView);
-    //screen[i].commandList->DrawInstanced(3, 1, 0, 0);
     screen[i].commandList->IASetIndexBuffer(&screen[i].indexBufferView);
-    screen[i].commandList->DrawIndexedInstanced(pyramidCount * 12, 1, 0, 0, 0);
+    screen[i].commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
 
     // Indicate that the back buffer will now be used to present
     auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(screen[i].renderTargets[screen[i].frameIndex].Get(), 
@@ -625,7 +599,15 @@ void CleanupD3D() {
     int i = 0; // Latter to be iterated over number of screens.
     WaitForPreviousFrame();
 
-    // Unmap constant buffer before cleanup
+    // Unmap all persistently mapped buffers before releasing them.
+    if (screen[i].pVertexDataBegin) {
+        screen[i].vertexBufferUpload->Unmap(0, nullptr);
+        screen[i].pVertexDataBegin = nullptr;
+    }
+    if (screen[i].pIndexDataBegin) {
+        screen[i].indexBufferUpload->Unmap(0, nullptr);
+        screen[i].pIndexDataBegin = nullptr;
+    }
     if (screen[i].cbvDataBegin) {
         screen[i].constantBuffer->Unmap(0, nullptr);
         screen[i].cbvDataBegin = nullptr;
@@ -634,6 +616,7 @@ void CleanupD3D() {
     CloseHandle(screen[i].fenceEvent);
     // Reset all ComPtr objects
     screen[i] = OneMonitorController{}; // Reset to default state
+    
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -657,56 +640,36 @@ extern uint64_t g_copyFrameCount;
 extern std::mutex g_renderPacketMutex;
 extern RenderPacket g_renderPacket;
 
-// --- VRAM Manager ---
-// This class simulates the GPU memory manager.
-class VramManager {
-public:
-    // Maps our CPU ObjectID to its resource info in VRAM
-    std::unordered_map<uint64_t, GpuResourceInfo> resourceMap;
-    
-    // Simulates a simple heap allocator with 16MB chunks
-    uint64_t m_nextFreeOffset = 0;
-    const uint64_t CHUNK_SIZE = 16 * 1024 * 1024;
-    uint64_t m_vram_capacity = 4 * CHUNK_SIZE; // Simulate 64MB VRAM
-
-    // When an object is updated, the old VRAM is put here to be freed later.
-    struct DeferredFree {
-        uint64_t frameNumber; // The frame it became obsolete
-        GpuResourceInfo resource;
-    };
-    std::list<DeferredFree> deferredFreeQueue;
-
-    // Allocate space in VRAM. Returns the handle.
-    std::optional<GpuResourceInfo> Allocate(size_t size) {
-        if (m_nextFreeOffset + size > m_vram_capacity) {
-            std::cerr << "VRAM MANAGER: Out of memory!" << std::endl;
-            // Here, the Main Logic thread would be signaled to reduce LOD.
-            return std::nullopt;
+// Free memory that is guaranteed to be no longer in use by any rendering frame.
+void शंकर::ProcessDeferredFrees(uint64_t lastCompletedRenderFrame) {
+    // A real implementation would be more robust. This is a simple version.
+    // Free any resource that became obsolete >= 2 frames ago.
+    auto it = deferredFreeQueue.begin();
+    while (it != deferredFreeQueue.end()) {
+        if (it->frameNumber <= lastCompletedRenderFrame) {
+            //std::cout << "VRAM MANAGER: Reclaiming " << it->resource.size << " bytes." << std::endl;
+            // In a real allocator, this space would be added to a free list.
+            // In our simple bump allocator, we can't easily reuse it without compaction.
+            it = deferredFreeQueue.erase(it);
         }
-        GpuResourceInfo info{m_nextFreeOffset, size};
-        m_nextFreeOffset += size; // Simple bump allocator
-        return info;
-    }
-
-    // Free memory that is guaranteed to be no longer in use by any rendering frame.
-    void ProcessDeferredFrees(uint64_t lastCompletedRenderFrame) {
-        // A real implementation would be more robust. This is a simple version.
-        // Free any resource that became obsolete >= 2 frames ago.
-        auto it = deferredFreeQueue.begin();
-        while (it != deferredFreeQueue.end()) {
-            if (it->frameNumber <= lastCompletedRenderFrame) {
-                //std::cout << "VRAM MANAGER: Reclaiming " << it->resource.size << " bytes." << std::endl;
-                // In a real allocator, this space would be added to a free list.
-                // In our simple bump allocator, we can't easily reuse it without compaction.
-                it = deferredFreeQueue.erase(it);
-            } else {
-                ++it;
-            }
+        else {
+            ++it;
         }
     }
-};
+}
 
-VramManager g_vramManager;
+std::optional<GpuResourceInfo> शंकर::Allocate(size_t size) {
+    if (m_nextFreeOffset + size > m_vram_capacity) {
+        std::cerr << "VRAM MANAGER: Out of memory!" << std::endl;
+        // Here, the Main Logic thread would be signaled to reduce LOD.
+        return std::nullopt;
+    }
+    GpuResourceInfo info{ m_nextFreeOffset, size };
+    m_nextFreeOffset += size; // Simple bump allocator
+    return info;
+}
+
+शंकर gpuRAMManager;
 
 // --- GPU Thread Functions ---
 
@@ -730,27 +693,27 @@ void GpuCopyThreadFunc() {
                 using T = std::decay_t<decltype(arg)>;
                 if constexpr (std::is_same_v<T, GpuUploadCmd>) {
                     // An object's data needs to be uploaded.
-                    auto newResourceOpt = g_vramManager.Allocate(arg.data.size());
+                    auto newResourceOpt = gpuRAMManager.Allocate(arg.data.size());
                     if (newResourceOpt) {
                         GpuResourceInfo newResource = *newResourceOpt;
                         // In DX12, this is where you'd record and execute the copy command list.
                         //std::cout << "COPY THREAD: Uploaded " << newResource.size << " bytes for object " << arg.objectId << " to VRAM offset " << newResource.vramOffset << std::endl;
 
                         // Check if this is an update to an existing resource.
-                        if (g_vramManager.resourceMap.count(arg.objectId)) {
+                        if (gpuRAMManager.resourceMap.count(arg.objectId)) {
                             // It is an update. The old resource must be freed, but not yet!
                             // A render thread might still be using it for the current frame.
-                            GpuResourceInfo oldResource = g_vramManager.resourceMap[arg.objectId];
-                            g_vramManager.deferredFreeQueue.push_back({lastProcessedFrame, oldResource});
+                            GpuResourceInfo oldResource = gpuRAMManager.resourceMap[arg.objectId];
+                            gpuRAMManager.deferredFreeQueue.push_back({lastProcessedFrame, oldResource});
                         }
                         // Atomically update the map to point to the new resource.
-                        g_vramManager.resourceMap[arg.objectId] = newResource;
+                        gpuRAMManager.resourceMap[arg.objectId] = newResource;
                     }
                 } else if constexpr (std::is_same_v<T, GpuFreeCmd>) {
                     // An object was deleted. Free its VRAM resource (defer it).
-                     if (g_vramManager.resourceMap.count(arg.objectId)) {
-                        g_vramManager.deferredFreeQueue.push_back({lastProcessedFrame, arg.resourceToFree});
-                        g_vramManager.resourceMap.erase(arg.objectId);
+                     if (gpuRAMManager.resourceMap.count(arg.objectId)) {
+                         gpuRAMManager.deferredFreeQueue.push_back({lastProcessedFrame, arg.resourceToFree});
+                         gpuRAMManager.resourceMap.erase(arg.objectId);
                      }
                 }
             }, cmd);
@@ -796,8 +759,8 @@ void RenderThreadFunc(int monitorId, int refreshRate) {
         if (!currentPacket.visibleObjectIds.empty()) {
             //std::cout << "RENDER-" << monitorId << ": Frame " << currentPacket.frameNumber << " | Drawing " << currentPacket.visibleObjectIds.size() << " objects." << std::endl;
             for (uint64_t id : currentPacket.visibleObjectIds) {
-                if (g_vramManager.resourceMap.count(id)) {
-                    auto res = g_vramManager.resourceMap[id];
+                if (gpuRAMManager.resourceMap.count(id)) {
+                    auto res = gpuRAMManager.resourceMap[id];
                     // "Drawing object <id> using VRAM at offset <res.vramOffset>"
                 }
             }
@@ -810,7 +773,7 @@ void RenderThreadFunc(int monitorId, int refreshRate) {
         // 5. After rendering, perform garbage collection on VRAM
         // In a real engine, the last COMPLETED GPU frame is tracked via fences.
         if (lastRenderedFrame > 2) {
-            g_vramManager.ProcessDeferredFrees(lastRenderedFrame - 2);
+            gpuRAMManager.ProcessDeferredFrees(lastRenderedFrame - 2);
         }
     }
     std::cout << "Render Thread (Monitor " << monitorId << ") shutting down." << std::endl;

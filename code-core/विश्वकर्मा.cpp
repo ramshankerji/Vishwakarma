@@ -16,7 +16,7 @@ This thread is also responsible for engineering calculations, consistency of Dat
 
 // --- Externs for communication ---
 extern std::atomic<bool> shutdownSignal;
-extern CPURAMManager cpuRAMManager;
+extern राम cpuRAMManager;
 extern ThreadSafeQueue<InputCommand> g_inputCommandQueue;
 extern ThreadSafeQueue<GpuCommand> g_gpuCommandQueue;
 

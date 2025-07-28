@@ -78,7 +78,9 @@ struct DATALocation {
     //We have 2 bytes margin in above definitions. We can use it latter using bit numbering.
 };
 
-class CPURAMManager {
+// There will be exactly 1 object of this class in entire application. Hence the special name.
+// भगवान राम की कृपा बानी रहे. Corresponding object is named "cpuRAMManager".
+class राम {
 public:
     // Global variables with proper initialization
     uint64_t physicalRAMInstalled = 8ULL * 1024 * 1024 * 1024; // 8 GB. TODO: Read system RAM.
@@ -98,8 +100,8 @@ public:
     // like absl::flat_hash_map or tsl::hopscotch_map which are more cache-friendly.
     std::unordered_map<uint64_t, DATALocation> id2ChunkMap;
 
-    CPURAMManager() { InitializeMemorySystem(); };
-    ~CPURAMManager() { CleanupMemorySystem();   };
+    राम() { InitializeMemorySystem(); };
+    ~राम() { CleanupMemorySystem();   };
     void InitializeMemorySystem();
     void CleanupMemorySystem();
 
