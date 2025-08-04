@@ -17,8 +17,6 @@ This thread is also responsible for engineering calculations, consistency of Dat
 // --- Externs for communication ---
 extern std::atomic<bool> shutdownSignal;
 extern राम cpuRAMManager;
-extern ThreadSafeQueue<InputCommand> g_inputCommandQueue;
-extern ThreadSafeQueue<GpuCommand> g_gpuCommandQueue;
 
 // The "fence" for the Main Logic thread. Signals that a frame's logic is complete.
 extern std::mutex g_logicFenceMutex;
@@ -28,6 +26,7 @@ extern uint64_t g_logicFrameCount;
 // A shared pointer to the latest render packet for the render threads
 extern std::mutex g_renderPacketMutex;
 extern RenderPacket g_renderPacket;
+extern void AddRandomPyramid();
 
 void विश्वकर्मा() { //Main logic thread. The ringmaster of the application.
     std::cout << "Main Logic Thread विश्वकर्मा started." << std::endl;
@@ -37,17 +36,15 @@ void विश्वकर्मा() { //Main logic thread. The ringmaster of t
         auto frameStart = std::chrono::high_resolution_clock::now();
 
         // 1. Process all pending inputs from User, Network, File threads
-        InputCommand cmd;
-        while (g_inputCommandQueue.try_pop(cmd)) {
-            std::visit([](auto&& arg) {
-                using T = std::decay_t<decltype(arg)>;
-                if constexpr (std::is_same_v<T, CreateObjectCmd>)
-                    cpuRAMManager.AllocateNewObject(arg);
-                else if constexpr (std::is_same_v<T, ModifyObjectCmd>)
-                    cpuRAMManager.ModifyObject(arg);
-                else if constexpr (std::is_same_v<T, DeleteObjectCmd>)
-                    cpuRAMManager.DeleteObject(arg.id);
-            }, cmd);
+        ACTION_DETAILS nextWorkTODO;
+        while (bool todo = todoCPUQueue.try_pop(nextWorkTODO)) {
+            std::cout << "Input received. Action Type = " << static_cast<int>(nextWorkTODO.actionType) <<"\n";
+            if (nextWorkTODO.actionType == ACTION_TYPE::CREATEPYRAMID) {
+                AddRandomPyramid();
+            }
+            if (todo == false) { // Means input queue was empty. We should sleep for 1 millisecond.
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
         }
 
         // 2. Scene Logic, Culling, and Identifying Dirty Objects
@@ -85,7 +82,7 @@ void विश्वकर्मा() { //Main logic thread. The ringmaster of t
                     std::memcpy(gpuData.data(), *payloadOpt, header->dataSize);
 
                     GpuUploadCmd gpuCmd{id, currentVersion, std::move(gpuData)};
-                    g_gpuCommandQueue.push(GpuCommand(gpuCmd));
+                    //g_gpuCommandQueue.push(GpuCommand(gpuCmd));
                 }
 
                 // Mark as processed

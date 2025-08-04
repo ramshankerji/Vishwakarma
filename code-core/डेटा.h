@@ -1,7 +1,7 @@
 ﻿// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
 
 // This files defines our basic data types to be used by other domain specific data types.
-#pragma once
+#pragma once // Further to this, Global variables defined here need to be defined with "inline" prefix.
 #include <cstdint>
 #include <vector>
 #include <string>
@@ -123,43 +123,113 @@ struct FOLDER {
 //////////////////////////////////////////////////////////
 
 // --- Thread-Safe Queue for Inter-Thread Communication ---
+enum class ACTION_TYPE : uint16_t { // Specifying uint16_t ensures that it is of 2 bytes only.
+    // Remember this could change from software release to software release.
+    // Hence these values shall not be persisted to disc or sent over network.
+    // They are for internal thread coordination purpose only.
 
-template<typename T>
-class ThreadSafeQueue {
+    // Keyboard Actions
+    KEYDOWN = 0, //Sent when a key is pressed down.
+    KEYUP = 1, //Sent when a key is released.
+    CHAR = 2, //Sent when a character is input(based on keyboard layout and modifiers).
+    DEADCHAR = 3,  //Sent for dead keys(accent characters used in combinations).
+    SYSKEYDOWN = 4, //Sent when a system key(e.g., Alt or F10) is pressed.
+    SYSKEYUP = 5, //Sent when a system key is released.
+    SYSCHAR = 6, //Sent when a system key produces a character.
+    SYSDEADCHAR = 7, //Sent for dead characters with system keys.
+    UNICHAR = 8, //Used to send Unicode characters(rarely used; fall-back for WM_CHAR with Unicode).
+
+    // Mouse Actions within applications
+    MOUSEMOVE = 11, //Mouse moved over the client area.
+    LBUTTONDOWN = 12, //Left mouse button pressed.
+    LBUTTONUP = 13, //Left mouse button released.
+    LBUTTONDBLCLK = 14, //Left button double - clicked.
+    RBUTTONDOWN = 15, //Right mouse button pressed.
+    RBUTTONUP = 16, //Right mouse button released.
+    RBUTTONDBLCLK = 17, //Right button double - clicked.
+    MBUTTONDOWN = 18, //Middle mouse button pressed.
+    MBUTTONUP = 19, //Middle mouse button released.
+    MBUTTONDBLCLK = 20, //Middle button double - clicked.
+    MOUSEWHEEL = 21, //Mouse wheel scrolled(vertical).
+    MOUSEHWHEEL = 22, //Mouse wheel scrolled(horizontal).
+    XBUTTONDOWN = 23, //XButton1 or XButton2 pressed(usually thumb buttons).
+    XBUTTONUP = 24, //XButton1 or XButton2 released.
+    XBUTTONDBLCLK = 25, //XButton1 or XButton2 double - clicked.
+
+    // Mouse action in Non-Application areas.
+    NCMOUSEMOVE = 31, //Mouse moved over title bar, border, etc.
+    NCLBUTTONDOWN = 32, //Left button down in non - client area.
+    NCLBUTTONUP = 33, //Left button up in non - client area.
+    NCLBUTTONDBLCLK = 34, //Double click in non - client area.
+    NCRBUTTONDOWN = 35, //Right button down in non - client area.
+    NCRBUTTONUP = 36, //Right button up in non - client area.
+    NCRBUTTONDBLCLK = 37, //Double click in non - client area.
+    NCMBUTTONDOWN = 38, //Middle button down in non - client area.
+    NCMBUTTONUP = 39, //Middle button up in non - client area.
+    NCMBUTTONDBLCLK = 40, //Double click in non - client area.
+    NCXBUTTONDOWN = 41, //X button down in non - client area.
+    NCXBUTTONUP = 42, //X button up in non - client area.
+    NCXBUTTONDBLCLK = 43, //Double click in non - client area.
+
+    CAPTURECHANGED = 51, //Sent when a window loses mouse capture (e.g., during drag, mouse released outside).
+    // We are not yet going for High-precision input. Latter on when we develop snapping mechanism, we may use this.
+    INPUT = 52, //For high-precision input (e.g., games), use WM_INPUT after calling RegisterRawInputDevices.
+
+    // Numbers between 0x400 ( = 1024 ) to 0x7FFF ( = 32767 ) are allocated to WM_USER by windows.
+    // We should be using this range only for our internal messaging needs. 
+    // Whenever in future, we implement inter-process communications we will use this range only.
+    // Reserving from 1024 to 10000 for Inter-Process communications.
+    // 30000 to 32767 we are reserving for experiments.
+
+    CREATEPYRAMID = 30001
+};
+
+struct ACTION_DETAILS {
+    ACTION_TYPE actionType;
+    uint16_t    data1;
+    uint32_t    data2;
+    uint64_t    data3; //In case data3 is a pointer, data2 will store the size of bytes stored in data3.
+};
+
+class ThreadSafeQueueCPU {
 public:
-    void push(T value) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_queue.push(std::move(value));
-        m_cond.notify_one();
+    void push(ACTION_DETAILS value) {
+        std::lock_guard<std::mutex> lock(mutex);
+        fifoQueue.push(std::move(value));
+        cond.notify_one();
     }
 
     // Non-blocking pop
-    bool try_pop(T& value) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (m_queue.empty()) {
+    bool try_pop(ACTION_DETAILS& value) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (fifoQueue.empty()) {
             return false;
         }
-        value = std::move(m_queue.front());
-        m_queue.pop();
+        value = std::move(fifoQueue.front());
+        fifoQueue.pop();
         return true;
     }
 
     // Shuts down the queue, waking up any waiting threads
-    void shutdown() {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_shutdown = true;
-        m_cond.notify_all();
+    void shutdownQueue() {
+        std::lock_guard<std::mutex> lock(mutex);
+        shutdown = true;
+        cond.notify_all();
     }
 
 private:
-    std::queue<T> m_queue;
-    std::mutex m_mutex;
-    std::condition_variable m_cond;
-    bool m_shutdown = false;
+    std::queue<ACTION_DETAILS> fifoQueue; // fifo = First-In First-Out
+    std::mutex mutex;
+    std::condition_variable cond;
+    bool shutdown = false;
 };
+
+inline ThreadSafeQueueCPU todoCPUQueue;
 
 // --- Command Definitions for the Input->MainLogic Queue ---
 
+
+// RAM Manager related structs.
 struct CreateObjectCmd {
     uint64_t desiredId;
     uint64_t parentId;
@@ -177,8 +247,7 @@ struct DeleteObjectCmd {
 
 // Using a variant for type-safe command storage
 using InputCommand = std::variant<CreateObjectCmd, ModifyObjectCmd, DeleteObjectCmd>;
-
-
+///////////////////////////////////////////////////////////////////////////////////////////////////
 // --- GPU-related Definitions ---
 
 // Information about a resource currently residing in VRAM
@@ -208,6 +277,40 @@ struct RenderPacket {
     std::vector<uint64_t> visibleObjectIds;
 };
 
+class ThreadSafeQueueGPU {
+public:
+    void push(GpuCommand value) {
+        std::lock_guard<std::mutex> lock(mutex);
+        fifoQueue.push(std::move(value));
+        cond.notify_one();
+    }
+
+    // Non-blocking pop
+    bool try_pop(GpuCommand& value) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (fifoQueue.empty()) {
+            return false;
+        }
+        value = std::move(fifoQueue.front());
+        fifoQueue.pop();
+        return true;
+    }
+
+    // Shuts down the queue, waking up any waiting threads
+    void shutdownQueue() {
+        std::lock_guard<std::mutex> lock(mutex);
+        shutdown = true;
+        cond.notify_all();
+    }
+
+private:
+    std::queue<GpuCommand> fifoQueue; // fifo = First-In First-Out
+    std::mutex mutex;
+    std::condition_variable cond;
+    bool shutdown = false;
+};
+
+inline ThreadSafeQueueGPU g_gpuCommandQueue;
 
 
 

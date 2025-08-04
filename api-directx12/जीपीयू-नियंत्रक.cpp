@@ -113,7 +113,7 @@ void InitD3D(HWND hwnd) {
     ComPtr<IDXGIFactory4> factory;
     CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&factory));
 
-    // Create device
+    // Create device. This should be in a separate function. Because creation of swap chain etc.  is monitor specific.
     ComPtr<IDXGIAdapter1> hardwareAdapter;
     for (UINT adapterIndex = 0; SUCCEEDED(factory->EnumAdapters1(adapterIndex, &hardwareAdapter)); ++adapterIndex) {
         if (SUCCEEDED(D3D12CreateDevice(hardwareAdapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
@@ -624,7 +624,7 @@ void CleanupD3D() {
 
 // --- Externs for communication ---
 extern std::atomic<bool> shutdownSignal;
-extern ThreadSafeQueue<GpuCommand> g_gpuCommandQueue;
+extern ThreadSafeQueueGPU g_gpuCommandQueue;
 
 // Logic Thread "Fence"
 extern std::mutex g_logicFenceMutex;
@@ -673,7 +673,7 @@ std::optional<GpuResourceInfo> शंकर::Allocate(size_t size) {
 
 // --- GPU Thread Functions ---
 
-void GpuCopyThreadFunc() {
+void GpuCopyThread() {
     std::cout << "GPU Copy Thread started." << std::endl;
     uint64_t lastProcessedFrame = -1;
 
@@ -730,7 +730,7 @@ void GpuCopyThreadFunc() {
     std::cout << "GPU Copy Thread shutting down." << std::endl;
 }
 
-void RenderThreadFunc(int monitorId, int refreshRate) {
+void GpuRenderThread(int monitorId, int refreshRate) {
     std::cout << "Render Thread (Monitor " << monitorId << ", " << refreshRate << "Hz) started." << std::endl;
     uint64_t lastRenderedFrame = -1;
     const auto frameDuration = std::chrono::milliseconds(1000 / refreshRate);

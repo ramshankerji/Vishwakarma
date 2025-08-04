@@ -1,5 +1,6 @@
 // Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
 #include "CPURAM-Manager.h"
+#include <algorithm> // Required for std::lower_bound
 
 void राम::InitializeMemorySystem() { // Initialize the system - should be called once at startup
     if (!RAMChunks.empty()) return; // Already initialized
@@ -76,39 +77,69 @@ std::unordered_map<uint64_t, DATALocation> राम::GetIdMapSnapshot() {
 std::optional<DATALocation> राम::FindSpaceAndAllocate(uint32_t totalSpaceNeeded) {
     if (totalSpaceNeeded > CPU_RAM_4MB::DATA_BLOCK_SIZE) return std::nullopt; // Object too large
 
-    if (RAMChunks[activeChunkIndex]->newDataSpace < totalSpaceNeeded) {
-        // Not enough contiguous space at the end of the active chunk.
-        // TODO: Could search prior chunks for free space (from deletions). For now, just allocate a new one.
+    // --- Search Active Chunk's Free List ---
+    // First-fit: find the first block in the free list that is large enough.
+    CPU_RAM_4MB* activeChunk = RAMChunks[activeChunkIndex];
+    uint32_t foundOffset = 0;
 
-        activeChunkIndex++;
-        if (activeChunkIndex >= RAMChunksAllocatedCount) {
-            if (RAMChunksAllocatedCount >= cpuRAMChunkLimit) {
-                std::cerr << "WARNING: Exceeding physical RAM soft limit." << std::endl;
-                // Allow allocation to continue, but we're now likely swapping to disk.
+    for (auto it = activeChunk->freeByteRangesList.begin(); it != activeChunk->freeByteRangesList.end(); ++it) {
+        if (it->freeBytes >= totalSpaceNeeded) {
+            // Found a suitable block.
+            foundOffset = it->startOffset;
+
+            // Update the free list entry.
+            if (it->freeBytes == totalSpaceNeeded) {
+                // The block is used up exactly, so remove it from the list.
+                activeChunk->freeByteRangesList.erase(it);
             }
-            if (RAMChunksAllocatedCount >= RAMChunks.size()) {
-                RAMChunks.resize(RAMChunks.size() + 16, nullptr); // Grow vector by 16 slots 
-                cpuRAMChunkLimit += 16; // and update limit.
+            else {
+                // The block is larger than needed, so shrink it from the start.
+                it->startOffset += totalSpaceNeeded;
+                it->freeBytes -= totalSpaceNeeded;
             }
-            RAMChunks[activeChunkIndex] = new CPU_RAM_4MB();
-            RAMChunksAllocatedCount++;
-        }
-        else if (RAMChunks[activeChunkIndex] == nullptr) {
-            // Re-using a slot that was part of the initial vector but not yet allocated
-            RAMChunks[activeChunkIndex] = new CPU_RAM_4MB();
+
+            // Update chunk metadata and return the location.
+            activeChunk->totalFreeSpace -= totalSpaceNeeded;
+            activeChunk->totalUsedSpace += totalSpaceNeeded;
+            return DATALocation{ activeChunkIndex, foundOffset };
         }
     }
 
-    // We have a chunk with enough space at the end
-    uint32_t offset = static_cast<uint32_t>(RAMChunks[activeChunkIndex]->nextDataLocation
-        - RAMChunks[activeChunkIndex]->dataBlock);
+    // --- If no space in active chunk, allocate a new one ---
+    // Not enough contiguous space in the active chunk's free list.
+    // As per design, we do not search prior chunks. We just allocate a new one.
+    activeChunkIndex++;
+    if (activeChunkIndex >= RAMChunksAllocatedCount) {
+        if (RAMChunksAllocatedCount >= cpuRAMChunkLimit) {
+            std::cerr << "WARNING: Exceeding physical RAM soft limit." << std::endl;
+            // Allow allocation to continue, but we're now likely swapping to disk.
+        }
+        if (activeChunkIndex >= RAMChunks.size()) {
+            RAMChunks.resize(RAMChunks.size() + 16, nullptr); // Grow vector by 16 slots 
+        }
+        RAMChunks[activeChunkIndex] = new CPU_RAM_4MB();
+        RAMChunksAllocatedCount++;
+    }
+    else if (RAMChunks[activeChunkIndex] == nullptr) {
+        // Re-using a slot that was part of the initial vector but not yet allocated
+        RAMChunks[activeChunkIndex] = new CPU_RAM_4MB();
+    }
 
-    // Update chunk metadata
-    RAMChunks[activeChunkIndex]->nextDataLocation += totalSpaceNeeded;
-    RAMChunks[activeChunkIndex]->newDataSpace -= totalSpaceNeeded;
-    RAMChunks[activeChunkIndex]->totalFreeSpace -= totalSpaceNeeded;
+    // --- Allocate from the newly prepared chunk ---
+    // The new chunk is guaranteed to have one large free block at the start of its list.
+    CPU_RAM_4MB* newActiveChunk = RAMChunks[activeChunkIndex];
+    auto& firstBlock = newActiveChunk->freeByteRangesList.front();
+    foundOffset = firstBlock.startOffset;
 
-    return DATALocation{ activeChunkIndex, offset };
+    // Adjust the single free block in the new chunk.
+    firstBlock.startOffset += totalSpaceNeeded;
+    firstBlock.freeBytes -= totalSpaceNeeded;
+
+    // Update chunk metadata.
+    newActiveChunk->totalFreeSpace -= totalSpaceNeeded;
+    newActiveChunk->totalUsedSpace += totalSpaceNeeded;
+
+    return DATALocation{ activeChunkIndex, foundOffset };
 }
 
 bool राम::ModifyObject(const ModifyObjectCmd& cmd) {
@@ -118,7 +149,8 @@ bool राम::ModifyObject(const ModifyObjectCmd& cmd) {
     if (it == id2ChunkMap.end()) return false; // Object not found
 
     DATALocation location = it->second;
-    META_DATA* header = reinterpret_cast<META_DATA*>(RAMChunks[location.chunkIndex]->dataBlock + location.offsetInChunk);
+    CPU_RAM_4MB* chunk = RAMChunks[location.chunkIndex];
+    META_DATA* header = reinterpret_cast<META_DATA*>(chunk->dataBlock + location.offsetInChunk);
 
     uint32_t oldPayloadSize = header->dataSize;
     uint32_t oldTotalSpace = (sizeof(META_DATA) + oldPayloadSize + 7) & ~7U;
@@ -131,6 +163,36 @@ bool राम::ModifyObject(const ModifyObjectCmd& cmd) {
         std::memcpy(reinterpret_cast<std::byte*>(header) + sizeof(META_DATA), cmd.newData.data(), newPayloadSize);
         header->dataSize = newPayloadSize;
         header->dataVersion.fetch_add(1, std::memory_order_relaxed); // Increment version
+
+        // If the new data is smaller, there is leftover space. Add it back to the freelist.
+        uint32_t leftoverSpace = oldTotalSpace - newTotalSpace;
+        if (leftoverSpace > 64) { // Only add back if the fragment is reasonably large.
+            chunk->totalFreeSpace += leftoverSpace;
+            chunk->totalUsedSpace -= leftoverSpace;
+
+            // Add the leftover block to the freelist (with merging).
+            uint32_t freedOffset = location.offsetInChunk + newTotalSpace;
+            auto& freeList = chunk->freeByteRangesList;
+            auto insertPos = std::lower_bound(freeList.begin(), freeList.end(), freedOffset,
+                [](const FREE_RAM_RANGES& range, uint32_t value) { return range.startOffset < value; });
+            auto newBlockIt = freeList.insert(insertPos, { freedOffset, leftoverSpace });
+
+            // Try to merge with previous and next blocks.
+            if (newBlockIt != freeList.begin()) {
+                auto prevBlockIt = std::prev(newBlockIt);
+                if (prevBlockIt->startOffset + prevBlockIt->freeBytes == newBlockIt->startOffset) {
+                    prevBlockIt->freeBytes += newBlockIt->freeBytes;
+                    newBlockIt = freeList.erase(newBlockIt);
+                }
+            }
+            if (newBlockIt != freeList.end() && std::next(newBlockIt) != freeList.end()) {
+                auto nextBlockIt = std::next(newBlockIt);
+                if (newBlockIt->startOffset + newBlockIt->freeBytes == nextBlockIt->startOffset) {
+                    newBlockIt->freeBytes += nextBlockIt->freeBytes;
+                    freeList.erase(nextBlockIt);
+                }
+            }
+        }
     }
     else {
         // New data is larger. We must move the object.
@@ -139,9 +201,30 @@ bool राम::ModifyObject(const ModifyObjectCmd& cmd) {
 
         DATALocation newLocation = *newLocationOpt;
 
-        // Mark old space as free
-        RAMChunks[location.chunkIndex]->totalFreeSpace += oldTotalSpace;
-        // In a real system, add this free block to a freelist for reuse.
+        // Mark old space as free and add it to the freelist for reuse.
+        chunk->totalFreeSpace += oldTotalSpace;
+        chunk->totalUsedSpace -= oldTotalSpace;
+        uint32_t freedOffset = location.offsetInChunk;
+        auto& freeList = chunk->freeByteRangesList;
+        auto insertPos = std::lower_bound(freeList.begin(), freeList.end(), freedOffset,
+            [](const FREE_RAM_RANGES& range, uint32_t value) { return range.startOffset < value; });
+        auto newBlockIt = freeList.insert(insertPos, { freedOffset, oldTotalSpace });
+
+        // Try to merge with previous and next blocks.
+        if (newBlockIt != freeList.begin()) {
+            auto prevBlockIt = std::prev(newBlockIt);
+            if (prevBlockIt->startOffset + prevBlockIt->freeBytes == newBlockIt->startOffset) {
+                prevBlockIt->freeBytes += newBlockIt->freeBytes;
+                newBlockIt = freeList.erase(newBlockIt);
+            }
+        }
+        if (newBlockIt != freeList.end() && std::next(newBlockIt) != freeList.end()) {
+            auto nextBlockIt = std::next(newBlockIt);
+            if (newBlockIt->startOffset + newBlockIt->freeBytes == nextBlockIt->startOffset) {
+                newBlockIt->freeBytes += nextBlockIt->freeBytes;
+                freeList.erase(nextBlockIt);
+            }
+        }
 
         // Copy data to the new location
         std::byte* destPtr = RAMChunks[newLocation.chunkIndex]->dataBlock + newLocation.offsetInChunk;
@@ -170,7 +253,7 @@ bool राम::ModifyObject(const ModifyObjectCmd& cmd) {
 
 bool राम::DeleteObject(uint64_t id) {
     //Find the chunkIndex using id2ChunkMap.
-    //Update Relevant details in RAMChunks and mark for deletion. Delegated till GPU link is freeded.
+    //Update Relevant details in RAMChunks and mark for deletion. Delegated till GPU link is freed.
     //Remove id from id2ChunkMap.
     std::lock_guard<std::mutex> lock(mutex);
 
@@ -178,7 +261,8 @@ bool राम::DeleteObject(uint64_t id) {
     if (it == id2ChunkMap.end()) return false;
 
     DATALocation location = it->second;
-    META_DATA* header = reinterpret_cast<META_DATA*>(RAMChunks[location.chunkIndex]->dataBlock + location.offsetInChunk);
+    CPU_RAM_4MB* chunk = RAMChunks[location.chunkIndex];
+    META_DATA* header = reinterpret_cast<META_DATA*>(chunk->dataBlock + location.offsetInChunk);
 
     // Soft delete: just mark the flag. The memory is now considered "free" but fragmented.
     // De-fragmentation would reclaim it.
@@ -186,7 +270,41 @@ bool राम::DeleteObject(uint64_t id) {
     header->dataVersion.fetch_add(1, std::memory_order_relaxed); // Signal change to other systems
 
     uint32_t totalSpace = (sizeof(META_DATA) + header->dataSize + 7) & ~7U;
-    RAMChunks[location.chunkIndex]->totalFreeSpace += totalSpace;
+    chunk->totalFreeSpace += totalSpace;
+    chunk->totalUsedSpace -= totalSpace;
+
+    // Add the freed space back to the chunk's free list, maintaining sorted order and merging.
+    auto& freeList = chunk->freeByteRangesList;
+    uint32_t freedOffset = location.offsetInChunk;
+
+    // Find the correct position to insert the new free block to maintain sorted order by offset.
+    auto insertPos = std::lower_bound(freeList.begin(), freeList.end(), freedOffset,
+        [](const FREE_RAM_RANGES& range, uint32_t value) {
+            return range.startOffset < value;
+        });
+
+    auto newBlockIt = freeList.insert(insertPos, { freedOffset, totalSpace });
+
+    // Try to merge with the previous block.
+    if (newBlockIt != freeList.begin()) {
+        auto prevBlockIt = std::prev(newBlockIt);
+        if (prevBlockIt->startOffset + prevBlockIt->freeBytes == newBlockIt->startOffset) {
+            prevBlockIt->freeBytes += newBlockIt->freeBytes;
+            // Erase the current block (which has been merged into the previous one)
+            // and update the iterator to point to the merged block.
+            newBlockIt = freeList.erase(newBlockIt);
+            newBlockIt--; // Point to the merged block (previous one)
+        }
+    }
+
+    // Try to merge with the next block.
+    if (newBlockIt != freeList.end() && std::next(newBlockIt) != freeList.end()) {
+        auto nextBlockIt = std::next(newBlockIt);
+        if (newBlockIt->startOffset + newBlockIt->freeBytes == nextBlockIt->startOffset) {
+            newBlockIt->freeBytes += nextBlockIt->freeBytes;
+            freeList.erase(nextBlockIt);
+        }
+    }
 
     // IMPORTANT: We do NOT remove from id2ChunkMap here. The Main Logic thread needs to see the
     // "isDeleted" flag to command the GPU to free its resources. The object will be fully

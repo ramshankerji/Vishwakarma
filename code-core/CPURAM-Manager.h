@@ -42,33 +42,44 @@ We will have index only over certain fields. For others, we will do a linear sca
 #include <unordered_map>
 #include <iostream>
 #include <mutex>
+#include <optional>
 
 #include "डेटा.h"
 
+struct FREE_RAM_RANGES {
+    // Simple struct to track all the free spaces in the RAM Chunks. RAM Chunks are also knows as areana.
+    uint32_t startOffset = 0;
+    uint32_t freeBytes = 0;
+    //For our 4MB RAM Chunks, above variable will be maximum 2^22 only. Which can be accomodated in 
+    //3 Bytes ( 2^24 ). We have 10x2=20 bits margin here for additional info if we impliment
+    //bit packing in future.
+};
+
 struct CPU_RAM_4MB {
     //1 KB ( 1024 Bytes) out of 4 MB ( = 4 * 1024 * 1024 Bytes) is reserved for meta-data.
+    // We must not use more than 1 KB (1024 Bytes) for meta-data of this CPU RAM Chunk.
+
+    // "static const" are not per Object of this struct. There are global properties of the struct.
     static const uint32_t METADATA_SIZE = 1024;
     static const uint32_t DATA_BLOCK_SIZE = (4 * 1024 * 1024) - METADATA_SIZE;
-
-    // We must not use more than 1 KB (1024 Bytes) for meta-data of this CPU RAM Chunk.
-    uint32_t newDataSpace = 0;     // 4 Bytes. How much space is left starting with nextDataPointer
+    
+    std::vector<FREE_RAM_RANGES> freeByteRangesList; // Track the free space within the 4 MB Range.
     uint32_t totalFreeSpace = 0;   // 4 Bytes
     uint32_t totalUsedSpace = 0;   // 4 Bytes
     bool isChunkAllocated = false; // 1 Bytes
     bool isChunkFull = false;      // 1 Bytes 
-    std::byte* nextDataLocation = nullptr;// 8 Byte. This is where new data will be appended.
-
-    static const uint32_t dataBlockSize = 4 * 1024 * 1024 - 1024; // Not per Object. Global variable.
-    
-    std::byte dataBlock[DATA_BLOCK_SIZE];
+    std::byte dataBlock[DATA_BLOCK_SIZE]; // Our THE data range.
 
     CPU_RAM_4MB() { // Constructor Function. Initialize all the fields.
-        newDataSpace = dataBlockSize;
-        totalFreeSpace = dataBlockSize;
+        totalFreeSpace = DATA_BLOCK_SIZE;
         totalUsedSpace = 0;
-        nextDataLocation = dataBlock;
         isChunkAllocated = true;
         isChunkFull = false;
+
+        // The chunk starts with one single free block covering the entire data area.
+        // Offsets are relative to the start of dataBlock, so the first block starts at 0.
+        freeByteRangesList.push_back({.startOffset = 0, .freeBytes = DATA_BLOCK_SIZE });
+        std::memset(dataBlock, 0, sizeof(dataBlock)); // Clear the data block (set all bytes to 0)
     }
 };
 
@@ -121,8 +132,11 @@ public:
     void DefragmentRAMChunks(uint32_t chunkIndex);
 
 private:
-    // Helper function to find space and allocate
+    // Helper function to find space and allocate from the freelist
     std::optional<DATALocation> FindSpaceAndAllocate(uint32_t totalSpaceNeeded);
+
+    // Helper function to return a memory block to the freelist
+    void AddToFreelist(uint32_t chunkIndex, uint32_t offset, uint32_t size);
 
     // Using std::mutex for thread-safety, as this class will be called from the Main Logic thread,
     // which is the single writer to the data repository. A mutex provides safety if we ever

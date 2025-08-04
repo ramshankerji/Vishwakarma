@@ -4,14 +4,15 @@
 #include <chrono>
 #include <iostream>
 #include <random>
+#include <chrono>
+
+extern void AddRandomPyramid();
+extern ThreadSafeQueueCPU todoCPUQueue;
+extern enum class ACTION_TYPE actions;
 
 // Global flag to signal all threads to shut down.
 extern std::atomic<bool> shutdownSignal;
 // Global queue for inputs to send commands to the Main Logic Thread.
-extern ThreadSafeQueue<InputCommand> g_inputCommandQueue;
-
-// Used to generate unique IDs for new objects.
-std::atomic<uint64_t> g_nextObjectId = 1;
 
 // TODO: Implement a mechanism, to queue KeyPresses, Mouse movement and so on.
 void UserInputThread() {
@@ -24,11 +25,15 @@ void UserInputThread() {
         // Simulate user interaction (e.g., creating or modifying an object)
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-        uint64_t id = g_nextObjectId.fetch_add(1);
         std::vector<std::byte> data(distrib(gen) * 16, std::byte{0xAA}); // Create object of random size
         
-        CreateObjectCmd cmd{id, 0, data};
-        g_inputCommandQueue.push(InputCommand(cmd));
+        // Check timer and add a new pyramid every second. This is used to simulate user Input.
+        static std::chrono::steady_clock::time_point lastPyramidAddTime;
+        auto currentTime = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastPyramidAddTime).count() >= 1) {
+            todoCPUQueue.push(ACTION_DETAILS( { ACTION_TYPE::CREATEPYRAMID, 0,0,0 }));
+            lastPyramidAddTime = currentTime; // Reset the timer
+        }
         //std::cout << "USER: Created object " << id << std::endl;
     }
     std::cout << "User Input Thread shutting down." << std::endl;
@@ -44,16 +49,6 @@ void NetworkInputThread() {
     while (!shutdownSignal) {
         // Simulate receiving an update for an existing object over the network.
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        if (g_nextObjectId > 5) {
-            uint64_t idToModify = distrib(gen);
-            if (idToModify > 0) {
-                 std::vector<std::byte> data(distrib(gen) * 24, std::byte{0xBB});
-                 ModifyObjectCmd cmd{idToModify, data};
-                 g_inputCommandQueue.push(InputCommand(cmd));
-                 //std::cout << "NET: Modified object " << idToModify << std::endl;
-            }
-        }
     }
      std::cout << "Network Thread shutting down." << std::endl;
 }
@@ -66,10 +61,7 @@ void FileInputThread() {
     // and then terminate, or it could continuously monitor for file changes.
     // For this example, it loads 10 objects and then sleeps.
     for(int i=0; i<10; ++i) {
-        uint64_t id = g_nextObjectId.fetch_add(1);
-        std::vector<std::byte> data(1024, std::byte{0xCC}); // 1KB objects
-        CreateObjectCmd cmd{id, 0, data};
-        g_inputCommandQueue.push(InputCommand(cmd));
+        todoCPUQueue.push(ACTION_DETAILS({ ACTION_TYPE::CREATEPYRAMID, 0,0,0 }));
     }
     std::cout << "FILE: Initial bulk load complete." << std::endl;
 

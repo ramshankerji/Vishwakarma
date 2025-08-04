@@ -47,8 +47,8 @@ Hence we don't need to compile them and generate .lib file and link them separat
 std::atomic<bool> shutdownSignal = false;
 
 राम cpuRAMManager;
-ThreadSafeQueue<InputCommand> g_inputCommandQueue;
-ThreadSafeQueue<GpuCommand> g_gpuCommandQueue;
+extern ThreadSafeQueueCPU todoCPUQueue;
+extern ThreadSafeQueueGPU g_gpuCommandQueue;
 
 // Fences (simulated)
 std::mutex g_logicFenceMutex;
@@ -72,8 +72,8 @@ void UserInputThread();
 void NetworkInputThread();
 void FileInputThread();
 void विश्वकर्मा(); //Main Logic Thread. The ringmaster ! :-)
-void GpuCopyThreadFunc();
-void RenderThreadFunc(int monitorId, int refreshRate);
+void GpuCopyThread();
+void GpuRenderThread(int monitorId, int refreshRate);
 
 
 std::wstring GetExecutablePath() {
@@ -418,9 +418,9 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     threads.emplace_back(FileInputThread);
 
     threads.emplace_back(विश्वकर्मा); //Main logic thread. The ringmaster of the application.
-    threads.emplace_back(GpuCopyThreadFunc);
-    threads.emplace_back(RenderThreadFunc, 0, 60);  // Monitor 1 at 60Hz
-    threads.emplace_back(RenderThreadFunc, 1, 144); // Monitor 2 at 144Hz    
+    threads.emplace_back(GpuCopyThread);
+    threads.emplace_back(GpuRenderThread, 0, 60);  // Monitor 1 at 60Hz
+    threads.emplace_back(GpuRenderThread, 1, 144); // Monitor 2 at 144Hz    
 
     // Initialize D3D12
     InitD3D(hWnd);
@@ -489,8 +489,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     // Let's try to gracefully shutdown all the threads we started.
     // // Signal all threads to stop
     shutdownSignal = true; // UI Input thread, Network Input Thread & File Handling thread listen to this.
-    g_inputCommandQueue.shutdown();
-    g_gpuCommandQueue.shutdown();
+    todoCPUQueue.shutdownQueue();
+    g_gpuCommandQueue.shutdownQueue();
     g_logicFenceCV.notify_all();
     g_copyFenceCV.notify_all();
 
