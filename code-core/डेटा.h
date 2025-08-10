@@ -22,8 +22,13 @@ For our Data-Structure design approach, reach commentary on डेटा-CPURAM-
 */
 // Represents the meta-data stored at the beginning of each object in a RAM chunk.
 struct META_DATA {
-    uint64_t id;                  // 8 bytes 
-    uint64_t parentId;      // 8 bytes 
+    uint64_t tempId = 0;        // 8 bytes : This is temporary CPU ID inside currently running software. Scoped within each tab.
+    uint64_t tempIdParent = 0;  // 8 bytes : This is temporary CPU ID. "0" simply means it has not been initialized.
+
+    int64_t persistedId;      // This is the unique ID within the saved file.
+    int64_t persistedParentId;// This is the unique ID within the saved file.
+
+    uint64_t changeNo = 0; // Every time a variable changes, we increment this to signal other threads.
     
     // In general our dataSize will be maximum few kilo bytes per object only.
     // The following will limit the maximum external data (ex: Image, PDF, other native files etc.)
@@ -47,6 +52,18 @@ struct META_DATA {
     uint64_t lastProcessedVersion{ 0 };     // The version last seen by the GPU processing logic
     bool isDeleted{ false };                // Soft-delete flag
     // Padding to ensure 8-byte alignment can be added if necessary
+};
+
+struct optionalDataCount {
+    // Our data objects can have optional fields of following types. Tracking the count of these
+    // Optional fields here helps with memory allocation of things.
+    // Objects get to decide whether they want this optional property or not.
+    uint16_t optionalByteCount = 0;
+    uint16_t optionalInt32Count = 0;
+    uint16_t optionalInt64Count = 0;
+    uint16_t optionalFloatCount = 0;
+    uint16_t optionalDoubleCount = 0;
+    uint16_t optionalByteArrayCount = 0;
 };
 
 // Following are some special data types designed to be dynamically allocated by our RAM Manager.

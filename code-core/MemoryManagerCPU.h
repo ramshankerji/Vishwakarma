@@ -1,15 +1,169 @@
-// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
-#include "CPURAM-Manager.h"
+﻿// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
+
+/* Goal of our In-Memory data structure: 
+The data set being handled by the application will have classes of approx. 
+1000 to 5000 unique types. Each class type will have 10 to 50 fields. 
+Certain mandatory fields (members) and around 2/3rd being optional values, 
+some of which could be utf-8 string. These optional values could be set or unset. 
+Design a memory data structure / algorithmic approach such that least amount of space 
+is wasted storing unneeded fields, with flexibility to change 
+the field values as and when required by the user. 
+I will be persisting these classes using their protocol buffer representations. 
+Each object shall be identified by a unique 64bit ID. 
+I also need to be able to quickly retrieve any particular ID, or confirm it's absence. 
+Not afraid to use state-of-art industry standards algorithms.
+Could even consider small string optimizations etc.
+
+Proposed solution:
+┌───────────────────────────────────────────────────────────┐
+│ uint64_t  id;     // 8 bytes (Part of meta-data)          │
+│ bool/int/char/float/double mandatoryFeilds; // Fixed‑size │
+│ uint64_t  presence_mask;         // bit-mask for up to 64 │
+│ // followed by N small-value slots, in order:             │
+│ // ┌───────────────────────────────────────────────────┐  │
+│ // │ optional slot 0 (if present)                      │  │
+│ // │ optional slot 1 (if present)                      │  │
+│ // │   …                                               │  │
+│ // │ optional slot F (if present)                      │  │
+│ // └───────────────────────────────────────────────────┘  │
+│ // followed by string storage area (packed back‑to‑back)  │
+└───────────────────────────────────────────────────────────┘
+
+We will not use std::optional<T> because It will consume min. 8 Bytes even if "T" is not present.
+I also want to quickly access all objects of a particular class having another field 
+equal to say "2"? It will be like in-memory indexing over the table.
+We will have index only over certain fields. For others, we will do a linear scan.
+*/
+#pragma once
+#include <cstdint>
+#include <cstddef>
+#include <vector>
+#include <cstring> // for memcpy
+#include <unordered_map>
+#include <iostream>
+#include <mutex>
+#include <optional>
 #include <algorithm> // Required for std::lower_bound
 
-void राम::InitializeMemorySystem() { // Initialize the system - should be called once at startup
+#include "डेटा.h"
+
+struct FREE_RAM_RANGES {
+    // Simple struct to track all the free spaces in the RAM Chunks. RAM Chunks are also knows as areana.
+    uint32_t startOffset = 0;
+    uint32_t freeBytes = 0;
+    //For our 4MB RAM Chunks, above variable will be maximum 2^22 only. Which can be accomodated in 
+    //3 Bytes ( 2^24 ). We have 10x2=20 bits margin here for additional info if we impliment
+    //bit packing in future.
+};
+
+struct CPU_RAM_4MB {
+    //1 KB ( 1024 Bytes) out of 4 MB ( = 4 * 1024 * 1024 Bytes) is reserved for meta-data.
+    // We must not use more than 1 KB (1024 Bytes) for meta-data of this CPU RAM Chunk.
+
+    // "static const" are not per Object of this struct. There are global properties of the struct.
+    static const uint32_t METADATA_SIZE = 1024;
+    static const uint32_t DATA_BLOCK_SIZE = (4 * 1024 * 1024) - METADATA_SIZE;
+    
+    uint32_t tabIndex = 0;
+    std::vector<FREE_RAM_RANGES> freeByteRangesList; // Track the free space within the 4 MB Range.
+    uint32_t totalFreeSpace = 0;   // 4 Bytes
+    uint32_t totalUsedSpace = 0;   // 4 Bytes
+    bool isChunkAllocated = false; // 1 Bytes
+    bool isChunkFull = false;      // 1 Bytes 
+    std::byte dataBlock[DATA_BLOCK_SIZE]; // Our THE data range.
+
+    CPU_RAM_4MB(uint32_t tabNo) { // Constructor Function. Initialize all the fields.
+        tabIndex = tabNo;
+        totalFreeSpace = DATA_BLOCK_SIZE;
+        totalUsedSpace = 0;
+        isChunkAllocated = true;
+        isChunkFull = false;
+
+        // The chunk starts with one single free block covering the entire data area.
+        // Offsets are relative to the start of dataBlock, so the first block starts at 0.
+        freeByteRangesList.push_back({.startOffset = 0, .freeBytes = DATA_BLOCK_SIZE });
+        std::memset(dataBlock, 0, sizeof(dataBlock)); // Clear the data block (set all bytes to 0)
+    }
+};
+
+struct DATALocation {
+    uint32_t chunkIndex;   // It needs 3 Byte only.
+    uint32_t offsetInChunk;// It needs 3 Byte only.
+    //We have 2 bytes margin in above definitions. We can use it latter using bit numbering.
+};
+
+/*
+There will be exactly 1 object of this class in entire application.Hence the special name.
+The global host cpu's Memory (RAM) manager.
+Basically it consists of a series of 4 MB Chunks. However 1 Chunks belong to 1 tab only.
+भगवान राम की कृपा बानी रहे. Corresponding object is named "cpuRAMManager".
+TODO: Improve this function such that 1 Chunk is dedicated to 1 tab only.
+*/
+class राम {
+public:
+    // Global variables with proper initialization
+    uint64_t physicalRAMInstalled = 8ULL * 1024 * 1024 * 1024; // 8 GB. TODO: Read system RAM.
+    const uint64_t cpuRAMChunkSize = sizeof(CPU_RAM_4MB);
+    uint32_t cpuRAMChunkLimit = static_cast<uint32_t>(physicalRAMInstalled / cpuRAMChunkSize);
+
+    /* We try to restrict our memory limit to what is physically installed on machine.
+    However our approach is of soft-limit. Users will get warning only when we have actually exceeded the system RAM limit.
+    We do not take into account, other running applications, hence we may already be getting paged-out to disc when
+    nearing the limit. It's not a hard limit. */
+
+    //TODO: Standard Library unordered_map does not take advantage of SIMD capabilities.
+    // Latter on we will have our own implementation. We want this performance to be extreme.
+    // This is core operation in our application. Ask AI for better options.
+    // We use a high-performance hash map for ID-to-location mapping.
+    // NOTE: For extreme performance, consider replacing with a more specialized hash map
+    // like absl::flat_hash_map or tsl::hopscotch_map which are more cache-friendly.
+    std::unordered_map<uint64_t, DATALocation> id2ChunkMap;
+
+    राम() { InitializeMemorySystem(); };
+    ~राम() { CleanupMemorySystem();   };
+    void InitializeMemorySystem();
+    void CleanupMemorySystem();
+
+    // The main interface for the logic thread
+    bool AllocateNewObject(const CreateObjectCmd& cmd);
+    bool ModifyObject(const ModifyObjectCmd& cmd);
+    bool DeleteObject(uint64_t id);
+
+    // Accessors for the logic thread to inspect objects
+    std::optional<META_DATA*> GetMETA_DATA(uint64_t id);
+    std::optional<std::byte*> GetObjectPayload(uint64_t id);
+
+    // For iterating over all objects to find "dirty" ones
+    // Returns a copy of the map to iterate over without holding the lock.
+    std::unordered_map<uint64_t, DATALocation> GetIdMapSnapshot();
+
+    void DefragmentRAMChunks(uint32_t chunkIndex);
+
+private:
+    // Helper function to find space and allocate from the freelist
+    std::optional<DATALocation> FindSpaceAndAllocate(uint32_t totalSpaceNeeded);
+
+    // Helper function to return a memory block to the freelist
+    void AddToFreelist(uint32_t chunkIndex, uint32_t offset, uint32_t size);
+
+    // Using std::mutex for thread-safety, as this class will be called from the Main Logic thread,
+    // which is the single writer to the data repository. A mutex provides safety if we ever
+    // change this architecture.
+    std::mutex mutex;
+
+    std::vector<CPU_RAM_4MB*> RAMChunks; // NULL identifies the chunk has not been allocated.
+    uint32_t RAMChunksAllocatedCount = 0; // Just a tracker. Whenever we reach up-to cpuRAMChunkCount, we soft-warn users.
+    uint32_t activeChunkIndex = 0; //TODO: Move to tab scope, when tabs are implimented.
+
+};
+
+inline void राम::InitializeMemorySystem() { // Initialize the system - should be called once at startup
     if (!RAMChunks.empty()) return; // Already initialized
     physicalRAMInstalled = 8ULL * 1024 * 1024 * 1024; // 8 GB
     cpuRAMChunkLimit = static_cast<uint32_t>(physicalRAMInstalled / sizeof(CPU_RAM_4MB));
 
     RAMChunks.assign(cpuRAMChunkLimit, nullptr); // Overhead: 4GB RAM=>8*1024=8KB , 4TB Server=8*1024*1024=8MB : Negligible.
-    //RAMChunks.reserve(cpuRAMChunkLimit, nullptr); 
-    RAMChunks[0] = new CPU_RAM_4MB(); // We allocate 1 chunk at the beginning itself.
+    RAMChunks[0] = new CPU_RAM_4MB(0); // We allocate 1 chunk at the beginning itself.
     RAMChunksAllocatedCount = 1; // Even on 16 TB system, this count will not grow to more than 2^22. (16TB/4MB)
     activeChunkIndex = 0;
 
@@ -21,7 +175,7 @@ void राम::InitializeMemorySystem() { // Initialize the system - should be 
 the application that would run until program termination, we can safely skip the cleanup function.
 The OS will handle it. However to satisfy Valgrind, AddressSanitizer, or Visual Studio's diagnostic tools,
 and make our life easier catching relevant bugs there, we do the cleanup anyway.*/
-void राम::CleanupMemorySystem() {
+inline void राम::CleanupMemorySystem() {
     std::lock_guard<std::mutex> lock(mutex);
     for (auto chunk : RAMChunks) { delete chunk; }
     RAMChunks.clear();
@@ -31,7 +185,7 @@ void राम::CleanupMemorySystem() {
 }
 
 //void CPURAMManager::AllocateNewObject(META_DATA& metaData, void* data, uint32_t dataSize) {
-bool राम::AllocateNewObject(const CreateObjectCmd& cmd) {
+inline bool राम::AllocateNewObject(const CreateObjectCmd& cmd) {
     std::lock_guard<std::mutex> lock(mutex);
     // Duplicate id will be silently discarded without crashing the application.
     if (id2ChunkMap.count(cmd.desiredId)) return false; // ID already exists
@@ -52,8 +206,8 @@ bool राम::AllocateNewObject(const CreateObjectCmd& cmd) {
 
     // Construct the header in-place
     META_DATA header;
-    header.id = cmd.desiredId;
-    header.parentId = cmd.parentId;
+    header.tempId = cmd.desiredId;
+    header.tempIdParent = cmd.parentId; //WARNING: Wrong. copy tempIdParent ?
     header.dataSize = payloadSize;
     header.xxxFileIndex = 0; // Placeholder
     header.dataVersion = 1;
@@ -69,12 +223,12 @@ bool राम::AllocateNewObject(const CreateObjectCmd& cmd) {
     return true;
 }
 
-std::unordered_map<uint64_t, DATALocation> राम::GetIdMapSnapshot() {
+inline std::unordered_map<uint64_t, DATALocation> राम::GetIdMapSnapshot() {
     std::lock_guard<std::mutex> lock(mutex);
     return id2ChunkMap;
 }
 
-std::optional<DATALocation> राम::FindSpaceAndAllocate(uint32_t totalSpaceNeeded) {
+inline std::optional<DATALocation> राम::FindSpaceAndAllocate(uint32_t totalSpaceNeeded) {
     if (totalSpaceNeeded > CPU_RAM_4MB::DATA_BLOCK_SIZE) return std::nullopt; // Object too large
 
     // --- Search Active Chunk's Free List ---
@@ -117,12 +271,12 @@ std::optional<DATALocation> राम::FindSpaceAndAllocate(uint32_t totalSpaceN
         if (activeChunkIndex >= RAMChunks.size()) {
             RAMChunks.resize(RAMChunks.size() + 16, nullptr); // Grow vector by 16 slots 
         }
-        RAMChunks[activeChunkIndex] = new CPU_RAM_4MB();
+        RAMChunks[activeChunkIndex] = new CPU_RAM_4MB(0);
         RAMChunksAllocatedCount++;
     }
     else if (RAMChunks[activeChunkIndex] == nullptr) {
         // Re-using a slot that was part of the initial vector but not yet allocated
-        RAMChunks[activeChunkIndex] = new CPU_RAM_4MB();
+        RAMChunks[activeChunkIndex] = new CPU_RAM_4MB(0);
     }
 
     // --- Allocate from the newly prepared chunk ---
@@ -142,7 +296,7 @@ std::optional<DATALocation> राम::FindSpaceAndAllocate(uint32_t totalSpaceN
     return DATALocation{ activeChunkIndex, foundOffset };
 }
 
-bool राम::ModifyObject(const ModifyObjectCmd& cmd) {
+inline bool राम::ModifyObject(const ModifyObjectCmd& cmd) {
     std::lock_guard<std::mutex> lock(mutex);
 
     auto it = id2ChunkMap.find(cmd.id);
@@ -230,8 +384,8 @@ bool राम::ModifyObject(const ModifyObjectCmd& cmd) {
         std::byte* destPtr = RAMChunks[newLocation.chunkIndex]->dataBlock + newLocation.offsetInChunk;
 
         META_DATA newHeader;
-        newHeader.id = header->id;
-        newHeader.parentId = header->parentId;
+        newHeader.tempId = header->tempId;
+        newHeader.tempIdParent = header->tempIdParent;
         newHeader.xxxFileIndex = header->xxxFileIndex;
         newHeader.dataType = header->dataType;
         newHeader.lastProcessedVersion = header->lastProcessedVersion;
@@ -251,7 +405,7 @@ bool राम::ModifyObject(const ModifyObjectCmd& cmd) {
     return true;
 }
 
-bool राम::DeleteObject(uint64_t id) {
+inline bool राम::DeleteObject(uint64_t id) {
     //Find the chunkIndex using id2ChunkMap.
     //Update Relevant details in RAMChunks and mark for deletion. Delegated till GPU link is freed.
     //Remove id from id2ChunkMap.
@@ -313,7 +467,7 @@ bool राम::DeleteObject(uint64_t id) {
     return true;
 }
 
-std::optional<META_DATA*> राम::GetMETA_DATA(uint64_t id) {
+inline std::optional<META_DATA*> राम::GetMETA_DATA(uint64_t id) {
     std::lock_guard<std::mutex> lock(mutex);
     auto it = id2ChunkMap.find(id);
     if (it == id2ChunkMap.end()) return std::nullopt;
@@ -322,7 +476,7 @@ std::optional<META_DATA*> राम::GetMETA_DATA(uint64_t id) {
     return reinterpret_cast<META_DATA*>(RAMChunks[loc.chunkIndex]->dataBlock + loc.offsetInChunk);
 }
 
-std::optional<std::byte*> राम::GetObjectPayload(uint64_t id) {
+inline std::optional<std::byte*> राम::GetObjectPayload(uint64_t id) {
     std::lock_guard<std::mutex> lock(mutex);
     auto it = id2ChunkMap.find(id);
     if (it == id2ChunkMap.end()) return std::nullopt;
@@ -332,7 +486,7 @@ std::optional<std::byte*> राम::GetObjectPayload(uint64_t id) {
     return headerPtr + sizeof(META_DATA);
 }
 
-void राम::DefragmentRAMChunks(uint32_t chunkIndex) {
+inline void राम::DefragmentRAMChunks(uint32_t chunkIndex) {
     // Compress RAMChunks to free up CPU RAM. Update id2ChunkMap for all the IDs which have moved.
     // This is a highly complex operation.
     // 1. Lock the chunk to prevent any modifications.

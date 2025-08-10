@@ -1,7 +1,9 @@
-// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
+﻿// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
 
 #include <cstdint>
 #include <vector>
+#include "MemoryManagerCPU.h"
+extern struct CPU_RAM_4MB;
 
 #pragma once //It prevents multiple inclusions of the same header file.
 
@@ -11,7 +13,7 @@ struct NETWORK_INTERFACE {
     char* ipAddress[16]; // IPv6 are 128 byte (=16 Byte), IPv4 will 32 bits i.e. 1st 4 Byte Only. 
 };
 
-struct DATASET {
+struct DATASETTAB {
     // Each opened dataSet is considered / shown as a TAB. It could consist of multiple .yyy & .zzz file.
     // It could either load from local disc attached to OS OR loaded from remote network share OR loaded from same application running on other computer on network.
     // Network share is different because we don't want to submit overburden remote shared server with design calculation transient files.
@@ -42,7 +44,14 @@ struct DATASET {
     char* fileNonce[16]; //Internal AES encryption key of the file.
     char* fileID[16]; //SHA256 of Public Key truncated to 1st 128 bits.
 
+    राम cpuRAMManager; // Each tab gets it's own memory manager, which keeps growing in 4 MB chunks.
+
 };
+
+inline std::vector<DATASETTAB> tabs;
+// Tab 0 id default application launch screen tab. It can't be closed.
+// Tab 0 is also used to do all the experiments and benchmark during development.
+inline uint32_t activeTab = 0; 
 
 // Following is the main application. It is THE global variable. 
 // There will be only one instance of this class in the entire application. Hence unnamed struct type.
@@ -61,9 +70,15 @@ struct globals{
     // We will allow user to open as many files simultaneously as system RAM allows.
     // Particularly, enterprise central repository may have thousands of projects.
     // Hence this is one of the rate location where we allow dynamic allocation done by std:vector.
-    std::vector<DATASET> dataSet; //Grows exponentially. 1.5x for GCC/Clang, 2x for MSVC.
+    std::vector<DATASETTAB> dataSet; //Grows exponentially. 1.5x for GCC/Clang, 2x for MSVC.
     int activeDataSetNo; //The one current visible on windows.
 
     //***** Centralized Application Variables. *****
     //***** Centralized Application Variables. *****
 };
+
+// Global variable across the application..
+
+//Atomic ID generator for unique IDs across the application.
+static std::atomic<uint64_t> global_id{1}; // start at 1 to reserve 0 if you want
+inline uint64_t GetNewTempID(){ return global_id.fetch_add(1, std::memory_order_relaxed); } //fetch_add returns the old value before increment,

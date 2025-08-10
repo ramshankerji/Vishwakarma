@@ -1,22 +1,21 @@
 // Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
 
 /*This is the application's orchestrator. It consumes commands, updates the scene database, identifies dirty objects, 
-and generates work for the GPU threads.
-This thread is also responsible for engineering calculations, consistency of Data etc.
+and generates work for the GPU threads. This thread is also responsible for engineering calculations, consistency of Data etc.
 */
-#include "विश्वकर्मा.h"
 
-// MainLogicThread.cpp
-#include "डेटा.h"
-#include "CPURAM-Manager.h"
 #include <iostream>
 #include <thread>
 #include <chrono>
 #include <vector>
 
+#include "विश्वकर्मा.h"
+//#include "डेटा.h"
+#include "MemoryManagerCPU.h"
+
+
 // --- Externs for communication ---
 extern std::atomic<bool> shutdownSignal;
-extern राम cpuRAMManager;
 
 // The "fence" for the Main Logic thread. Signals that a frame's logic is complete.
 extern std::mutex g_logicFenceMutex;
@@ -28,13 +27,17 @@ extern std::mutex g_renderPacketMutex;
 extern RenderPacket g_renderPacket;
 extern void AddRandomPyramid();
 
+DATASETTAB* currentTab;
+
 void विश्वकर्मा() { //Main logic thread. The ringmaster of the application.
     std::cout << "Main Logic Thread विश्वकर्मा started." << std::endl;
+
     uint64_t frameCounter = 0;
 
-    while (!shutdownSignal) {
+    while (!shutdownSignal) { // This is our primary application loop.
         auto frameStart = std::chrono::high_resolution_clock::now();
 
+        currentTab = &tabs[activeTab];
         // 1. Process all pending inputs from User, Network, File threads
         ACTION_DETAILS nextWorkTODO;
         while (bool todo = todoCPUQueue.try_pop(nextWorkTODO)) {

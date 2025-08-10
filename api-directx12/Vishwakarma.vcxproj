@@ -102,7 +102,6 @@
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\code-core\CPURAM-Manager.cpp" />
     <ClCompile Include="..\code-core\विश्वकर्मा.cpp" />
     <ClCompile Include="..\code-external\libpng-code\png.c">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
@@ -213,8 +212,9 @@
     <ClCompile Include="preCompiledHeadersWindows.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\code-core\CPURAM-Manager.h" />
+    <ClInclude Include="..\code-core\MemoryManagerCPU.h" />
     <ClInclude Include="..\code-core\Input_UI_Network_File.h" />
+    <ClInclude Include="..\code-core\VishwakarmaID64bit.h" />
     <ClInclude Include="..\code-core\डेटा-उपकरण.h" />
     <ClInclude Include="..\code-core\डेटा-गतिशील-मशीन.h" />
     <ClInclude Include="..\code-core\डेटा-पाइप.h" />

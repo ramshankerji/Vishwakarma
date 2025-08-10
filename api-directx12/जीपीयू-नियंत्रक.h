@@ -19,9 +19,12 @@
 #include <DirectXMath.h> //Where from? https://github.com/Microsoft/DirectXMath ?
 #include <vector>
 #include <string>
+#include <unordered_map>
 
 using namespace Microsoft::WRL;
 using namespace DirectX;
+
+#include "डेटा.h"
 
 //DirectX12 Libraries.
 #pragma comment(lib, "d3d12.lib") //%WindowsSdkDir\Lib%WindowsSDKVersion%\\um\arch
@@ -106,6 +109,9 @@ struct OneMonitorController {
 
     UINT8* cbvDataBegin;
 };
+
+// GPU Resource Information Structure
+// This structure holds information about a resource allocated in GPU memory (VRAM)
 
 // --- VRAM Manager ---
 // This class handles the GPU memory dynamically.

@@ -111,9 +111,6 @@
     <ClCompile Include="..\code-core\विश्वकर्मा.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
-    <ClCompile Include="..\code-core\CPURAM-Manager.cpp">
-      <Filter>code-core</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="preCompiledHeadersWindows.h">
@@ -129,9 +126,6 @@
       <Filter>Source Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code-core\डेटा.h">
-      <Filter>code-core</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code-core\CPURAM-Manager.h">
       <Filter>code-core</Filter>
     </ClInclude>
     <ClInclude Include="..\code-core\डेटा-उपकरण.h">
@@ -159,6 +153,12 @@
       <Filter>code-core</Filter>
     </ClInclude>
     <ClInclude Include="..\code-core\Input_UI_Network_File.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\VishwakarmaID64bit.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\MemoryManagerCPU.h">
       <Filter>code-core</Filter>
     </ClInclude>
   </ItemGroup>

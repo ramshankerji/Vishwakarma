@@ -4,25 +4,25 @@
 
 #include "preCompiledHeadersWindows.h"
 
+// Standard Library we depend upon.
 #include <stdlib.h>
 #include <string.h>
 #include <tchar.h>
 #include <chrono>
 #include <iomanip>  // for std::setprecision
-#include "CPURAM-Manager.h"
 #include <iostream>
 #include <thread>
 #include <vector>
-#include <chrono>
-
-//#include "ft2build.h"
-//#include FT_FREETYPE_H
-#include <iostream>
 #include <random>
 #include <png.h>
 #include "resource.h"
 #include <shellscalingapi.h> // For PROCESS_PER_MONITOR_DPI_AWARE.
 
+// External Library we depend upon.
+//#include "ft2build.h"
+//#include FT_FREETYPE_H
+
+// Our own codes.
 #include "विश्वकर्मा.h"
 #include "जीपीयू-नियंत्रक.h"
 #include "डेटा.h"
@@ -34,7 +34,7 @@
 #include "डेटा-उपकरण.h"
 #include "डेटा-स्थिर-मशीन.h"
 #include "डेटा-गतिशील-मशीन.h"
-#include "CPURAM-Manager.h"
+#include "MemoryManagerCPU.h"
 #include "Input_UI_Network_File.h"
 
 #include <windows.h>
@@ -46,7 +46,6 @@ Hence we don't need to compile them and generate .lib file and link them separat
 // --- Global Shared Objects ---
 std::atomic<bool> shutdownSignal = false;
 
-राम cpuRAMManager;
 extern ThreadSafeQueueCPU todoCPUQueue;
 extern ThreadSafeQueueGPU g_gpuCommandQueue;
 
