@@ -21,6 +21,10 @@ Our current End User License Agreement ( EULA ) is here. https://mv.ramshanker.i
 We do not infringe anyone's patents. To safeguard our users, developers, and organizations, we ask all our developers to sign a Contributor License Agreement.
 
 Our current Contributor License Agreement is here. https://mv.ramshanker.in/start/contributor-license-agreement/  
+We have taken inspiration from following CLAs:  
+Forgero Developer Certificate of Origin: https://forgejo.org/docs/next/contributor/dco/  
+Blender CLA:  
+
 
 Privacy of our users is of utmost importance. We intend to maintain a delicate balance between privacy of users and need of developers to guide future software development. We intend to follow all applicable privacy laws. Following laws should be a good start.  
 
