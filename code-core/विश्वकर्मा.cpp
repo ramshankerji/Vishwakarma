@@ -8,6 +8,7 @@ and generates work for the GPU threads. This thread is also responsible for engi
 #include <thread>
 #include <chrono>
 #include <vector>
+#include <random> // Required for std::uniform_int_distribution
 #include "MemoryManagerCPU.h"
 #include "विश्वकर्मा.h"
 #include "डेटा.h"
@@ -36,6 +37,98 @@ std::atomic<uint64_t> g_nextPyramidId = 1;
 
 DATASETTAB* currentTab;
 std::vector<DATASETTAB> tabs;
+/*
+inline void addRandomGemoetryElement() {
+    PYRAMID* newPyramid = new PYRAMID(); //create on CPU RAM stack.
+    newPyramid->Randomize();
+    {
+        std::lock_guard<std::mutex> lock(toCopyThreadMutex);
+        commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD,
+            newPyramid->GetGeometry(), newPyramid->memoryID });
+    }
+    currentTab->allIDsInThisTab.push_back(newPyramid->memoryID);
+    toCopyThreadCV.notify_one();
+}
+*/
+
+inline void addRandomGemoetryElement() {
+    GeometryData geometry;// These will hold the data of the randomly created shape.
+    uint64_t memoryId;
+
+    // Randomly select a shape type (0-7 for the 8 shapes available).
+    // We use the GetRNG() helper function already available in "डेटा-सामान्य-3D.h".
+    std::uniform_int_distribution<int> shapeDist(0, 7);
+    int shapeType = shapeDist(GetRNG());
+
+    switch (shapeType) {// Create and randomize the chosen shape.
+    case 0: {
+        PYRAMID* shape = new PYRAMID();
+        shape->Randomize();
+        geometry = shape->GetGeometry();
+        memoryId = shape->memoryID;
+        break;
+    }
+    case 1: {
+        CUBOID* shape = new CUBOID();
+        shape->Randomize();
+        geometry = shape->GetGeometry();
+        memoryId = shape->memoryID;
+        break;
+    }
+    case 2: {
+        CONE* shape = new CONE();
+        shape->Randomize();
+        geometry = shape->GetGeometry();
+        memoryId = shape->memoryID;
+        break;
+    }
+    case 3: {
+        CYLINDER* shape = new CYLINDER();
+        shape->Randomize();
+        geometry = shape->GetGeometry();
+        memoryId = shape->memoryID;
+        break;
+    }
+    case 4: {
+        PARALLELEPIPED* shape = new PARALLELEPIPED();
+        shape->Randomize();
+        geometry = shape->GetGeometry();
+        memoryId = shape->memoryID;
+        break;
+    }
+    case 5: {
+        SPHERE* shape = new SPHERE();
+        shape->Randomize();
+        geometry = shape->GetGeometry();
+        memoryId = shape->memoryID;
+        break;
+    }
+    case 6: {
+        FRUSTUM_OF_PYRAMID* shape = new FRUSTUM_OF_PYRAMID();
+        shape->Randomize();
+        geometry = shape->GetGeometry();
+        memoryId = shape->memoryID;
+        break;
+    }
+    case 7: {
+        FRUSTUM_OF_CONE* shape = new FRUSTUM_OF_CONE();
+        shape->Randomize();
+        geometry = shape->GetGeometry();
+        memoryId = shape->memoryID;
+        break;
+    }
+    }
+    //Add the new shape's data to the command queue for the GPU.
+    {
+        std::lock_guard<std::mutex> lock(toCopyThreadMutex);
+        commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD,
+            geometry, memoryId });
+    }
+
+    //Track the new object's ID and notify the consumer thread.
+    currentTab->allIDsInThisTab.push_back(memoryId);
+    toCopyThreadCV.notify_one();
+}
 
 void विश्वकर्मा() { //Main logic thread. The ringmaster of the application.
     std::cout << "Main Logic Thread विश्वकर्मा started." << std::endl;
@@ -43,15 +136,7 @@ void विश्वकर्मा() { //Main logic thread. The ringmaster of t
     currentTab = &tabs[0]; //By default start with tab 0.
     // Generate the initial 10 pyramids
     for (int k = 0; k < 10; ++k) {
-        PYRAMID* newPyramid = new PYRAMID(); //create on CPU RAM stack.
-        newPyramid->Randomize();
-        {
-            std::lock_guard<std::mutex> lock(toCopyThreadMutex);
-            commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD, 
-                newPyramid->GetGeometry(), newPyramid->memoryID});
-        }
-        currentTab->allIDsInThisTab.push_back(newPyramid->memoryID);
-        toCopyThreadCV.notify_one();
+		addRandomGemoetryElement();
     }
     lastPyramidAddTime = std::chrono::steady_clock::now();// Initialize the timer
 
@@ -65,15 +150,7 @@ void विश्वकर्मा() { //Main logic thread. The ringmaster of t
         // Check timer and add a new pyramid every second.
         auto currentTime = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastPyramidAddTime).count() >= 1) {
-            PYRAMID* newPyramid = new PYRAMID(); //create on CPU RAM stack.
-            newPyramid->Randomize();
-            {
-                std::lock_guard<std::mutex> lock(toCopyThreadMutex);
-                commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD,
-                    newPyramid->GetGeometry(), newPyramid->memoryID });
-            }
-            currentTab->allIDsInThisTab.push_back(newPyramid->memoryID);
-            toCopyThreadCV.notify_one();
+            addRandomGemoetryElement();
             lastPyramidAddTime = currentTime; // Reset the timer
         }
 
@@ -82,15 +159,7 @@ void विश्वकर्मा() { //Main logic thread. The ringmaster of t
         while (bool todo = todoCPUQueue.try_pop(nextWorkTODO)) {
             std::cout << "Input received. Action Type = " << static_cast<int>(nextWorkTODO.actionType) <<"\n";
             if (nextWorkTODO.actionType == ACTION_TYPE::CREATEPYRAMID) {
-                PYRAMID* newPyramid = new PYRAMID(); //create on CPU RAM stack.
-                newPyramid->Randomize();
-                {
-                    std::lock_guard<std::mutex> lock(toCopyThreadMutex);
-                    commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD,
-                        newPyramid->GetGeometry(), newPyramid->memoryID });
-                }
-                currentTab->allIDsInThisTab.push_back(newPyramid->memoryID);
-                toCopyThreadCV.notify_one();
+                //addRandomGemoetryElement();
             }
             if (todo == false) { // Means input queue was empty. We should sleep for 1 millisecond.
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
