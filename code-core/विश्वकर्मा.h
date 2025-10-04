@@ -1,4 +1,5 @@
 ﻿// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
+#pragma once
 
 #include <cstdint>
 #include <vector>
@@ -26,6 +27,8 @@ struct DATASETTAB {
     Tab codes.*/
     int mode = 0;
 
+    uint32_t tabNo; //This also act as memoryGroupNo of the memory chunks in which engineering objects created under this tabs are located.
+
     /* In general, unless explicitly tuned, windows file full path including the "c:\" and terminating NULL character is 3+256+1=260
     character long. If long path is enabled, it is 2^16-1=32767
     https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation
@@ -44,11 +47,9 @@ struct DATASETTAB {
     char* fileNonce[16]; //Internal AES encryption key of the file.
     char* fileID[16]; //SHA256 of Public Key truncated to 1st 128 bits.
 
-    राम cpuRAMManager; // Each tab gets it's own memory manager, which keeps growing in 4 MB chunks.
-
+	std::vector<uint64_t> allIDsInThisTab; //List of all engineering object IDs in this tab.
 };
 
-inline std::vector<DATASETTAB> tabs;
 // Tab 0 id default application launch screen tab. It can't be closed.
 // Tab 0 is also used to do all the experiments and benchmark during development.
 inline uint32_t activeTab = 0; 

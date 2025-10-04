@@ -16,8 +16,6 @@ void InitD3D(HWND hwnd);
 void PopulateCommandList();
 void WaitForPreviousFrame();
 void CleanupD3D();
-void GenerateVertexData(Vertex** vertexData, UINT* vertexCount, UINT* vertexBufferSize);
-void GenerateIndexData(UINT16** indexData, UINT* indexCount, UINT* indexBufferSize);
 
 /*
 IID_PPV_ARGS is a MACRO used in DirectX (and COM programming in general) to help safely and correctly
@@ -43,9 +41,8 @@ bool isGPUEngineInitialized = false; //TODO: To be implemented.
 static std::vector<Vertex> dynamicVertices;
 static std::vector<UINT16> dynamicIndices;
 static UINT pyramidCount = 0;
-// Add this near your other global variables
-static std::chrono::steady_clock::time_point lastPyramidAddTime;
 
+/*
 void GenerateVertexData(Vertex** vertexData, UINT* vertexCount, UINT* vertexBufferSize) {
     *vertexData = dynamicVertices.data();
     *vertexCount = dynamicVertices.size();
@@ -57,44 +54,7 @@ void GenerateIndexData(UINT16** indexData, UINT* indexCount, UINT* indexBufferSi
     *indexCount = dynamicIndices.size();
     *indexBufferSize = *indexCount * sizeof(UINT16);
 }
-
-void AddRandomPyramid() {
-    if (pyramidCount >= MaxPyramids) return; // Safety check to not exceed our pre-allocated buffer size
-
-    // Initialize random number generator (persistent)
-    static std::mt19937 rng(static_cast<unsigned>(std::time(nullptr)));
-    std::uniform_real_distribution<float> posDist(-5.0f, 5.0f);
-    std::uniform_real_distribution<float> sizeDist(0.2f, 1.0f);
-    std::uniform_real_distribution<float> colorDist(0.0f, 1.0f);
-
-    // Random properties for the new pyramid
-    float centerX = posDist(rng);
-    float centerY = posDist(rng);
-    float centerZ = posDist(rng);
-    float pyramidSize = sizeDist(rng);
-    XMFLOAT4 color1(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-    XMFLOAT4 color2(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-    XMFLOAT4 color3(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-    XMFLOAT4 color4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-
-    // --- Append new vertex data ---
-    dynamicVertices.push_back({ XMFLOAT3(centerX - pyramidSize * 0.5f, centerY - pyramidSize * 0.5f, centerZ + pyramidSize * 0.5f), color1 });
-    dynamicVertices.push_back({ XMFLOAT3(centerX + pyramidSize * 0.5f, centerY - pyramidSize * 0.5f, centerZ + pyramidSize * 0.5f), color2 });
-    dynamicVertices.push_back({ XMFLOAT3(centerX, centerY - pyramidSize * 0.5f, centerZ - pyramidSize * 0.5f), color3 });
-    dynamicVertices.push_back({ XMFLOAT3(centerX, centerY + pyramidSize * 0.8f, centerZ), color4 });
-
-    // --- Append new index data ---
-    UINT16 baseIndex = pyramidCount * 4;
-    // Base triangle
-    dynamicIndices.push_back(baseIndex + 0); dynamicIndices.push_back(baseIndex + 1); dynamicIndices.push_back(baseIndex + 2);
-    // Side triangles
-    dynamicIndices.push_back(baseIndex + 0); dynamicIndices.push_back(baseIndex + 1); dynamicIndices.push_back(baseIndex + 3);
-    dynamicIndices.push_back(baseIndex + 1); dynamicIndices.push_back(baseIndex + 2); dynamicIndices.push_back(baseIndex + 3);
-    dynamicIndices.push_back(baseIndex + 2); dynamicIndices.push_back(baseIndex + 0); dynamicIndices.push_back(baseIndex + 3);
-
-    // Increment the total pyramid count
-    pyramidCount++;
-}
+*/
 
 void InitD3D(HWND hwnd) {
     UINT dxgiFactoryFlags = 0;
@@ -398,15 +358,6 @@ void InitD3D(HWND hwnd) {
     screen[i].fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
     // Upto this point, setting of Graphics Engine is complete. Now we generate the actual 
-    // vertex & index data which graphics engine will use to render things on screen.
-    // Initial set of vertexes are generated here. Latter on more vertexes / indexes shall be updated each frame.
-
-    // Generate the initial 10 pyramids
-    dynamicVertices.reserve(MaxVertexBufferSize);
-    dynamicIndices.reserve(MaxIndexBufferSize);
-    for (int k = 0; k < 10; ++k) { AddRandomPyramid(); }
-    lastPyramidAddTime = std::chrono::steady_clock::now();// Initialize the timer
-
     // Create synchronization objects
     device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&screen[i].fence));
 
@@ -420,8 +371,7 @@ void InitD3D(HWND hwnd) {
     screen[i].commandList->ResourceBarrier(1, &initialVertexBarrier);
     screen[i].commandList->ResourceBarrier(1, &initialIndexBarrier);
 
-    // Wait for initialization to complete
-    WaitForPreviousFrame();
+    WaitForPreviousFrame();// Wait for initialization to complete
 }
 
 void PopulateCommandList() {
@@ -429,70 +379,7 @@ void PopulateCommandList() {
     int i = 0; // Latter to be iterated over number of screens.
     screen[i].commandAllocator->Reset();
     screen[i].commandList->Reset(screen[i].commandAllocator.Get(), screen[i].pipelineState.Get());
-
-    // Check timer and add a new pyramid every second ---
-    auto currentTime = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastPyramidAddTime).count() >= 1) {
-        AddRandomPyramid();
-        lastPyramidAddTime = currentTime; // Reset the timer
-    }
-
-    // --- Generate and Upload Geometry Every Frame (using the persistent vectors) ---
-
-    // 1. Get the current state of the vertex and index data.
-    Vertex* pyramidVertices;
-    UINT vertexCount;
-    UINT vertexBufferSize;
-    GenerateVertexData(&pyramidVertices, &vertexCount, &vertexBufferSize);
-
-    UINT16* pyramidIndices;
-    UINT indexCount;
-    UINT indexBufferSize;
-    GenerateIndexData(&pyramidIndices, &indexCount, &indexBufferSize);
-
-    // Early exit if no data to render
-    if (vertexCount == 0 || indexCount == 0) {
-        screen[i].commandList->Close();
-        return;
-    }
-
-    memcpy(screen[i].pVertexDataBegin, pyramidVertices, vertexBufferSize);// Copy vertex data to upload buffer
-    memcpy(screen[i].pIndexDataBegin, pyramidIndices, indexBufferSize);// Copy index data to upload buffer  
-    // Update buffer view sizes with current data
-    screen[i].vertexBufferView.SizeInBytes = vertexBufferSize;
-    screen[i].indexBufferView.SizeInBytes = indexBufferSize;
-    
-    // Add resource barriers and copy commands to transfer from upload to default heap
-    // Transition vertex buffer to copy destination
-    auto vertexBarrierToCopy = CD3DX12_RESOURCE_BARRIER::Transition( screen[i].vertexBuffer.Get(),
-        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_COPY_DEST);
-    screen[i].commandList->ResourceBarrier(1, &vertexBarrierToCopy);
-
-    // Transition index buffer to copy destination  
-    auto indexBarrierToCopy = CD3DX12_RESOURCE_BARRIER::Transition( screen[i].indexBuffer.Get(),
-        D3D12_RESOURCE_STATE_INDEX_BUFFER, D3D12_RESOURCE_STATE_COPY_DEST);
-    screen[i].commandList->ResourceBarrier(1, &indexBarrierToCopy);
-
-    // Copy vertex data from upload heap to default heap
-    screen[i].commandList->CopyBufferRegion( screen[i].vertexBuffer.Get(), 0,
-        screen[i].vertexBufferUpload.Get(), 0, vertexBufferSize);
-
-    // Copy index data from upload heap to default heap
-    screen[i].commandList->CopyBufferRegion( screen[i].indexBuffer.Get(), 0,
-        screen[i].indexBufferUpload.Get(), 0, indexBufferSize);
-
-    // Transition buffers back to their usage states
-    auto vertexBarrierToUse = CD3DX12_RESOURCE_BARRIER::Transition( screen[i].vertexBuffer.Get(),
-        D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
-    screen[i].commandList->ResourceBarrier(1, &vertexBarrierToUse);
-
-    auto indexBarrierToUse = CD3DX12_RESOURCE_BARRIER::Transition( screen[i].indexBuffer.Get(),
-        D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_INDEX_BUFFER);
-    screen[i].commandList->ResourceBarrier(1, &indexBarrierToUse);
-
-    // Update buffer view sizes with current data
-    screen[i].vertexBufferView.SizeInBytes = vertexBufferSize;
-    screen[i].indexBufferView.SizeInBytes = indexBufferSize;
+    // Generate and Upload Geometry Every Frame (using the persistent vectors)
 
     // Update constant buffer with transformation matrices
     static float rotationAngle = 0.0f;
@@ -559,20 +446,31 @@ void PopulateCommandList() {
     screen[i].commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
     screen[i].commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-    // Draw pyramids
     screen[i].commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    screen[i].commandList->IASetVertexBuffers(0, 1, &screen[i].vertexBufferView);
-    screen[i].commandList->IASetIndexBuffer(&screen[i].indexBufferView);
-    screen[i].commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
+
+    // Lock and Iterate through GPU resources to draw them.
+    {
+        std::lock_guard<std::mutex> lock(objectsOnGPUMutex);
+        for (const auto& pair : objectsOnGPU)
+        {
+            uint64_t id = pair.first;
+            const GpuResourceVertexIndexInfo& res = pair.second;
+
+            screen[i].commandList->IASetVertexBuffers(0, 1, &res.vertexBufferView);
+            screen[i].commandList->IASetIndexBuffer(&res.indexBufferView);
+            screen[i].commandList->DrawIndexedInstanced(res.indexCount, 1, 0, 0, 0);
+        }
+    }
 
     // Indicate that the back buffer will now be used to present
-    auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(screen[i].renderTargets[screen[i].frameIndex].Get(), 
+    auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(screen[i].renderTargets[screen[i].frameIndex].Get(),
         D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
     screen[i].commandList->ResourceBarrier(1, &barrier2); // Pass address of barrier2
 
     // Close command list
     screen[i].commandList->Close();
 }
+
 
 void WaitForPreviousFrame() {
     // Signal and increment the fence value
@@ -619,9 +517,6 @@ void CleanupD3D() {
     
 }
 
-/////////////////////////////////////////////////////////////////////////////////
-// Initial draft of thread based program to handle GPU commands
-
 // --- Externs for communication ---
 extern std::atomic<bool> shutdownSignal;
 extern ThreadSafeQueueGPU g_gpuCommandQueue;
@@ -658,74 +553,192 @@ void शंकर::ProcessDeferredFrees(uint64_t lastCompletedRenderFrame) {
     }
 }
 
-std::optional<GpuResourceInfo> शंकर::Allocate(size_t size) {
-    if (m_nextFreeOffset + size > m_vram_capacity) {
+//TODO: Implement this. In a real allocator, we would manage free lists and possibly defragment memory.
+/*
+std::optional<GpuResourceVertexIndexInfo> शंकर::Allocate(size_t size) {
+	
+    if (nextFreeOffset + size > m_vram_capacity) {
         std::cerr << "VRAM MANAGER: Out of memory!" << std::endl;
         // Here, the Main Logic thread would be signaled to reduce LOD.
         return std::nullopt;
     }
-    GpuResourceInfo info{ m_nextFreeOffset, size };
-    m_nextFreeOffset += size; // Simple bump allocator
+    GpuResourceVertexIndexInfo info{ nextFreeOffset, size };
+    nextFreeOffset += size; // Simple bump allocator
     return info;
-}
+}*/
 
 शंकर gpuRAMManager;
 
-// --- GPU Thread Functions ---
+// =================================================================================================
+// Utility Functions
+// =================================================================================================
+class HrException : public std::runtime_error// Simple exception helper for HRESULT checks
+{
+public:
+    HrException(HRESULT hr) : std::runtime_error("HRESULT Exception"), hr(hr) {}
+    HRESULT Error() const { return hr; }
+private:
+    const HRESULT hr;
+};
 
+inline void ThrowIfFailed(HRESULT hr)
+{
+    if (FAILED(hr))
+    {
+        throw HrException(hr);
+    }
+}
+
+// Waits for the previous frame to complete rendering.
+void WaitForGpu()
+{
+    screen[0].commandQueue->Signal(screen[0].fence.Get(), screen[0].fenceValue);
+    screen[0].fence->SetEventOnCompletion(screen[0].fenceValue, screen[0].fenceEvent);
+    WaitForSingleObjectEx(screen[0].fenceEvent, INFINITE, FALSE);
+    screen[0].fenceValue++;
+}
+
+// Waits for a specific fence value to be reached
+void WaitForFenceValue(UINT64 fenceValue)
+{
+    if (screen[0].fence->GetCompletedValue() < fenceValue)
+    {
+        ThrowIfFailed(screen[0].fence->SetEventOnCompletion(fenceValue, screen[0].fenceEvent));
+        WaitForSingleObjectEx(screen[0].fenceEvent, INFINITE, FALSE);
+    }
+}
+
+// =================================================================================================
+// Thread Functions
+// =================================================================================================
+// Thread synchronization between Main Logic thread and Copy thread
+std::mutex toCopyThreadMutex;
+std::condition_variable toCopyThreadCV;
+std::queue<CommandToCopyThread> commandToCopyThreadQueue;
+std::mutex objectsOnGPUMutex;
+// Copy thread will update the following map whenever it adds/removes/modifies an object on GPU.
+std::map<uint64_t, GpuResourceVertexIndexInfo> objectsOnGPU;
+
+// The thread receiving geometry data from the Main Logic thread and uploading it to GPU VRAM.
 void GpuCopyThread() {
     std::cout << "GPU Copy Thread started." << std::endl;
     uint64_t lastProcessedFrame = -1;
 
+    ComPtr<ID3D12CommandAllocator> commandAllocator;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+
+    device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator));
+    device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, commandAllocator.Get(), 
+        nullptr, IID_PPV_ARGS(&commandList));
+    commandList->Close();
     while (!shutdownSignal) {
-        // 1. Wait for the Main Logic thread to finish a frame.
+        CommandToCopyThread cmd;
         {
-            std::unique_lock<std::mutex> lock(g_logicFenceMutex);
-            g_logicFenceCV.wait(lock, [&]{ return g_logicFrameCount > lastProcessedFrame || shutdownSignal; });
-            if (shutdownSignal) break;
-            lastProcessedFrame = g_logicFrameCount;
-        }
-        
-        // 2. Process all pending GPU commands for this frame.
-        GpuCommand cmd;
-        while (g_gpuCommandQueue.try_pop(cmd)) {
-            std::visit([&](auto&& arg) {
-                using T = std::decay_t<decltype(arg)>;
-                if constexpr (std::is_same_v<T, GpuUploadCmd>) {
-                    // An object's data needs to be uploaded.
-                    auto newResourceOpt = gpuRAMManager.Allocate(arg.data.size());
-                    if (newResourceOpt) {
-                        GpuResourceInfo newResource = *newResourceOpt;
-                        // In DX12, this is where you'd record and execute the copy command list.
-                        //std::cout << "COPY THREAD: Uploaded " << newResource.size << " bytes for object " << arg.objectId << " to VRAM offset " << newResource.vramOffset << std::endl;
+            std::unique_lock<std::mutex> lock(toCopyThreadMutex);
+            toCopyThreadCV.wait(lock, [] { return !commandToCopyThreadQueue.empty() || shutdownSignal; });
 
-                        // Check if this is an update to an existing resource.
-                        if (gpuRAMManager.resourceMap.count(arg.objectId)) {
-                            // It is an update. The old resource must be freed, but not yet!
-                            // A render thread might still be using it for the current frame.
-                            GpuResourceInfo oldResource = gpuRAMManager.resourceMap[arg.objectId];
-                            gpuRAMManager.deferredFreeQueue.push_back({lastProcessedFrame, oldResource});
-                        }
-                        // Atomically update the map to point to the new resource.
-                        gpuRAMManager.resourceMap[arg.objectId] = newResource;
-                    }
-                } else if constexpr (std::is_same_v<T, GpuFreeCmd>) {
-                    // An object was deleted. Free its VRAM resource (defer it).
-                     if (gpuRAMManager.resourceMap.count(arg.objectId)) {
-                         gpuRAMManager.deferredFreeQueue.push_back({lastProcessedFrame, arg.resourceToFree});
-                         gpuRAMManager.resourceMap.erase(arg.objectId);
-                     }
-                }
-            }, cmd);
+            if (shutdownSignal && commandToCopyThreadQueue.empty()) break;
+
+            cmd = commandToCopyThreadQueue.front();
+            commandToCopyThreadQueue.pop();
         }
 
-        // 3. Signal Fence: Let the Render Thread(s) know the data for this frame is in VRAM.
+        // --- Process Command ---
+        switch (cmd.type)
         {
-            std::lock_guard<std::mutex> lock(g_copyFenceMutex);
-            g_copyFrameCount = lastProcessedFrame;
+        case CommandToCopyThreadType::ADD:
+        case CommandToCopyThreadType::MODIFY:
+        {
+            GeometryData geo = cmd.geometry.value();
+            const UINT vertexBufferSize = static_cast<UINT>(geo.vertices.size() * sizeof(Vertex));
+            const UINT indexBufferSize = static_cast<UINT>(geo.indices.size() * sizeof(uint16_t));
+
+            GpuResourceVertexIndexInfo newResource;
+            newResource.indexCount = static_cast<UINT>(geo.indices.size());
+
+            // Create an upload heap to transfer data to the GPU.
+            ComPtr<ID3D12Resource> vertexUploadHeap;
+            ComPtr<ID3D12Resource> indexUploadHeap;
+
+            // Create the vertex buffer resource on the default heap.
+            CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
+            CD3DX12_RESOURCE_DESC vertexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
+            device->CreateCommittedResource(&defaultHeapProps, D3D12_HEAP_FLAG_NONE, &vertexBufferDesc, 
+                D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&newResource.vertexBuffer));
+
+            // Create the index buffer resource on the default heap.
+            CD3DX12_RESOURCE_DESC indexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
+            device->CreateCommittedResource(&defaultHeapProps, D3D12_HEAP_FLAG_NONE, &indexBufferDesc, 
+                D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&newResource.indexBuffer));
+
+            // Create the upload heap
+            CD3DX12_HEAP_PROPERTIES uploadHeapProps(D3D12_HEAP_TYPE_UPLOAD);
+            device->CreateCommittedResource(&uploadHeapProps, D3D12_HEAP_FLAG_NONE, &vertexBufferDesc, 
+                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexUploadHeap));
+            device->CreateCommittedResource(&uploadHeapProps, D3D12_HEAP_FLAG_NONE, &indexBufferDesc, 
+                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&indexUploadHeap));
+
+            commandAllocator->Reset();// Record copy commands
+            commandList->Reset(commandAllocator.Get(), nullptr);
+
+            // Copy vertex data to the upload heap
+            D3D12_SUBRESOURCE_DATA vertexData = {};
+            vertexData.pData = geo.vertices.data();
+            vertexData.RowPitch = vertexBufferSize;
+            vertexData.SlicePitch = vertexData.RowPitch;
+            UpdateSubresources(commandList.Get(), newResource.vertexBuffer.Get(), vertexUploadHeap.Get(), 0, 0, 1, &vertexData);
+
+            // Copy index data to the upload heap
+            D3D12_SUBRESOURCE_DATA indexData = {};
+            indexData.pData = geo.indices.data();
+            indexData.RowPitch = indexBufferSize;
+            indexData.SlicePitch = indexData.RowPitch;
+            UpdateSubresources(commandList.Get(), newResource.indexBuffer.Get(), indexUploadHeap.Get(), 0, 0, 1, &indexData);
+
+            // Transition the buffers to be readable by the shader
+            CD3DX12_RESOURCE_BARRIER barriers[] = {
+                CD3DX12_RESOURCE_BARRIER::Transition(newResource.vertexBuffer.Get(), 
+                    D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER),
+                CD3DX12_RESOURCE_BARRIER::Transition(newResource.indexBuffer.Get(), 
+                    D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_INDEX_BUFFER)
+            };
+            commandList->ResourceBarrier(2, barriers);
+
+            commandList->Close();
+
+            // --- Execute and Sync ---
+            ID3D12CommandList* ppCommandLists[] = { commandList.Get() };
+            screen[0].commandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
+
+            UINT64 fencePoint = screen[0].fenceValue;
+            screen[0].commandQueue->Signal(screen[0].fence.Get(), fencePoint);
+            screen[0].fenceValue++;
+            WaitForFenceValue(fencePoint); // Wait for the copy to complete
+
+            // --- Finalize and make available to Render thread ---
+            newResource.vertexBufferView.BufferLocation = newResource.vertexBuffer->GetGPUVirtualAddress();
+            newResource.vertexBufferView.StrideInBytes = sizeof(Vertex);
+            newResource.vertexBufferView.SizeInBytes = vertexBufferSize;
+
+            newResource.indexBufferView.BufferLocation = newResource.indexBuffer->GetGPUVirtualAddress();
+            newResource.indexBufferView.Format = DXGI_FORMAT_R16_UINT;
+            newResource.indexBufferView.SizeInBytes = indexBufferSize;
+
+            {
+                std::lock_guard<std::mutex> lock(objectsOnGPUMutex);
+                objectsOnGPU[cmd.id] = newResource; // This will add or overwrite
+            }
+            break;
         }
-        g_copyFenceCV.notify_all();
+        case CommandToCopyThreadType::REMOVE:
+        {
+            std::lock_guard<std::mutex> lock(objectsOnGPUMutex);
+            objectsOnGPU.erase(cmd.id);
+            break;
+        }
+        }
     }
+
     g_copyFenceCV.notify_all(); // Wake up threads for shutdown
     std::cout << "GPU Copy Thread shutting down." << std::endl;
 }

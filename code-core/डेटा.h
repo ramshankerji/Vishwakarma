@@ -12,118 +12,128 @@
 #include <condition_variable>
 #include <queue>
 #include <optional>
+#include <new> // Required for std::align_val_t
+#include "ID.h"
+#include "MemoryManagerCPU.h"
+#include "MemoryManagerGPU.h"
+#include <d3dx12.h>
+#include <dxgi1_6.h>
+#include <wrl.h>
+#include <d3dcompiler.h>
+#include <DirectXMath.h> //Where from? https://github.com/Microsoft/DirectXMath ?
+#include <unordered_map>
+
+using namespace Microsoft::WRL;
+using namespace DirectX;
 
 /*Each data type will inherit this base struct.
-STRICT WARNING: DO NOT ADD ANY MORE FIELDS TO THIS BASE STRUCT.
-The sequence of fields in this struct has been specifically planned considering 
-"compact struct packing" approach. DO NOT ALTER the sequence.
-
-For our Data-Structure design approach, reach commentary on डेटा-CPURAM-Manager.h
+STRICT WARNING: DO NOT ADD ANY MORE FIELDS TO THIS BASE STRUCT. DO NOT ALTER the sequence.
+The sequence of fields in this struct has been specifically planned considering "compact struct packing" approach.
+For our Data-Structure design approach, read commentary on MemoryManagerCPU.h
 */
-// Represents the meta-data stored at the beginning of each object in a RAM chunk.
+// Forward declaration of the global memory manager.
+
+extern राम cpuMemoryManager;
+
+// A tab is assigned a unique memoryGroupNo, which is shared with the downstream analysis thread and so on.
+extern uint32_t memoryGroupNo;
+
+// Data for a single geometry object. All 3D entities will generate one for their own graphics representation.
+// Currently we are using common heap, latter on we will transition them to our own heap allocator.
+struct Vertex { // Struct for vertex data
+    XMFLOAT3 position;
+    XMFLOAT4 color;
+};
+
+struct GeometryData
+{
+    uint64_t id = 0; // Unique identifier for the geometry. It is the memoryID of the corresponding engineering object.
+    std::vector<Vertex> vertices;
+    std::vector<uint16_t> indices;
+    XMFLOAT4 color;
+	GeometryData() { color = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f); } // Default color: light gray
+};
+
 struct META_DATA {
-    uint64_t tempId = 0;        // 8 bytes : This is temporary CPU ID inside currently running software. Scoped within each tab.
-    uint64_t tempIdParent = 0;  // 8 bytes : This is temporary CPU ID. "0" simply means it has not been initialized.
-
-    int64_t persistedId;      // This is the unique ID within the saved file.
-    int64_t persistedParentId;// This is the unique ID within the saved file.
-
-    uint64_t changeNo = 0; // Every time a variable changes, we increment this to signal other threads.
-    
-    // In general our dataSize will be maximum few kilo bytes per object only.
-    // The following will limit the maximum external data (ex: Image, PDF, other native files etc.)
-    // TODO: Notice that our MEMORY manager is not capable to handle more then 4MB data per object.
-    uint32_t dataSize; // Total size of data of the inherited struct, inclusive of optional fields.
+    uint64_t memoryID = 0;// This is temporary CPU ID inside currently running software. Scoped within each tab.
+    uint64_t memoryIDParent = 0; // This is temporary CPU ID. "0" simply means it has not been initialized.
+    uint64_t persistedId = 0;      // This is the unique ID within the saved file.
+    uint64_t persistedParentId = 0;// This is the unique ID within the saved file.
 
     // For each loaded yyy/zzz file, we will have an index. To assist with saving things to disc.
     // This way we can handle a total of 4 Billion loaded files. This is our SYSTEM limit.
-    uint32_t xxxFileIndex;
+    uint32_t xxxFileIndex = 0;
+    uint16_t dataType = 0; // Each unique class type. Derived class will set this value. To assist with linear scan etc. 
+    uint16_t schemaVersion = 0; // Derived class will set this value. To assist with versioning of data structure.
 
-    uint16_t dataType; // Each unique class type. To assist with linear scan etc.
-
-    uint16_t reserved1; //reserved for future use.
-    uint16_t reserved2; //reserved for future use.
-    uint16_t reserved3; //reserved for future use.
-    
-    // So we have minimum 32 Byte overhead per Object.
-
-    // --- Architecture-specific fields ---
+    // Every time a variable changes, we increment this to signal other threads.
     std::atomic<uint64_t> dataVersion{ 1 }; // Incremented on each modification
-    uint64_t lastProcessedVersion{ 0 };     // The version last seen by the GPU processing logic
+    std::atomic<uint64_t> geometryRenderedVersion{ 0 }; // The version last seen by the GPU processing logic
     bool isDeleted{ false };                // Soft-delete flag
-    // Padding to ensure 8-byte alignment can be added if necessary
-};
 
-struct optionalDataCount {
-    // Our data objects can have optional fields of following types. Tracking the count of these
-    // Optional fields here helps with memory allocation of things.
-    // Objects get to decide whether they want this optional property or not.
-    uint16_t optionalByteCount = 0;
-    uint16_t optionalInt32Count = 0;
-    uint16_t optionalInt64Count = 0;
-    uint16_t optionalFloatCount = 0;
-    uint16_t optionalDoubleCount = 0;
-    uint16_t optionalByteArrayCount = 0;
+	META_DATA() { memoryID = MemoryID::next(); }; // Assign a unique memoryID at creation
+	GeometryData GenerateGeometry() { return GeometryData(); }; // Default implementation. Derived class will override.
+
+    /* Overload the `new` operator. This is the magic that intercepts object creation.
+    Delegate the allocation request to the global memory manager,
+    passing the required size and the current thread's tab ID.
+    The manager will handle the raw allocation. C++ runtime then calls the constructor. */
+    void* operator new(uint64_t size, uint32_t memoryGroupNo) {
+        return cpuMemoryManager.Allocate(size, memoryGroupNo);
+    }
+    // It's good practice to provide overloaded new/delete for arrays as well.
+    void* operator new[](uint64_t size, uint32_t memoryGroupNo) {
+        return cpuMemoryManager.Allocate(size, memoryGroupNo);
+    }
+    /*No downstream derived class should create an object without specifying memoryGroupNo.
+    This way we ensure more strict memory partitioning between isolated tabs.
+    However in case it is missed anyway than we create on default tab 0. Memory may leak here.*/
+    void* operator new(uint64_t size) { return cpuMemoryManager.Allocate(size, 0); };
+    void* operator new[](uint64_t size) { return cpuMemoryManager.Allocate(size, 0);};
+
+    // Overload the `delete` operator. Delegate the free request to the global memory manager.
+    void operator delete(void* ptr) { cpuMemoryManager.Free(reinterpret_cast<std::byte*>(ptr)); }
+    void operator delete[](void* ptr) { cpuMemoryManager.Free(reinterpret_cast<std::byte*>(ptr)); }
+
+    // Disable default heap allocations to prevent accidental misuse.
+    // Making these private and not defining them will cause a compile-time error
+    // if someone tries to call `::new ArenaObject`.
+
+private:
+    static void* operator new(uint64_t size, void* ptr) = delete;
+    static void operator delete(void* memory, void* ptr) = delete;
 };
 
 // Following are some special data types designed to be dynamically allocated by our RAM Manager.
 
-struct c_string {// System Limit: 4 GB for individual dynamically allocated properties.
+class CustomString {// System Limit: 4 GB for individual dynamically allocated properties.
     uint32_t allocatedBytes; //In general keep min(20%, 1KB) margin in initial allocation.
     uint32_t usedBytes;   //If used bytes is less than or equal to 8, we don't heap allocate,
     //i.e. store the byte directly in "bytes" variable. It's called Small String Optimization.
     std::byte* str; //utf8 encoded.
+
+    CustomString() {
+        allocatedBytes = 0;
+        usedBytes = 0;
+        str = nullptr;
+    }
+    //TODO: Improvised on this constructor to use our custom memory allocator.
 };
 
-// System Limit: 4 GB for individual dynamically allocated properties.
-struct c_double {
-    // Used by Polylines, Contour Plates etc.
-    uint32_t allocatedBytes; //In general keep min(20%, 1KB) margin in initial allocation.
-    uint32_t usedBytes;
-    double* d;
-};
+struct c_string {};// To be deleted.
 
-struct c_float {// System Limit: 4 GB for individual dynamically allocated properties.
-    // Used by Polylines, Contour Plates etc.
-    uint32_t allocatedBytes; //In general keep min(20%, 1KB) margin in initial allocation.
-    uint32_t usedBytes;
-    float* n;
-};
+/* We don't have CustomDouble, CustomFloat, CustomInt, CustomLong etc. because they are fixed size variables.
+Whenever we want them to optionally available as part of engineering data, and stored in memory when present,
+it will be managed OptionalProperties Class as 1 boolean for each such dynamic property.
+This way we avoid the high pointer overhead small dynamic properties.*/
 
-struct c_uint64 {// System Limit: 4 GB for individual dynamically allocated properties.
-    // Used by Polylines, Contour Plates etc.
-    uint32_t allocatedBytes; //In general keep min(20%, 1KB) margin in initial allocation.
-    uint32_t usedBytes;
-    uint64_t* n;
-};
-
-struct c_uint32 {// System Limit: 4 GB for individual dynamically allocated properties.
-    // Used by Polylines, Contour Plates etc.
-    uint32_t allocatedBytes; //In general keep min(20%, 1KB) margin in initial allocation.
-    uint32_t usedBytes;
-    uint32_t* n;
-};
-
-struct c_uint16 {// System Limit: 4 GB for individual dynamically allocated properties.
-    // Used by Polylines, Contour Plates etc.
-    uint32_t allocatedBytes; //In general keep min(20%, 1KB) margin in initial allocation.
-    uint32_t usedBytes;
-    uint16_t* n;
-};
-
-struct c_uint8 {// System Limit: 4 GB for individual dynamically allocated properties.
-    // Used by Polylines, Contour Plates etc.
-    uint32_t allocatedBytes; //In general keep min(20%, 1KB) margin in initial allocation.
-    uint32_t usedBytes;
-    uint8_t* n;
-};
-
-struct FOLDER {
-    META_DATA metaData;
-    /*This is our administrative element used for selection tree organization.
-    This will also provide the short-codes used for naming of various equipments & instruments
-    buildings, or any way people may want to organize their information.*/
-
+/* Following struct demonstrate how various engineering Objects use the metaData.
+The FOLDER is also an engineering data, helping with organization of other engineering data in User Interface.
+This is our administrative element used for selection tree organization.
+This will also provide the short-codes used for naming of various equipments & instruments
+buildings, or any way people may want to organize their information.*/
+struct FOLDER : META_DATA {
+    
     //Mandatory Properties
     char name[128];     //Null terminated utf-8 encoded string.
     char shortCode[16]; //Short Prefix for naming use. utf-8 encoded.
@@ -133,13 +143,11 @@ struct FOLDER {
     uint16_t optionalFieldsFlags;  // Bit-mask for up to 16 Optional Fields - 8 Bytes.
     uint16_t systemFlags;          // 32 booleans for internal use only. Not persisted.
 
-    //Optional Properties
-    c_string displayName; // Optionally 
+    //Variable Length Properties
+    CustomString displayName; // Optionally 
 };
 
-//////////////////////////////////////////////////////////
-
-// --- Thread-Safe Queue for Inter-Thread Communication ---
+// Thread-Safe Queue for Inter-Thread Communication 
 enum class ACTION_TYPE : uint16_t { // Specifying uint16_t ensures that it is of 2 bytes only.
     // Remember this could change from software release to software release.
     // Hence these values shall not be persisted to disc or sent over network.
@@ -242,92 +250,3 @@ private:
 };
 
 inline ThreadSafeQueueCPU todoCPUQueue;
-
-// --- Command Definitions for the Input->MainLogic Queue ---
-
-
-// RAM Manager related structs.
-struct CreateObjectCmd {
-    uint64_t desiredId;
-    uint64_t parentId;
-    std::vector<std::byte> data; // The actual object data
-};
-
-struct ModifyObjectCmd {
-    uint64_t id;
-    std::vector<std::byte> newData;
-};
-
-struct DeleteObjectCmd {
-    uint64_t id;
-};
-
-// Using a variant for type-safe command storage
-using InputCommand = std::variant<CreateObjectCmd, ModifyObjectCmd, DeleteObjectCmd>;
-///////////////////////////////////////////////////////////////////////////////////////////////////
-// --- GPU-related Definitions ---
-
-// Information about a resource currently residing in VRAM
-struct GpuResourceInfo {
-    uint64_t vramOffset; // Simulated VRAM address
-    size_t size;
-    // In a real DX12 app, this would hold ID3D12Resource*, D3D12_VERTEX_BUFFER_VIEW, etc.
-};
-
-// Commands for the MainLogic -> GpuCopy Thread Queue
-struct GpuUploadCmd {
-    uint64_t objectId;
-    uint64_t objectDataVersion;
-    std::vector<std::byte> data; // Vertex/Index data to be uploaded
-};
-
-struct GpuFreeCmd {
-    uint64_t objectId;
-    GpuResourceInfo resourceToFree; // The specific VRAM resource to be reclaimed
-};
-
-using GpuCommand = std::variant<GpuUploadCmd, GpuFreeCmd>;
-
-// Packet of work for a Render Thread for one frame
-struct RenderPacket {
-    uint64_t frameNumber;
-    std::vector<uint64_t> visibleObjectIds;
-};
-
-class ThreadSafeQueueGPU {
-public:
-    void push(GpuCommand value) {
-        std::lock_guard<std::mutex> lock(mutex);
-        fifoQueue.push(std::move(value));
-        cond.notify_one();
-    }
-
-    // Non-blocking pop
-    bool try_pop(GpuCommand& value) {
-        std::lock_guard<std::mutex> lock(mutex);
-        if (fifoQueue.empty()) {
-            return false;
-        }
-        value = std::move(fifoQueue.front());
-        fifoQueue.pop();
-        return true;
-    }
-
-    // Shuts down the queue, waking up any waiting threads
-    void shutdownQueue() {
-        std::lock_guard<std::mutex> lock(mutex);
-        shutdown = true;
-        cond.notify_all();
-    }
-
-private:
-    std::queue<GpuCommand> fifoQueue; // fifo = First-In First-Out
-    std::mutex mutex;
-    std::condition_variable cond;
-    bool shutdown = false;
-};
-
-inline ThreadSafeQueueGPU g_gpuCommandQueue;
-
-
-

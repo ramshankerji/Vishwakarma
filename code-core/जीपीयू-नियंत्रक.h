@@ -1,5 +1,4 @@
 // Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
-
 #pragma once
 
 //DirectX 12 headers. Best Place to learn DirectX12 is original Microsoft documentation.
@@ -33,11 +32,6 @@ using namespace DirectX;
 #pragma comment(lib, "dxguid.lib")
 
 
-// Struct for vertex data
-struct Vertex {
-    XMFLOAT3 position;
-    XMFLOAT4 color;
-};
 /* Double buffering is preferred for CAD application due to low input lag.Caveat: If rendering time
 exceeds frame refresh interval, than strutting distortion will appear. However
 we low input latency outweighs the slight frame smoothness of triple buffering.
@@ -51,7 +45,9 @@ const UINT MaxIndexCount = MaxPyramids * 12;
 const UINT MaxVertexBufferSize = MaxVertexCount * sizeof(Vertex);
 const UINT MaxIndexBufferSize = MaxIndexCount * sizeof(UINT16);
 
-//extern ComPtr<ID3D12Device> device;
+//ComPtr<ID3D12Fence> fence;
+//UINT64 fenceValue = 0;
+//HANDLE fenceEvent;
 
 struct OneMonitorController {
     // System Fetched information.
@@ -110,8 +106,81 @@ struct OneMonitorController {
     UINT8* cbvDataBegin;
 };
 
-// GPU Resource Information Structure
+// Commands sent from Generator thread(s) to the Copy thread
+enum class CommandToCopyThreadType { ADD, MODIFY, REMOVE };
+struct CommandToCopyThread
+{
+    CommandToCopyThreadType type;
+    std::optional<GeometryData> geometry; // Present for ADD and MODIFY
+    uint64_t id; // Always present
+};
+// Thread synchronization between Main Logic thread and Copy thread
+extern std::mutex toCopyThreadMutex;
+extern std::condition_variable toCopyThreadCV;
+extern std::queue<CommandToCopyThread> commandToCopyThreadQueue;
+
+// Represents complete geometry and index data associated with 1 engineering object..
 // This structure holds information about a resource allocated in GPU memory (VRAM)
+struct GpuResourceVertexIndexInfo {
+    ComPtr<ID3D12Resource> vertexBuffer;
+    D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
+    ComPtr<ID3D12Resource> indexBuffer;
+    D3D12_INDEX_BUFFER_VIEW indexBufferView;
+    UINT indexCount;
+
+	//TODO: Latter on we will generalize this structure to hold textures, materials, shaders etc.
+	// Currently we are letting the Drive manage the GPU memory fragmentation. Latter we will manage it ourselves.
+    //uint64_t vramOffset; // Simulated VRAM address
+    //uint64_t size;
+    // In a real DX12 app, this would hold ID3D12Resource*, D3D12_VERTEX_BUFFER_VIEW, etc.
+};
+
+extern std::mutex objectsOnGPUMutex;
+// Copy thread will update the following map whenever it adds/removes/modifies an object on GPU.
+extern std::map<uint64_t, GpuResourceVertexIndexInfo> objectsOnGPU;
+
+
+
+// Packet of work for a Render Thread for one frame
+struct RenderPacket {
+    uint64_t frameNumber;
+    std::vector<uint64_t> visibleObjectIds;
+};
+
+class ThreadSafeQueueGPU {
+public:
+    void push(CommandToCopyThread value) {
+        std::lock_guard<std::mutex> lock(mutex);
+        fifoQueue.push(std::move(value));
+        cond.notify_one();
+    }
+
+    // Non-blocking pop
+    bool try_pop(CommandToCopyThread& value) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (fifoQueue.empty()) {
+            return false;
+        }
+        value = std::move(fifoQueue.front());
+        fifoQueue.pop();
+        return true;
+    }
+
+    // Shuts down the queue, waking up any waiting threads
+    void shutdownQueue() {
+        std::lock_guard<std::mutex> lock(mutex);
+        shutdown = true;
+        cond.notify_all();
+    }
+
+private:
+    std::queue<CommandToCopyThread> fifoQueue; // fifo = First-In First-Out
+    std::mutex mutex;
+    std::condition_variable cond;
+    bool shutdown = false;
+};
+
+inline ThreadSafeQueueGPU g_gpuCommandQueue;
 
 // --- VRAM Manager ---
 // This class handles the GPU memory dynamically.
@@ -123,7 +192,7 @@ public:
     UINT8* pIndexDataBegin = nullptr;  // MODIFICATION: Pointer for mapped index upload buffer
 
     // Maps our CPU ObjectID to its resource info in VRAM
-    std::unordered_map<uint64_t, GpuResourceInfo> resourceMap;
+    std::unordered_map<uint64_t, GpuResourceVertexIndexInfo> resourceMap;
 
     // Simulates a simple heap allocator with 16MB chunks
     uint64_t m_nextFreeOffset = 0;
@@ -133,12 +202,12 @@ public:
     // When an object is updated, the old VRAM is put here to be freed later.
     struct DeferredFree {
         uint64_t frameNumber; // The frame it became obsolete
-        GpuResourceInfo resource;
+        GpuResourceVertexIndexInfo resource;
     };
     std::list<DeferredFree> deferredFreeQueue;
 
     // Allocate space in VRAM. Returns the handle.
-    std::optional<GpuResourceInfo> Allocate(size_t size);
+    std::optional<GpuResourceVertexIndexInfo> Allocate(size_t size);
 
     void ProcessDeferredFrees(uint64_t lastCompletedRenderFrame);
     

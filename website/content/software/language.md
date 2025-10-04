@@ -21,4 +21,4 @@ Some important C++ Concepts:
 * Struct and Class are basically same these days, except that struct has by default all variable public, and class has default private. Both can have public / private variables and function declaration.
 * Compile time reinterpret_cast<> vs Runtime static_cast<> distinction.
 * Template Programming; Standard Library (std::) heavily uses this. In our code, try to avoid Template. Template-heavy code can slow compilation.
-* constexpr
+* std::mutex is necessary for better co-ordination between different threads.

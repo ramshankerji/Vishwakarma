@@ -5,14 +5,6 @@
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
       <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
     </Filter>
-    <Filter Include="Header Files">
-      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
-    </Filter>
-    <Filter Include="Resource Files">
-      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
-      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
-    </Filter>
     <Filter Include="code-external">
       <UniqueIdentifier>{0c56ed5d-08f8-4877-a8a1-97d54641179c}</UniqueIdentifier>
     </Filter>
@@ -21,9 +13,6 @@
     </Filter>
     <Filter Include="code-external\zlib">
       <UniqueIdentifier>{585bd2d6-790f-4201-ad79-dc436a562b80}</UniqueIdentifier>
-    </Filter>
-    <Filter Include="code-core">
-      <UniqueIdentifier>{68182463-fd52-4702-81c4-57347c918c61}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -109,71 +98,80 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\code-core\विश्वकर्मा.cpp">
-      <Filter>code-core</Filter>
+      <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="preCompiledHeadersWindows.h">
       <Filter>Source Files</Filter>
     </ClInclude>
-    <ClInclude Include="resource.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code-core\विश्वकर्मा.h">
-      <Filter>code-core</Filter>
-    </ClInclude>
     <ClInclude Include="जीपीयू-नियंत्रक.h">
       <Filter>Source Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\code-core\डेटा.h">
-      <Filter>code-core</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code-core\डेटा-उपकरण.h">
-      <Filter>code-core</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code-core\डेटा-गतिशील-मशीन.h">
-      <Filter>code-core</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code-core\डेटा-पाइप.h">
-      <Filter>code-core</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code-core\डेटा-बिजली.h">
-      <Filter>code-core</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code-core\डेटा-संरचना.h">
-      <Filter>code-core</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code-core\डेटा-सामान्य-2D.h">
-      <Filter>code-core</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code-core\डेटा-सामान्य-3D.h">
-      <Filter>code-core</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code-core\डेटा-स्थिर-मशीन.h">
-      <Filter>code-core</Filter>
+    <ClInclude Include="..\code-core\ID.h">
+      <Filter>Source Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code-core\Input_UI_Network_File.h">
-      <Filter>code-core</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code-core\VishwakarmaID64bit.h">
-      <Filter>code-core</Filter>
+      <Filter>Source Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code-core\MemoryManagerCPU.h">
-      <Filter>code-core</Filter>
+      <Filter>Source Files</Filter>
     </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <ResourceCompile Include="Vishwakarma.rc">
-      <Filter>Resource Files</Filter>
-    </ResourceCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <Image Include="..\code-core\logo.ico">
-      <Filter>Resource Files</Filter>
-    </Image>
+    <ClInclude Include="..\code-core\MemoryManagerGPU.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\VirtualMemory.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\VishwakarmaID64bit.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-उपकरण.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-गतिशील-मशीन.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-पाइप.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-बिजली.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-संरचना.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-सामान्य-2D.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-सामान्य-3D.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\डेटा-स्थिर-मशीन.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\विश्वकर्मा.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="resource.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="VertexShader.hlsl" />
     <FxCompile Include="PixelShader.hlsl" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="..\code-core\logo.ico">
+      <Filter>Source Files</Filter>
+    </Image>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Vishwakarma.rc">
+      <Filter>Source Files</Filter>
+    </ResourceCompile>
   </ItemGroup>
 </Project>

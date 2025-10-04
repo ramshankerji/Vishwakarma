@@ -43,6 +43,14 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>$(SolutionDir)\build\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)\build\$(Configuration)\Intermediate\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>$(SolutionDir)\build\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)\build\$(Configuration)\Intermediate\</IntDir>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -212,8 +220,11 @@
     <ClCompile Include="preCompiledHeadersWindows.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\code-core\ID.h" />
     <ClInclude Include="..\code-core\MemoryManagerCPU.h" />
     <ClInclude Include="..\code-core\Input_UI_Network_File.h" />
+    <ClInclude Include="..\code-core\MemoryManagerGPU.h" />
+    <ClInclude Include="..\code-core\VirtualMemory.h" />
     <ClInclude Include="..\code-core\VishwakarmaID64bit.h" />
     <ClInclude Include="..\code-core\डेटा-उपकरण.h" />
     <ClInclude Include="..\code-core\डेटा-गतिशील-मशीन.h" />

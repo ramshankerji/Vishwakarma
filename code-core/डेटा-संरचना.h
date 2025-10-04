@@ -18,8 +18,8 @@ struct STRUCTURAL_SIMPLE_MEMBER {
     uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
     uint32_t systemFlags;          // 32 booleans for internal use only. Not persisted.
     uint32_t objectLifeCycleFlags; // 32 booleans used as compact stored object properties. Persisted.
-    c_string name;
-    c_float profileParameters;
+    CustomString name;
+    //c_float profileParameters;
 };
 
 struct STRUCTURAL_CURVED_MEMBER {
@@ -33,8 +33,8 @@ struct STRUCTURAL_CURVED_MEMBER {
     uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
     uint32_t systemFlags;          // 32 booleans for internal use only. Not persisted.
     uint32_t objectLifeCycleFlags; // 32 booleans used as compact stored object properties. Persisted.
-    c_string name;
-    c_float profileParameters;
+    CustomString name;
+    //c_float profileParameters;
 };
 
 struct STRUCTURAL_POLY_MEMBER {
@@ -48,8 +48,8 @@ struct STRUCTURAL_POLY_MEMBER {
     uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
     uint32_t systemFlags;          // 32 booleans for internal use only. Not persisted.
     uint32_t objectLifeCycleFlags; // 32 booleans used as compact stored object properties. Persisted.
-    c_string name;
-    c_float profileParameters;
+    CustomString name;
+    //c_float profileParameters;
 };
 
 struct PLANER_2D { //SLABS, GRATINGS, PLATES, CHEQUERED PLATES, OR ANY PLATE  IN A SINGLE PLANE.
@@ -62,6 +62,6 @@ struct PLANER_2D { //SLABS, GRATINGS, PLATES, CHEQUERED PLATES, OR ANY PLATE  IN
     uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
     uint32_t systemFlags;          // 32 booleans for internal use only. Not persisted.
     uint32_t objectLifeCycleFlags; // 32 booleans used as compact stored object properties. Persisted.
-    c_string name;
-    c_float profileParameters;
+    CustomString name;
+    //c_float profileParameters;
 };

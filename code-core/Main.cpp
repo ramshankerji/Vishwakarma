@@ -42,12 +42,14 @@
 /* We have moved to statically compiling the .h/.c files of dependencies. 
 Hence we don't need to compile them and generate .lib file and link them separately.
 */
+//राम cpuRAMManager;//already defined in विश्वकर्मा.cpp
 
 // --- Global Shared Objects ---
 std::atomic<bool> shutdownSignal = false;
 
 extern ThreadSafeQueueCPU todoCPUQueue;
 extern ThreadSafeQueueGPU g_gpuCommandQueue;
+
 
 // Fences (simulated)
 std::mutex g_logicFenceMutex;
@@ -62,6 +64,7 @@ uint64_t g_copyFrameCount = -1; // -1 indicates not yet signaled
 // Render Packet
 std::mutex g_renderPacketMutex;
 RenderPacket g_renderPacket;
+
 
 int g_monitorCount = 0; // Global monitor count
 int primaryMonitorIndex = 0;
@@ -407,9 +410,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
 
     std::cout << "Starting application..." << std::endl;
 
-    // Initialize the core memory system
-    cpuRAMManager.InitializeMemorySystem();
-
+    InitD3D(hWnd);// Initialize D3D12. We need this before we can start GPU Copy thread and Render thread.
     // Create and launch all threads
     std::vector<std::thread> threads;
     threads.emplace_back(UserInputThread);
@@ -420,9 +421,6 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     threads.emplace_back(GpuCopyThread);
     threads.emplace_back(GpuRenderThread, 0, 60);  // Monitor 1 at 60Hz
     threads.emplace_back(GpuRenderThread, 1, 144); // Monitor 2 at 144Hz    
-
-    // Initialize D3D12
-    InitD3D(hWnd);
 
     /*
     FT_Library ft;
@@ -506,7 +504,6 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     //FT_Done_FreeType(ft);
     
     WaitForPreviousFrame(); // Wait for GPU to finish all commands
-    cpuRAMManager.CleanupMemorySystem();
     CleanupD3D();// Clean up D3D resources
 
     std::cout << "Application finished cleanly." << std::endl;
