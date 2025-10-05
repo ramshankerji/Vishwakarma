@@ -37,25 +37,6 @@ OneMonitorController screen[4];
 ComPtr<ID3D12Device> device;
 bool isGPUEngineInitialized = false; //TODO: To be implemented.
 
-// Global variables for dynamic pyramid generation
-static std::vector<Vertex> dynamicVertices;
-static std::vector<UINT16> dynamicIndices;
-static UINT pyramidCount = 0;
-
-/*
-void GenerateVertexData(Vertex** vertexData, UINT* vertexCount, UINT* vertexBufferSize) {
-    *vertexData = dynamicVertices.data();
-    *vertexCount = dynamicVertices.size();
-    *vertexBufferSize = *vertexCount * sizeof(Vertex);
-}
-
-void GenerateIndexData(UINT16** indexData, UINT* indexCount, UINT* indexBufferSize) {
-    *indexData = dynamicIndices.data();
-    *indexCount = dynamicIndices.size();
-    *indexBufferSize = *indexCount * sizeof(UINT16);
-}
-*/
-
 void InitD3D(HWND hwnd) {
     UINT dxgiFactoryFlags = 0;
     int i = 0; // Latter to be iterated over number of screens.
@@ -470,7 +451,6 @@ void PopulateCommandList() {
     // Close command list
     screen[i].commandList->Close();
 }
-
 
 void WaitForPreviousFrame() {
     // Signal and increment the fence value
