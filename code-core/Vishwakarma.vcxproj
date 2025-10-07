@@ -215,7 +215,6 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
     </ClCompile>
-    <ClCompile Include="जीपीयू-नियंत्रक.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="preCompiledHeadersWindows.cpp" />
   </ItemGroup>
@@ -236,9 +235,10 @@
     <ClInclude Include="..\code-core\डेटा-स्थिर-मशीन.h" />
     <ClInclude Include="..\code-core\डेटा.h" />
     <ClInclude Include="..\code-core\विश्वकर्मा.h" />
+    <ClInclude Include="MemoryManagerGPU-DirectX12.h" />
+    <ClInclude Include="MemoryManagerGPU-Vulkan1.1.h" />
     <ClInclude Include="preCompiledHeadersWindows.h" />
     <ClInclude Include="resource.h" />
-    <ClInclude Include="जीपीयू-नियंत्रक.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Vishwakarma.rc" />

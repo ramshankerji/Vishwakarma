@@ -24,7 +24,6 @@
 
 // Our own codes.
 #include "विश्वकर्मा.h"
-#include "जीपीयू-नियंत्रक.h"
 #include "डेटा.h"
 #include "डेटा-सामान्य-2D.h"
 #include "डेटा-सामान्य-3D.h"
@@ -35,6 +34,8 @@
 #include "डेटा-स्थिर-मशीन.h"
 #include "डेटा-गतिशील-मशीन.h"
 #include "MemoryManagerCPU.h"
+#include "MemoryManagerGPU-DirectX12.h"
+
 #include "Input_UI_Network_File.h"
 
 #include <windows.h>
@@ -48,8 +49,7 @@ Hence we don't need to compile them and generate .lib file and link them separat
 std::atomic<bool> shutdownSignal = false;
 
 extern ThreadSafeQueueCPU todoCPUQueue;
-extern ThreadSafeQueueGPU g_gpuCommandQueue;
-
+//extern ThreadSafeQueueGPU g_gpuCommandQueue;
 
 // Fences (simulated)
 std::mutex g_logicFenceMutex;
@@ -61,11 +61,6 @@ std::mutex g_copyFenceMutex;
 std::condition_variable g_copyFenceCV;
 uint64_t g_copyFrameCount = -1; // -1 indicates not yet signaled
 
-// Render Packet
-std::mutex g_renderPacketMutex;
-RenderPacket g_renderPacket;
-
-
 int g_monitorCount = 0; // Global monitor count
 int primaryMonitorIndex = 0;
 
@@ -76,7 +71,6 @@ void FileInputThread();
 void विश्वकर्मा(); //Main Logic Thread. The ringmaster ! :-)
 void GpuCopyThread();
 void GpuRenderThread(int monitorId, int refreshRate);
-
 
 std::wstring GetExecutablePath() {
     wchar_t buffer[MAX_PATH];
@@ -168,7 +162,7 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
         return FALSE; // Stop enumeration
     }
 
-    OneMonitorController* currentScreen = &screen[g_monitorCount];
+    OneMonitorController* currentScreen = &gpu.screen[g_monitorCount];
     currentScreen->hMonitor = hMonitor; // Store monitor handle
     MONITORINFOEXW monitorInfo = {};// Get monitor info
     monitorInfo.cbSize = sizeof(MONITORINFOEXW);
@@ -256,25 +250,25 @@ void FetchAllMonitorDetails() // Main function to fetch all monitor details
     // Clear all screen structures
     for (int i = 0; i < 4; i++) {
         // Reset monitor-specific fields but preserve D3D objects if they exist
-        screen[i].isScreenInitalized = false;
-        screen[i].screenPixelWidth = 800;
-        screen[i].screenPixelHeight = 600;
-        screen[i].screenPhysicalWidth = 0;
-        screen[i].screenPhysicalHeight = 0;
-        screen[i].hMonitor = NULL;
-        screen[i].deviceName.clear();
-        screen[i].friendlyName.clear();
-        ZeroMemory(&screen[i].monitorRect, sizeof(RECT));
-        ZeroMemory(&screen[i].workAreaRect, sizeof(RECT));
-        screen[i].dpiX = 96;
-        screen[i].dpiY = 96;
-        screen[i].scaleFactor = 1.0;
-        screen[i].isPrimary = false;
-        screen[i].orientation = DMDO_DEFAULT;
-        screen[i].refreshRate = 60;
-        screen[i].colorDepth = 32;
-        screen[i].WindowWidth = 800;
-        screen[i].WindowHeight = 600;
+        gpu.screen[i].isScreenInitalized = false;
+        gpu.screen[i].screenPixelWidth = 800;
+        gpu.screen[i].screenPixelHeight = 600;
+        gpu.screen[i].screenPhysicalWidth = 0;
+        gpu.screen[i].screenPhysicalHeight = 0;
+        gpu.screen[i].hMonitor = NULL;
+        gpu.screen[i].deviceName.clear();
+        gpu.screen[i].friendlyName.clear();
+        ZeroMemory(&gpu.screen[i].monitorRect, sizeof(RECT));
+        ZeroMemory(&gpu.screen[i].workAreaRect, sizeof(RECT));
+        gpu.screen[i].dpiX = 96;
+        gpu.screen[i].dpiY = 96;
+        gpu.screen[i].scaleFactor = 1.0;
+        gpu.screen[i].isPrimary = false;
+        gpu.screen[i].orientation = DMDO_DEFAULT;
+        gpu.screen[i].refreshRate = 60;
+        gpu.screen[i].colorDepth = 32;
+        gpu.screen[i].WindowWidth = 800;
+        gpu.screen[i].WindowHeight = 600;
     }
 
     std::wcout << L"Enumerating monitors..." << std::endl;
@@ -284,12 +278,12 @@ void FetchAllMonitorDetails() // Main function to fetch all monitor details
         std::wcerr << L"Failed to enumerate monitors!" << std::endl;
         // Set up default single monitor if enumeration fails
         g_monitorCount = 1;
-        screen[0].isScreenInitalized = true;
-        screen[0].screenPixelWidth = GetSystemMetrics(SM_CXSCREEN);
-        screen[0].screenPixelHeight = GetSystemMetrics(SM_CYSCREEN);
-        screen[0].WindowWidth = screen[0].screenPixelWidth;
-        screen[0].WindowHeight = screen[0].screenPixelHeight;
-        screen[0].isPrimary = true;
+        gpu.screen[0].isScreenInitalized = true;
+        gpu.screen[0].screenPixelWidth = GetSystemMetrics(SM_CXSCREEN);
+        gpu.screen[0].screenPixelHeight = GetSystemMetrics(SM_CYSCREEN);
+        gpu.screen[0].WindowWidth = gpu.screen[0].screenPixelWidth;
+        gpu.screen[0].WindowHeight = gpu.screen[0].screenPixelHeight;
+        gpu.screen[0].isPrimary = true;
     }
 
     std::wcout << L"Found " << g_monitorCount << L" monitor(s)" << std::endl;
@@ -336,7 +330,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
 
     // Use the monitor details for window creation, i.e. to create window on primary monitor:
     for (int i = 0; i < g_monitorCount; i++) {
-        if (screen[i].isPrimary) {
+        if (gpu.screen[i].isPrimary) {
             primaryMonitorIndex = i;
             break;
         }
@@ -384,8 +378,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
         WS_OVERLAPPEDWINDOW | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
         // Size and position
         CW_USEDEFAULT, CW_USEDEFAULT, // Initial position (x, y)
-        screen[primaryMonitorIndex].WindowWidth / 2,  // Half the work area width
-        screen[primaryMonitorIndex].WindowHeight / 2, // Window size divided by 2 when user press un-maximize button. 
+        gpu.screen[primaryMonitorIndex].WindowWidth / 2,  // Half the work area width
+        gpu.screen[primaryMonitorIndex].WindowHeight / 2, // Window size divided by 2 when user press un-maximize button. 
         NULL,      // The parent of this window
         NULL,      // This application does not have a menu bar, we create our own Menu.
         hInstance, // Instance handle, the first parameter from WinMain
@@ -410,7 +404,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
 
     std::cout << "Starting application..." << std::endl;
 
-    InitD3D(hWnd);// Initialize D3D12. We need this before we can start GPU Copy thread and Render thread.
+    gpu.InitD3D(hWnd);// Initialize D3D12. We need this before we can start GPU Copy thread and Render thread.
     // Create and launch all threads
     std::vector<std::thread> threads;
     threads.emplace_back(UserInputThread);
@@ -420,7 +414,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     threads.emplace_back(विश्वकर्मा); //Main logic thread. The ringmaster of the application.
     threads.emplace_back(GpuCopyThread);
     threads.emplace_back(GpuRenderThread, 0, 60);  // Monitor 1 at 60Hz
-    threads.emplace_back(GpuRenderThread, 1, 144); // Monitor 2 at 144Hz    
+    //threads.emplace_back(GpuRenderThread, 1, 144); // Monitor 2 at 144Hz    
 
     /*
     FT_Library ft;
@@ -448,19 +442,20 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         } else {
-            PopulateCommandList();// Render frame
+            //WaitMessage(); // blocks until new Windows message arrives
+            gpu.PopulateCommandList();// Render frame
 
             // Execute command list
-            ID3D12CommandList* ppCommandLists[] = { screen[0].commandList.Get() };
-            screen[0].commandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
+            ID3D12CommandList* ppCommandLists[] = { gpu.screen[0].commandList.Get() };
+            gpu.screen[0].commandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
 
             /*  The first parameter 1 enables VSync!This, tells the GPU to wait for the monitor's vertical blank interval before presenting the frame
                 Synchronize frame presentation with the display's refresh rate. It Throttle application to match the monitor's Hz
                 This is more energy efficient way. We are engineering application, not some 1st person shooter video game maximizing fps !
                 Without VSync, it was going 650fps(FullHD) on Laptop GPU with 25 Pyramid only geometry.
              */
-            screen[0].swapChain->Present(1, 0); //Present. TODO: Multi Monitor window handling to be developed.
-            WaitForPreviousFrame(); // Wait for GPU
+            gpu.screen[0].swapChain->Present(1, 0); //Present. TODO: Multi Monitor window handling to be developed.
+            gpu.WaitForPreviousFrame(); // Wait for GPU
 
 #ifdef _DEBUG
             // Update FPS counter (Debug build only)
@@ -487,7 +482,7 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     // // Signal all threads to stop
     shutdownSignal = true; // UI Input thread, Network Input Thread & File Handling thread listen to this.
     todoCPUQueue.shutdownQueue();
-    g_gpuCommandQueue.shutdownQueue();
+    //g_gpuCommandQueue.shutdownQueue();
     g_logicFenceCV.notify_all();
     g_copyFenceCV.notify_all();
 
@@ -503,8 +498,8 @@ int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     //FT_Done_Face(face);
     //FT_Done_FreeType(ft);
     
-    WaitForPreviousFrame(); // Wait for GPU to finish all commands
-    CleanupD3D();// Clean up D3D resources
+    gpu.WaitForPreviousFrame(); // Wait for GPU to finish all commands
+    gpu.CleanupD3D();// Clean up D3D resources
 
     std::cout << "Application finished cleanly." << std::endl;
 
@@ -640,10 +635,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_DISPLAYCHANGE: //When user adds or disconnects a new monitor.
     case WM_DPICHANGED:    //When user manually changes screen resolution through windows settings.
         std::wcout << L"Display configuration changed. Reinitializing..." << std::endl;
-        WaitForPreviousFrame();// Wait for GPU to finish all operations
-        CleanupD3D();// Clean up existing swap chains and D3D resources
+        gpu.WaitForPreviousFrame();// Wait for GPU to finish all operations
+        gpu.CleanupD3D();// Clean up existing swap chains and D3D resources
         FetchAllMonitorDetails();// Fetch updated monitor details
-        InitD3D(hWnd);// Reinitialize D3D with new monitor configuration
+        gpu.InitD3D(hWnd);// Reinitialize D3D with new monitor configuration
         break;
     case WM_DESTROY:
         PostQuitMessage(0);

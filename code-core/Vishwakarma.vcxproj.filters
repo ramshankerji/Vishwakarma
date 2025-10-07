@@ -94,18 +94,12 @@
     <ClCompile Include="..\code-external\libpng-code\pngread.c">
       <Filter>code-external\libpng</Filter>
     </ClCompile>
-    <ClCompile Include="जीपीयू-नियंत्रक.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\code-core\विश्वकर्मा.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="preCompiledHeadersWindows.h">
-      <Filter>Source Files</Filter>
-    </ClInclude>
-    <ClInclude Include="जीपीयू-नियंत्रक.h">
       <Filter>Source Files</Filter>
     </ClInclude>
     <ClInclude Include="..\code-core\ID.h">
@@ -157,6 +151,12 @@
       <Filter>Source Files</Filter>
     </ClInclude>
     <ClInclude Include="resource.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryManagerGPU-DirectX12.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryManagerGPU-Vulkan1.1.h">
       <Filter>Source Files</Filter>
     </ClInclude>
   </ItemGroup>

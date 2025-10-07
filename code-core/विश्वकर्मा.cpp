@@ -13,8 +13,10 @@ and generates work for the GPU threads. This thread is also responsible for engi
 #include "विश्वकर्मा.h"
 #include "डेटा.h"
 #include "डेटा-सामान्य-3D.h"
-#include "जीपीयू-नियंत्रक.h"
-राम cpuMemoryManager;
+#include "MemoryManagerGPU-DirectX12.h"
+
+राम cpu;
+शंकर gpu;
 
 // Global Variables.
 static std::chrono::steady_clock::time_point lastPyramidAddTime; //Temporary. TODO: Remove.
@@ -28,8 +30,8 @@ extern std::condition_variable g_logicFenceCV;
 extern uint64_t g_logicFrameCount;
 
 // A shared pointer to the latest render packet for the render threads
-extern std::mutex g_renderPacketMutex;
-extern RenderPacket g_renderPacket;
+//extern std::mutex g_renderPacketMutex;
+//extern RenderPacket g_renderPacket;
 
 // Thread Synchronization and Data Structures
 std::atomic<bool> g_stopThreads = false;

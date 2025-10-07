@@ -33,7 +33,7 @@ For our Data-Structure design approach, read commentary on MemoryManagerCPU.h
 */
 // Forward declaration of the global memory manager.
 
-extern राम cpuMemoryManager;
+extern राम cpu;
 
 // A tab is assigned a unique memoryGroupNo, which is shared with the downstream analysis thread and so on.
 extern uint32_t memoryGroupNo;
@@ -79,21 +79,21 @@ struct META_DATA {
     passing the required size and the current thread's tab ID.
     The manager will handle the raw allocation. C++ runtime then calls the constructor. */
     void* operator new(uint64_t size, uint32_t memoryGroupNo) {
-        return cpuMemoryManager.Allocate(size, memoryGroupNo);
+        return cpu.Allocate(size, memoryGroupNo);
     }
     // It's good practice to provide overloaded new/delete for arrays as well.
     void* operator new[](uint64_t size, uint32_t memoryGroupNo) {
-        return cpuMemoryManager.Allocate(size, memoryGroupNo);
+        return cpu.Allocate(size, memoryGroupNo);
     }
     /*No downstream derived class should create an object without specifying memoryGroupNo.
     This way we ensure more strict memory partitioning between isolated tabs.
     However in case it is missed anyway than we create on default tab 0. Memory may leak here.*/
-    void* operator new(uint64_t size) { return cpuMemoryManager.Allocate(size, 0); };
-    void* operator new[](uint64_t size) { return cpuMemoryManager.Allocate(size, 0);};
+    void* operator new(uint64_t size) { return cpu.Allocate(size, 0); };
+    void* operator new[](uint64_t size) { return cpu.Allocate(size, 0);};
 
     // Overload the `delete` operator. Delegate the free request to the global memory manager.
-    void operator delete(void* ptr) { cpuMemoryManager.Free(reinterpret_cast<std::byte*>(ptr)); }
-    void operator delete[](void* ptr) { cpuMemoryManager.Free(reinterpret_cast<std::byte*>(ptr)); }
+    void operator delete(void* ptr) { cpu.Free(reinterpret_cast<std::byte*>(ptr)); }
+    void operator delete[](void* ptr) { cpu.Free(reinterpret_cast<std::byte*>(ptr)); }
 
     // Disable default heap allocations to prevent accidental misuse.
     // Making these private and not defining them will cause a compile-time error

@@ -22,3 +22,4 @@ Some important C++ Concepts:
 * Compile time reinterpret_cast<> vs Runtime static_cast<> distinction.
 * Template Programming; Standard Library (std::) heavily uses this. In our code, try to avoid Template. Template-heavy code can slow compilation.
 * std::mutex is necessary for better co-ordination between different threads.
+* inline keyword (c++17 onwards) for global variable defined in header only files. Allows the header to be included in multiple .cpp files and at the time of linking, linker considers all instances as just one.
