@@ -258,7 +258,7 @@ inline void CPU_RAM_4MB::Free(std::byte* ptrToFree) {
 /* There will be exactly 1 object of this class across the application,
 However 1 Chunk belongs to exactly 1 tab. So that when a tab is closed, we can free up it's memory quickly.
 This way our defragmentation boundary is also per tab (in addition to per chunk).
-भगवान राम की कृपा बानी रहे. Corresponding object is named "cpuRAMManager".
+भगवान राम की कृपा बनी रहे. Corresponding object is named "cpuRAMManager".
 */
 class राम {
 public:
@@ -433,7 +433,7 @@ inline void राम::notifyTabClosed(uint32_t memoryGroupNo) {
     auto it = tabToChunksMap.find(memoryGroupNo);
     if (it != tabToChunksMap.end()) {
         for (CPU_RAM_4MB* chunk : it->second) {
-            std::cout << "Tab " << memoryGroupNo << ": Decommitting chunk at " << chunk << std::endl;
+            std::cout << "Tab " << memoryGroupNo << ": De-committing chunk at " << chunk << std::endl;
             VirtualMemory::decommit_memory(chunk, SMALL_ALLOCATOR_CHUNK_SIZE);
             freeChunks.push_back(chunk); // Add back to the free pool for reuse
         }

@@ -533,7 +533,7 @@ void RestartRenderThreads(bool isTopologyChange) {
             }
 
             // CHECK: Do we need to migrate this window? We migrate if:
-            // a) The monitor index changed (moved logicially)
+            // a) The monitor index changed (moved logically)
             // b) The underlying CommandQueue changed (e.g. moved to a totally new monitor)
             ID3D12CommandQueue* newQueue = gpu.screens[newMonitorIdx].commandQueue.Get();
 
@@ -800,7 +800,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     //FT_Done_Face(face);
     //FT_Done_FreeType(ft);
     
-    //gpu.WaitForPreviousFrame(); // Wait for GPU to finish all commands. No need. All render thrads have exited by now.
+    //gpu.WaitForPreviousFrame(); // Wait for GPU to finish all commands. No need. All render threads have exited by now.
 
     std::cout << "Application finished cleanly." << std::endl;
 

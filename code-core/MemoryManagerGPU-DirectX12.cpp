@@ -618,7 +618,7 @@ void GpuCopyThread() {
             commandList->Reset(commandAllocator.Get(), nullptr);
 
             /*
-			* UpdateSubresources may introduce ResouceBarriers internally ! Which is not allowed on Copy Queues.
+			* UpdateSubresources may introduce ResourceBarriers internally ! Which is not allowed on Copy Queues.
             with the raw copy command, which is safe because your buffers are already created
             in a valid state for copying (COMMON or GENERIC_READ).*/
             
@@ -764,7 +764,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             // The Safety Switch: If migrating, pretend this window doesn't exist for now.
             if (window.isMigrating) continue;
 
-            // Get Window Resources (Swapchain, RTV)
+            // Get Window Resources (Swap chain, RTV)
             DX12ResourcesPerWindow& winRes = window.dx;
 
             //threadRes.commandAllocators[winRes.frameIndex]->Reset();
@@ -791,7 +791,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
 
             // GET TAB DATA & RECORD GEOMETRY
 			// Also Sets the Unique Root Signature for THIS window. Root Signature and Pipeline State are per-window.
-			// Infact the Populate Command List can change it multiple times per window if needed.
+			// In fact the Populate Command List can change it multiple times per window if needed.
             if (window.activeTabIndex >= 0 && window.activeTabIndex < allTabs.size() ) {
                 DX12ResourcesPerTab& tabRes = allTabs[window.activeTabIndex].dx;
                 gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes);// Renders geometry.
@@ -807,7 +807,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
 		} // End of loop over all windows on this monitor.
 
         // Close & Execute ONCE after recording all windows.
-		// TODO: Future Optimization: Spawn seperate thread for each recording command list of each window. Synchronization will be complex though.
+		// TODO: Future Optimization: Spawn separate thread for each recording command list of each window. Synchronization will be complex though.
         threadRes.commandList->Close();
         if (didRender) {
             ID3D12CommandList* ppCommandLists[] = { threadRes.commandList.Get() };

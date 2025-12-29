@@ -118,7 +118,7 @@ struct DX12ResourcesPerRenderThread { // Execution Context
     // Command Allocators MUST be unique to the thread.
     // We need one per frame-in-flight to avoid resetting while GPU is reading.
     ComPtr<ID3D12CommandAllocator> commandAllocators[FRAMES_PER_RENDERTARGETS];
-	UINT allocatorIndex = 0; // Remember this is diffeent from frameIndex available per Window.
+	UINT allocatorIndex = 0; // Remember this is different from frameIndex available per Window.
 
     // The Command List (The recording pen). Can be reset and reused for multiple windows within the same frame.
     ComPtr<ID3D12GraphicsCommandList> commandList;
@@ -253,7 +253,7 @@ inline ThreadSafeQueueGPU g_gpuCommandQueue;
 // VRAM Manager
 // This class handles the GPU memory dynamically.
 // There will be exactly 1 object of this class in entire application. Hence the special name.
-// भगवान शंकर की कृपा बानी रहे. Corresponding object is named "gpu".
+// भगवान शंकर की कृपा बनी रहे. Corresponding object is named "gpu".
 class शंकर {
 public:
     std::vector<OneMonitorController> screens;
@@ -273,13 +273,13 @@ public:
 
     /* We will have 1 Render Queue per monitor, which is local to Render Thread.
     IMPORTANT: All GPU have only 1 physical hardware engine, and can execute 1 command at a time only.
-    Even if 4 commands list are submitted to 4 independent queue, graphics driver / WDDM seralizes them.
-    Still we need to have 4 sepearte queue to properly handle different refresh rate.
+    Even if 4 commands list are submitted to 4 independent queue, graphics driver / WDDM serializes them.
+    Still we need to have 4 separate queue to properly handle different refresh rate.
 
     Ex: If we put all 4 window on same queue: Window A (60Hz) submits a Present command. The Queue STALLS
     waiting for Monitor A's VSync interval. Window B (144Hz) submits draw comand. 
     Window B cannot be processed because the Queue is blocked by Windows A's VSync wait. 
-    By usning 4 Queues, Queue A can sit blocked wiating for VSync, 
+    By using 4 Queues, Queue A can sit blocked waiting for VSync, 
     while Queue B immediately push work work to the GPU for the faster monitor.*/
 
     ComPtr<ID3D12CommandQueue> renderCommandQueue; // Only used by Monitor No. 0 i.e. 1st Render Thread.
@@ -287,7 +287,7 @@ public:
     UINT64 renderFenceValue = 0;
     HANDLE renderFenceEvent = nullptr;
 
-	ComPtr<ID3D12CommandQueue> copyCommandQueue; // There is only 1 accross the application.
+	ComPtr<ID3D12CommandQueue> copyCommandQueue; // There is only 1 across the application.
     ComPtr<ID3D12Fence> copyFence;// Synchronization for Copy Queue
     UINT64 copyFenceValue = 0;
     HANDLE copyFenceEvent = nullptr;
@@ -316,7 +316,7 @@ public:
 
     void ProcessDeferredFrees(uint64_t lastCompletedRenderFrame);
 
-	शंकर() {}; // Our Main function inilizes DirectX12 global resources by calling InitD3DDeviceOnly().
+	शंकर() {}; // Our Main function inilsizes DirectX12 global resources by calling InitD3DDeviceOnly().
     void InitD3DDeviceOnly();
     void InitD3DPerTab(DX12ResourcesPerTab& tabRes); // Call this when a new Tab is created
     void InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D12CommandQueue* commandQueue);
