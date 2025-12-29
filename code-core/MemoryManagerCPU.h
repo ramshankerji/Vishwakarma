@@ -128,13 +128,13 @@ struct CPU_RAM_4MB : CHUNK_METADATA {
     }
     // Finds space, allocates it, and updates the free list. Returns a pointer within dataBytes.
     // This operation is now thread-safe at the chunk level.
-    std::byte* Allocate(uint64_t size);
+	std::byte* Allocate(uint32_t size); //uint32_t because maximum allocation size is 4MB only.
     // Frees a previously allocated block of memory, coalescing with adjacent free blocks.
     void Free(std::byte* ptrToFree);
     
 };
 static_assert(sizeof(CPU_RAM_4MB) == 4194304, "CPU_RAM_4MB must be exactly 4MB (4194304 bytes)");
-inline std::byte* CPU_RAM_4MB::Allocate(uint64_t size) {
+inline std::byte* CPU_RAM_4MB::Allocate(uint32_t size) {
     if (size > DATA_BLOCK_SIZE) return nullptr;  // Safety against overflow.
     std::lock_guard<std::mutex> lock(chunkMutex); // Lock only this chunk
     if (freeByteRangesCount == 0) { return nullptr; }

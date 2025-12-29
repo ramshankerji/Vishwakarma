@@ -15,7 +15,7 @@
 #include <new> // Required for std::align_val_t
 #include "ID.h"
 #include "MemoryManagerCPU.h"
-#include "MemoryManagerGPU.h"
+//#include "MemoryManagerGPU.h" // This file must not depend on GPU manager.
 #include <d3dx12.h>
 #include <dxgi1_6.h>
 #include <wrl.h>
