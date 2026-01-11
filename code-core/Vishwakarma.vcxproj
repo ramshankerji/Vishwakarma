@@ -13,7 +13,7 @@
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
-    <ProjectGuid>{74c1f039-b036-425c-befd-c20f217aed04}</ProjectGuid>
+    <ProjectGuid>{15843AF6-EF3F-46D5-9321-BAB4770DB14C}</ProjectGuid>
     <RootNamespace>Vishwakarma</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
