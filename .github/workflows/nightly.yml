@@ -1,0 +1,59 @@
+# Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
+name: Nightly Build
+
+on:
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: write
+
+jobs:
+  update-nightly:
+    runs-on: windows-latest
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        # This ensures that submodules are also checked out.
+        submodules: recursive
+    
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.1
+
+    - name: Prepare libpng config header
+      shell: pwsh
+      run: |
+        $src = "code-external/libpng-code/scripts/pnglibconf.h.prebuilt"
+        $dst = "code-external/libpng-code/pnglibconf.h"
+        if (!(Test-Path $dst)) {
+          Copy-Item $src $dst
+        }
+
+    - name: Build
+      #run: msbuild Vishwakarma.sln /p:Configuration=Release /p:Platform=x64
+      # We are forcing to downgrade to v143 since this is what is available on GitHub Actions runners.
+      run: msbuild Vishwakarma.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
+
+    # DEBUG STEP: Verify the file actually exists
+    - name: Verify Executable Exists
+      run: |
+        if (Test-Path "build/Release/Vishwakarma.exe") {
+            Write-Host "File found!"
+        } else {
+            Write-Error "File NOT found at build/Release/Vishwakarma.exe"
+            Get-ChildItem -Recurse *.exe # List all .exes so we can see where it went
+            exit 1
+        }
+
+    # Use GitHub CLI to cleanly wipe the old release and create a new one
+    - name: Publish Nightly Release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # Delete the old release AND the tag together. 
+        # '|| true' ensures we don't fail if this is the very first run.
+        gh release delete nightly --cleanup-tag -y || echo "No existing nightly release to delete"
+        
+        # Create the new release and upload the file
+        gh release create nightly "build/Release/Vishwakarma.exe" --title "Nightly Build" --notes "Latest development build, automatically generated." --prerelease
