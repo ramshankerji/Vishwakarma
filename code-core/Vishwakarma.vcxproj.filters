@@ -103,6 +103,9 @@
     <ClCompile Include="MemoryManagerGPU-DirectX12.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
+    <ClCompile Include="ImageHandling.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="preCompiledHeadersWindows.h">

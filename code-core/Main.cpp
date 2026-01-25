@@ -139,6 +139,28 @@ void LoadPngImage(const char* filename, unsigned char** image_data, int* width, 
     
 }
 
+// Defined in ImageHandling.cpp
+void LoadPngImageFromMemory(const void* data, size_t size, unsigned char** image_data, int* width, int* height);
+// Load directly from Windows Resource
+void LoadPngFromResource(int resourceID, unsigned char** image_data, int* width, int* height) {
+    HRSRC hRes = FindResource(NULL, MAKEINTRESOURCE(resourceID), RT_RCDATA);
+    if (!hRes) {
+        std::cerr << "Error: Could not find resource ID " << resourceID << std::endl;
+        return;
+    }
+
+    HGLOBAL hMem = LoadResource(NULL, hRes);
+    if (!hMem) return;
+
+    void* data = LockResource(hMem);
+    DWORD size = SizeofResource(NULL, hRes);
+
+    LoadPngImageFromMemory(data, size, image_data, width, height);
+
+    // Note: Resources are freed automatically when the module unloads, 
+    // strictly speaking FreeResource is a no-op on 32-bit/64-bit Windows.
+}
+
 void DisplayImage(HDC hdc, const unsigned char* image_data, int width, int height)
 {
     BITMAPINFO bmi = { 0 };
@@ -853,6 +875,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     std::string fullPath = str + "\\logo.png";
 
+    unsigned char* imgData = nullptr;
+    int w, h;
+
     switch (message)
     {
      /*
@@ -866,11 +891,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
         */
     case WM_CREATE:
-        
-        std::cout << "Full path to logo.png: " << fullPath << std::endl;
-
-        LoadPngImage(fullPath.c_str(), &image_data, &width, &height);
-        //LoadPngImage("C:\\RAM\\CODE\\Vishwakarma\\api-direct3d12\\x64\\Debug\\logo.png", &image_data, &width, &height);
+        //std::cout << "Full path to logo.png: " << fullPath << std::endl;//No longer loading from disc.
+        //LoadPngImage(fullPath.c_str(), &image_data, &width, &height); 
+        LoadPngFromResource(IDR_LOGO_PNG, &imgData, &w, &h);
         break;
 
     case WM_LBUTTONDOWN: {

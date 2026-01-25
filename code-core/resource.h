@@ -14,3 +14,5 @@
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif
+
+#define IDR_LOGO_PNG  105   // Integer must be unique. Used to identify the logo.png resource in the application.
