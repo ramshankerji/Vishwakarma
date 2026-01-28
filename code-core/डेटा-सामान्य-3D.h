@@ -23,7 +23,7 @@ inline std::mt19937& GetRNG() {
 struct PYRAMID :public META_DATA{
     //Mandatory Fields
     std::vector<XMFLOAT3> vertices; // Index 0,1,2 for base, 3 for apex
-    std::vector<XMFLOAT4> colors; // RGBA format.
+    std::vector<XMHALF4> colors; // RGBA format.
 
     //Optional Fields
     uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
@@ -40,7 +40,7 @@ struct PYRAMID :public META_DATA{
 struct CUBOID :public META_DATA {
     //Mandatory Fields
     std::vector<XMFLOAT3> vertices; // 8 corner vertices
-    std::vector<XMFLOAT4> colors;   // 8 colors, one for each vertex
+    std::vector<XMHALF4> colors;   // 8 colors, one for each vertex
 
     //Optional Fields
     uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
@@ -56,7 +56,7 @@ struct CONE :public META_DATA {
     XMFLOAT3 apex;
     XMFLOAT3 baseCenter;
     float radius;
-    std::vector<XMFLOAT4> colors; // 38 colors: 1 for apex, 1 for base center, 36 for base edge
+    XMHALF4 colorBase, colorIncline; // Cone has only 2 surface.
 
     //Optional Fields
     uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
@@ -71,7 +71,7 @@ struct CYLINDER :public META_DATA {
     //Mandatory Fields
     XMFLOAT3 p1, p2; // Center points of the two circular bases
     float radius;
-    std::vector<XMFLOAT4> colors; // 74 colors: 1 for each base center, 36 for each base edge
+    XMHALF4 colorBase, colorTop, colorIncline; // 1 Unique color for each surface.
 
     //Optional Fields
     uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
@@ -85,7 +85,7 @@ struct CYLINDER :public META_DATA {
 struct PARALLELEPIPED :public META_DATA {
     //Mandatory Fields
     std::vector<XMFLOAT3> vertices; // 8 vertices
-    std::vector<XMFLOAT4> colors;   // 8 colors
+    std::vector<XMHALF4> colors;   // 8 colors
 
     //Optional Fields
     uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
@@ -100,7 +100,7 @@ struct SPHERE :public META_DATA {
     //Mandatory Fields
     XMFLOAT3 center;
     float radius;
-    std::vector<XMFLOAT4> colors;
+    XMHALF4 color; // SInce entire sphere is 1 surface, it has got only 1 color.
 
     //Optional Fields
     uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
@@ -114,7 +114,7 @@ struct SPHERE :public META_DATA {
 struct FRUSTUM_OF_PYRAMID :public META_DATA {
     //Mandatory Fields
     std::vector<XMFLOAT3> vertices; // 8 vertices: 4 for bottom base, 4 for top base
-    std::vector<XMFLOAT4> colors;   // 8 colors
+    XMHALF4 colorBase, colorTop, colorIncline; // There are 3 uniqe type of surfaces on a pyramid frustum.
 
     //Optional Fields
     uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
@@ -129,7 +129,7 @@ struct  FRUSTUM_OF_CONE :public META_DATA {
     //Mandatory Fields
     XMFLOAT3 bottomCenter, topCenter;
     float bottomRadius, topRadius;
-    std::vector<XMFLOAT4> colors; // 74 colors: 1 for each center, 36 for each edge
+    XMHALF4 colorBase, colorTop, colorIncline; // Cone has only 3 surface.
 
     //Optional Fields
     uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
@@ -167,10 +167,11 @@ inline GeometryData PYRAMID::GetGeometry() {
         };
 
     // Construct vertices with Position, Normal, and Color
+    // Since we are using commone vertex between different surfaces, Intentionally assigning colors[0] for uinformity.
     geometry.vertices[0] = Vertex{ vertices[0], GetCentroidNormal(v0), colors[0] };
-    geometry.vertices[1] = Vertex{ vertices[1], GetCentroidNormal(v1), colors[1] };
-    geometry.vertices[2] = Vertex{ vertices[2], GetCentroidNormal(v2), colors[2] };
-    geometry.vertices[3] = Vertex{ vertices[3], GetCentroidNormal(v3), colors[3] };
+    geometry.vertices[1] = Vertex{ vertices[1], GetCentroidNormal(v1), colors[0] };
+    geometry.vertices[2] = Vertex{ vertices[2], GetCentroidNormal(v2), colors[0] };
+    geometry.vertices[3] = Vertex{ vertices[3], GetCentroidNormal(v3), colors[0] };
 
     geometry.indices.resize(12);
     geometry.indices = { 0, 1, 2, 0, 3, 1, 1, 3, 2, 2, 3, 0 }; // //1st triangle is base, then 3 sides.
@@ -196,10 +197,10 @@ inline void PYRAMID::Randomize() {
         XMFLOAT3(centerX, centerY + pyramidSize * 0.8f, centerZ)
     };
 
-    colors = {XMFLOAT4 (colorDist(rng), colorDist(rng), colorDist(rng), 1.0f),
-        XMFLOAT4 (colorDist(rng), colorDist(rng), colorDist(rng), 1.0f),
-        XMFLOAT4 (colorDist(rng), colorDist(rng), colorDist(rng), 1.0f),
-        XMFLOAT4 (colorDist(rng), colorDist(rng), colorDist(rng), 1.0f)
+    colors = {XMHALF4 (colorDist(rng), colorDist(rng), colorDist(rng), 1.0f),
+        XMHALF4 (colorDist(rng), colorDist(rng), colorDist(rng), 1.0f),
+        XMHALF4 (colorDist(rng), colorDist(rng), colorDist(rng), 1.0f),
+        XMHALF4 (colorDist(rng), colorDist(rng), colorDist(rng), 1.0f)
     };
 }
 
@@ -226,7 +227,7 @@ inline void CUBOID::Randomize() {
 
     colors.resize(8);
     for (int i = 0; i < 8; ++i) {
-        colors[i] = XMFLOAT4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+        colors[i] = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
     }
 }
 
@@ -283,10 +284,9 @@ inline void CONE::Randomize() {
     float height = sizeDist(rng);
     apex = { baseCenter.x, baseCenter.y + height, baseCenter.z };
 
-    colors.resize(38); // 1 apex + 1 base center + 36 base edge
-    for (size_t i = 0; i < colors.size(); ++i) {
-        colors[i] = XMFLOAT4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-    }
+    colorBase = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+    colorIncline = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+    
 }
 
 // CONE
@@ -329,7 +329,7 @@ inline GeometryData CONE::GetGeometry() {
 
     for (int i = 0; i < numSegments + 2; ++i) { // Construct Vertices with Position, Normal, and Color
         XMVECTOR vPos = XMLoadFloat3(&tempPositions[i]);
-        geometry.vertices[i] = Vertex{ tempPositions[i], GetCentroidNormal(vPos), colors[i] };
+        geometry.vertices[i] = Vertex{ tempPositions[i], GetCentroidNormal(vPos), colorIncline };
     }
 
     for (int i = 0; i < numSegments; ++i) {//Define Indices
@@ -356,10 +356,10 @@ inline void CYLINDER::Randomize() {
     p2 = { p1.x , p1.y + sizeDist(rng), p1.z  };
     radius = sizeDist(rng) * 0.5f;
 
-    colors.resize(74); // 2 centers + 2 * 36 edges
-    for (size_t i = 0; i < colors.size(); ++i) {
-        colors[i] = XMFLOAT4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-    }
+    colorBase    = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+    colorTop     = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+    colorIncline = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+    
 }
 
 // CYLINDER
@@ -386,8 +386,8 @@ inline GeometryData CYLINDER::GetGeometry() {
         return PackNormal(normalFloat);
         };
 
-    geometry.vertices[0] = Vertex{ p1, GetCentroidNormal(vP1), colors[0] };// Bottom center
-    geometry.vertices[numSegments + 1] = Vertex{ p2, GetCentroidNormal(vP2), colors[1] };// Top center
+    geometry.vertices[0] = Vertex{ p1, GetCentroidNormal(vP1), colorBase };// Bottom center
+    geometry.vertices[numSegments + 1] = Vertex{ p2, GetCentroidNormal(vP2), colorTop };// Top center
 
     for (int i = 0; i < numSegments; ++i) {
         float angle = 2.0f * (float)M_PI * i / numSegments;
@@ -397,14 +397,12 @@ inline GeometryData CYLINDER::GetGeometry() {
         // Bottom cap rim vertex
         XMFLOAT3 posBottom = { p1.x + radius * cosA, p1.y, p1.z + radius * sinA };
         XMVECTOR vPosBottom = XMLoadFloat3(&posBottom);
-        //geometry.vertices[i + 1] = { XMFLOAT3(p1.x + radius * cos(angle), p1.y, p1.z + radius * sin(angle)), colors[i + 2] };
-        geometry.vertices[i + 1] = Vertex{ posBottom, GetCentroidNormal(vPosBottom), colors[i + 2] };
+        geometry.vertices[i + 1] = Vertex{ posBottom, GetCentroidNormal(vPosBottom), colorIncline };
 
         // Top cap rim vertex
         XMFLOAT3 posTop = { p2.x + radius * cosA, p2.y, p2.z + radius * sinA };
         XMVECTOR vPosTop = XMLoadFloat3(&posTop);
-        //geometry.vertices[i + numSegments + 2] = { XMFLOAT3(p2.x + radius * cos(angle), p2.y, p2.z + radius * sin(angle)), colors[i + 38] };
-        geometry.vertices[i + numSegments + 2] = Vertex{ posTop, GetCentroidNormal(vPosTop), colors[i + 38] };
+        geometry.vertices[i + numSegments + 2] = Vertex{ posTop, GetCentroidNormal(vPosTop), colorIncline };
     }
 
     // Define indices
@@ -453,7 +451,7 @@ inline void PARALLELEPIPED::Randomize() {
 
     colors.resize(8);
     for (int i = 0; i < 8; ++i) {
-        colors[i] = XMFLOAT4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+        colors[i] = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
     }
 }
 
@@ -507,6 +505,7 @@ inline void SPHERE::Randomize() {
     radius = sizeDist(rng);
 
     // Color randomization is handled in GetGeometry as vertex count is determined there
+    color = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
 }
 
 /*For the sphere, the "suitable" normal for every vertex is exactly the normalized vector from the sphere's 
@@ -529,15 +528,9 @@ inline GeometryData SPHERE::GetGeometry() {
         return PackNormal(normalFloat);
         };
 
-    auto& rng = GetRNG();
-    std::uniform_real_distribution<float> colorDist(0.0f, 1.0f);
-    auto GetRandomColor = [&]() -> XMFLOAT4 { // Helper for random colors
-        return XMFLOAT4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-    };
-
     // Add top pole vertex
     XMFLOAT3 topPos = { center.x, center.y + radius, center.z };
-    geometry.vertices.push_back(Vertex{ topPos, GetSphericalNormal(XMLoadFloat3(&topPos)), GetRandomColor() });
+    geometry.vertices.push_back(Vertex{ topPos, GetSphericalNormal(XMLoadFloat3(&topPos)), color });
 
     for (int i = 1; i < stackCount; ++i) {// Add middle stacks
         float phi = (float)M_PI * i / stackCount;
@@ -553,13 +546,13 @@ inline GeometryData SPHERE::GetGeometry() {
             };
 
             XMVECTOR vPos = XMLoadFloat3(&pos);
-            geometry.vertices.push_back(Vertex{ pos, GetSphericalNormal(vPos), GetRandomColor() });
+            geometry.vertices.push_back(Vertex{ pos, GetSphericalNormal(vPos), color });
         }
     }
 
     // Add bottom pole vertex
     XMFLOAT3 bottomPos = { center.x, center.y - radius, center.z };
-    geometry.vertices.push_back(Vertex{ bottomPos, GetSphericalNormal(XMLoadFloat3(&bottomPos)), GetRandomColor() });
+    geometry.vertices.push_back(Vertex{ bottomPos, GetSphericalNormal(XMLoadFloat3(&bottomPos)), color });
 
     // Top cap indices
     for (int i = 0; i < sliceCount; ++i) {
@@ -625,10 +618,10 @@ inline void FRUSTUM_OF_PYRAMID::Randomize() {
     vertices[6] = { cx + topSize, cy + height, cz + bottomSize };
     vertices[7] = { cx - topSize, cy + height, cz + bottomSize };
 
-    colors.resize(8);
-    for (int i = 0; i < 8; ++i) {
-        colors[i] = XMFLOAT4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-    }
+    colorBase = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+    colorTop = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+    colorIncline = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+    
 }
 
 // FRUSTUM_OF_PYRAMID
@@ -655,7 +648,8 @@ inline GeometryData FRUSTUM_OF_PYRAMID::GetGeometry() {
 
     for (size_t i = 0; i < 8; ++i) {
         XMVECTOR vPos = XMLoadFloat3(&vertices[i]);
-        geometry.vertices[i] = Vertex{ vertices[i], GetCentroidNormal(vPos), colors[i] };
+        //Since currently we are sharing vertices between faces, we can assign only 1 color.
+        geometry.vertices[i] = Vertex{ vertices[i], GetCentroidNormal(vPos), colorBase };
     }
 
     geometry.indices = {
@@ -683,10 +677,9 @@ inline void FRUSTUM_OF_CONE::Randomize() {
     bottomRadius = sizeDist(rng);
     topRadius = bottomRadius * ratioDist(rng);
 
-    colors.resize(74); // 2 centers + 2 * 36 edges
-    for (size_t i = 0; i < colors.size(); ++i) {
-        colors[i] = XMFLOAT4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-    }
+    colorBase    = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+    colorTop     = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+    colorIncline = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
 }
 
 // FRUSTUM_OF_CONE
@@ -714,10 +707,10 @@ inline GeometryData FRUSTUM_OF_CONE::GetGeometry() {
         };
 
     // Bottom center
-    geometry.vertices[0] = Vertex{ bottomCenter, GetCentroidNormal(vBottom), colors[0] };
+    geometry.vertices[0] = Vertex{ bottomCenter, GetCentroidNormal(vBottom), colorBase };
 
     // Top center
-    geometry.vertices[numSegments + 1] = Vertex{ topCenter, GetCentroidNormal(vTop), colors[1] };
+    geometry.vertices[numSegments + 1] = Vertex{ topCenter, GetCentroidNormal(vTop), colorTop };
 
     for (int i = 0; i < numSegments; ++i) {
         float angle = 2.0f * (float)M_PI * i / numSegments;
@@ -727,12 +720,12 @@ inline GeometryData FRUSTUM_OF_CONE::GetGeometry() {
         // Bottom cap vertices
         XMFLOAT3 posBottom = { bottomCenter.x + bottomRadius * cosA, bottomCenter.y, bottomCenter.z + bottomRadius * sinA };
         XMVECTOR vPosBottom = XMLoadFloat3(&posBottom);
-        geometry.vertices[i + 1] = Vertex{ posBottom, GetCentroidNormal(vPosBottom), colors[i + 2] };
+        geometry.vertices[i + 1] = Vertex{ posBottom, GetCentroidNormal(vPosBottom), colorIncline };
 
         // Top cap vertices
         XMFLOAT3 posTop = { topCenter.x + topRadius * cosA, topCenter.y, topCenter.z + topRadius * sinA };
         XMVECTOR vPosTop = XMLoadFloat3(&posTop);
-        geometry.vertices[i + numSegments + 2] = Vertex{ posTop, GetCentroidNormal(vPosTop), colors[i + 38] };
+        geometry.vertices[i + numSegments + 2] = Vertex{ posTop, GetCentroidNormal(vPosTop), colorIncline };
     }
 
     // Define indices

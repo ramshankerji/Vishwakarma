@@ -43,10 +43,10 @@ extern uint32_t memoryGroupNo;
 // Data for a single geometry object. All 3D entities will generate one for their own graphics representation.
 // Currently we are using common heap, latter on we will transition them to our own heap allocator.
 struct Vertex { // Struct for vertex data
-    XMFLOAT3 position;
+    XMFLOAT3 position; // 12 Bytes
     XMUBYTE4 normal; // 4 Bytes: Packed X, Y, Z, W (padding/0). Uses DXGI_FORMAT_R8G8B8A8_SNORM
-    XMFLOAT4 color;
-};
+    XMHALF4  color;  // 8 Bytes
+}; // Total Stride = 24 Bytes (Perfect alignment!)
 
 struct GeometryData
 {

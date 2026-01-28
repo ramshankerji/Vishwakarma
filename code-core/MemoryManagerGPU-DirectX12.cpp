@@ -258,11 +258,20 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
         struct PSInput {
             float4 position : SV_POSITION;
             float4 color : COLOR;
+            float3 normal : NORMAL;
         };
 
-        PSInput VSMain(float3 position : POSITION, float4 color : COLOR) {
+        PSInput VSMain(float3 position : POSITION, float4 normal : NORMAL, float4 color : COLOR)
+        {
             PSInput result;
+            // Transform position to homogeneous clip space
             result.position = mul(float4(position, 1.0f), worldViewProjection);
+
+            // Transform normal to world space
+            // Note: If 'world' contains non-uniform scaling, we should use the inverse-transpose.
+            // For now, assuming uniform scaling, casting to float3x3 works.
+            result.normal = mul(normal.xyz, (float3x3)world);
+
             result.color = color;
             return result;
         }
@@ -274,10 +283,26 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
         struct PSInput {
             float4 position : SV_POSITION;
             float4 color : COLOR;
+            float3 normal : NORMAL;
         };
 
         float4 PSMain(PSInput input) : SV_TARGET {
-            return input.color;
+            float3 norm = normalize(input.normal);// Re-normalize interpolants
+
+            // Hemispherical Lighting Settings
+            float3 up = float3(0.0f, 0.0f, 1.0f); // World Up
+            //float3 skyColor = float3(0.2f, 0.3f, 0.45f); // Soft Blue-Grey
+            // Sky: Bright, slightly bluish white (multiplies your vertex color by ~0.95)
+            float3 skyColor = float3(0.9f, 0.95f, 1.0f);
+            //float3 groundColor = float3(0.05f, 0.05f, 0.05f); // Very Dark Grey
+            // Ground: Mid-grey (multiplies by ~0.4) 
+            // This ensures the shadowed parts are still visible, not pitch black.
+            float3 groundColor = float3(0.4f, 0.4f, 0.45f);
+
+            // Calculate blend factor [-1, 1] -> [0, 1] . Dot product gives 1.0 facing up, -1.0 facing down.
+            float t = 0.5f * (dot(norm, up) + 1.0f);
+            float3 ambientLight = lerp(groundColor, skyColor, t); // Interpolate lighting
+            return float4(input.color.rgb * ambientLight, input.color.a); // Apply lighting to surface color
         }
     )";
 
@@ -286,13 +311,17 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     D3DCompile(pixelShaderCode, strlen(pixelShaderCode), nullptr, nullptr, nullptr,
         "PSMain", "ps_5_0", compileFlags, 0, &pixelShader, nullptr);
 
-    /* Define the vertex input layout
-    Position: 3 floats (12 bytes) starting at offset 0
-    Color: 4 floats (16 bytes) starting at offset 12 */
+    // Define the vertex input layout
     D3D12_INPUT_ELEMENT_DESC inputElementDescs[] = {
+        // Position: 3 Floats (12 bytes)
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-        { "NORMAL",   0, DXGI_FORMAT_R8G8B8A8_SNORM,  0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },// Offset 12
-        { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }// Offset 12+4=16
+        // Normal: 4 Bytes Packed (Packed into 1 element, Offset 12)
+        // DXGI_FORMAT_R8G8B8A8_SNORM automatically unpacks 0..255 to -1.0..1.0 float in shader
+        { "NORMAL"  , 0, DXGI_FORMAT_R8G8B8A8_SNORM,  0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },// Offset 12
+        // Note that DXGI_FORMAT_R16G16B16A16_FLOAT has 10 bits for Precision, so it is already HDR capable.
+        // Additonal sign bit and exponent bit enable lighting calculation to exceed the [ 0 , 1 ] bracket.
+        // Eventually they are clamped by the GPU, when sending to Swap Chain.
+        { "COLOR"   , 0, DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 16, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }// Offset 12+4=16
     };
 
     // Create the pipeline state object with depth testing enabled
