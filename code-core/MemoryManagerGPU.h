@@ -13,7 +13,7 @@ VertexLayout Common to all geometry:
 Anyway go with 24 Bytes format ONLY. Tone mapping (HDR -> SDR) should happen in the Pixel Shader.
 
 Initially Hemispheric Ambient Lighting
-Factor = (Normal.y \times 0.5) + 0.5
+Factor = (Normal.z \times 0.5) + 0.5
 AmbientLight = Lerp(GroundColor, SkyColor, Factor)
 Screen Space Ambient Occlusion (SSAO) to darken creases and corners in future revision.
 
@@ -22,7 +22,7 @@ Seperate render threads per monitor are in VSync with monitors unique refresh ra
 
 We use ExecuteIndirect command with start vertex location instead of DrawIndexedInstanced per object.
 
-I want per tab VRAM isolation, each tab will be completely seperate . Except for unclosable tab 0 which stores common textures and UI elements.
+I want per tab VRAM isolation, each tab will be completely seperate. Except for unclosable tab 0 which stores common textures and UI elements.
 
 Since I want to support 100s of simultaneous tab, I want to start with small heap say 4MB per tab and grow only heap size only when necessary.
 Instead of allocating 1 giant 256MB buffer. Don't manually destroy heaps on tab switch. Use Evict. It allows the OS to handle the caching. 
@@ -39,17 +39,17 @@ the Allocator immediately returns "Page 3". No iterating through Page objects.
 If freelist says none of existing pages can accomodate new geometry, than create new heap/placedresource buffer.
 Free list does not track internal holes created from deleting objects. Only middle empty space. Aggregate holes are tracked per page. Defragmented occasionally.
 
-When a buffer gets >25% holex, it does creates a new defragmented buffer, once complete, switches over to new buffer. For new geometry addition.
-Maximum 1 buffer is defragmented at a time (between 2 frames). Since max page size is 64MB, 
+When a buffer gets >25% holes, it does creates a new defragmented buffer, once complete, switches over to new buffer.
+For new geometry addition. Maximum 1 buffer is defragmented at a time (between 2 frames). Since max page size is 64MB, 
 This will not produce high latemcy stall during aync with copy thread.
 
-Root Signature puts the "Constants" (View/Proj matrix) in root constants or a very fast descriptor table, as these don't change between pages.
-Only the VBV/IBV and the EI Argument Buffer change per batch/page.
+Root Signature puts the "Constants" (View/Proj matrix) in root constants or a very fast descriptor table,
+as these don't change between pages. Only the VBV/IBV and the EI Argument Buffer change per batch/page.
 
 Here is the realistic "Worst Case" Hierarchy for a CAD Frame:
 • ​Index Depth (2): 16-bit vs 32-bit (Hardware Requirement) Examples: Nuts/Bolts (16) vs Engine Blocks (32)
 • ​Transparency (2): Opaque vs Transparent (Sorting Requirement). Transparent objects must be drawn last for alpha blending.
-• ​Topology (2): Triangles (Solid) vs Lines (Wireframe) (PSO Requirement) . You cannot draw lines and triangles in the same call.
+• ​Topology (2): Triangles (Solid) vs Lines (Wireframe) (PSO Requirement). You cannot draw lines and triangles in the same call.
 • ​Culling (2): Single-Sided vs Double-Sided (PSO Requirement) . Sheet metal vs Solids.
 • ​Buffer Pages (N): How many 256MB blocks you are using.
 ​Total Unique Batches = 2 \times 2 \times 2 \times 2 \times N = 16 \times N
@@ -165,8 +165,8 @@ TO DO LIST : As things get completed, they will be removed from this pending lis
 -------------------------------------------------------------------------------
 Phase 1: The Visual Baseline (Get these out of the way)
 Do this first so you aren't fighting "black screen" bugs later.
-[ ] Release Downloads (New Repository).
-[ ] Update Vertex format to include Normals. (Required for lighting).
+[Done] Release Downloads (New Repository).
+[Done] Update Vertex format to include Normals. (Required for lighting).
 [ ] Hemispherical Lighting in shader. (Verify normals are correct).
 [ ] Mouse Zoom/Pan/Rotate (Basic).
 Advice: Move this UP. You need to be able to move the camera to debug the complex culling/memory bugs you are about to create in Phase 2 & 3.

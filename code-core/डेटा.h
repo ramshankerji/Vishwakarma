@@ -21,10 +21,12 @@
 #include <wrl.h>
 #include <d3dcompiler.h>
 #include <DirectXMath.h> //Where from? https://github.com/Microsoft/DirectXMath ?
+#include <DirectXPackedVector.h>
 #include <unordered_map>
 
 using namespace Microsoft::WRL;
 using namespace DirectX;
+using namespace DirectX::PackedVector;
 
 /*Each data type will inherit this base struct.
 STRICT WARNING: DO NOT ADD ANY MORE FIELDS TO THIS BASE STRUCT. DO NOT ALTER the sequence.
@@ -42,6 +44,7 @@ extern uint32_t memoryGroupNo;
 // Currently we are using common heap, latter on we will transition them to our own heap allocator.
 struct Vertex { // Struct for vertex data
     XMFLOAT3 position;
+    XMUBYTE4 normal; // 4 Bytes: Packed X, Y, Z, W (padding/0). Uses DXGI_FORMAT_R8G8B8A8_SNORM
     XMFLOAT4 color;
 };
 
@@ -53,6 +56,27 @@ struct GeometryData
     XMFLOAT4 color;
 	GeometryData() { color = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f); } // Default color: light gray
 };
+
+inline XMUBYTE4 PackNormal(XMFLOAT3 n) {
+    // Normalize first to be safe
+    XMVECTOR v = XMLoadFloat3(&n);
+    v = XMVector3Normalize(v);
+    XMFLOAT3 norm;
+    XMStoreFloat3(&norm, v);
+
+    // Compress float (-1.0 to 1.0) to byte (0 to 255) representing SNORM
+    // simple packing: (val * 127.0f) 
+    // Note: C++ casting to int8_t handles the bit representation for SNORM usually, 
+    // but XMUBYTE4 is unsigned char, so we rely on the specific casting or manual mapping.
+    // DXGI_FORMAT_R8G8B8A8_SNORM interprets 0x7F as 1.0 and 0x81 as -1.0. 
+
+    // Easier approach: Use XMNORMAL helper from library if available, but manual here:
+    auto toSNORM = [](float f) -> uint8_t {
+        return (uint8_t)(int8_t)(std::clamp(f, -1.0f, 1.0f) * 127.0f);
+        };
+
+    return XMUBYTE4(toSNORM(norm.x), toSNORM(norm.y), toSNORM(norm.z), 0);
+}
 
 struct META_DATA {
     uint64_t memoryID = 0;// This is temporary CPU ID inside currently running software. Scoped within each tab.
