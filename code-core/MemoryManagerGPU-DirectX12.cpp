@@ -102,6 +102,7 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
 
 void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D12CommandQueue* commandQueue) {
     int i = 0; // Latter to be iterated over number of screens.
+    dx.creatorQueue = commandQueue; // Track which queue this windows was created with. To assist with migrations.
 
     // commandAllocator is per render thread (i.e. per monitor), not per window.
     // gpu.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&dx.commandAllocator));
@@ -291,12 +292,9 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
 
             // Hemispherical Lighting Settings
             float3 up = float3(0.0f, 0.0f, 1.0f); // World Up
-            //float3 skyColor = float3(0.2f, 0.3f, 0.45f); // Soft Blue-Grey
             // Sky: Bright, slightly bluish white (multiplies your vertex color by ~0.95)
             float3 skyColor = float3(0.9f, 0.95f, 1.0f);
-            //float3 groundColor = float3(0.05f, 0.05f, 0.05f); // Very Dark Grey
-            // Ground: Mid-grey (multiplies by ~0.4) 
-            // This ensures the shadowed parts are still visible, not pitch black.
+            // Ground: Mid-grey (multiplies by ~0.4). This ensures the shadowed parts are still visible, not pitch black.
             float3 groundColor = float3(0.4f, 0.4f, 0.45f);
 
             // Calculate blend factor [-1, 1] -> [0, 1] . Dot product gives 1.0 facing up, -1.0 facing down.
@@ -729,13 +727,9 @@ void GpuRenderThread(int monitorId, int refreshRate) {
 	// Ge the persistent Command Queue for this monitor. Do NOT create a new queue.
     ID3D12CommandQueue* pCommandQueue = gpu.screens[monitorId].commandQueue.Get();
 
-    // 1. Initialize Thread-Local Resources (CommandQueue/Allocator/CommandList)
+    // Initialize Thread-Local Resources (CommandQueue/Allocator/CommandList)
 	// Create command queue. TODO: Ideally it should be per GPU, not per Monitor? Or better to have per monitor for parallelism?
     DX12ResourcesPerRenderThread threadRes;
-
-    //D3D12_COMMAND_QUEUE_DESC queueDesc = {};
-    //queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    //gpu.device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&threadRes.commandQueue));
 
     // We just store the pointer for convenience, we don't own it (ComPtr assignment adds ref)
     threadRes.commandQueue = pCommandQueue;
@@ -793,12 +787,8 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             if (window.currentMonitorIndex != monitorId) continue; // Skip the windows not on this monitor.
             // The Safety Switch: If migrating, pretend this window doesn't exist for now.
             if (window.isMigrating) continue;
-
-            // Get Window Resources (Swap chain, RTV)
-            DX12ResourcesPerWindow& winRes = window.dx;
-
-            //threadRes.commandAllocators[winRes.frameIndex]->Reset();
-            //threadRes.commandList->Reset(threadRes.commandAllocators[winRes.frameIndex].Get(), nullptr);
+            
+            DX12ResourcesPerWindow& winRes = window.dx;// Get Window Resources (Swap chain, RTV)
 
             // CONTEXT SWITCHING. Set the Viewport/Scissor for THIS window (Critical!)
             threadRes.commandList->RSSetViewports(1, &winRes.viewport);
@@ -851,7 +841,8 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             */
             for (auto& window : allUIWindows) {
                 if (window.currentMonitorIndex != monitorId) continue;
-                window.dx.swapChain->Present(1, 0);
+                HRESULT hr = window.dx.swapChain->Present(1, 0);
+                if (FAILED(hr)) { std::cerr << "Present failed: " << hr << std::endl; }
 				// Do NOT Handle Fences here. It will be handled after all windows are presented.
 
                 // Update THIS window's specific buffer index. Update the frame index immediately so the NEXT loop uses the correct buffer.
@@ -902,31 +893,34 @@ void GpuRenderThread(int monitorId, int refreshRate) {
         }
 #endif
 
-        // 5. After rendering, perform garbage collection on VRAM
+        // After rendering, perform garbage collection on VRAM
         // In a real engine, the last COMPLETED GPU frame is tracked via fences.
         if (lastRenderedFrame > 2) {
             gpu.ProcessDeferredFrees(lastRenderedFrame - 2);
         }
     }
 
-	// Cleanup Thread-Local Resources
-    // We cannot destroy resources currently being read by the GPU!
+	// Cleanup Thread-Local Resources. We cannot destroy resources currently being read by the GPU!
     const UINT64 fenceValueToWaitFor = threadRes.fenceValue;
 
     // If the GPU hasn't reached that point yet, we sleep the CPU thread.
     if (threadRes.fence->GetCompletedValue() < fenceValueToWaitFor) {
         threadRes.fence->SetEventOnCompletion(fenceValueToWaitFor, threadRes.fenceEvent);
-        WaitForSingleObject(threadRes.fenceEvent, INFINITE);
+        //At this cleanup stage, do not waith INFINITE. Otherwise we may get stuck waiting forever.
+        DWORD waitResult = WaitForSingleObject(threadRes.fenceEvent, 5000);  // 5 sec timeout
+        if (waitResult != WAIT_OBJECT_0) {
+            std::cerr << "Render thead cleanup Fence wait timed out!\n" << std::endl;
+            // Force exit or log
+        }
     }
 
-    // 3. Close Synchronization Handles
+    // Close Synchronization Handles
     if (threadRes.fenceEvent) {
         CloseHandle(threadRes.fenceEvent);
         threadRes.fenceEvent = nullptr;
     }
 
-    // Command Objects
-    threadRes.commandQueue.Reset();
+    threadRes.commandQueue.Reset();// Command Objects cleanup.
     threadRes.fence.Reset();
-    std::cout << "Render Thread (Monitor " << monitorId << ") shutting down." << std::endl;
+    std::cout << "Render Thread (Monitor " << monitorId << ") shutting down.\n" << std::endl;
 }

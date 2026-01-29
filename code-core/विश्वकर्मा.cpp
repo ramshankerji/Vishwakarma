@@ -196,5 +196,5 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
     } // End of while (!shutdownSignal), i.e. our primary application loop for this particular tab.
 
     //g_logicFenceCV.notify_all(); // Wake up threads for shutdown
-    std::cout << "Main Logic Thread shutting down." << std::endl;
+    std::cout << "Main Logic Thread shutting down.\n" << std::endl;
 }

@@ -799,15 +799,19 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     }
 
     // Cleanup
+    std::cout << "Message Loop exited.\n";
     pauseRenderThreads = true;
     for (auto& t : renderThreads) { if (t.joinable()) t.join(); }
+    std::cout << "All render threads exited.\n";
 
     // Let's try to gracefully shutdown all the threads we started. Signal all threads to stop
     shutdownSignal = true; // UI Input thread, Network Input Thread & File Handling thread listen to this.
+    toCopyThreadCV.notify_all(); // This one is to wake up the sleepy GPU Copy thread to shutdown.
     todoCPUQueue.shutdownQueue();
     //g_gpuCommandQueue.shutdownQueue();
 
     // Wait for all threads to finish
+    std::cout << "Thread Count: " << threads.size() <<"\n";
     for (auto& t : threads) {
         if (t.joinable()) {
             t.join();
@@ -991,6 +995,30 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         break;
         }
+    case WM_CLOSE: // This is called BEFORE WM_DESTROY is received. Importantly, once this is over hWnd is destroyed.
+        // Initiate shutdown for render threads FIRST
+        std::cout << "WM_CLOSE: Pausing render threads..." << std::endl;
+        pauseRenderThreads = true;
+
+        // Join render threads to ensure they stop BEFORE window destruction
+        // TODO : Warning : This will terminate ALL render theads. Revisit this code when multi window is implemented.
+        for (auto& t : renderThreads) {
+            if (t.joinable()) {
+                t.join();
+            }
+        }
+        std::cout << "WM_CLOSE: All render threads joined." << std::endl;
+
+        // Now safe to clean up window-specific DX resources (swap chain, RTVs, etc.)
+        // This prevents any lingering GPU work on invalid resources
+        for (auto& window : allUIWindows) {
+            if (window.hWnd == hWnd) {  // Target this specific window
+                gpu.CleanupWindowResources(window.dx);
+            }
+        }
+        DestroyWindow(hWnd);// Now destroy the window (sends WM_DESTROY)
+        return 0;  // Don't call DefWindowProc (prevents default handling)
+        break;
     case WM_DESTROY:
         PostQuitMessage(0);
         break;

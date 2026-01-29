@@ -87,6 +87,7 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
 struct DX12ResourcesPerWindow {// Presentation Logic
     int WindowWidth = 800;//Current ViewPort ( Rendering area ) size. excluding task-bar etc.
     int WindowHeight = 600;
+    ID3D12CommandQueue* creatorQueue = nullptr; // Track which queue this windows was created with. To assist with migrations.
     
     ComPtr<IDXGISwapChain3>         swapChain; // The link to the OS Window
 	//ComPtr<ID3D12CommandQueue>    commandQueue; // Moved to OneMonitorController
