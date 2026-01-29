@@ -788,6 +788,19 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             // The Safety Switch: If migrating, pretend this window doesn't exist for now.
             if (window.isMigrating) continue;
             
+            // TODO: Ideally, it should be handled in WM_MOVE or nearby. Folloiwng is simply safeguard for bugs elsewhere.
+            // Check if the window is physically on this monitor, but chemically bound to another queue
+            if (window.dx.swapChain && window.dx.creatorQueue != threadRes.commandQueue.Get()) {
+                std::cout << "Monitor Mismatch detected! Recreating SwapChain for new Queue." << std::endl;
+                // Ensure the GPU is done with the OLD queue resources before destroying them
+                // (In a production engine, you would use a fence wait here on the OLD queue)
+                gpu.WaitForPreviousFrame(threadRes);
+                gpu.CleanupWindowResources(window.dx);// Clean up resources tied to the old queue
+                // Re-initialize resources on the CURRENT thread's queue
+                // Note: We assume 'window.hwnd' is accessible here. If not, add it to SingleUIWindow struct.
+                gpu.InitD3DPerWindow(window.dx, window.hWnd, threadRes.commandQueue.Get());
+            }
+
             DX12ResourcesPerWindow& winRes = window.dx;// Get Window Resources (Swap chain, RTV)
 
             // CONTEXT SWITCHING. Set the Viewport/Scissor for THIS window (Critical!)
