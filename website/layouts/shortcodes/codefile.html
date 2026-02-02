@@ -1,0 +1,40 @@
+<div class="code-embed-wrapper" style="margin-bottom: 20px;">
+    <style>
+    /* This ensures only these embedded files wrap, keeping your CSS scoped */
+    .code-embed-wrapper pre {
+        white-space: pre-wrap !important;
+        word-wrap: break-word !important;
+        background-color: #f8f8f8;
+        padding: 1rem;
+        border-radius: 4px;
+        counter-reset: line; /* Setup a counter if needed, but Hugo provides the span */
+    }
+
+    /* Target the line numbers Hugo generates in 'inline' mode */
+    .code-embed-wrapper .ln {
+        margin-right: 1em;
+        color: #7f7f7f;
+        user-select: none; /* Prevents line numbers from being copied */
+        display: inline-block;
+        width: 2em; /* Adjust width based on your line counts */
+        text-align: right;
+    }
+
+    /* This is the magic part: Ensure the line and number stay together */
+    .code-embed-wrapper code {
+        display: block; 
+    }
+    </style>
+    
+    {{ $path := .Get "src" }}
+    {{ $lang := .Get "lang" | default "cpp" }}
+    {{ $resource := resources.Get $path }}
+
+    {{ if $resource }}
+        {{ highlight $resource.Content $lang "linenos=inline" }}
+    {{ else }}
+        <div style="border: 1px solid red; padding: 10px; color: red;">
+            Error: Could not find <code>{{ $path }}</code>.
+        </div>
+    {{ end }}
+</div>

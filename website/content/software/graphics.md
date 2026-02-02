@@ -17,3 +17,10 @@ Above 3 APIs are for desktop application. Next up is Brower based engine. Here u
 Having made above decisions, we have to be realistic about our core-engineering-degree-holder software developers. We can't expect a chemical / civil / electrical / instrumentation / mechanical background people/developers to be familiar with such deep computer science concepts. Hence we structure our code in sort of mini-engine (NIH?), where adding a new UI element doesn't involve fiddling deep down in graphics APIs. This will be sorted out progressively as our software matures.
 
 Our software installer will verify that all the relevant APIs are present on the system, before installation. So this way, inside application, we don't check every time whether a particular feature is supported by available hardware. Unless the initial installed-hardware itself changes. By default this check shouldn't take more than a few micro-seconds during application startups.
+
+### More Graphics design decisions as specified in our Source Code !
+{{< codefile src="code-core/MemoryManagerGPU.h" >}}
+
+### Actual Code of our graphics engine.
+{{< codefile src="code-core/MemoryManagerGPU-DirectX12.h" >}}
+{{< codefile src="code-core/MemoryManagerGPU-DirectX12.h" >}}

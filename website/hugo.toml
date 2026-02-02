@@ -4,3 +4,21 @@ title = 'Mission Vishwakarma 2035'
 
 [minify]
 enable = true
+
+[module]
+  # 1. Mount the default assets folder (so we don't lose existing assets)
+  [[module.mounts]]
+    source = 'assets'
+    target = 'assets'
+
+  # 2. Mount sibling 'code-core' folder into a virtual 'assets/code-core' folder
+  [[module.mounts]]
+    source = '../code-core'
+    target = 'assets/code-core'
+    
+[markup]
+  [markup.highlight]
+    # 'tango' or 'pygments' are popular light themes. 
+    # Try 'github' for a clean white background.
+    style = 'tango' 
+    noClasses = true  # This embeds the colors directly in the HTML
