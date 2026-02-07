@@ -28,10 +28,10 @@
 #include <map>
 #include <list>
 
+#include "MemoryManagerGPU.h"
 #include "डेटा.h"
 
 using namespace Microsoft::WRL;
-using namespace DirectX;
 
 //DirectX12 Libraries.
 #pragma comment(lib, "d3d12.lib") //%WindowsSdkDir\Lib%WindowsSDKVersion%\\um\arch
@@ -82,6 +82,8 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
     // Track how much of the jumbo buffer is used
     uint64_t vertexDataSize = 0;
     uint64_t indexDataSize = 0;
+
+	CameraState camera; //Reference is updated per frame.
 };
 
 struct DX12ResourcesPerWindow {// Presentation Logic

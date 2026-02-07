@@ -168,6 +168,9 @@
     <ClInclude Include="MemoryManagerGPU-Vulkan1.1.h">
       <Filter>code-core</Filter>
     </ClInclude>
+    <ClInclude Include="UserInputProcessing.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="VertexShader.hlsl" />

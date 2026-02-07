@@ -5,6 +5,7 @@
 #include <cmath>
 #include <vector>
 #include <iostream>
+#include <d3d12.h>
 #include "डेटा.h"
 #include <random>
 constexpr float M_PI = 3.1415926535f; // TODO: Why it's not coming from cmath library ?

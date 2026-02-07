@@ -36,9 +36,11 @@
 #include "MemoryManagerCPU.h"
 #include "MemoryManagerGPU-DirectX12.h"
 
+#include "UserInputProcessing.h"
 #include "Input_UI_Network_File.h"
 
 #include <windows.h>
+#include <windowsx.h> // For some macros like GET_X_LPARAM, GET_Y_LPARAM etc.
 
 /* We have moved to statically compiling the .h/.c files of dependencies. 
 Hence we don't need to compile them and generate .lib file and link them separately.
@@ -48,9 +50,6 @@ Hence we don't need to compile them and generate .lib file and link them separat
 extern राम cpu;
 extern शंकर gpu;
 std::atomic<bool> shutdownSignal = false;
-
-extern ThreadSafeQueueCPU todoCPUQueue;
-//extern ThreadSafeQueueGPU g_gpuCommandQueue;
 
 int g_monitorCount = 0; // Global monitor count
 int primaryMonitorIndex = 0;
@@ -64,7 +63,6 @@ std::vector<std::thread> renderThreads;
 std::atomic<bool> pauseRenderThreads = false;
 
 // Forward declarations of thread functions
-void UserInputThread();
 void NetworkInputThread();
 void FileInputThread();
 void विश्वकर्मा(uint64_t); //Main Logic Thread. The ringmaster ! :-)
@@ -361,17 +359,32 @@ SingleUIWindow* GetWindowFromHwnd(HWND hWnd) {
     return nullptr;
 }
 
+DATASETTAB* GetActiveTabFromHwnd(HWND hWnd) {
+    SingleUIWindow* window = nullptr;
+    for (auto& w : allUIWindows) {
+        if (w.hWnd == hWnd) {
+            window = &w;
+            break;
+        }
+    }
+    if (!window || window->activeTabIndex < 0 || window->activeTabIndex >= window->tabIds.size()) {
+        return nullptr;
+    }
+    uint64_t tabID = window->tabIds[window->activeTabIndex];
+    for (auto& t : allTabs) {
+        if (t.tabID == tabID) {
+            return &t;
+        }
+    }
+    return nullptr;
+}
+
 void HandleTopologyChange() {
     std::cout << "Topology Change Detected. Analyzing..." << std::endl;
+    std::vector<OneMonitorController> oldScreens = std::move(gpu.screens);// Capture the OLD topology
+    FetchAllMonitorDetails(); //Scan for NEW topology (populates gpu.screens)This now fills a fresh gpu.screens vector
 
-    // 1. Capture the OLD topology
-    std::vector<OneMonitorController> oldScreens = std::move(gpu.screens);
-
-    // 2. Scan for NEW topology (populates gpu.screens)
-    FetchAllMonitorDetails(); // This now fills a fresh gpu.screens vector
-
-    // 3. MERGE: Transfer existing CommandQueues to the new list
-    for (auto& newScreen : gpu.screens) {
+    for (auto& newScreen : gpu.screens) { // MERGE: Transfer existing CommandQueues to the new list
         int oldIdx = FindMonitorIndexByName(oldScreens, newScreen.deviceName);
 
         if (oldIdx != -1) {
@@ -617,13 +630,10 @@ void AllocateConsoleWindow() {
 static const wchar_t szWindowClass[] = L"विश्वकर्मा"; // The main window class name.
 static const wchar_t szTitle[] = L"Vishwakarma 0 :-) "; // The string that appears in the application's title bar.
 
-
 HINSTANCE hInst;// Stored instance handle for use in Win32 API calls such as FindResource
 
 // Forward declarations of functions included in this code module:
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
-// Forward declaration of the RenderText function
-// void RenderText(HDC hdc, FT_Face face, const char* text, int x, int y);
 
 // Ask to AI: Whats the difference between WinMain and wWinMain for Windows Desktop C++ DirectX12 application?
 // WinMain: This was legacy name. New name is wWinMain with Unicode support.
@@ -668,7 +678,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     {
         MessageBox(NULL,
             _T("Call to RegisterClassEx failed!"),
-            _T("Windows Desktop Guided Tour"),
+            _T("Something bad happened. Failed to register Windows Class."),
             NULL);
 
         return 1;
@@ -729,7 +739,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     {
         MessageBox(NULL,
             _T("Call to CreateWindow failed!"),
-            _T("Windows Desktop Guided Tour"),
+            _T("Something bad happened. Failed to create a new Window."),
             NULL);
 
         return 1;
@@ -748,7 +758,6 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
 
     // Create and launch all threads
     std::vector<std::thread> threads;
-    threads.emplace_back(UserInputThread);
     threads.emplace_back(NetworkInputThread);
     threads.emplace_back(FileInputThread);
     threads.emplace_back(GpuCopyThread);
@@ -807,8 +816,6 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     // Let's try to gracefully shutdown all the threads we started. Signal all threads to stop
     shutdownSignal = true; // UI Input thread, Network Input Thread & File Handling thread listen to this.
     toCopyThreadCV.notify_all(); // This one is to wake up the sleepy GPU Copy thread to shutdown.
-    todoCPUQueue.shutdownQueue();
-    //g_gpuCommandQueue.shutdownQueue();
 
     // Wait for all threads to finish
     std::cout << "Thread Count: " << threads.size() <<"\n";
@@ -836,8 +843,8 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
 // PURPOSE:  Processes messages for the main window.
 // This is the function which runs whenever something changes from Operating System and we are expected to update ourselves.
 // Even the user input such as keyboard presses, mouse clicks, open/close are notified to this function.
-// Remember this is not the function which keeps running every frame, that is a different infinite loop in WinMain function.
-// Question: What happens to WinMain when this function runs? Does that one pause?
+// Remember this is not the function which keeps running every frame, that is a different infinite loop in wWinMain function.
+// Question: What happens to wWinMain when this function runs? Does that one pause?
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     PAINTSTRUCT ps;
@@ -882,9 +889,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     unsigned char* imgData = nullptr;
     int w, h;
 
+    DATASETTAB* tab = GetActiveTabFromHwnd(hWnd);
+    ACTION_DETAILS ad;
+
     switch (message)
     {
-     /*
+    /*
     case WM_NCCALCSIZE: //Override the WM_NCCALCSIZE message to extend the client area into the title bar space.
         if (wParam == TRUE) {
             // Extend the client area to cover the title bar
@@ -893,39 +903,183 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             return 0;
         },,,,
         break;
-        */
+    */
+    
+    // ******* LIFECYCLE messages ******
+    
+    
+    case WM_KEYDOWN: 
+        
+        if (tab) {
+            ad.actionType = ACTION_TYPE::KEYDOWN;
+            ad.source = INPUT_SOURCE::KEYBOARD;
+            ad.x = static_cast<int>(wParam); //Virtual key code
+            ad.y = static_cast<int>(lParam); //Repeat count, scan code, flags
+            ad.delta = 0;
+            ad.timestamp = GetTickCount64();
+            tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+        }
+        return 0;
+    
+    case WM_KEYUP:
+        if (tab) {
+            ad.actionType = ACTION_TYPE::KEYDOWN;
+            ad.source = INPUT_SOURCE::KEYBOARD;
+            ad.x = static_cast<int>(wParam); //Virtual key code
+            ad.y = static_cast<int>(lParam); //Repeat count, scan code, flags
+            ad.delta = 0;
+            ad.timestamp = GetTickCount64();
+            tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+        }
+        return 0;
+
+    case WM_CHAR: // What is this? How is this different from WM_KEYDOWN / UP?
+        if (tab) {
+            ad.actionType = ACTION_TYPE::KEYDOWN;
+            ad.source = INPUT_SOURCE::KEYBOARD;
+            ad.x = static_cast<int>(wParam); //Virtual key code
+            ad.y = static_cast<int>(lParam); //Repeat count, scan code, flags
+            ad.delta = 0;
+            ad.timestamp = GetTickCount64();
+            tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+        }
+        return 0;
+
+    case WM_SYSKEYDOWN:
+        if (tab) {
+            ad.actionType = ACTION_TYPE::KEYDOWN;
+            ad.source = INPUT_SOURCE::KEYBOARD;
+            ad.x = static_cast<int>(wParam); //Virtual key code
+            ad.y = static_cast<int>(lParam); //Repeat count, scan code, flags
+            ad.delta = 0;
+            ad.timestamp = GetTickCount64();
+            tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+        }
+        return 0;
+
+    case WM_MOUSEMOVE:
+        if (tab) {
+            ad.actionType = ACTION_TYPE::MOUSEMOVE;
+            ad.source = INPUT_SOURCE::MOUSE;
+            ad.x = GET_X_LPARAM(lParam);
+            ad.y = GET_Y_LPARAM(lParam);
+            ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
+            ad.timestamp = GetTickCount64();
+            tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+        }
+        return 0;
+
+    case WM_LBUTTONDOWN:
+        if (tab) {
+            ad.actionType = ACTION_TYPE::LBUTTONDOWN;
+            ad.source = INPUT_SOURCE::MOUSE;
+            ad.x = LOWORD(wParam); //Client X
+            ad.y = HIWORD(lParam); //Client Y
+            ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
+            ad.timestamp = GetTickCount64();
+            tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+        }
+        return 0;
+    
+    case WM_LBUTTONUP:
+        if (tab) {
+            ad.actionType = ACTION_TYPE::LBUTTONUP;
+            ad.source = INPUT_SOURCE::MOUSE;
+            ad.x = LOWORD(wParam); //Client X
+            ad.y = HIWORD(lParam); //Client Y
+            ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
+            ad.timestamp = GetTickCount64();
+            tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+        }
+        return 0;
+    
+    case WM_RBUTTONDOWN:
+        if (tab) {
+            ad.actionType = ACTION_TYPE::RBUTTONDOWN;
+            ad.source = INPUT_SOURCE::MOUSE;
+            ad.x = LOWORD(wParam); //Client X
+            ad.y = HIWORD(lParam); //Client Y
+            ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
+            ad.timestamp = GetTickCount64();
+            tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+        }
+        return 0;
+    
+    case WM_RBUTTONUP:
+        if (tab) {
+            ad.actionType = ACTION_TYPE::RBUTTONUP;
+            ad.source = INPUT_SOURCE::MOUSE;
+            ad.x = LOWORD(wParam); //Client X
+            ad.y = HIWORD(lParam); //Client Y
+            ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
+            ad.timestamp = GetTickCount64();
+            tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+        }
+        return 0;
+    
+    case WM_MBUTTONDOWN:
+        if (tab) {
+            ad.actionType = ACTION_TYPE::MBUTTONDOWN;
+            ad.source = INPUT_SOURCE::MOUSE;
+            ad.x = LOWORD(wParam); //Client X
+            ad.y = HIWORD(lParam); //Client Y
+            ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
+            ad.timestamp = GetTickCount64();
+            tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+        }
+        return 0;
+    
+    case WM_MBUTTONUP:
+        if (tab) {
+            ad.actionType = ACTION_TYPE::MBUTTONUP;
+            ad.source = INPUT_SOURCE::MOUSE;
+            ad.x = LOWORD(wParam); //Client X
+            ad.y = HIWORD(lParam); //Client Y
+            ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
+            ad.timestamp = GetTickCount64();
+            tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+        }
+        return 0;
+    
+    case WM_MOUSEWHEEL:
+        if (tab) {
+            ad.actionType = ACTION_TYPE::MOUSEWHEEL;
+            ad.source = INPUT_SOURCE::MOUSE;
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            ScreenToClient(hWnd, &pt);
+            ad.x = pt.x;
+            ad.y = pt.y;
+            ad.delta = GET_WHEEL_DELTA_WPARAM(wParam);
+            ad.timestamp = GetTickCount64();
+            tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+        }
+        return 0;
+
+    //case WM_NCLBUTTONDOWN: return 0; // If needed for title bars / boarders.
+    //Currently removed because it was causing WM_CLOSE to not fire up even when clicking close button.
+    //If we want to support dragging from the title bar, we can re - enable this and add logic to handle it.
+    
+    case WM_CAPTURECHANGED: // Notify all tabs to release captured mouse states (e.g. , if draggin )
+        for (auto& tab : allTabs) {
+            ad.actionType = ACTION_TYPE::CAPTURECHANGED;
+            ad.source = INPUT_SOURCE::MOUSE;
+            ad.x = 0;
+            ad.y = 0;
+            ad.delta = 0;
+            ad.timestamp = GetTickCount64();
+            tab.userInputQueue->push(ad); //userInputQueue is threadsafe.
+
+        }
+        return 0;
+    case WM_INPUT_DEVICE_CHANGE: return 0; //TODO : Copy this case from Grok.
+
+    // ******* LIFECYCLE messages ******
     case WM_CREATE:
         //std::cout << "Full path to logo.png: " << fullPath << std::endl;//No longer loading from disc.
         //LoadPngImage(fullPath.c_str(), &image_data, &width, &height); 
         LoadPngFromResource(IDR_LOGO_PNG, &imgData, &w, &h);
         break;
 
-    case WM_LBUTTONDOWN: {
-        int x = LOWORD(lParam);
-        int y = HIWORD(lParam);
-        //MessageBox(hWnd, L"Left button clicked", L"Mouse Click", MB_OK);
-        return 0;
-    }
-    case WM_RBUTTONDOWN: {
-        int x = LOWORD(lParam);
-        int y = HIWORD(lParam);
-        //MessageBox(hWnd, L"Right button clicked", L"Mouse Click", MB_OK);
-        return 0;
-    }
-    case WM_MBUTTONDOWN: {
-        MessageBoxW(hWnd, L"Middle button clicked", L"Mouse Click", MB_OK);
-        return 0;
-    }
-    case WM_MOUSEWHEEL: {
-        int zDelta = GET_WHEEL_DELTA_WPARAM(wParam);
-        if (zDelta > 0) {
-            MessageBoxW(hWnd, L"Mouse wheel scrolled up", L"Mouse Scroll", MB_OK);
-        }
-        else {
-            MessageBoxW(hWnd, L"Mouse wheel scrolled down", L"Mouse Scroll", MB_OK);
-        }
-        return 0;
-    }
     case WM_PAINT:
     {
         // We're not using GDI for rendering anymore - DirectX12 handles all rendering

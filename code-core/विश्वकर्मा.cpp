@@ -40,8 +40,8 @@ std::vector<SingleUIWindow> allUIWindows; /*Each tab will be hosted in exactly 1
 However some of the views of the tab can be extracted to other windows.
 Each tab gets its own engineering thread, capable of doing background processing, receiving network data, file I/O etc.
 However engineering threads do not directly talk to GPU. They submit the screen visible changes to the GPU Copy thread.
-More importantly, engineering thread are responsible for maintianing data consistency,
-tracking whcih objects are visible in which views, what are the dirty objects to be clearned up from GPU memory etc.
+More importantly, engineering thread are responsible for maintaining data consistency,
+tracking which objects are visible in which views, what are the dirty objects to be cleaned up from GPU memory etc.
 */
 int g_nextTabId = 1;
 
@@ -52,7 +52,7 @@ std::mt19937 gen(rd()); //rd(): Calls the device we made above to get a single r
 //std::mt19937: A specific algorithm famous for being very fast and having high statistical quality.
 // Period of 2^{19937}-1. All subsequent random numbers are generated from this seeded mt19937 object.
 
-inline void addRandomGemoetryElement(DATASETTAB* targetTab) {
+inline void addRandomGeometryElement(DATASETTAB* targetTab) {
 	if (!targetTab) return; //Safety against NULL pointer dereference.
     GeometryData geometry;// These will hold the data of the randomly created shape.
     uint64_t memoryId;
@@ -146,7 +146,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         DATASETTAB* myTab = nullptr;
         for (auto& tab : allTabs) { if (tab.tabID == tabID) { myTab = &tab; break; } }
         if (myTab) { // Generate the initial 10 pyramids
-            for (int k = 0; k < 10; ++k) addRandomGemoetryElement(myTab);
+            for (int k = 0; k < 10; ++k) addRandomGeometryElement(myTab);
         }
     }
 
@@ -154,7 +154,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
 
     while (!shutdownSignal) { // This is our primary application loop.
         auto frameStart = std::chrono::high_resolution_clock::now();
-
+        
         // Dynamic Lookup: Find the tab pointer based on ID
         // This handles the case where vector reallocates or tabs shift.
         DATASETTAB* myTab = nullptr;
@@ -165,26 +165,103 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
             break; // Exit the thread gracefully
         }
 
+		UpdateCameraOrbit(myTab->camera); // Engineering thread updates camera orbit continuously.
+        
         // Check timer and add a new pyramid every second.
         auto currentTime = std::chrono::steady_clock::now();
         if (std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastPyramidAddTime).count() >= 1) {
-            addRandomGemoetryElement(myTab);
+            addRandomGeometryElement(myTab);
             lastPyramidAddTime = currentTime; // Reset the timer
             // Optional: Log to prove background work is happening
             // std::cout << "Tab " << tabIndex << " generated object." << std::endl;
         }
 
-        // Input Processing (Specific to this Tab)
-        // Note: Currently todoCPUQueue is global. You need a way to filter messages for THIS tab.
-        // For now, we will skip queue processing or assume all threads consume generic global inputs (risky).
-        // A better approach is: todoCPUQueue should be per-tab or messages should have tabID.
-        // 
+        // Process User Inputs First (Lightweight: Camera, Selection, Throttling)
+        ACTION_DETAILS input;
+        int inputCount = 0;  // For throttling detection
+        auto inputStart = std::chrono::steady_clock::now();
+        while (myTab->userInputQueue->try_pop(input)) {
+            inputCount++;
+            // Throttle: Skip intermediate MOUSEMOVE if >200/sec (check timestamp/rate)
+            if (input.actionType == ACTION_TYPE::MOUSEMOVE && inputCount > 200) { continue; }  // Simple rate limit
+
+            // Handle based on type
+            switch (input.actionType) {
+            case ACTION_TYPE::MOUSEMOVE:
+                if (myTab->mouseLeftDown) {  // Example: Drag-rotate camera
+                    // Update camera based on delta (input.x - lastMouseX)
+                    // Push to commandToCopyThreadQueue if view changes dirty geometry.
+                }
+                myTab->lastMouseX = input.x;
+                myTab->lastMouseY = input.y;
+                // Check if in render area (vs UI): Compare input.x/y to myTab->views[activeViewIndex].rect or contentRect.
+                break;
+            case ACTION_TYPE::MOUSEWHEEL:
+            {
+                float wheelSteps = input.delta / (float)WHEEL_DELTA; // Since new mouse send lots of events ?
+
+                // Calculate the vector from Target to Position
+                float dx = myTab->camera.position.x - myTab->camera.target.x;
+                float dy = myTab->camera.position.y - myTab->camera.target.y;
+                float dz = myTab->camera.position.z - myTab->camera.target.z;
+                float distance = std::sqrt(dx * dx + dy * dy + dz * dz);// Calculate current distance from target
+
+                // Determine Zoom Factor. Standard mouse wheel delta is 120. 
+                // Delta > 0 (Wheel Forward) -> Zoom IN  (Factor < 1.0). Delta < 0 (Wheel Back)    -> Zoom OUT (Factor > 1.0)
+				//float zoomFactor = (input.delta > 0) ? 0.9f : 1.1f; // Binary zoom. Not smooth.                
+                float zoomFactor = std::pow(0.9f, wheelSteps);// Smooth zoom instead of binary zoom
+                float newDistance = distance * zoomFactor;// Apply Zoom
+
+                // Safety Clamping. Prevent getting stuck at 0 (locking the camera) or going too far
+                if (newDistance < 1.0f) newDistance = 1.0f;
+                if (newDistance > myTab->camera.farZ - 10.0f) newDistance = myTab->camera.farZ - 10.0f;
+
+                // Update Position. We keep the same direction, just change the magnitude
+                if (distance > 0.002f) {
+                    float scale = newDistance / distance;
+                    myTab->camera.position.x = myTab->camera.target.x + (dx * scale);
+                    myTab->camera.position.y = myTab->camera.target.y + (dy * scale);
+                    myTab->camera.position.z = myTab->camera.target.z + (dz * scale);
+                }
+
+                std::cout << "Zoom Updated. New Distance: " << newDistance << "\n";// Debug logging (Optional)
+                break;
+            }
+            case ACTION_TYPE::LBUTTONDOWN:
+                myTab->mouseLeftDown = true;
+                // SetCapture(hWnd) if needed for drag (but handle in main thread?).
+                break;
+            case ACTION_TYPE::LBUTTONUP:
+                myTab->mouseLeftDown = false;
+                break;
+                // Similarly for other buttons, keys (e.g., 'P' for CREATEPYRAMID -> push to todoCPUQueue).
+            case ACTION_TYPE::KEYDOWN:
+                if (input.x == 'P') {  // Example mapping
+                    ACTION_DETAILS todo;
+                    todo.actionType = ACTION_TYPE::CREATEPYRAMID;
+                    // Fill other fields...
+                    myTab->todoCPUQueue->push(todo);
+                }
+                break;
+            case ACTION_TYPE::CAPTURECHANGED:
+            case ACTION_TYPE::INPUT:  // For device reset
+                // Reset all button states
+                myTab->mouseLeftDown = myTab->mouseRightDown = myTab->mouseMiddleDown = false;
+                break;
+                // Handle wheel for zoom, etc.
+            }
+        }
+        // After loop: If inputCount high, log or adjust (e.g., sleep if bursty).
+
+        // Existing todoCPUQueue processing remains (for self-TODOs like CREATEPYRAMID).
+
+        // Input Processing (Specific to this Tab). Previously todoCPUQueue was global. now it is Local. 
         // Process all pending inputs from User, Network, File threads
         ACTION_DETAILS nextWorkTODO;
-        while (bool todo = todoCPUQueue.try_pop(nextWorkTODO)) {
+        while (bool todo = myTab->todoCPUQueue->try_pop(nextWorkTODO)) {
             std::cout << "Input received. Action Type = " << static_cast<int>(nextWorkTODO.actionType) <<"\n";
             if (nextWorkTODO.actionType == ACTION_TYPE::CREATEPYRAMID) {
-                //addRandomGemoetryElement();
+                //addRandomGeometryElement();
             }
             if (todo == false) { // Means input queue was empty. We should sleep for 1 millisecond.
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));

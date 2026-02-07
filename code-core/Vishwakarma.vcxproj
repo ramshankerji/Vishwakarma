@@ -242,6 +242,7 @@
     <ClInclude Include="MemoryManagerGPU-Vulkan1.1.h" />
     <ClInclude Include="preCompiledHeadersWindows.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="UserInputProcessing.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Vishwakarma.rc" />

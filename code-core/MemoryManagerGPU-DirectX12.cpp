@@ -351,24 +351,23 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
 
 void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
     DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes) {
-    int i = 0; // Latter to be iterated over number of screens.
-
+    //int i = 0; // Latter to be iterated over number of screens.
     // Update constant buffer with transformation matrices
-    static float rotationAngle = 0.0f;
-    rotationAngle += 0.02f; // Rotate over time
 
     // Create view matrix (camera looking at scene from distance)
-    DirectX::XMVECTOR eyePosition = DirectX::XMVectorSet(0.0f, 2.0f, -10.0f, 1.0f);
-    DirectX::XMVECTOR focusPoint = DirectX::XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
-    DirectX::XMVECTOR upDirection = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+    XMVECTOR eyePosition = XMLoadFloat3(&tabRes.camera.position);
+    XMVECTOR focusPoint = XMLoadFloat3(&tabRes.camera.target);
+    XMVECTOR upDirection = XMLoadFloat3(&tabRes.camera.up);
     DirectX::XMMATRIX viewMatrix = DirectX::XMMatrixLookAtLH(eyePosition, focusPoint, upDirection);
 
     // Create projection matrix
     float aspectRatio = static_cast<float>(winRes.WindowWidth) / static_cast<float>(winRes.WindowHeight);
-    DirectX::XMMATRIX projectionMatrix = DirectX::XMMatrixPerspectiveFovLH(DirectX::XM_PIDIV4, aspectRatio, 0.1f, 100.0f);
 
-    // Create world matrix with rotation
-    DirectX::XMMATRIX worldMatrix = DirectX::XMMatrixRotationY(rotationAngle);
+    XMMATRIX projectionMatrix =  XMMatrixPerspectiveFovLH(
+        tabRes.camera.fov, tabRes.camera.aspect, tabRes.camera.nearZ,  tabRes.camera.farZ );
+
+    // Create world matrix with rotation. Now the camera rotates, not the world !
+    DirectX::XMMATRIX worldMatrix = DirectX::XMMatrixIdentity();
 
     // Combine matrices
     DirectX::XMMATRIX worldViewProjectionMatrix = worldMatrix * viewMatrix * projectionMatrix;
@@ -645,8 +644,7 @@ void GpuCopyThread() {
             commandAllocator->Reset();// Record copy commands
             commandList->Reset(commandAllocator.Get(), nullptr);
 
-            /*
-			* UpdateSubresources may introduce ResourceBarriers internally ! Which is not allowed on Copy Queues.
+            /* UpdateSubresources may introduce ResourceBarriers internally ! Which is not allowed on Copy Queues.
             with the raw copy command, which is safe because your buffers are already created
             in a valid state for copying (COMMON or GENERIC_READ).*/
             
@@ -764,15 +762,6 @@ void GpuRenderThread(int monitorId, int refreshRate) {
 
     while (!shutdownSignal && !pauseRenderThreads) {
         auto frameStart = std::chrono::high_resolution_clock::now();
-        /*
-        // 1. Wait for the GPU Copy thread to finish preparing a frame. : TODO: Discard this block.
-        {
-            std::unique_lock<std::mutex> lock(g_copyFenceMutex);
-            g_copyFenceCV.wait(lock, [&] { return g_copyFrameCount > lastRenderedFrame || shutdownSignal; });
-            if (shutdownSignal) break;
-            lastRenderedFrame = g_copyFrameCount;
-        }
-        */
         
 		// Reset Thread Allocator & List.We must do this outside the window loop,
 		// since we send the command list of all windows in one go to the GPU, to render all windows on this monitor.
@@ -788,7 +777,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             // The Safety Switch: If migrating, pretend this window doesn't exist for now.
             if (window.isMigrating) continue;
             
-            // TODO: Ideally, it should be handled in WM_MOVE or nearby. Folloiwng is simply safeguard for bugs elsewhere.
+            // TODO: Ideally, it should be handled in WM_MOVE or nearby. Following is simply safeguard for bugs elsewhere.
             // Check if the window is physically on this monitor, but chemically bound to another queue
             if (window.dx.swapChain && window.dx.creatorQueue != threadRes.commandQueue.Get()) {
                 std::cout << "Monitor Mismatch detected! Recreating SwapChain for new Queue." << std::endl;
@@ -827,6 +816,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
 			// In fact the Populate Command List can change it multiple times per window if needed.
             if (window.activeTabIndex >= 0 && window.activeTabIndex < allTabs.size() ) {
                 DX12ResourcesPerTab& tabRes = allTabs[window.activeTabIndex].dx;
+				tabRes.camera = allTabs[window.activeTabIndex].camera; // Update camera from Tab.
                 gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes);// Renders geometry.
             }
 

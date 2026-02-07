@@ -6,38 +6,15 @@
 #include <random>
 #include <chrono>
 
+#include "UserInputProcessing.h"
+
 extern void AddRandomPyramid();
-extern ThreadSafeQueueCPU todoCPUQueue;
+extern std::vector<DATASETTAB> allTabs;
 extern enum class ACTION_TYPE actions;
 
 // Global flag to signal all threads to shut down.
 extern std::atomic<bool> shutdownSignal;
 // Global queue for inputs to send commands to the Main Logic Thread.
-
-// TODO: Implement a mechanism, to queue KeyPresses, Mouse movement and so on.
-void UserInputThread() {
-    std::cout << "User Input Thread started." << std::endl;
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> distrib(1, 100);
-
-    while (!shutdownSignal) {
-        // Simulate user interaction (e.g., creating or modifying an object)
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-        std::vector<std::byte> data(distrib(gen) * 16, std::byte{0xAA}); // Create object of random size
-        
-        // Check timer and add a new pyramid every second. This is used to simulate user Input.
-        static std::chrono::steady_clock::time_point lastPyramidAddTime;
-        auto currentTime = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastPyramidAddTime).count() >= 1) {
-            todoCPUQueue.push(ACTION_DETAILS( { ACTION_TYPE::CREATEPYRAMID, 0,0,0 }));
-            lastPyramidAddTime = currentTime; // Reset the timer
-        }
-        //std::cout << "USER: Created object " << id << std::endl;
-    }
-    std::cout << "User Input Thread shutting down." << std::endl;
-}
 
 // TODO: Implement windows socket API for listening to other clients.
 void NetworkInputThread() {
@@ -61,7 +38,7 @@ void FileInputThread() {
     // and then terminate, or it could continuously monitor for file changes.
     // For this example, it loads 10 objects and then sleeps.
     for(int i=0; i<10; ++i) {
-        todoCPUQueue.push(ACTION_DETAILS({ ACTION_TYPE::CREATEPYRAMID, 0,0,0 }));
+        allTabs[0].todoCPUQueue->push(ACTION_DETAILS{ .actionType = ACTION_TYPE::CREATEPYRAMID });
     }
     std::cout << "FILE: Initial bulk load complete." << std::endl;
 

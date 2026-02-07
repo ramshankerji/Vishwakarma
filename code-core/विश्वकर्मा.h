@@ -5,9 +5,51 @@
 #include <vector>
 #include "MemoryManagerCPU.h"
 #include "MemoryManagerGPU-DirectX12.h"
+#include "UserInputProcessing.h"
 extern struct CPU_RAM_4MB;
 
 #pragma once //It prevents multiple inclusions of the same header file.
+
+class ThreadSafeQueueCPU {
+	//This class supports safer transfer of user inputs from main thread to engineering thread.
+	//This also helps tabs maintain their onwn internal engineeirng todo queue. See DATASETTAB structure.
+public:
+    void push(ACTION_DETAILS value) {
+        std::lock_guard<std::mutex> lock(mutex);
+        fifoQueue.push(std::move(value));
+        cond.notify_one();
+    }
+
+    // Non-blocking pop
+    bool try_pop(ACTION_DETAILS& value) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (fifoQueue.empty()) {
+            return false;
+        }
+        value = std::move(fifoQueue.front());
+        fifoQueue.pop();
+        return true;
+    }
+
+    // Shuts down the queue, waking up any waiting threads
+    void shutdownQueue() {
+        std::lock_guard<std::mutex> lock(mutex);
+        shutdown = true;
+        cond.notify_all();
+    }
+
+    ThreadSafeQueueCPU() = default; //default constructor
+    ThreadSafeQueueCPU(ThreadSafeQueueCPU&&) noexcept = default; // Disable copy. Othrwise it can't reside in std::vector.
+    ThreadSafeQueueCPU& operator=(ThreadSafeQueueCPU&&) noexcept = default;
+    ThreadSafeQueueCPU(const ThreadSafeQueueCPU&) = delete; // Allow move
+    ThreadSafeQueueCPU& operator=(const ThreadSafeQueueCPU&) = delete;
+
+private:
+    std::queue<ACTION_DETAILS> fifoQueue; // fifo = First-In First-Out
+    std::mutex mutex;
+    std::condition_variable cond;
+    bool shutdown = false;
+};
 
 struct NETWORK_INTERFACE {
     uint16_t type; // 0: IPv6, 1: IPv4
@@ -22,6 +64,7 @@ struct VIEW_INSIDE_DATASETTAB {
 	std::wstring viewName; //User assigned name of the view.
     float backgroundColor[4]; //RGBA
     float backgroundColorHue; // 0 to 360 degree.
+
 };
 
 struct DATASETTAB {
@@ -67,6 +110,31 @@ struct DATASETTAB {
 	std::vector<uint64_t> allIDsInThisTab; //List of all engineering object IDs in this tab.
 
 	DX12ResourcesPerTab dx; // DirectX12 resources specific to this tab.
+    //ThreadSafeQueueCPU userInputQueue; // Dedicated Input Queue for this tab's engineering thread.
+    //ThreadSafeQueueCPU todoCPUQueue;   // Dedicated Work Queue for this tab's engineering thread. Self TODOs.
+    std::unique_ptr<ThreadSafeQueueCPU> userInputQueue;
+    std::unique_ptr<ThreadSafeQueueCPU> todoCPUQueue;
+
+    /*Self TODOs are modification to enginering world data, like create new Beam, Modify existing Column etc.
+    This is different from userInputQueue because this 2nd queue can come from filesystem thread, 
+    network thread, engineering calculation thread, undo/redo action etc. */
+
+    bool mouseLeftDown = false;
+    bool mouseMiddleDown = false;
+    bool mouseRightDown = false;
+    int lastMouseX = 0;
+    int lastMouseY = 0;
+    
+    CameraState camera; //Currently it is per tab. Latter we may move it to per view.
+    
+    DATASETTAB() {
+        userInputQueue = std::make_unique<ThreadSafeQueueCPU>();
+        todoCPUQueue = std::make_unique<ThreadSafeQueueCPU>();
+    }
+    DATASETTAB(const DATASETTAB&) = delete;// Disable copy (mutex cannot copy). Othrwise it can't reside in std::vector.
+    DATASETTAB& operator=(const DATASETTAB&) = delete;
+    DATASETTAB(DATASETTAB&&) noexcept = default;// Allow move
+    DATASETTAB& operator=(DATASETTAB&&) noexcept = default;
 };
 
 // Tab 0 id default application launch screen tab. It can't be closed.
@@ -137,5 +205,7 @@ struct SingleUIWindow {
 void विश्वकर्मा(uint64_t tabID);
 
 //Atomic ID generator for unique IDs across the application.
-static std::atomic<uint64_t> global_id{1}; // start at 1 to reserve 0 if you want
-inline uint64_t GetNewTempID(){ return global_id.fetch_add(1, std::memory_order_relaxed); } //fetch_add returns the old value before increment,
+static std::atomic<uint64_t> global_id{1}; // start at 1 to reserve 0 .
+inline uint64_t GetNewTempID(){ //fetch_add returns the old value before increment,
+    return global_id.fetch_add(1, std::memory_order_relaxed); 
+} 
