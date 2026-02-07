@@ -122,6 +122,10 @@ struct DATASETTAB {
     bool mouseLeftDown = false;
     bool mouseMiddleDown = false;
     bool mouseRightDown = false;
+    bool isAltDown = false;
+    bool isShiftDown = false;
+    bool isCtrlDown = false;
+
     int lastMouseX = 0;
     int lastMouseY = 0;
     
@@ -147,7 +151,7 @@ struct SingleUIWindow {
     HWND hWnd = nullptr;
     std::vector<int> tabIds;
     int activeTabIndex = -1;
-    int currentMonitorIndex; // The index of monitor returend by Windows API. It changes on monitor addition/removal.
+    int currentMonitorIndex; // The index of monitor returned by Windows API. It changes on monitor addition/removal.
 
     RECT tabBandRect{};
     RECT viewBandRect{};

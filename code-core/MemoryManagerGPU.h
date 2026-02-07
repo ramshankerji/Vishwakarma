@@ -168,8 +168,7 @@ Do this first so you aren't fighting "black screen" bugs later.
 [Done] Release Downloads (New Repository).
 [Done] Update Vertex format to include Normals. (Required for lighting).
 [Done] Hemispherical Lighting in shader. (Verify normals are correct).
-[ ] Mouse Zoom/Pan/Rotate (Basic).
-Advice: Move this UP. You need to be able to move the camera to debug the complex culling/memory bugs you are about to create in Phase 2 & 3.
+[Done] Mouse Zoom/Pan/Rotate (Basic).
 
 Phase 2: The "Freeze" Infrastructure
 Before you break the memory model, build the mechanism that hides the breakage.

@@ -20,7 +20,6 @@ This thread is also responsible for engineering calculations, consistency of Dat
 शंकर gpu;
 
 // Global Variables.
-static std::chrono::steady_clock::time_point lastPyramidAddTime; //Temporary. TODO: Remove.
 extern std::atomic<bool> shutdownSignal; // Externs for communication
 
 // Thread Synchronization and Data Structures
@@ -138,6 +137,7 @@ inline void addRandomGeometryElement(DATASETTAB* targetTab) {
 
 void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering thread. The ringmaster of the application.
     std::cout << "Main Logic Thread विश्वकर्मा started." << std::endl;
+    std::chrono::steady_clock::time_point lastPyramidAddTime;
     lastPyramidAddTime = std::chrono::steady_clock::now();// Initialize the timer
 
     // Initial Population: We need to find the tab first.
@@ -164,8 +164,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
             std::cout << "Tab ID " << tabID << " not found (Closed?). Engineering thread exiting." << std::endl;
             break; // Exit the thread gracefully
         }
-
-		UpdateCameraOrbit(myTab->camera); // Engineering thread updates camera orbit continuously.
+		//UpdateCameraOrbit(myTab->camera); // Automatic camera rotation for troubleshooting. Comment out in before commit.
         
         // Check timer and add a new pyramid every second.
         auto currentTime = std::chrono::steady_clock::now();
@@ -180,6 +179,10 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         ACTION_DETAILS input;
         int inputCount = 0;  // For throttling detection
         auto inputStart = std::chrono::steady_clock::now();
+		bool isOrbiting = false, isPanning = false; // Track if we are in orbit/panning based on mouse state and modifiers.
+        float distance = 0.0;
+		float dx, dy, dz, vx, vy, vz;
+
         while (myTab->userInputQueue->try_pop(input)) {
             inputCount++;
             // Throttle: Skip intermediate MOUSEMOVE if >200/sec (check timestamp/rate)
@@ -188,10 +191,108 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
             // Handle based on type
             switch (input.actionType) {
             case ACTION_TYPE::MOUSEMOVE:
-                if (myTab->mouseLeftDown) {  // Example: Drag-rotate camera
-                    // Update camera based on delta (input.x - lastMouseX)
+                isPanning = myTab->mouseMiddleDown && myTab->isShiftDown;
+                // Orbit if Middle Mouse is down, but NOT panning, OR if Alt+Left Click
+                isOrbiting = (!isPanning && myTab->mouseMiddleDown) || (myTab->mouseLeftDown && myTab->isAltDown);
+
+                dx = (input.x - myTab->lastMouseX);
+                dy = (input.y - myTab->lastMouseY);
+
+                // Calculate Vector from Target to Camera (View Vector)
+                vx = myTab->camera.position.x - myTab->camera.target.x;
+                vy = myTab->camera.position.y - myTab->camera.target.y;
+                vz = myTab->camera.position.z - myTab->camera.target.z;
+                distance = std::sqrt(vx * vx + vy * vy + vz * vz);
+
+                if (isPanning) {// PANNING IMPLEMENTATION
+                    // Pan Speed should scale with distance (zooming out makes pan faster)
+                    float panSpeed = distance * 0.001f;
+
+                    // Calculate Forward View Vector (Normalized). We need the direction looking AT the target
+                    float invDist = 1.0f / (distance + 0.0001f); // Avoid div by zero
+                    float fx = -vx * invDist;
+                    float fy = -vy * invDist;
+                    float fz = -vz * invDist;
+                    // Calculate Right Vector (Cross Product of Forward and World Up)
+                    // Assuming World Up is Z+ (0, 0, 1) based on your Orbit Math
+                    float rx = fy;      // (fy * 1) - (fz * 0)
+                    float ry = -fx;     // (fz * 0) - (fx * 1)
+                    float rz = 0.0f;    // (fx * 0) - (fy * 0)
+                    float rLen = std::sqrt(rx * rx + ry * ry);// Normalize Right Vector
+                    if (rLen > 0.0001f) { rx /= rLen; ry /= rLen; }
+
+                    // Calculate Camera Up Vector (Cross Product of Right and Forward)
+                    // This creates the "Screen Up" vector perpendicular to view
+                    float ux = (ry * fz) - (rz * fy);
+                    float uy = (rz * fx) - (rx * fz);
+                    float uz = (rx * fy) - (ry * fx);
+
+                    // Apply Movement. Move Left/Right: -dx along Right Vector
+                    // Move Up/Down: +dy along Camera Up Vector (Screen space Y is usually inverted, check preference)
+                    float moveX = (rx * -dx * panSpeed) + (ux * dy * panSpeed);
+                    float moveY = (ry * -dx * panSpeed) + (uy * dy * panSpeed);
+                    float moveZ = (rz * -dx * panSpeed) + (uz * dy * panSpeed);
+
+                    // Apply to BOTH Position and Target to maintain view direction
+                    myTab->camera.position.x += moveX;
+                    myTab->camera.position.y += moveY;
+                    myTab->camera.position.z += moveZ;
+
+                    myTab->camera.target.x += moveX;
+                    myTab->camera.target.y += moveY;
+                    myTab->camera.target.z += moveZ;
+                }
+                else if (isOrbiting) {// Orbit / Rotate around Focal Point (Target)
+                    float sensitivity = 0.005f; // Adjust rotation speed here
+                    dx = (input.x - myTab->lastMouseX) * sensitivity;
+                    dy = (input.y - myTab->lastMouseY) * sensitivity;
+
+                    // Calculate vector from Target to Camera (The Radius vector)
+                    vx = myTab->camera.position.x - myTab->camera.target.x;
+                    vy = myTab->camera.position.y - myTab->camera.target.y;
+                    vz = myTab->camera.position.z - myTab->camera.target.z;
+
+                    // Convert to Spherical Coordinates. radius (distance), theta (azimuth), phi (elevation)
+                    float radius = std::sqrt(vx * vx + vy * vy + vz * vz);
+                    float theta = std::atan2(vy, vx);     // Angle in XY plane
+                    float phi = std::acos(vz / radius);   // Angle from Z axis (Up)
+
+                    theta -= dx;// Apply Mouse Delta. Note: Sign +/- depends on desired control inversion
+                    phi -= dy;
+
+                    // Clamp Phi (Elevation) to prevent camera flipping upside down
+                    // Keep it between 1 degree and 179 degrees (0.01 to PI - 0.01)
+                    float epsilon = 0.01f;
+                    float pi = 3.1415926535f;
+                    if (phi < epsilon) phi = epsilon;
+                    if (phi > pi - epsilon) phi = pi - epsilon;
+                    
+                    float nx = radius * std::sin(phi) * std::cos(theta);// Convert back to Cartesian Coordinates
+                    float ny = radius * std::sin(phi) * std::sin(theta);
+                    float nz = radius * std::cos(phi);
+
+                    // Update Camera Position relative to Target
+                    myTab->camera.position.x = myTab->camera.target.x + nx;
+                    myTab->camera.position.y = myTab->camera.target.y + ny;
+                    myTab->camera.position.z = myTab->camera.target.z + nz;
+
+                    // Flag to Copy Thread that camera changed (if your engine requires explicit dirty flags)
+                    // std::lock_guard<std::mutex> lock(toCopyThreadMutex);
+                    // commandToCopyThreadQueue.push({ CommandToCopyThreadType::UPDATE_CAMERA, ... });
+                }
+				// Camera Safety Check to ensure camera and target are not at the same, crashing view matrix calculation.
+                vx = myTab->camera.position.x - myTab->camera.target.x;
+                vy = myTab->camera.position.y - myTab->camera.target.y;
+                vz = myTab->camera.position.z - myTab->camera.target.z;
+                if (vx * vx + vy * vy + vz * vz < 0.000001f) {
+                    myTab->camera.position.z += 0.001f;}// tiny nudge along camera up
+                
+                // Standard Mouse Update
+                if (myTab->mouseLeftDown && !isOrbiting && !isPanning) {
+                    // Drag logic (selection box etc.)
                     // Push to commandToCopyThreadQueue if view changes dirty geometry.
                 }
+
                 myTab->lastMouseX = input.x;
                 myTab->lastMouseY = input.y;
                 // Check if in render area (vs UI): Compare input.x/y to myTab->views[activeViewIndex].rect or contentRect.
@@ -204,7 +305,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 float dx = myTab->camera.position.x - myTab->camera.target.x;
                 float dy = myTab->camera.position.y - myTab->camera.target.y;
                 float dz = myTab->camera.position.z - myTab->camera.target.z;
-                float distance = std::sqrt(dx * dx + dy * dy + dz * dz);// Calculate current distance from target
+                distance = std::sqrt(dx * dx + dy * dy + dz * dz);// Calculate current distance from target
 
                 // Determine Zoom Factor. Standard mouse wheel delta is 120. 
                 // Delta > 0 (Wheel Forward) -> Zoom IN  (Factor < 1.0). Delta < 0 (Wheel Back)    -> Zoom OUT (Factor > 1.0)
@@ -229,12 +330,16 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
             }
             case ACTION_TYPE::LBUTTONDOWN:
                 myTab->mouseLeftDown = true;
-                // SetCapture(hWnd) if needed for drag (but handle in main thread?).
                 break;
             case ACTION_TYPE::LBUTTONUP:
                 myTab->mouseLeftDown = false;
                 break;
-                // Similarly for other buttons, keys (e.g., 'P' for CREATEPYRAMID -> push to todoCPUQueue).
+            case ACTION_TYPE::MBUTTONDOWN:
+                myTab->mouseMiddleDown = true;
+                break;
+            case ACTION_TYPE::MBUTTONUP:
+                myTab->mouseMiddleDown = false;
+                break;
             case ACTION_TYPE::KEYDOWN:
                 if (input.x == 'P') {  // Example mapping
                     ACTION_DETAILS todo;
@@ -242,13 +347,18 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                     // Fill other fields...
                     myTab->todoCPUQueue->push(todo);
                 }
+                else if (input.x == 18) {myTab->isAltDown = true;} // 18 is VK_MENU (ALT)
+                else if (input.x == 16) {myTab->isShiftDown = true;} // SHIFT (VK_SHIFT)
+                break;
+            case ACTION_TYPE::KEYUP:
+                if (input.x == 18) { myTab->isAltDown = false;}// 18 is VK_MENU (ALT)
+                else if (input.x == 16) { myTab->isShiftDown = false; } // SHIFT
                 break;
             case ACTION_TYPE::CAPTURECHANGED:
-            case ACTION_TYPE::INPUT:  // For device reset
-                // Reset all button states
+            case ACTION_TYPE::INPUT:  // For device reset Reset all button states
                 myTab->mouseLeftDown = myTab->mouseRightDown = myTab->mouseMiddleDown = false;
+                myTab->isShiftDown = myTab->isAltDown = myTab->isCtrlDown = false; // Reset modifiers too
                 break;
-                // Handle wheel for zoom, etc.
             }
         }
         // After loop: If inputCount high, log or adjust (e.g., sleep if bursty).
@@ -262,9 +372,6 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
             std::cout << "Input received. Action Type = " << static_cast<int>(nextWorkTODO.actionType) <<"\n";
             if (nextWorkTODO.actionType == ACTION_TYPE::CREATEPYRAMID) {
                 //addRandomGeometryElement();
-            }
-            if (todo == false) { // Means input queue was empty. We should sleep for 1 millisecond.
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
         }
         
