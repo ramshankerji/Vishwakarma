@@ -106,6 +106,9 @@
     <ClCompile Include="ImageHandling.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
+    <ClCompile Include="FreeType.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="preCompiledHeadersWindows.h">

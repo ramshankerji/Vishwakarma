@@ -215,6 +215,7 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="FreeType.cpp" />
     <ClCompile Include="GlobalVariables.cpp" />
     <ClCompile Include="ImageHandling.cpp" />
     <ClCompile Include="Main.cpp" />

@@ -4,12 +4,12 @@
 #include <chrono>
 #include <iostream>
 #include <random>
-#include <chrono>
+#include "विश्वकर्मा.h"
 
 #include "UserInputProcessing.h"
 
 extern void AddRandomPyramid();
-extern std::vector<DATASETTAB> allTabs;
+extern std::vector<std::unique_ptr<DATASETTAB>> allTabs;
 extern enum class ACTION_TYPE actions;
 
 // Global flag to signal all threads to shut down.
@@ -38,8 +38,11 @@ void FileInputThread() {
     // and then terminate, or it could continuously monitor for file changes.
     // For this example, it loads 10 objects and then sleeps.
     for(int i=0; i<10; ++i) {
-        allTabs[0].todoCPUQueue->push(ACTION_DETAILS{ .actionType = ACTION_TYPE::CREATEPYRAMID });
+        if (!allTabs.empty() && allTabs[0]) {
+            allTabs[0]->todoCPUQueue->push(ACTION_DETAILS{ .actionType = ACTION_TYPE::CREATEPYRAMID });
+        }
     }
+    
     std::cout << "FILE: Initial bulk load complete." << std::endl;
 
     while(!shutdownSignal){

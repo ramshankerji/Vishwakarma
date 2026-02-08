@@ -34,7 +34,7 @@ uint8_t noOfOpenedDataset = 0;
 // Particularly, enterprise central repository may have thousands of projects.
 // Hence this is one of the rare location where we allow dynamic allocation done by std:vector.
 // std::vector Grows exponentially. 1.5x for GCC/Clang, 2x for MSVC.
-std::vector<DATASETTAB> allTabs;          //They are all the dataset tabs opened in the application.
+std::vector<std::unique_ptr<DATASETTAB>> allTabs; //They are all the dataset tabs opened in the application.
 std::vector<SingleUIWindow> allUIWindows; /*Each tab will be hosted in exactly 1 windows. 
 However some of the views of the tab can be extracted to other windows.
 Each tab gets its own engineering thread, capable of doing background processing, receiving network data, file I/O etc.
@@ -144,7 +144,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
     // In a real scenario, we might wait here if the tab isn't created yet, but Main ensures creation before thread launch.
     {
         DATASETTAB* myTab = nullptr;
-        for (auto& tab : allTabs) { if (tab.tabID == tabID) { myTab = &tab; break; } }
+        for (auto& tab : allTabs) { if (tab->tabID == tabID) { myTab = tab.get(); break; } }
         if (myTab) { // Generate the initial 10 pyramids
             for (int k = 0; k < 10; ++k) addRandomGeometryElement(myTab);
         }
@@ -158,7 +158,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         // Dynamic Lookup: Find the tab pointer based on ID
         // This handles the case where vector reallocates or tabs shift.
         DATASETTAB* myTab = nullptr;
-        for (auto& tab : allTabs) { if (tab.tabID == tabID) {myTab = &tab;  break; } }
+        for (auto& tab : allTabs) { if (tab->tabID == tabID) {myTab = tab.get();  break; } }
 
         if (myTab == nullptr) { // Handle Tab Closure
             std::cout << "Tab ID " << tabID << " not found (Closed?). Engineering thread exiting." << std::endl;

@@ -5,7 +5,7 @@
 
 // Global Variables declared in विश्वकर्मा.cpp
 extern शंकर gpu;
-extern std::vector<DATASETTAB> allTabs;
+extern std::vector<std::unique_ptr<DATASETTAB>> allTabs;
 extern std::vector<SingleUIWindow> allUIWindows; 
 
 void शंकर::InitD3DDeviceOnly() {
@@ -815,8 +815,8 @@ void GpuRenderThread(int monitorId, int refreshRate) {
 			// Also Sets the Unique Root Signature for THIS window. Root Signature and Pipeline State are per-window.
 			// In fact the Populate Command List can change it multiple times per window if needed.
             if (window.activeTabIndex >= 0 && window.activeTabIndex < allTabs.size() ) {
-                DX12ResourcesPerTab& tabRes = allTabs[window.activeTabIndex].dx;
-				tabRes.camera = allTabs[window.activeTabIndex].camera; // Update camera from Tab.
+                DX12ResourcesPerTab& tabRes = allTabs[window.activeTabIndex]->dx;
+				tabRes.camera = allTabs[window.activeTabIndex]->camera; // Update camera from Tab.
                 gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes);// Renders geometry.
             }
 

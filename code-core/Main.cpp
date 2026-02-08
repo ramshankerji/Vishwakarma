@@ -15,6 +15,7 @@
 #include <vector>
 #include <random>
 #include <png.h>
+#include <shared_mutex>
 #include "resource.h"
 #include <shellscalingapi.h> // For PROCESS_PER_MONITOR_DPI_AWARE.
 
@@ -54,9 +55,10 @@ std::atomic<bool> shutdownSignal = false;
 int g_monitorCount = 0; // Global monitor count
 int primaryMonitorIndex = 0;
 
-extern std::vector<DATASETTAB> allTabs; //Defined in विश्वकर्मा.cpp
+extern std::vector<std::unique_ptr<DATASETTAB>> allTabs; //Defined in विश्वकर्मा.cpp
 extern std::vector<SingleUIWindow> allUIWindows; //Defined in विश्वकर्मा.cpp
 extern std::random_device rd;
+std::shared_mutex monitorMutex; //Where there is topology change, pause windows move / resize.
 
 // Render Thread Management.
 std::vector<std::thread> renderThreads;
@@ -79,17 +81,21 @@ std::wstring GetExecutablePath() {
 
 void LoadPngImage(const char* filename, unsigned char** image_data, int* width, int* height)
 {
+	image_data = nullptr;
+	width = nullptr;
+	height = nullptr;
+	//In case there is an error, we just return with null pointers. The caller should check for this.
     #pragma warning(disable: 4996)
     FILE* fp = fopen(filename, "rb");
-    if (!fp) abort();
+    if (!fp) return;//abort();
 
     png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-    if (!png) abort();
+    if (!png) return;//abort();
 
     png_infop info = png_create_info_struct(png);
-    if (!info) abort();
+    if (!info) return;//abort();
 
-    if (setjmp(png_jmpbuf(png))) abort();
+    if (setjmp(png_jmpbuf(png))) return;//abort();
 
     png_init_io(png, fp);
 
@@ -279,6 +285,7 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
 
 void FetchAllMonitorDetails() // Main function to fetch all monitor details
 {
+    std::unique_lock<std::shared_mutex> lock(monitorMutex); // Blocks everyone
     g_monitorCount = 0; // Reset monitor count and clear all screen data
     gpu.screens.clear();// Clear the vector completely.
     std::wcout << L"Enumerating monitors..." << std::endl; // Try to enumerate real monitors
@@ -371,16 +378,16 @@ DATASETTAB* GetActiveTabFromHwnd(HWND hWnd) {
         return nullptr;
     }
     uint64_t tabID = window->tabIds[window->activeTabIndex];
-    for (auto& t : allTabs) {
-        if (t.tabID == tabID) {
-            return &t;
+    for (auto& tPtr : allTabs) {
+        if (tPtr && tPtr->tabID == tabID) {// Check if pointer is valid (good practice with unique_ptr)
+            return tPtr.get();// Return the raw pointer managed by the unique_ptr
         }
     }
     return nullptr;
 }
 
 void HandleTopologyChange() {
-    std::cout << "Topology Change Detected. Analyzing..." << std::endl;
+    std::wcout << "Topology Change Detected. Analyzing..." << std::endl;
     std::vector<OneMonitorController> oldScreens = std::move(gpu.screens);// Capture the OLD topology
     FetchAllMonitorDetails(); //Scan for NEW topology (populates gpu.screens)This now fills a fresh gpu.screens vector
 
@@ -471,7 +478,7 @@ void UpdateWindowsMonitorAffinity() {
 
         // Optional optimization: Only log if it actually changed
         if (window.currentMonitorIndex != newIndex) {
-            std::cout << "Window moved to Monitor " << newIndex << std::endl;
+            std::wcout << "Window moved to Monitor " << newIndex << std::endl;
             window.currentMonitorIndex = newIndex;
         }
     }
@@ -514,7 +521,7 @@ void HandleWindowMove(SingleUIWindow& window, int newMonitorIndex) {
     gpu.InitD3DPerWindow(window.dx, window.hWnd, newQueue);
     window.isMigrating = false;// SWITCH ON RENDERING
 
-    std::cout << "Window migrated to Monitor " << newMonitorIndex << std::endl;
+    std::wcout << "Window migrated to Monitor " << newMonitorIndex << std::endl;
 }
 
 // The "Safe" Restart Function
@@ -524,7 +531,7 @@ void RestartRenderThreads(bool isTopologyChange) {
     renderThreads.clear();
 
     if (isTopologyChange) {
-        std::cout << "Display Topology Changed. Analyzing..." << std::endl;
+        std::wcout << "Display Topology Changed. Analyzing..." << std::endl;
         // Capture OLD topology to salvage queues
         std::vector<OneMonitorController> oldScreens = std::move(gpu.screens);
         gpu.screens.clear(); // Clear global list to rebuild
@@ -584,7 +591,7 @@ void RestartRenderThreads(bool isTopologyChange) {
             // Since we don't store the old queue in Window, we rely on the index check +
             // the fact that we preserved queues by DeviceName.
             if (needsMigration) {
-                std::cout << "Migrating Window to Monitor " << newMonitorIdx << std::endl;
+                std::wcout << "Migrating Window to Monitor " << newMonitorIdx << std::endl;
                 gpu.CleanupWindowResources(window.dx);// Cleanup OLD resources (Swap Chain, RTVs)
 
                 // Initialize NEW resources with the NEW Queue
@@ -604,7 +611,7 @@ void RestartRenderThreads(bool isTopologyChange) {
     for (int i = 0; i < g_monitorCount; i++) {
         int refreshRate = gpu.screens[i].refreshRate;
         renderThreads.emplace_back(GpuRenderThread, i, refreshRate);
-        std::cout << "Spawned Render Thread for Monitor " << i << " (" << refreshRate << "Hz)" << std::endl;
+        std::wcout << "Spawned Render Thread for Monitor " << i << " (" << refreshRate << "Hz)" << std::endl;
     }
 }
 
@@ -619,7 +626,7 @@ void AllocateConsoleWindow() {
     // Make cout, wcout, cin, wcin, wcerr, cerr, wclog and clog point to console as well
     std::ios::sync_with_stdio(true);
     std::wcout.clear();
-    std::cout.clear();
+    std::wcout.clear();
     std::wcerr.clear();
     std::cerr.clear();
     std::wcin.clear();
@@ -628,7 +635,7 @@ void AllocateConsoleWindow() {
 }
 
 static const wchar_t szWindowClass[] = L"विश्वकर्मा"; // The main window class name.
-static const wchar_t szTitle[] = L"Vishwakarma 0 :-) "; // The string that appears in the application's title bar.
+static const wchar_t* szTitle = L"विश्वकर्मा 0 :-)"; // The string that appears in the application's title bar.
 
 HINSTANCE hInst;// Stored instance handle for use in Win32 API calls such as FindResource
 
@@ -701,12 +708,12 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     }
 
     // SETUP TABS (The Data) CRITICAL: Resize first to prevent pointer invalidation when threads start!
-    allTabs.resize(3);
-    // Configure the tabs
-    for (int i = 0; i < 3; ++i) {
-        allTabs[i].tabID = i; // Assign ID
-        allTabs[i].tabNo = i; // Memory Group
-        gpu.InitD3DPerTab(allTabs[i].dx);// Initialize the Geometry Buffers for this tab!
+    allTabs.resize(3); // Resize first, then Allocate (Good if we know the exact count)
+    for (int i = 0; i < 3; ++i) {// Configure the tabs
+        allTabs[i] = std::make_unique<DATASETTAB>();// Actually create the object!
+        allTabs[i]->tabID = i; // Assign ID
+        allTabs[i]->tabNo = i; // Memory Group
+        gpu.InitD3DPerTab(allTabs[i]->dx);// Initialize the Geometry Buffers for this tab!
         // Optional: Give them names
         // allTabs[i].fileName = L"Untitled-" + std::to_wstring(i);
         // We can set random colors or names here to distinguish them
@@ -749,7 +756,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
 
     // Initialize D3D for this Window. Access via reference from vector to ensure we modify the stored instance
     gpu.InitD3DPerWindow(allUIWindows[0].dx, allUIWindows[0].hWnd, gpu.screens[0].commandQueue.Get());
-    std::cout << "Starting application..." << std::endl;
+    std::wcout << "Starting application..." << std::endl;
 
     // By default we always initialize application in maximized state.
     // Intentionally we don't remember last closed size and slowdown startup time retrieving that value.
@@ -808,17 +815,17 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     }
 
     // Cleanup
-    std::cout << "Message Loop exited.\n";
+    std::wcout << "Message Loop exited.\n";
     pauseRenderThreads = true;
     for (auto& t : renderThreads) { if (t.joinable()) t.join(); }
-    std::cout << "All render threads exited.\n";
+    std::wcout << "All render threads exited.\n";
 
     // Let's try to gracefully shutdown all the threads we started. Signal all threads to stop
     shutdownSignal = true; // UI Input thread, Network Input Thread & File Handling thread listen to this.
     toCopyThreadCV.notify_all(); // This one is to wake up the sleepy GPU Copy thread to shutdown.
 
     // Wait for all threads to finish
-    std::cout << "Thread Count: " << threads.size() <<"\n";
+    std::wcout << "Thread Count: " << threads.size() <<"\n";
     for (auto& t : threads) {
         if (t.joinable()) {
             t.join();
@@ -826,7 +833,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     }
     // Clean up resources before exiting the application.
     for (auto& window : allUIWindows) { gpu.CleanupWindowResources(window.dx); } // Cleanup Windows
-    for (auto& tab : allTabs) { gpu.CleanupTabResources(tab.dx); } // Cleanup Tabs (Geometry)
+    for (auto& tab : allTabs) { gpu.CleanupTabResources(tab->dx); } // Cleanup Tabs (Geometry)
     gpu.CleanupD3DGlobal();// Global Cleanup
     
     //Cleanup Freetype library.
@@ -835,7 +842,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     
     //gpu.WaitForPreviousFrame(); // Wait for GPU to finish all commands. No need. All render threads have exited by now.
 
-    std::cout << "Application finished cleanly." << std::endl;
+    std::wcout << "Application finished cleanly." << std::endl;
 
     return (int)msg.wParam;
 }
@@ -1067,7 +1074,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ad.y = 0;
             ad.delta = 0;
             ad.timestamp = GetTickCount64();
-            tab.userInputQueue->push(ad); //userInputQueue is threadsafe.
+            tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
 
         }
         return 0;
@@ -1075,7 +1082,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     // ******* LIFECYCLE messages ******
     case WM_CREATE:
-        //std::cout << "Full path to logo.png: " << fullPath << std::endl;//No longer loading from disc.
+        //std::wcout << "Full path to logo.png: " << fullPath << std::endl;//No longer loading from disc.
         //LoadPngImage(fullPath.c_str(), &image_data, &width, &height); 
         LoadPngFromResource(IDR_LOGO_PNG, &imgData, &w, &h);
         break;
@@ -1083,35 +1090,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_PAINT:
     {
         // We're not using GDI for rendering anymore - DirectX12 handles all rendering
-        // Just validate the paint message to prevent Windows from continuously sending WM_PAINT
-        // TODO: Figure out why can't we remove BeginPaint & EndPaint commands also.
-
+        // Just validate the paint message to prevent Windows from continuously sending WM_PAINT.
+		// This is a mandatory quirk of the Windows message system.
         hdc = BeginPaint(hWnd, &ps);
-        /*
-
-        // Initialize FreeType face only once
-        if (!initialized) {
-            FT_Library ft;
-            if (FT_Init_FreeType(&ft)) {
-                std::cerr << "Could not initialize FreeType library" << std::endl;
-                return -1;
-            }
-
-            if (FT_New_Face(ft, "C:\\Windows\\Fonts\\arial.ttf", 0, &face)) {
-                std::cerr << "Could not open font" << std::endl;
-                return -1;
-            }
-
-            FT_Set_Pixel_Sizes(face, 0, 24); // Set font size to 48 pixels high
-            initialized = true;
-        }
-
-        // Get the dimensions of the client area
-        RECT rect;
-        GetClientRect(hWnd, &rect);
-        */
         EndPaint(hWnd, &ps);
-        
         break;
     }
     case WM_DISPLAYCHANGE: // Resolution change OR When user adds or disconnects a new monitor.
@@ -1123,6 +1105,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_MOVE: {
         std::wcout << L"WM_MOVE received. Reinitializing..." << std::endl;
+        std::shared_lock<std::shared_mutex> lock(monitorMutex); // Allows multiple readers, no writers
         SingleUIWindow* pWin = GetWindowFromHwnd(hWnd);// Get our internal window object
         if (pWin) {
             // Determine which monitor the window is now on
@@ -1151,7 +1134,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
     case WM_CLOSE: // This is called BEFORE WM_DESTROY is received. Importantly, once this is over hWnd is destroyed.
         // Initiate shutdown for render threads FIRST
-        std::cout << "WM_CLOSE: Pausing render threads..." << std::endl;
+        std::wcout << "WM_CLOSE: Pausing render threads..." << std::endl;
         pauseRenderThreads = true;
 
         // Join render threads to ensure they stop BEFORE window destruction
@@ -1161,7 +1144,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 t.join();
             }
         }
-        std::cout << "WM_CLOSE: All render threads joined." << std::endl;
+        std::wcout << "WM_CLOSE: All render threads joined." << std::endl;
 
         // Now safe to clean up window-specific DX resources (swap chain, RTVs, etc.)
         // This prevents any lingering GPU work on invalid resources
