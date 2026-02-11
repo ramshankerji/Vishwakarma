@@ -26,9 +26,10 @@ extern std::atomic<bool> shutdownSignal; // Externs for communication
 std::atomic<bool> g_stopThreads = false;
 std::atomic<uint64_t> g_nextPyramidId = 1;
 
-// Global State
-// Different tabs represent different files opened in the software.Just like different website links open in different Internet browser tab.
-// Tab No. 0 Show the opening screen.i.e.Not associated with any particular opened file. 1 DATASET = 1 TAB visible to user / to website.
+//Global State
+/* Different tabs represent different files opened in the software.
+Just like different website links open in different Internet browser tab. Tab No. 0 Show the opening screen.
+i.e.Not associated with any particular opened file. 1 DATASET = 1 TAB visible to user / to website. */
 uint8_t noOfOpenedDataset = 0;
 // We will allow user to open as many files simultaneously as system RAM allows.
 // Particularly, enterprise central repository may have thousands of projects.
@@ -36,6 +37,8 @@ uint8_t noOfOpenedDataset = 0;
 // std::vector Grows exponentially. 1.5x for GCC/Clang, 2x for MSVC.
 std::vector<std::unique_ptr<DATASETTAB>> allTabs; //They are all the dataset tabs opened in the application.
 std::vector<SingleUIWindow> allUIWindows; /*Each tab will be hosted in exactly 1 windows. 
+TODO: Convert avoe std::vector to fixed size statically allocated array with a large max limit, 
+to avoid dynamic allocation / synchronization overhead.
 However some of the views of the tab can be extracted to other windows.
 Each tab gets its own engineering thread, capable of doing background processing, receiving network data, file I/O etc.
 However engineering threads do not directly talk to GPU. They submit the screen visible changes to the GPU Copy thread.
@@ -164,7 +167,9 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
             std::cout << "Tab ID " << tabID << " not found (Closed?). Engineering thread exiting." << std::endl;
             break; // Exit the thread gracefully
         }
-		//UpdateCameraOrbit(myTab->camera); // Automatic camera rotation for troubleshooting. Comment out in before commit.
+
+		// Automatic camera rotation for troubleshooting. Toggle using "r". To be removed later or made optional in UI.
+        if(myTab->autoCameraRotation) UpdateCameraOrbit(myTab->camera); 
         
         // Check timer and add a new pyramid every second.
         auto currentTime = std::chrono::steady_clock::now();
@@ -229,9 +234,9 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
 
                     // Apply Movement. Move Left/Right: -dx along Right Vector
                     // Move Up/Down: +dy along Camera Up Vector (Screen space Y is usually inverted, check preference)
-                    float moveX = (rx * -dx * panSpeed) + (ux * dy * panSpeed);
-                    float moveY = (ry * -dx * panSpeed) + (uy * dy * panSpeed);
-                    float moveZ = (rz * -dx * panSpeed) + (uz * dy * panSpeed);
+                    float moveX = (rx * dx * panSpeed) + (ux * dy * panSpeed);
+                    float moveY = (ry * dx * panSpeed) + (uy * dy * panSpeed);
+                    float moveZ = (rz * dx * panSpeed) + (uz * dy * panSpeed);
 
                     // Apply to BOTH Position and Target to maintain view direction
                     myTab->camera.position.x += moveX;
@@ -255,6 +260,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                     // Convert to Spherical Coordinates. radius (distance), theta (azimuth), phi (elevation)
                     float radius = std::sqrt(vx * vx + vy * vy + vz * vz);
                     float theta = std::atan2(vy, vx);     // Angle in XY plane
+                    if (radius < 0.0001f) radius = 0.0001f;
                     float phi = std::acos(vz / radius);   // Angle from Z axis (Up)
 
                     theta -= dx;// Apply Mouse Delta. Note: Sign +/- depends on desired control inversion
@@ -354,6 +360,16 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 if (input.x == 18) { myTab->isAltDown = false;}// 18 is VK_MENU (ALT)
                 else if (input.x == 16) { myTab->isShiftDown = false; } // SHIFT
                 break;
+
+            case ACTION_TYPE::CHAR:
+				//Temporary Debug Key: Toggle Auto Camera Rotation with "r" key.
+                if (input.x == 82 || input.x == 114) // 'r' & "R"
+                {
+                    myTab->autoCameraRotation = !myTab->autoCameraRotation; 
+                }
+				if (input.x == 67 || input.x == 99) { myTab->camera.Initialize(); } // 'c' & "C". Reset camera.
+                break;
+
             case ACTION_TYPE::CAPTURECHANGED:
             case ACTION_TYPE::INPUT:  // For device reset Reset all button states
                 myTab->mouseLeftDown = myTab->mouseRightDown = myTab->mouseMiddleDown = false;

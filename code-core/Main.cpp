@@ -52,7 +52,6 @@ extern राम cpu;
 extern शंकर gpu;
 std::atomic<bool> shutdownSignal = false;
 
-int g_monitorCount = 0; // Global monitor count
 int primaryMonitorIndex = 0;
 
 extern std::vector<std::unique_ptr<DATASETTAB>> allTabs; //Defined in विश्वकर्मा.cpp
@@ -76,74 +75,12 @@ std::wstring GetExecutablePath() {
     GetModuleFileNameW(NULL, buffer, MAX_PATH);
     std::wstring::size_type pos = std::wstring(buffer).find_last_of(L"\\/");
 
+    if (pos == std::wstring::npos) return buffer; //Guard against pos == npos → overflow. ? Explain !
     return std::wstring(buffer).substr(0, pos);
 }
 
-void LoadPngImage(const char* filename, unsigned char** image_data, int* width, int* height)
-{
-	image_data = nullptr;
-	width = nullptr;
-	height = nullptr;
-	//In case there is an error, we just return with null pointers. The caller should check for this.
-    #pragma warning(disable: 4996)
-    FILE* fp = fopen(filename, "rb");
-    if (!fp) return;//abort();
-
-    png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
-    if (!png) return;//abort();
-
-    png_infop info = png_create_info_struct(png);
-    if (!info) return;//abort();
-
-    if (setjmp(png_jmpbuf(png))) return;//abort();
-
-    png_init_io(png, fp);
-
-    png_read_info(png, info);
-
-    *width = png_get_image_width(png, info);
-    *height = png_get_image_height(png, info);
-    png_byte color_type = png_get_color_type(png, info);
-    png_byte bit_depth = png_get_bit_depth(png, info);
-
-    if (bit_depth == 16)
-        png_set_strip_16(png);
-
-    if (color_type == PNG_COLOR_TYPE_PALETTE)
-        png_set_palette_to_rgb(png);
-
-    if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8)
-        png_set_expand_gray_1_2_4_to_8(png);
-
-    if (png_get_valid(png, info, PNG_INFO_tRNS))
-        png_set_tRNS_to_alpha(png);
-
-    if (color_type == PNG_COLOR_TYPE_RGB ||
-        color_type == PNG_COLOR_TYPE_GRAY ||
-        color_type == PNG_COLOR_TYPE_PALETTE)
-        png_set_filler(png, 0xFF, PNG_FILLER_AFTER);
-
-    if (color_type == PNG_COLOR_TYPE_GRAY ||
-        color_type == PNG_COLOR_TYPE_GRAY_ALPHA)
-        png_set_gray_to_rgb(png);
-
-    png_read_update_info(png, info);
-
-    *image_data = (unsigned char*)malloc(png_get_rowbytes(png, info) * (*height));
-    png_bytep* row_pointers = (png_bytep*)malloc(sizeof(png_bytep) * (*height));
-    for (int y = 0; y < *height; y++) {
-        row_pointers[y] = (*image_data) + y * png_get_rowbytes(png, info);
-    }
-
-    png_read_image(png, row_pointers);
-
-    fclose(fp);
-    free(row_pointers);
-    png_destroy_read_struct(&png, &info, NULL);
-    
-}
-
 // Defined in ImageHandling.cpp
+void LoadPngImage(const char* filename, unsigned char** image_data, int* width, int* height);
 void LoadPngImageFromMemory(const void* data, size_t size, unsigned char** image_data, int* width, int* height);
 // Load directly from Windows Resource
 void LoadPngFromResource(int resourceID, unsigned char** image_data, int* width, int* height) {
@@ -182,10 +119,12 @@ void DisplayImage(HDC hdc, const unsigned char* image_data, int width, int heigh
 // But windows API design needs a separate function to be defined, which is called for each monitor.
 BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData)
 {
-    gpu.screens.emplace_back();// Create a new slot in the vector
-    // Get a pointer to this new slot (the back of the vector)
-    OneMonitorController* currentScreen = &gpu.screens.back();
-    // Set defaults immediately in case API calls fail
+    if (gpu.currentMonitorCount >= MV_MAX_MONITORS) {
+        std::wcout << L"Max monitors exceeded (" << MV_MAX_MONITORS << L"). Skipping additional monitor." << std::endl;
+        return FALSE; // Stop enumeration if limit reached
+    }
+    OneMonitorController* currentScreen = &gpu.screens[gpu.currentMonitorCount];
+
     currentScreen->hMonitor = hMonitor;// Store monitor handle
     currentScreen->isVirtualMonitor = false;
     currentScreen->dpiX = 96;// Default DPI to 96 to prevent divide-by-zero later if GetDpiForMonitor fails
@@ -196,11 +135,12 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
 
     // CRITICAL CHECK: If this fails, we have a "Ghost Monitor". Remove it and skip.
     if (!GetMonitorInfoW(hMonitor, &monitorInfo)) {
-        gpu.screens.pop_back(); // Undo the emplace_back
+        // No increment happened yet, so just skip.
+        std::wcout << L"GetMonitorInfoW returned nothing. Skipping this monitor." << std::endl;
         return TRUE; // Continue enumeration hoping for valid monitors
     }
 
-    currentScreen->deviceName = std::wstring(monitorInfo.szDevice);
+    currentScreen->monitorName = std::wstring(monitorInfo.szDevice);
     currentScreen->monitorRect = monitorInfo.rcMonitor;// Store monitor rectangle (full screen)
     currentScreen->workAreaRect = monitorInfo.rcWork;// Store work area (screen minus taskbar/docked toolbars)
     // Calculate pixel dimensions
@@ -251,22 +191,21 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
     }
 
     // Debug output
-    std::wcout << L"Monitor " << g_monitorCount << L":" << std::endl;
-    std::wcout << L"  Device: " << currentScreen->deviceName << std::endl;
-    std::wcout << L"  Name: " << currentScreen->friendlyName << std::endl;
-    std::wcout << L"  Resolution: " << currentScreen->screenPixelWidth << L"x" << currentScreen->screenPixelHeight << std::endl;
-    std::wcout << L"  Physical: " << currentScreen->screenPhysicalWidth << L"x" << currentScreen->screenPhysicalHeight << L" mm" << std::endl;
-    std::wcout << L"  DPI: " << currentScreen->dpiX << L"x" << currentScreen->dpiY << std::endl;
-    std::wcout << L"  Scale: " << static_cast<int>(currentScreen->scaleFactor * 100) << L"%" << std::endl;
-    std::wcout << L"  Work Area: " << currentScreen->WindowWidth << L"x" << currentScreen->WindowHeight << std::endl;
-    std::wcout << L"  Primary: " << (currentScreen->isPrimary ? L"Yes" : L"No") << std::endl;
-    std::wcout << L"  Refresh: " << currentScreen->refreshRate << L" Hz" << std::endl;
-    std::wcout << L"  Color Depth: " << currentScreen->colorDepth << L" bits" << std::endl;
+    std::wcout << L"Monitor " << gpu.currentMonitorCount << L":" << std::endl;
+    std::wcout << L"Device: " << currentScreen->monitorName << std::endl;
+    std::wcout << L"Name: " << currentScreen->friendlyName << std::endl;
+    std::wcout << L"Resolution: " << currentScreen->screenPixelWidth << L"x" << currentScreen->screenPixelHeight << std::endl;
+    std::wcout << L"Physical: " << currentScreen->screenPhysicalWidth << L"x" << currentScreen->screenPhysicalHeight << L" mm" << std::endl;
+    std::wcout << L"DPI: " << currentScreen->dpiX << L"x" << currentScreen->dpiY << std::endl;
+    std::wcout << L"Scale: " << static_cast<int>(currentScreen->scaleFactor * 100) << L"%" << std::endl;
+    std::wcout << L"Work Area: " << currentScreen->WindowWidth << L"x" << currentScreen->WindowHeight << std::endl;
+    std::wcout << L"Primary: " << (currentScreen->isPrimary ? L"Yes" : L"No") << std::endl;
+    std::wcout << L"Refresh: " << currentScreen->refreshRate << L" Hz" << std::endl;
+    std::wcout << L"Color Depth: " << currentScreen->colorDepth << L" bits" << std::endl;
     std::wcout << std::endl;
 
-    // Default initialization if physical calc fails
+    // Default initialization if physical calc fails. Fallback: 1 inch = 25.4 mm
     if (currentScreen->screenPhysicalWidth == 0) {
-        // Fallback: 1 inch = 25.4 mm
         currentScreen->screenPhysicalWidth = static_cast<int>((currentScreen->screenPixelWidth / (float)currentScreen->dpiX) * 25.4f);
         currentScreen->screenPhysicalHeight = static_cast<int>((currentScreen->screenPixelHeight / (float)currentScreen->dpiY) * 25.4f);
     }
@@ -275,19 +214,16 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
     currentScreen->WindowWidth = currentScreen->workAreaRect.right - currentScreen->workAreaRect.left;
     currentScreen->WindowHeight = currentScreen->workAreaRect.bottom - currentScreen->workAreaRect.top;
     currentScreen->isScreenInitalized = true;// Mark as initialized
-
-    // Optional Logging
-    std::wcout << L"Monitor Found: " << currentScreen->deviceName << L" ("
-        << currentScreen->screenPixelWidth << L"x" << currentScreen->screenPixelHeight << L")" << std::endl;
-
+    
+    gpu.currentMonitorCount++; // Increment count after successful initialization
     return TRUE; // Continue enumeration
 }
 
 void FetchAllMonitorDetails() // Main function to fetch all monitor details
 {
     std::unique_lock<std::shared_mutex> lock(monitorMutex); // Blocks everyone
-    g_monitorCount = 0; // Reset monitor count and clear all screen data
-    gpu.screens.clear();// Clear the vector completely.
+    gpu.currentMonitorCount = 0; // Reset monitor count and clear all screen data
+    //memset(gpu.screens, 0, sizeof(gpu.screens)); // "Clear" the array. TODO latter without memset.
     std::wcout << L"Enumerating monitors..." << std::endl; // Try to enumerate real monitors
     EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, 0);
 
@@ -313,17 +249,20 @@ void FetchAllMonitorDetails() // Main function to fetch all monitor details
         gpu.screens[i].WindowWidth = 800;
         gpu.screens[i].WindowHeight = 600;
     */
-
+    std::wcout << L"Total monitors found =" << gpu.currentMonitorCount << std::endl;
     // HEADLESS CHECK: If the API returned success but found 0 monitors, OR if the API failed...
-    if (gpu.screens.empty()) {
+    if (gpu.currentMonitorCount == 0) {
         std::wcout << L"Headless mode detected (No monitors found). Creating Virtual Display." << std::endl;
 
         // Force-add one virtual monitor so the rest of the app doesn't crash
-        gpu.screens.emplace_back();
-        OneMonitorController* s = &gpu.screens.back();
+        if (gpu.currentMonitorCount >= MV_MAX_MONITORS) {
+            std::wcout << L"Cannot add virtual monitor: Max exceeded." << std::endl;
+            return;
+        }
+        OneMonitorController * s = &gpu.screens[gpu.currentMonitorCount];
 
         s->isScreenInitalized = true;
-        s->deviceName = L"HEADLESS_DISPLAY";
+        s->monitorName = L"HEADLESS_DISPLAY";
         s->friendlyName = L"Virtual Adapter";
 
         // Default to a safe resolution (e.g., SVGA or FullHD)
@@ -346,34 +285,23 @@ void FetchAllMonitorDetails() // Main function to fetch all monitor details
         s->scaleFactor = 1.0;
         s->refreshRate = 60; // Virtual 60Hz
         s->isVirtualMonitor = true;
+        gpu.currentMonitorCount++;
     }
-
-    // Update the global count to match the actual vector size
-    g_monitorCount = static_cast<int>(gpu.screens.size());
-
-    std::wcout << L"Found " << g_monitorCount << L" monitor(s)" << std::endl;
 }
 
 // Helper to find a monitor in the OLD list by name
 int FindMonitorIndexByName(const std::vector<OneMonitorController>& list, const std::wstring& name) {
-    for (int i = 0; i < list.size(); ++i) { if (list[i].deviceName == name) return i; }
+    for (int i = 0; i < list.size(); ++i) { if (list[i].monitorName == name) return i; }
     return -1;
 }
-
-// Helper to find our internal Window Struct from the OS Window Handle
-SingleUIWindow* GetWindowFromHwnd(HWND hWnd) {
-    for (auto& window : allUIWindows) { if (window.hWnd == hWnd) { return &window; } }
-    return nullptr;
+int FindMonitorIndexByName(const OneMonitorController* list, int count, const std::wstring& name) {
+    for (int i = 0; i < count; ++i) { if (list[i].monitorName == name) return i; }
+    return -1;
 }
 
 DATASETTAB* GetActiveTabFromHwnd(HWND hWnd) {
     SingleUIWindow* window = nullptr;
-    for (auto& w : allUIWindows) {
-        if (w.hWnd == hWnd) {
-            window = &w;
-            break;
-        }
-    }
+    for (auto& w : allUIWindows) { if (w.hWnd == hWnd) { window = &w;break; } }
     if (!window || window->activeTabIndex < 0 || window->activeTabIndex >= window->tabIds.size()) {
         return nullptr;
     }
@@ -386,114 +314,17 @@ DATASETTAB* GetActiveTabFromHwnd(HWND hWnd) {
     return nullptr;
 }
 
-void HandleTopologyChange() {
-    std::wcout << "Topology Change Detected. Analyzing..." << std::endl;
-    std::vector<OneMonitorController> oldScreens = std::move(gpu.screens);// Capture the OLD topology
-    FetchAllMonitorDetails(); //Scan for NEW topology (populates gpu.screens)This now fills a fresh gpu.screens vector
+void UpdateWindowMonitorAffinity(SingleUIWindow& window, int newMonitorIndex) {
+    /*Each window is backed by 1 swap chain. Each swap chain is permanently tied to a commandQueue.
+    We have 1 commandQueue per monitor. So when the window move from 1 monitor to another, 
+    we must purge existing swap chain, and create a new one associated with destination monitor's commandQueue.
+    Associating a new swap chain to an existing windows is well supported and fast enough. */
+    
+    window.isMigrating = true;// SWITCH OFF RENDERING. The threads will now skip this window in their loops.
 
-    for (auto& newScreen : gpu.screens) { // MERGE: Transfer existing CommandQueues to the new list
-        int oldIdx = FindMonitorIndexByName(oldScreens, newScreen.deviceName);
-
-        if (oldIdx != -1) {
-            // MATCH FOUND! This monitor existed before.
-            // Steal the CommandQueue so we don't have to recreate it (and break Swap Chains).
-            newScreen.commandQueue = oldScreens[oldIdx].commandQueue;
-            newScreen.hasActiveThread = oldScreens[oldIdx].hasActiveThread;
-            // Mark the old one as "handled" so we don't double-close threads later
-            oldScreens[oldIdx].hasActiveThread = false;
-            std::wcout << L"Monitor persisted: " << newScreen.deviceName << std::endl;
-        }
-        else {
-            // NEW MONITOR! Create a new Command Queue for it.
-            D3D12_COMMAND_QUEUE_DESC queueDesc = {};
-            queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-            gpu.device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&newScreen.commandQueue));
-            std::wcout << L"New Monitor detected: " << newScreen.deviceName << std::endl;
-        }
-    }
-
-    // 4. CLEANUP: Stop threads for monitors that are GONE
-    // (In your architecture, you might need a way to signal specific threads to stop)
-    // For simplicity here, if the thread index doesn't match, we might need to restart threads
-    // but we SAVED the queues, so Swap Chains are safe!
-
-    // 5. RE-MAP Windows
-    for (auto& window : allUIWindows) {
-        HMONITOR hWinMonitor = MonitorFromWindow(window.hWnd, MONITOR_DEFAULTTONEAREST);
-
-        // Find the new index in gpu.screens
-        int newMonitorIdx = 0;
-        for (int i = 0; i < gpu.screens.size(); ++i) {
-            if (gpu.screens[i].hMonitor == hWinMonitor) {
-                newMonitorIdx = i;
-                break;
-            }
-        }
-
-        // Did the window move logically?
-        if (window.currentMonitorIndex != newMonitorIdx) {
-            // If the CommandQueue pointer CHANGED (i.e., it moved to a different physical monitor),
-            // we MUST recreate the Swap Chain.
-            // If it's the SAME monitor (just index changed), the queue pointer is identical, so no visual glitch!
-
-            ID3D12CommandQueue* newQueue = gpu.screens[newMonitorIdx].commandQueue.Get();
-            ID3D12CommandQueue* oldQueue = nullptr; // Retrieve from window.dx if stored, or infer
-
-            // We can check if the underlying device changed
-            // Since we don't store the Queue in Window, we just Re-Init to be safe.
-            // But this is fast because it's only for the affected window.
-            gpu.CleanupWindowResources(window.dx);
-            gpu.InitD3DPerWindow(window.dx, window.hWnd, newQueue);
-
-            window.currentMonitorIndex = newMonitorIdx;
-        }
-    }
-
-    // THREAD MANAGEMENT. Simplest Robust Approach:
-    // Since threads are lightweight, just restart the RENDER LOOP threads.
-    // Because we kept the CommandQueues alive, this is instant and invisible to the user.
-
-    pauseRenderThreads = true;
-    for (auto& t : renderThreads) { if (t.joinable()) t.join(); }
-    renderThreads.clear();
-    pauseRenderThreads = false;
-
-    for (int i = 0; i < g_monitorCount; i++) {
-        renderThreads.emplace_back(GpuRenderThread, i, gpu.screens[i].refreshRate);
-    }
-}
-
-// Logic: Just update the integer ID. Destroys NOTHING.
-// This function is called in 2 cases: User moves window to another monitor, or monitor disconnected/added.
-void UpdateWindowsMonitorAffinity() {
-    for (auto& window : allUIWindows) {
-        int newIndex = 0; // Fallback to primary GetMonitorIndexForWindow(window.hWnd);
-
-        HMONITOR hMonitor = MonitorFromWindow(window.hWnd, MONITOR_DEFAULTTOPRIMARY);
-        for (int i = 0; i < g_monitorCount; i++) {
-            if (gpu.screens[i].hMonitor == hMonitor) {
-                newIndex = i;
-            }
-        }
-
-        // Optional optimization: Only log if it actually changed
-        if (window.currentMonitorIndex != newIndex) {
-            std::wcout << "Window moved to Monitor " << newIndex << std::endl;
-            window.currentMonitorIndex = newIndex;
-        }
-    }
-}
-
-void HandleWindowMove(SingleUIWindow& window, int newMonitorIndex) {
-
-    // SWITCH OFF RENDERING. The threads will now skip this window in their loops.
-    window.isMigrating = true;
-
-    // WAIT FOR OLD QUEUE (The only technical constraint)
     // We must ensure the GPU is done with the old SwapChain before destroying it.
     int oldIndex = window.currentMonitorIndex;
     if (oldIndex >= 0) {
-        // Using your existing helper from MemoryManagerGPU-DirectX12.h
         // You need to pass the *Window's* specific resources which hold the fence? 
         // Actually, use the Monitor's Queue directly for a hard flush.
         ID3D12CommandQueue* oldQueue = gpu.screens[oldIndex].commandQueue.Get();
@@ -510,105 +341,106 @@ void HandleWindowMove(SingleUIWindow& window, int newMonitorIndex) {
         CloseHandle(hEvent);
     }
 
-    // RECREATE RESOURCES (The "Surgery"). Now it is safe to destroy the old SwapChain.
-    gpu.CleanupWindowResources(window.dx);
+    gpu.CleanupWindowResources(window.dx);// Now it is safe to destroy the old SwapChain.
 
-    // Update the monitor index so the NEW thread picks it up.
+    // Update the monitor index so the destination monitor's render thread picks it up.
     window.currentMonitorIndex = newMonitorIndex;
 
     // Create the NEW SwapChain on the NEW Monitor's Queue.
-    ID3D12CommandQueue* newQueue = gpu.screens[newMonitorIndex].commandQueue.Get();
-    gpu.InitD3DPerWindow(window.dx, window.hWnd, newQueue);
+    ID3D12CommandQueue* destinationCommandQueue = gpu.screens[newMonitorIndex].commandQueue.Get();
+    gpu.InitD3DPerWindow(window.dx, window.hWnd, destinationCommandQueue);
     window.isMigrating = false;// SWITCH ON RENDERING
 
     std::wcout << "Window migrated to Monitor " << newMonitorIndex << std::endl;
 }
 
-// The "Safe" Restart Function
-void RestartRenderThreads(bool isTopologyChange) {
-    pauseRenderThreads = true; // Pause Logic
+void RestartRenderThreads() { // The "Safe" Restart Function. Runs for initial render thread creation as well.
+	// We want to preserve CommandQueues because they are tied to the physical monitor and Swap Chains.
+	// However actual render threads are lightweight, so we can just restart them.
+	// Adding a monitor is a RARE event, so a brief pause in rendering is acceptable.
+    // Either the user intentionally added / removed a monitor manually, so he expects windows to move around.
+    // Or maybe electricity went out and external display connected to laptop turned off. These are rare event.
+
+	pauseRenderThreads = true; // Pause Logic. Causes render threads (if running) to exit their loops safely.
     for (auto& t : renderThreads) { if (t.joinable()) t.join(); }
     renderThreads.clear();
 
-    if (isTopologyChange) {
-        std::wcout << "Display Topology Changed. Analyzing..." << std::endl;
-        // Capture OLD topology to salvage queues
-        std::vector<OneMonitorController> oldScreens = std::move(gpu.screens);
-        gpu.screens.clear(); // Clear global list to rebuild
-        // Enumerate NEW topology. This populates gpu.screens with FRESH data, no queues yet.
-        EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, 0);
-        g_monitorCount = static_cast<int>(gpu.screens.size());
-        // Handle Headless/Virtual Monitor logic if needed (copy from your FetchAllMonitorDetails)
-        if (gpu.screens.empty()) { /* ... Insert headless logic here ... */ }
+    std::wcout << "RestartRenderThreads called. Analyzing..." << std::endl;
+    // Capture OLD topology to salvage queues. TODO: Remove garbage values in case monitor count decreased.
+    OneMonitorController oldScreens[MV_MAX_MONITORS];
+	for (int i = 0; i < gpu.currentMonitorCount; i++) {
+        oldScreens[i] = gpu.screens[i];
+    }
+	int oldMonitorCount = gpu.currentMonitorCount;
+    gpu.currentMonitorCount = 0; // Global monitor count. It can be 0 when no monitors are found (headless mode)
 
-        // MERGE: Create Queues OR Salvage them from oldScreens
-        for (auto& newScreen : gpu.screens) {
-            // Try to find this monitor in the old list (Match by Device Name)
-            auto it = std::find_if(oldScreens.begin(), oldScreens.end(),
-                [&](const OneMonitorController& old) { return old.deviceName == newScreen.deviceName; });
+    // Enumerate NEW topology. This populates gpu.screens with FRESH data, no queues yet.
+    // Never exceeds MAX_MONITORS count. If it does, extra monitors are ignored with a warning.
+	EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, 0); 
+    // Handle Headless/Virtual Monitor logic if needed (copy from your FetchAllMonitorDetails)
+    //if (gpu.screens.empty()) { /* ... Insert headless logic here ... */ }
 
-            if (it != oldScreens.end() && it->commandQueue) {
-                // FOUND! Reuse the existing Command Queue.
-                // This keeps the Swap Chain alive for windows on this monitor.
-                newScreen.commandQueue = it->commandQueue;
-                // std::wcout << L"Preserved Queue for: " << newScreen.deviceName << std::endl;
+    // MERGE: Create Queues OR Salvage them from oldScreens
+	bool matchFound = false;
+    for (int i = 0; i < gpu.currentMonitorCount; i++) {
+        matchFound = false;
+		for (int j = 0; j < oldMonitorCount; j++) {
+            if (oldScreens[j].monitorName == gpu.screens[i].monitorName) {
+                gpu.screens[i].commandQueue = oldScreens[j].commandQueue;
+                std::wcout << L"Preserved Queue for: " << gpu.screens[i].monitorName << std::endl;
+				matchFound = true;
+                break;
             }
-            else {
-                // NEW MONITOR (or first run). Create a new Queue.
-                D3D12_COMMAND_QUEUE_DESC queueDesc = {};
-                queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-                gpu.device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&newScreen.commandQueue));
-                // std::wcout << L"Created New Queue for: " << newScreen.deviceName << std::endl;
+        }
+        if (matchFound == false) {
+            // NEW MONITOR (or first run). Create a new Queue.
+            D3D12_COMMAND_QUEUE_DESC queueDesc = {};
+            queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+            gpu.device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&gpu.screens[i].commandQueue));
+            std::wcout << L"Created New Queue for: " << gpu.screens[i].monitorName << std::endl;
+        }
+    }
+
+    for (auto& window : allUIWindows) {// RE-MAP WINDOWS
+        // Ask Windows: "Where is this window physically right now?"
+        HMONITOR hWinMonitor = MonitorFromWindow(window.hWnd, MONITOR_DEFAULTTONEAREST);
+        // Find the index in our NEW gpu.screens list
+        int newMonitorIdx = 0;
+        for (int i = 0; i < gpu.currentMonitorCount; ++i) {
+            if (gpu.screens[i].hMonitor == hWinMonitor) {
+                newMonitorIdx = i;
+                break;
             }
         }
 
-        for (auto& window : allUIWindows) {// RE-MAP WINDOWS
-            // Ask Windows: "Where is this window physically right now?"
-            HMONITOR hWinMonitor = MonitorFromWindow(window.hWnd, MONITOR_DEFAULTTONEAREST);
-            // Find the index in our NEW gpu.screens list
-            int newMonitorIdx = 0;
-            for (int i = 0; i < g_monitorCount; ++i) {
-                if (gpu.screens[i].hMonitor == hWinMonitor) {
-                    newMonitorIdx = i;
-                    break;
-                }
-            }
+        // CHECK: Do we need to migrate this window? We migrate if:
+        // a) The monitor index changed (moved logically)
+        // b) The underlying CommandQueue changed (e.g. moved to a totally new monitor)
+        ID3D12CommandQueue* newQueue = gpu.screens[newMonitorIdx].commandQueue.Get();
 
-            // CHECK: Do we need to migrate this window? We migrate if:
-            // a) The monitor index changed (moved logically)
-            // b) The underlying CommandQueue changed (e.g. moved to a totally new monitor)
-            ID3D12CommandQueue* newQueue = gpu.screens[newMonitorIdx].commandQueue.Get();
+        // We can't easily check 'oldQueue' since we don't store it in Window, 
+        // but we can check if the monitor index changed.
+        // OPTIMIZATION: If the monitor index is the same, and we preserved the queue,
+        // we do NOTHING. The window stays happy.
+        bool needsMigration = (window.currentMonitorIndex != newMonitorIdx);
 
-            // We can't easily check 'oldQueue' since we don't store it in Window, 
-            // but we can check if the monitor index changed.
-            // OPTIMIZATION: If the monitor index is the same, and we preserved the queue,
-            // we do NOTHING. The window stays happy.
-            bool needsMigration = (window.currentMonitorIndex != newMonitorIdx);
+        // Edge case: If the monitor index stayed the same (e.g. 0 -> 0), but it's actually
+        // a different physical monitor (old 0 unplugged, new 0 took its place), 
+        // the 'commandQueue' pointer check handles it.
+        // Since we don't store the old queue in Window, we rely on the index check +
+        // the fact that we preserved queues by DeviceName.
+        if (needsMigration) {
+            std::wcout << "Migrating Window to Monitor " << newMonitorIdx << std::endl;
+            gpu.CleanupWindowResources(window.dx);// Cleanup OLD resources (Swap Chain, RTVs)
 
-            // Edge case: If the monitor index stayed the same (e.g. 0 -> 0), but it's actually
-            // a different physical monitor (old 0 unplugged, new 0 took its place), 
-            // the 'commandQueue' pointer check handles it.
-            // Since we don't store the old queue in Window, we rely on the index check +
-            // the fact that we preserved queues by DeviceName.
-            if (needsMigration) {
-                std::wcout << "Migrating Window to Monitor " << newMonitorIdx << std::endl;
-                gpu.CleanupWindowResources(window.dx);// Cleanup OLD resources (Swap Chain, RTVs)
-
-                // Initialize NEW resources with the NEW Queue
-                gpu.InitD3DPerWindow(window.dx, window.hWnd, newQueue);
-                window.currentMonitorIndex = newMonitorIdx;
-            }
+            // Initialize NEW resources with the NEW Queue
+            gpu.InitD3DPerWindow(window.dx, window.hWnd, newQueue);
+            window.currentMonitorIndex = newMonitorIdx;
         }
     }
-    else {
-        // Not a topology change (Just a restart). Just update affinities without touching D3D resources.
-        UpdateWindowsMonitorAffinity();
-    }
-
+    
 	pauseRenderThreads = false; //When this is true, render threads terminate their loops.
-
-    // Spawn Threads (One per Monitor)
-    for (int i = 0; i < g_monitorCount; i++) {
+    for (int i = 0; i < gpu.currentMonitorCount; i++) { // Spawn Threads (One per Monitor)
         int refreshRate = gpu.screens[i].refreshRate;
         renderThreads.emplace_back(GpuRenderThread, i, refreshRate);
         std::wcout << "Spawned Render Thread for Monitor " << i << " (" << refreshRate << "Hz)" << std::endl;
@@ -638,9 +470,7 @@ static const wchar_t szWindowClass[] = L"विश्वकर्मा"; // The
 static const wchar_t* szTitle = L"विश्वकर्मा 0 :-)"; // The string that appears in the application's title bar.
 
 HINSTANCE hInst;// Stored instance handle for use in Win32 API calls such as FindResource
-
-// Forward declarations of functions included in this code module:
-LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
+LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);// Forward declarations of functions included in this code module.
 
 // Ask to AI: Whats the difference between WinMain and wWinMain for Windows Desktop C++ DirectX12 application?
 // WinMain: This was legacy name. New name is wWinMain with Unicode support.
@@ -655,7 +485,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     FetchAllMonitorDetails();
 
     // Use the monitor details for window creation, i.e. to create window on primary monitor:
-    for (int i = 0; i < g_monitorCount; i++) {
+    for (int i = 0; i < gpu.currentMonitorCount; i++) {
         if (gpu.screens[i].isPrimary) {
             primaryMonitorIndex = i;
             break;
@@ -730,15 +560,13 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         WS_EX_OVERLAPPEDWINDOW,  //An optional extended window style.
         szWindowClass,           // Window class: The name of the application
         szTitle,       // The text that appears in the title bar
-        // The type of window to create
-        WS_OVERLAPPEDWINDOW | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
-        // Size and position
-        CW_USEDEFAULT, CW_USEDEFAULT, // Initial position (x, y)
+        WS_OVERLAPPEDWINDOW | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,// The type of window to create
+        CW_USEDEFAULT, CW_USEDEFAULT, // Size and position. Initial position (x, y)
         gpu.screens[primaryMonitorIndex].WindowWidth / 2,  // Half the work area width
         gpu.screens[primaryMonitorIndex].WindowHeight / 2, // Window size divided by 2 when user press un-maximize button. 
         NULL,      // The parent of this window
         NULL,      // This application does not have a menu bar, we create our own Menu.
-        hInstance, // Instance handle, the first parameter from WinMain
+        hInstance, // Instance handle, the first parameter from wWinMain
         NULL       // Additional application data, not used in this application
     );
 
@@ -748,7 +576,6 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
             _T("Call to CreateWindow failed!"),
             _T("Something bad happened. Failed to create a new Window."),
             NULL);
-
         return 1;
     }
 
@@ -777,27 +604,9 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
 
     //threads.emplace_back(GpuRenderThread, 0, 60);  // Monitor 1 at 60Hz
     //threads.emplace_back(GpuRenderThread, 1, 144); // Monitor 2 at 144Hz
-    RestartRenderThreads(false);// Initial Render Thread Launch (Not a monitor topology change, just startup)
+    RestartRenderThreads();// Initial Render Thread Launch (Not a monitor topology change, just startup)
 
-    /*
-    FT_Library ft;
-    FT_Face face;
-
-    if (FT_Init_FreeType(&ft)) {
-        std::cerr << "Could not initialize FreeType library" << std::endl;
-        return -1;
-    }
-
-    if (FT_New_Face(ft, "C:\\Windows\\Fonts\\arial.ttf", 0, &face)) {
-        std::cerr << "Could not open font" << std::endl;
-        return -1;
-    }
-
-    FT_Set_Pixel_Sizes(face, 0, 48); // Set font size to 48 pixels high
-    */
-
-    // Main message loop:
-    MSG msg = {};
+    MSG msg = {};// Main message loop:
 
     while (msg.message != WM_QUIT) {
         if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) { //Does not block. Returns immediately.
@@ -805,8 +614,6 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         } else {
-            UpdateWindowsMonitorAffinity();// Check for window movement (Cheap, Non-Destructive)
-
             //WaitMessage(); // blocks until new Windows message arrives
             // Just sleep briefly to avoid burning CPU if no messages.
             // The Render Threads are responsible for the heartbeat of the app.
@@ -858,29 +665,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     HDC hdc;
     TCHAR greeting[] = _T("Hello, Vishwakarma!");
 
-    //static FT_Face face;
-    static const char* uiText001 = "Vishwakarma!";
-    static const char* uiText002 = "Name";
-    static const char* uiText003 = "Level 21";
-    static const char* uiText004 = "Create New";
-    static const char* uiText005 = "2D Drawing";
-    static const char* uiText006 = "2D P&ID";
-    static const char* uiText007 = "2D SLD";
-    static const char* uiText008 = "3D Pipes";
-    static const char* uiText009 = "3D Structure";
-    static const char* uiText010 = "Pressure Vessel";
-    static const char* uiText011 = "Heat Exchanger";
-    static const char* uiText016 = "3D Gen. Eq.";
-    static const char* uiText017 = "Filter";
-    static const char* uiText018 = "Air Cooler";
-    static const char* uiText019 = "Compressor";
-    static const char* uiText020 = "Pump";
-
-    static const char* uiText012 = "Recently Opened files";
-    static const char* uiText013 = "Extensions";
-    static const char* uiText014 = "Training";
-    static const char* uiText015 = "Medals";
-
     static bool initialized = false;
 
     static unsigned char* image_data = NULL;
@@ -916,7 +700,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     
     
     case WM_KEYDOWN: 
-        
         if (tab) {
             ad.actionType = ACTION_TYPE::KEYDOWN;
             ad.source = INPUT_SOURCE::KEYBOARD;
@@ -930,7 +713,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     
     case WM_KEYUP:
         if (tab) {
-            ad.actionType = ACTION_TYPE::KEYDOWN;
+            ad.actionType = ACTION_TYPE::KEYUP;
             ad.source = INPUT_SOURCE::KEYBOARD;
             ad.x = static_cast<int>(wParam); //Virtual key code
             ad.y = static_cast<int>(lParam); //Repeat count, scan code, flags
@@ -942,7 +725,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_CHAR: // What is this? How is this different from WM_KEYDOWN / UP?
         if (tab) {
-            ad.actionType = ACTION_TYPE::KEYDOWN;
+            ad.actionType = ACTION_TYPE::CHAR;
             ad.source = INPUT_SOURCE::KEYBOARD;
             ad.x = static_cast<int>(wParam); //Virtual key code
             ad.y = static_cast<int>(lParam); //Repeat count, scan code, flags
@@ -968,8 +751,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (tab) {
             ad.actionType = ACTION_TYPE::MOUSEMOVE;
             ad.source = INPUT_SOURCE::MOUSE;
-            ad.x = GET_X_LPARAM(lParam);
-            ad.y = GET_Y_LPARAM(lParam);
+            ad.x = GET_X_LPARAM(lParam); //Client X
+            ad.y = GET_Y_LPARAM(lParam); //Client Y
             ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
@@ -980,8 +763,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (tab) {
             ad.actionType = ACTION_TYPE::LBUTTONDOWN;
             ad.source = INPUT_SOURCE::MOUSE;
-            ad.x = LOWORD(wParam); //Client X
-            ad.y = HIWORD(lParam); //Client Y
+            ad.x = GET_X_LPARAM(lParam);
+            ad.y = GET_Y_LPARAM(lParam);
             ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
@@ -992,8 +775,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (tab) {
             ad.actionType = ACTION_TYPE::LBUTTONUP;
             ad.source = INPUT_SOURCE::MOUSE;
-            ad.x = LOWORD(wParam); //Client X
-            ad.y = HIWORD(lParam); //Client Y
+            ad.x = GET_X_LPARAM(lParam);
+            ad.y = GET_Y_LPARAM(lParam);
             ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
@@ -1004,8 +787,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (tab) {
             ad.actionType = ACTION_TYPE::RBUTTONDOWN;
             ad.source = INPUT_SOURCE::MOUSE;
-            ad.x = LOWORD(wParam); //Client X
-            ad.y = HIWORD(lParam); //Client Y
+            ad.x = GET_X_LPARAM(lParam);
+            ad.y = GET_Y_LPARAM(lParam);
             ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
@@ -1016,8 +799,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (tab) {
             ad.actionType = ACTION_TYPE::RBUTTONUP;
             ad.source = INPUT_SOURCE::MOUSE;
-            ad.x = LOWORD(wParam); //Client X
-            ad.y = HIWORD(lParam); //Client Y
+            ad.x = GET_X_LPARAM(lParam);
+            ad.y = GET_Y_LPARAM(lParam);
             ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
@@ -1028,8 +811,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (tab) {
             ad.actionType = ACTION_TYPE::MBUTTONDOWN;
             ad.source = INPUT_SOURCE::MOUSE;
-            ad.x = LOWORD(wParam); //Client X
-            ad.y = HIWORD(lParam); //Client Y
+            ad.x = GET_X_LPARAM(lParam);
+            ad.y = GET_Y_LPARAM(lParam);
             ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
@@ -1040,8 +823,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (tab) {
             ad.actionType = ACTION_TYPE::MBUTTONUP;
             ad.source = INPUT_SOURCE::MOUSE;
-            ad.x = LOWORD(wParam); //Client X
-            ad.y = HIWORD(lParam); //Client Y
+            ad.x = GET_X_LPARAM(lParam);
+            ad.y = GET_Y_LPARAM(lParam);
             ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
@@ -1082,9 +865,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     // ******* LIFECYCLE messages ******
     case WM_CREATE:
-        //std::wcout << "Full path to logo.png: " << fullPath << std::endl;//No longer loading from disc.
-        //LoadPngImage(fullPath.c_str(), &image_data, &width, &height); 
-        LoadPngFromResource(IDR_LOGO_PNG, &imgData, &w, &h);
+        LoadPngFromResource(IDR_LOGO_PNG, &imgData, &w, &h); //imgData is NOT to be freed till application life.
+        //TODO: It will be made global variable latter. To be used as placeholder for icons.
         break;
 
     case WM_PAINT:
@@ -1098,37 +880,45 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
     case WM_DISPLAYCHANGE: // Resolution change OR When user adds or disconnects a new monitor.
     case WM_DPICHANGED:    // Scale change, When user manually changes screen resolution through windows settings.
-        std::wcout << L"Display configuration changed. Reinitializing..." << std::endl;
-        // This IS a topology change. We need to reset swap chains. But Geometry belonging to tabs persists!
-		RestartRenderThreads(true); //True = Topology Change
+        std::wcout << L"WM_DISPLAYCHANGE / WM_DPICHANGED received. Restarting render threads." << std::endl;
+        // This IS a topology change. Monitor details may have changed. But Geometry belonging to tabs persists!
+		RestartRenderThreads(); // Preserves commandQueues and swapChains to the extent possible.
         break;
 
-    case WM_MOVE: {
-        std::wcout << L"WM_MOVE received. Reinitializing..." << std::endl;
+    case WM_ENTERSIZEMOVE:
+		// TODO: Set a boolean flag isMoving = true. 
+        // The actual handling of monitor affinity will be done in WM_EXITSIZEMOVE to avoid excessive handling 
+        // during active movement.
+		break;
+
+    case WM_MOVE:
+		break; // We handle this in WM_EXITSIZEMOVE to avoid excessive handling during active movement.
+
+    case WM_SIZE:
+		//TODO: Handle resizing of the window. This can be triggered by user resizing, 
+        // or programmatic resizing (e.g. maximize/unmaximize). We need to resize the swap chain buffers accordingly.
+        break;
+
+    case WM_EXITSIZEMOVE:{ // It occurs post - movement, not while the window is actively moving(use WM_MOVING for that).
+        std::wcout << L"WM_EXITSIZEMOVE received. Checking Monitor affinity." << std::endl;
         std::shared_lock<std::shared_mutex> lock(monitorMutex); // Allows multiple readers, no writers
-        SingleUIWindow* pWin = GetWindowFromHwnd(hWnd);// Get our internal window object
+        SingleUIWindow* pWin = nullptr; // Get our internal window object
+        for (auto& window : allUIWindows) { if (window.hWnd == hWnd) { pWin = &window; } }
         if (pWin) {
             // Determine which monitor the window is now on
             HMONITOR hMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
-            // Find our internal index for this monitor
             int newMonitorIdx = -1;
-            for (int i = 0; i < gpu.screens.size(); i++) {
-                if (gpu.screens[i].hMonitor == hMonitor) {
-                    newMonitorIdx = i;
-                    break;
-                }
+            for (int i = 0; i < gpu.currentMonitorCount; i++) {// Find our internal index for this monitor
+                if (gpu.screens[i].hMonitor == hMonitor) { newMonitorIdx = i; break; }
             }
 
             // Trigger Migration if monitor changed
             if (newMonitorIdx != -1 && pWin->currentMonitorIndex != newMonitorIdx) {
                 // This function contains the logic: 
                 // isMigrating=true -> Flush Old Queue -> Cleanup -> Recreate on New Queue -> isMigrating=false
-                HandleWindowMove(*pWin, newMonitorIdx);
+                UpdateWindowMonitorAffinity(*pWin, newMonitorIdx);
             }
-            else {
-                // Optional: If same monitor, just update position rects if you track them
-                // UpdateRects(*pWin); 
-            }
+            else std::wcout << L"No change. Currently on " << gpu.screens[pWin->currentMonitorIndex].friendlyName << std::endl;
         }
         break;
         }

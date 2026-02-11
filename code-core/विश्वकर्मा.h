@@ -12,7 +12,7 @@ extern struct CPU_RAM_4MB;
 
 class ThreadSafeQueueCPU {
 	//This class supports safer transfer of user inputs from main thread to engineering thread.
-	//This also helps tabs maintain their onwn internal engineeirng todo queue. See DATASETTAB structure.
+	//This also helps tabs maintain their own internal engineering todo queue. See DATASETTAB structure.
 public:
     void push(ACTION_DETAILS value) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -39,7 +39,7 @@ public:
     }
 
     ThreadSafeQueueCPU() = default; //default constructor
-    ThreadSafeQueueCPU(ThreadSafeQueueCPU&&) noexcept = default; // Disable copy. Othrwise it can't reside in std::vector.
+    ThreadSafeQueueCPU(ThreadSafeQueueCPU&&) noexcept = default; // Disable copy. Otherwise it can't reside in std::vector.
     ThreadSafeQueueCPU& operator=(ThreadSafeQueueCPU&&) noexcept = default;
     ThreadSafeQueueCPU(const ThreadSafeQueueCPU&) = delete; // Allow move
     ThreadSafeQueueCPU& operator=(const ThreadSafeQueueCPU&) = delete;
@@ -130,12 +130,13 @@ struct DATASETTAB {
     int lastMouseY = 0;
     
     CameraState camera; //Currently it is per tab. Latter we may move it to per view.
+    bool autoCameraRotation = true;
     
     DATASETTAB() {
         userInputQueue = std::make_unique<ThreadSafeQueueCPU>();
         todoCPUQueue = std::make_unique<ThreadSafeQueueCPU>();
     }
-    DATASETTAB(const DATASETTAB&) = delete;// Disable copy (mutex cannot copy). Othrwise it can't reside in std::vector.
+    DATASETTAB(const DATASETTAB&) = delete;// Disable copy (mutex cannot copy). Otherwise it can't reside in std::vector.
     DATASETTAB& operator=(const DATASETTAB&) = delete;
     DATASETTAB(DATASETTAB&&) noexcept = default;// Allow move
     DATASETTAB& operator=(DATASETTAB&&) noexcept = default;

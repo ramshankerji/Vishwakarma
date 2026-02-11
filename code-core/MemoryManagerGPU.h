@@ -215,7 +215,8 @@ struct CameraState { // Each view gets its own camera state.
     float nearZ;
     float farZ;
 
-    CameraState() {
+    CameraState() { Initialize(); }
+    void Initialize() {
         position = { 0.0f, -10.0f, 2.0f };
         target = { 0.0f, 0.0f,  0.0f };
         up = { 0.0f, 0.0f,  1.0f }; // Z-Up is perfect for an XY orbit.

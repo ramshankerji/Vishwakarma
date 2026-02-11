@@ -239,6 +239,9 @@
     <ClInclude Include="..\code-core\डेटा-स्थिर-मशीन.h" />
     <ClInclude Include="..\code-core\डेटा.h" />
     <ClInclude Include="..\code-core\विश्वकर्मा.h" />
+    <ClInclude Include="ConstantsApplication.h" />
+    <ClInclude Include="ConstantsPhysics.h" />
+    <ClInclude Include="ConstantsText.h" />
     <ClInclude Include="MemoryManagerGPU-DirectX12.h" />
     <ClInclude Include="MemoryManagerGPU-Vulkan1.1.h" />
     <ClInclude Include="preCompiledHeadersWindows.h" />

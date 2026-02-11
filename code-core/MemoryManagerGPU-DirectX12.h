@@ -28,6 +28,7 @@
 #include <map>
 #include <list>
 
+#include "ConstantsApplication.h"
 #include "MemoryManagerGPU.h"
 #include "डेटा.h"
 
@@ -54,9 +55,9 @@ const UINT MaxIndexBufferSize = MaxIndexCount * sizeof(UINT16);
 
 /* DirectX 12 resources are organized at 3 levels:
 1. The Data   : Per Tab (Jumbo Buffers for geometry data, materials, textures, etc.)
-2. The Target : Per Window (Swap Chain, Render Targets, Command Queue, Command List, etc.)
-3. The Worker : Per Render Thread (Resources shared across multiple windows on the same monitor)
-*/
+2. The Target : Per Window (Swap Chain, Render Targets, Depth Stencil Buffer etc.)
+3. The Worker : Per Render Thread. 1 For each monitor. (Command Queue, Command List etc.
+    Resources shared across multiple windows on the same monitor) */
 
 struct DX12ResourcesPerTab { // (The Data) Geometry Data
     // Since data is isolated per tab, these live here. We use a "Jumbo" buffer approach to reduce switching.
@@ -113,7 +114,7 @@ struct DX12ResourcesPerWindow {// Presentation Logic
 	UINT frameIndex = 0; // Remember this is different from allocatorIndex in Render Thread. It can change even during windows resize.
 };
 
-struct DX12ResourcesPerRenderThread { // Execution Context
+struct DX12ResourcesPerRenderThread { // This one is created 1 for each monitor.
     // For convenience only. It simply points to OneMonitorController.commandQueue
 	ComPtr<ID3D12CommandQueue> commandQueue;
 
@@ -142,25 +143,24 @@ struct OneMonitorController { // Variables stored per monitor.
     int WindowWidth = 800;//Current ViewPort ( Rendering area ) size. excluding task-bar etc.
     int WindowHeight = 600;
 
-    HMONITOR hMonitor = NULL;                   // Monitor handle
-    std::wstring deviceName;                    // Monitor device name (e.g., "\\\\.\\DISPLAY1")
-    std::wstring friendlyName;                  // Human readable name (e.g., "Dell U2720Q")
-    RECT monitorRect;                           // Full monitor rectangle
-    RECT workAreaRect;                          // Work area (excluding task bar)
-    int dpiX = 96;                              // DPI X
-    int dpiY = 96;                              // DPI Y
-    double scaleFactor = 1.0;                   // Scale factor (100% = 1.0, 125% = 1.25, etc.)
-    bool isPrimary = false;                     // Is this the primary monitor?
-    DWORD orientation = DMDO_DEFAULT;           // Monitor orientation
-    int refreshRate = 60;                       // Refresh rate in Hz
-    int colorDepth = 32;                        // Color depth in bits per pixel
+    HMONITOR hMonitor = NULL; // Monitor handle. Remains fixed as long as monitor is not disconnected / disabled.
+    std::wstring monitorName;            // Monitor device name (e.g., "\\\\.\\DISPLAY1")
+    std::wstring friendlyName;           // Human readable name (e.g., "Dell U2720Q")
+    RECT monitorRect;                    // Full monitor rectangle
+    RECT workAreaRect;                   // Work area (excluding task bar)
+    int dpiX = 96;                       // DPI X
+    int dpiY = 96;                       // DPI Y
+    double scaleFactor = 1.0;            // Scale factor (100% = 1.0, 125% = 1.25, etc.)
+    bool isPrimary = false;              // Is this the primary monitor?
+    DWORD orientation = DMDO_DEFAULT;    // Monitor orientation
+    int refreshRate = 60;                // Refresh rate in Hz
+    int colorDepth = 32;                 // Color depth in bits per pixel
 
-    bool isVirtualMonitor = false;              // To support headless mode.
+    bool isVirtualMonitor = false;       // To support headless mode.
 
     // DirectX12 Resources.
 	ComPtr<ID3D12CommandQueue> commandQueue;    // Persistent. Survives thread restarts.
-    // We need to know if this specific monitor is currently being serviced by a thread
-    bool hasActiveThread = false;
+    bool hasActiveThread = false;// We need to know if this specific monitor is currently being serviced by a thread
 };
 
 // Commands sent from Generator thread(s) to the Copy thread
@@ -253,13 +253,14 @@ private:
 
 inline ThreadSafeQueueGPU g_gpuCommandQueue;
 
-// VRAM Manager
-// This class handles the GPU memory dynamically.
+// VRAM Manager : This class handles the GPU memory dynamically.
 // There will be exactly 1 object of this class in entire application. Hence the special name.
 // भगवान शंकर की कृपा बनी रहे. Corresponding object is named "gpu".
 class शंकर {
 public:
-    std::vector<OneMonitorController> screens;
+    //std::vector<OneMonitorController> screens;
+    OneMonitorController screens[MV_MAX_MONITORS];
+    int currentMonitorCount = 0; // Global monitor count. It can be 0 when no monitors are found (headless mode)
 
     ComPtr<IDXGIFactory4> factory; //The OS-level display system manager. Can iterate over GPUs.
     //ComPtr<IDXGIFactory6> dxgiFactory; 
@@ -335,8 +336,6 @@ public:
 	// Thread resources are cleaned up by the Render Thread itself before exit.
     void CleanupD3DGlobal();
 };
-
-extern int g_monitorCount; // Global variable. We support as many monitors as the system has.
 
 void FetchAllMonitorDetails();
 BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData);
