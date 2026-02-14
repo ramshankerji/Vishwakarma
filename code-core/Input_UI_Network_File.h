@@ -8,12 +8,8 @@
 
 #include "UserInputProcessing.h"
 
-extern void AddRandomPyramid();
-extern std::vector<std::unique_ptr<DATASETTAB>> allTabs;
-extern enum class ACTION_TYPE actions;
 
-// Global flag to signal all threads to shut down.
-extern std::atomic<bool> shutdownSignal;
+extern std::atomic<bool> shutdownSignal; // Global flag to signal all threads to shut down.
 // Global queue for inputs to send commands to the Main Logic Thread.
 
 // TODO: Implement windows socket API for listening to other clients.
@@ -37,12 +33,20 @@ void FileInputThread() {
     // This thread could run once at the start to load a large scene file
     // and then terminate, or it could continuously monitor for file changes.
     // For this example, it loads 10 objects and then sleeps.
-    for(int i=0; i<10; ++i) {
-        if (!allTabs.empty() && allTabs[0]) {
-            allTabs[0]->todoCPUQueue->push(ACTION_DETAILS{ .actionType = ACTION_TYPE::CREATEPYRAMID });
+    // Push 10 create commands to first active tab (if any)
+    uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
+    uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+
+    if (tabCount > 0)
+    {
+        uint16_t firstTabIndex = tabList[0];
+        DATASETTAB& tab = allTabs[firstTabIndex];
+        for (int i = 0; i < 10; ++i){
+            ACTION_DETAILS action{};
+            action.actionType = ACTION_TYPE::CREATEPYRAMID;
+            tab.todoCPUQueue->push(action);
         }
     }
-    
     std::cout << "FILE: Initial bulk load complete." << std::endl;
 
     while(!shutdownSignal){

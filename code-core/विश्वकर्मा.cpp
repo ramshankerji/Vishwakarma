@@ -21,31 +21,40 @@ This thread is also responsible for engineering calculations, consistency of Dat
 
 // Global Variables.
 extern std::atomic<bool> shutdownSignal; // Externs for communication
-
-// Thread Synchronization and Data Structures
-std::atomic<bool> g_stopThreads = false;
 std::atomic<uint64_t> g_nextPyramidId = 1;
 
-//Global State
 /* Different tabs represent different files opened in the software.
 Just like different website links open in different Internet browser tab. Tab No. 0 Show the opening screen.
 i.e.Not associated with any particular opened file. 1 DATASET = 1 TAB visible to user / to website. */
 uint8_t noOfOpenedDataset = 0;
-// We will allow user to open as many files simultaneously as system RAM allows.
-// Particularly, enterprise central repository may have thousands of projects.
-// Hence this is one of the rare location where we allow dynamic allocation done by std:vector.
-// std::vector Grows exponentially. 1.5x for GCC/Clang, 2x for MSVC.
-std::vector<std::unique_ptr<DATASETTAB>> allTabs; //They are all the dataset tabs opened in the application.
-std::vector<SingleUIWindow> allUIWindows; /*Each tab will be hosted in exactly 1 windows. 
-TODO: Convert avoe std::vector to fixed size statically allocated array with a large max limit, 
-to avoid dynamic allocation / synchronization overhead.
+
+/* Initially we started with std:vector. , but latter changed to static array to simplify software design.
+std::vector Grows exponentially. 1.5x for GCC/Clang, 2x for MSVC.
+activeTabIndexesA/B are used to quickly iterate over active tabs without checking all slots in allTabs array.
+We will maintain this list in sorted order for better cache performance.
+Tab Lifecycle : creation → activation → rendering → deactivation → deferred destruction.
+Static slot-based tab registry. Double-buffered index lists are published atomically.
+Only UI thread modifies structure (creation/deletion). 
+Engineering threads and Render threads only read published snapshot and modify runtime fields.
+Tab Lifecycle : creation → activation → rendering → deactivation → deferred destruction.
+*/
+DATASETTAB allTabs[MV_MAX_TABS]; //They are all the dataset tabs opened in the application.
+uint16_t activeTabIndexesA[MV_MAX_TABS], activeTabIndexesB[MV_MAX_TABS]; // double buffered index list
+std::atomic<uint16_t*> publishedTabIndexes;
+std::atomic<uint16_t>  publishedTabCount;
+
+SingleUIWindow allWindows[MV_MAX_WINDOWS];
+uint16_t activeWindowIndexesA[MV_MAX_WINDOWS], activeWindowIndexesB[MV_MAX_WINDOWS];
+std::atomic<uint16_t*> publishedWindowIndexes;
+std::atomic<uint16_t>  publishedWindowCount;
+
+/*Each tab will be hosted in exactly 1 windows.
 However some of the views of the tab can be extracted to other windows.
 Each tab gets its own engineering thread, capable of doing background processing, receiving network data, file I/O etc.
 However engineering threads do not directly talk to GPU. They submit the screen visible changes to the GPU Copy thread.
 More importantly, engineering thread are responsible for maintaining data consistency,
 tracking which objects are visible in which views, what are the dirty objects to be cleaned up from GPU memory etc.
 */
-int g_nextTabId = 1;
 
 // Latter move this to विश्वकर्मा.h
 //Remember these global codes outside any function run even before main() starts.
@@ -147,7 +156,13 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
     // In a real scenario, we might wait here if the tab isn't created yet, but Main ensures creation before thread launch.
     {
         DATASETTAB* myTab = nullptr;
-        for (auto& tab : allTabs) { if (tab->tabID == tabID) { myTab = tab.get(); break; } }
+        uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
+        uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+        for (uint16_t i = 0; i < tabCount; ++i) {
+            DATASETTAB & t = allTabs[tabList[i]];
+            if (t.tabID == tabID) { myTab = &t; break; }
+        }
+        
         if (myTab) { // Generate the initial 10 pyramids
             for (int k = 0; k < 10; ++k) addRandomGeometryElement(myTab);
         }
@@ -161,8 +176,14 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         // Dynamic Lookup: Find the tab pointer based on ID
         // This handles the case where vector reallocates or tabs shift.
         DATASETTAB* myTab = nullptr;
-        for (auto& tab : allTabs) { if (tab->tabID == tabID) {myTab = tab.get();  break; } }
-
+        uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
+        uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+        
+        for (uint16_t i = 0; i < tabCount; ++i) {
+            DATASETTAB & t = allTabs[tabList[i]];
+            if (t.tabID == tabID){ myTab = &t; break; }
+        }
+        
         if (myTab == nullptr) { // Handle Tab Closure
             std::cout << "Tab ID " << tabID << " not found (Closed?). Engineering thread exiting." << std::endl;
             break; // Exit the thread gracefully

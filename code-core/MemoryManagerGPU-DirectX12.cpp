@@ -5,8 +5,6 @@
 
 // Global Variables declared in विश्वकर्मा.cpp
 extern शंकर gpu;
-extern std::vector<std::unique_ptr<DATASETTAB>> allTabs;
-extern std::vector<SingleUIWindow> allUIWindows; 
 
 void शंकर::InitD3DDeviceOnly() {
     UINT dxgiFactoryFlags = 0;
@@ -317,7 +315,7 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
         // DXGI_FORMAT_R8G8B8A8_SNORM automatically unpacks 0..255 to -1.0..1.0 float in shader
         { "NORMAL"  , 0, DXGI_FORMAT_R8G8B8A8_SNORM,  0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },// Offset 12
         // Note that DXGI_FORMAT_R16G16B16A16_FLOAT has 10 bits for Precision, so it is already HDR capable.
-        // Additonal sign bit and exponent bit enable lighting calculation to exceed the [ 0 , 1 ] bracket.
+        // Additional sign bit and exponent bit enable lighting calculation to exceed the [ 0 , 1 ] bracket.
         // Eventually they are clamped by the GPU, when sending to Swap Chain.
         { "COLOR"   , 0, DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 16, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }// Offset 12+4=16
     };
@@ -726,7 +724,8 @@ void GpuRenderThread(int monitorId, int refreshRate) {
     ID3D12CommandQueue* pCommandQueue = gpu.screens[monitorId].commandQueue.Get();
 
     // Initialize Thread-Local Resources (CommandQueue/Allocator/CommandList)
-	// Create command queue. TODO: Ideally it should be per GPU, not per Monitor? Or better to have per monitor for parallelism?
+	// Command queue is per monitor to enable different refresh rate monitors to operate independently.
+    // Otherwise present on slower monitor would block present on faster monitor.
     DX12ResourcesPerRenderThread threadRes;
 
     // We just store the pointer for convenience, we don't own it (ComPtr assignment adds ref)
@@ -771,7 +770,11 @@ void GpuRenderThread(int monitorId, int refreshRate) {
 
         bool didRender = false;
 
-        for (auto& window : allUIWindows) {
+        uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
+        uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+
+        for (uint16_t wi = 0; wi < windowCount; ++wi) {
+            SingleUIWindow& window = allWindows[windowList[wi]];
 
             if (window.currentMonitorIndex != monitorId) continue; // Skip the windows not on this monitor.
             // The Safety Switch: If migrating, pretend this window doesn't exist for now.
@@ -814,9 +817,12 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             // GET TAB DATA & RECORD GEOMETRY
 			// Also Sets the Unique Root Signature for THIS window. Root Signature and Pipeline State are per-window.
 			// In fact the Populate Command List can change it multiple times per window if needed.
-            if (window.activeTabIndex >= 0 && window.activeTabIndex < allTabs.size() ) {
-                DX12ResourcesPerTab& tabRes = allTabs[window.activeTabIndex]->dx;
-				tabRes.camera = allTabs[window.activeTabIndex]->camera; // Update camera from Tab.
+            int tabIndex = window.activeTabIndex;
+
+            if (tabIndex >= 0) {
+                DATASETTAB& tab = allTabs[tabIndex];
+                DX12ResourcesPerTab& tabRes = tab.dx;
+                tabRes.camera = tab.camera; // Update camera from Tab.
                 gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes);// Renders geometry.
             }
 
@@ -842,7 +848,12 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             This is more energy efficient way. We are engineering application, not some 1st person shooter video game maximizing fps !
             Without VSync, it was going 650fps(FullHD) on Laptop GPU with 25 Pyramid only geometry.
             */
-            for (auto& window : allUIWindows) {
+            uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
+            uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+
+            for (uint16_t wi = 0; wi < windowCount; ++wi) {
+                SingleUIWindow& window = allWindows[windowList[wi]];
+
                 if (window.currentMonitorIndex != monitorId) continue;
                 HRESULT hr = window.dx.swapChain->Present(1, 0);
                 if (FAILED(hr)) { std::cerr << "Present failed: " << hr << std::endl; }

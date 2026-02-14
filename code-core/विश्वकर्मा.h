@@ -214,3 +214,14 @@ static std::atomic<uint64_t> global_id{1}; // start at 1 to reserve 0 .
 inline uint64_t GetNewTempID(){ //fetch_add returns the old value before increment,
     return global_id.fetch_add(1, std::memory_order_relaxed); 
 } 
+
+//These variables are defined in this .h file so that we don't have to extern define them in all .cpp files again.
+extern DATASETTAB allTabs[MV_MAX_TABS]; //They are all the dataset tabs opened in the application.
+extern uint16_t activeTabIndexesA[MV_MAX_TABS], activeTabIndexesB[MV_MAX_TABS]; // double buffered index list
+extern std::atomic<uint16_t*> publishedTabIndexes;
+extern std::atomic<uint16_t>  publishedTabCount;
+
+extern SingleUIWindow allWindows[MV_MAX_WINDOWS];
+extern uint16_t activeWindowIndexesA[MV_MAX_WINDOWS], activeWindowIndexesB[MV_MAX_WINDOWS];
+extern std::atomic<uint16_t*> publishedWindowIndexes;
+extern std::atomic<uint16_t>  publishedWindowCount;

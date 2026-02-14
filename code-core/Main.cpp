@@ -12,7 +12,6 @@
 #include <iomanip>  // for std::setprecision
 #include <iostream>
 #include <thread>
-#include <vector>
 #include <random>
 #include <png.h>
 #include <shared_mutex>
@@ -54,8 +53,6 @@ std::atomic<bool> shutdownSignal = false;
 
 int primaryMonitorIndex = 0;
 
-extern std::vector<std::unique_ptr<DATASETTAB>> allTabs; //Defined in विश्वकर्मा.cpp
-extern std::vector<SingleUIWindow> allUIWindows; //Defined in विश्वकर्मा.cpp
 extern std::random_device rd;
 std::shared_mutex monitorMutex; //Where there is topology change, pause windows move / resize.
 
@@ -300,15 +297,15 @@ int FindMonitorIndexByName(const OneMonitorController* list, int count, const st
 }
 
 DATASETTAB* GetActiveTabFromHwnd(HWND hWnd) {
-    SingleUIWindow* window = nullptr;
-    for (auto& w : allUIWindows) { if (w.hWnd == hWnd) { window = &w;break; } }
-    if (!window || window->activeTabIndex < 0 || window->activeTabIndex >= window->tabIds.size()) {
-        return nullptr;
-    }
-    uint64_t tabID = window->tabIds[window->activeTabIndex];
-    for (auto& tPtr : allTabs) {
-        if (tPtr && tPtr->tabID == tabID) {// Check if pointer is valid (good practice with unique_ptr)
-            return tPtr.get();// Return the raw pointer managed by the unique_ptr
+    uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
+    uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+    
+    for (uint16_t i = 0; i < windowCount; ++i) {
+        SingleUIWindow & w = allWindows[windowList[i]];
+        if (w.hWnd == hWnd) {
+            int tabIndex = w.activeTabIndex;
+            if (tabIndex < 0) return nullptr;
+            return &allTabs[tabIndex];
         }
     }
     return nullptr;
@@ -401,7 +398,11 @@ void RestartRenderThreads() { // The "Safe" Restart Function. Runs for initial r
         }
     }
 
-    for (auto& window : allUIWindows) {// RE-MAP WINDOWS
+    uint16_t * windowList = publishedWindowIndexes.load(std::memory_order_acquire);
+    uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+    for (uint16_t wi = 0; wi < windowCount; ++wi){
+        SingleUIWindow & window = allWindows[windowList[wi]];
+
         // Ask Windows: "Where is this window physically right now?"
         HMONITOR hWinMonitor = MonitorFromWindow(window.hWnd, MONITOR_DEFAULTTONEAREST);
         // Find the index in our NEW gpu.screens list
@@ -538,22 +539,36 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     }
 
     // SETUP TABS (The Data) CRITICAL: Resize first to prevent pointer invalidation when threads start!
-    allTabs.resize(3); // Resize first, then Allocate (Good if we know the exact count)
-    for (int i = 0; i < 3; ++i) {// Configure the tabs
-        allTabs[i] = std::make_unique<DATASETTAB>();// Actually create the object!
-        allTabs[i]->tabID = i; // Assign ID
-        allTabs[i]->tabNo = i; // Memory Group
-        gpu.InitD3DPerTab(allTabs[i]->dx);// Initialize the Geometry Buffers for this tab!
+    publishedTabIndexes.store(activeTabIndexesA, std::memory_order_release);
+    publishedTabCount.store(0, std::memory_order_release);
+
+    publishedWindowIndexes.store(activeWindowIndexesA, std::memory_order_release);
+    publishedWindowCount.store(0, std::memory_order_release);
+
+    for (int i = 0; i < 3; ++i)
+    {
+        DATASETTAB& tab = allTabs[i];
+        tab.tabID = i;
+        tab.tabNo = i;
+        gpu.InitD3DPerTab(tab.dx);
         // Optional: Give them names
         // allTabs[i].fileName = L"Untitled-" + std::to_wstring(i);
         // We can set random colors or names here to distinguish them
         // allTabs[i].color = ...
     }
 
+    // Publish tab list
+    activeTabIndexesA[0] = 0;
+    activeTabIndexesA[1] = 1;
+    activeTabIndexesA[2] = 2;
+
+    publishedTabIndexes.store(activeTabIndexesA, std::memory_order_release);
+    publishedTabCount.store(3, std::memory_order_release);
+
     // SETUP WINDOW (The View)
-    SingleUIWindow mainWindow;
-    mainWindow.tabIds = { 0, 1, 2 };// Assign all 3 tabs to this window
-    mainWindow.activeTabIndex = 0; // Tab 0 is visible
+    uint16_t windowSlot = 0;
+    SingleUIWindow& mainWindow = allWindows[windowSlot];
+    mainWindow.activeTabIndex = 0;
     mainWindow.currentMonitorIndex = primaryMonitorIndex;
 
     mainWindow.hWnd = CreateWindowExW(
@@ -579,10 +594,13 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         return 1;
     }
 
-    allUIWindows.push_back(mainWindow);// Register window in global list (Used by Render Threads)
-
     // Initialize D3D for this Window. Access via reference from vector to ensure we modify the stored instance
-    gpu.InitD3DPerWindow(allUIWindows[0].dx, allUIWindows[0].hWnd, gpu.screens[0].commandQueue.Get());
+    gpu.InitD3DPerWindow(mainWindow.dx, mainWindow.hWnd, gpu.screens[primaryMonitorIndex].commandQueue.Get());
+    // Publish window list// Register window in global list (Used by Render Threads)
+    activeWindowIndexesA[0] = windowSlot;
+    publishedWindowIndexes.store(activeWindowIndexesA, std::memory_order_release);
+    publishedWindowCount.store(1, std::memory_order_release);
+    
     std::wcout << "Starting application..." << std::endl;
 
     // By default we always initialize application in maximized state.
@@ -639,8 +657,15 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         }
     }
     // Clean up resources before exiting the application.
-    for (auto& window : allUIWindows) { gpu.CleanupWindowResources(window.dx); } // Cleanup Windows
-    for (auto& tab : allTabs) { gpu.CleanupTabResources(tab->dx); } // Cleanup Tabs (Geometry)
+    // Cleanup Windows
+    uint16_t* winList = publishedWindowIndexes.load(std::memory_order_acquire);
+    uint16_t winCount = publishedWindowCount.load(std::memory_order_acquire);
+    for (uint16_t i = 0; i < winCount; ++i) gpu.CleanupWindowResources(allWindows[winList[i]].dx);
+    // Cleanup Tabs (Geometry)
+    uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
+    uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+    for (uint16_t i = 0; i < tabCount; ++i) gpu.CleanupTabResources(allTabs[tabList[i]].dx);
+
     gpu.CleanupD3DGlobal();// Global Cleanup
     
     //Cleanup Freetype library.
@@ -683,6 +708,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     DATASETTAB* tab = GetActiveTabFromHwnd(hWnd);
     ACTION_DETAILS ad;
 
+    uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
+    uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+    uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
+    uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+
     switch (message)
     {
     /*
@@ -723,7 +753,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         return 0;
 
-    case WM_CHAR: // What is this? How is this different from WM_KEYDOWN / UP?
+    case WM_CHAR: // This is different from WM_KEYDOWN / UP because it accounts for keyboard layout,
+    // modifiers, etc. It gives you the actual character that should be input, rather than the physical key.
         if (tab) {
             ad.actionType = ACTION_TYPE::CHAR;
             ad.source = INPUT_SOURCE::KEYBOARD;
@@ -849,15 +880,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     //Currently removed because it was causing WM_CLOSE to not fire up even when clicking close button.
     //If we want to support dragging from the title bar, we can re - enable this and add logic to handle it.
     
-    case WM_CAPTURECHANGED: // Notify all tabs to release captured mouse states (e.g. , if draggin )
-        for (auto& tab : allTabs) {
+    case WM_CAPTURECHANGED: // Notify all tabs to release captured mouse states (e.g. , if dragging )
+        for (uint16_t ti = 0; ti < tabCount; ++ti) {
+            DATASETTAB & tab = allTabs[tabList[ti]];
+
             ad.actionType = ACTION_TYPE::CAPTURECHANGED;
             ad.source = INPUT_SOURCE::MOUSE;
             ad.x = 0;
             ad.y = 0;
             ad.delta = 0;
             ad.timestamp = GetTickCount64();
-            tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+            tab.userInputQueue->push(ad); //userInputQueue is threadsafe.
 
         }
         return 0;
@@ -881,7 +914,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_DISPLAYCHANGE: // Resolution change OR When user adds or disconnects a new monitor.
     case WM_DPICHANGED:    // Scale change, When user manually changes screen resolution through windows settings.
         std::wcout << L"WM_DISPLAYCHANGE / WM_DPICHANGED received. Restarting render threads." << std::endl;
-        // This IS a topology change. Monitor details may have changed. But Geometry belonging to tabs persists!
+        /* This IS a topology change. Monitor details may have changed. But Geometry belonging to tabs persists!
+        Monitor addition / removal is very rare event. 1 event each couple hours average is already conservative.
+        Hence we can afford to briefly pause rendering and restart all threads to pick up the new topology.
+        Even windows OS flickers when you add/remove monitor, so a brief pause in rendering is not a big deal.*/
 		RestartRenderThreads(); // Preserves commandQueues and swapChains to the extent possible.
         break;
 
@@ -901,9 +937,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_EXITSIZEMOVE:{ // It occurs post - movement, not while the window is actively moving(use WM_MOVING for that).
         std::wcout << L"WM_EXITSIZEMOVE received. Checking Monitor affinity." << std::endl;
-        std::shared_lock<std::shared_mutex> lock(monitorMutex); // Allows multiple readers, no writers
         SingleUIWindow* pWin = nullptr; // Get our internal window object
-        for (auto& window : allUIWindows) { if (window.hWnd == hWnd) { pWin = &window; } }
+        uint16_t * windowList = publishedWindowIndexes.load(std::memory_order_acquire);
+        uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+        for (uint16_t wi = 0; wi < windowCount; ++wi)
+        {
+            SingleUIWindow& pWin = allWindows[windowList[wi]];
+        }
         if (pWin) {
             // Determine which monitor the window is now on
             HMONITOR hMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
@@ -938,9 +978,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
         // Now safe to clean up window-specific DX resources (swap chain, RTVs, etc.)
         // This prevents any lingering GPU work on invalid resources
-        for (auto& window : allUIWindows) {
+        for (uint16_t i = 0; i < windowCount; ++i) {
+            SingleUIWindow& window = allWindows[windowList[i]];
             if (window.hWnd == hWnd) {  // Target this specific window
                 gpu.CleanupWindowResources(window.dx);
+                break; // We found it. No need to continue.
             }
         }
         DestroyWindow(hWnd);// Now destroy the window (sends WM_DESTROY)
