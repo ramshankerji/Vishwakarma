@@ -1,4 +1,10 @@
-![Lines of Code](https://raw.githubusercontent.com/ramshankerji/Vishwakarma/ci/loc-badge.svg)
+![Build](https://github.com/ramshankerji/Vishwakarma/actions/workflows/nightly.yml/badge.svg)
+![Platform](https://img.shields.io/badge/Platform-Windows%2010%2B-blue)
+![Architecture](https://img.shields.io/badge/x64-native-informational?style=flat-square)
+![Language](https://img.shields.io/badge/C%2B%2B-20-blue?style=flat-square)
+![Graphics](https://img.shields.io/badge/Graphics-DirectX%2012-purple)
+![LOC](https://raw.githubusercontent.com/ramshankerji/Vishwakarma/ci/loc-badge.svg)
+![License](https://img.shields.io/badge/License-Custom-lightgrey?style=flat-square)
 
 ## স্বাগতম, स्वागत, સ્વાગત, ಸ್ವಾಗತ, خوش آمدید, സ്വാഗതം, ꯈꯨꯔꯨꯝꯖꯔꯤ, ସ୍ୱାଗତ, ਸਵਾਗਤ, ᱥᱣᱟᱜᱟᱛ, ڀلي ڪري آيا, வரவேற்பு, స్వాగతం, Welcome.
 
