@@ -159,6 +159,10 @@ struct SingleUIWindow {
     RECT contentRect{};
 
 	std::atomic<bool> isMigrating = false;// The "Switch" to turn rendering ON/OFF during migration.
+    std::atomic<bool> isResizing = false;
+	uint16_t nextRequestedWidth = 0, nextRequestedHeight = 0;
+	uint16_t currentWidth = 0, currentHeight = 0;
+
     DX12ResourcesPerWindow dx;
 
     // BOILERPLATE TO FIX C2672 ERROR

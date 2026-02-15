@@ -150,14 +150,11 @@ Lowest distance between object and ALL the different view camera position shall 
 It will have some mechanism to manage memory over pressure. To signal the logic threads to reduce the level of detail within some distance.
 Our GPU Memory manager will be a singleton. There will be only 1 instance of that class managing entire GPU memory.
 
-
-Conceptual Questions: Ask this to any contemporary AI:
-Consider a Desktop PC. It has 2 discrete graphics card and 1 integrated graphics card. 1 Monitor is connected and active to each of these 3 devices. 
-Can Windows 11 handle moving  application window from 1 screen to another smoothly?
-What if application is attached to 1st device, and window is moved from the monitor connected to 2nd device to the monitor connected to integrated GPU?
-
+Consider a Desktop PC. It has 2 discrete graphics card and 1 integrated graphics card.
+1 Monitor is connected and active to each of these 3 devices. We can use exactly 1 device for rendering for all monitor!
+Windows 10/11 WDDM supports heterogeneous multi-adapter. When window moves: DWM composites surfaces.
+Frame copied across adapters if needed. This works but is slow since all frames need to traverse PCIe bus.
 */
-
 
 /*
 -------------------------------------------------------------------------------

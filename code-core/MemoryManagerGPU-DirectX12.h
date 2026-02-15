@@ -58,7 +58,7 @@ const UINT MaxIndexBufferSize = MaxIndexCount * sizeof(UINT16);
 2. The Target : Per Window (Swap Chain, Render Targets, Depth Stencil Buffer etc.)
 3. The Worker : Per Render Thread. 1 For each monitor. (Command Queue, Command List etc.
     Resources shared across multiple windows on the same monitor) */
-
+struct GpuResourceVertexIndexInfo; //Forward declaration.
 struct DX12ResourcesPerTab { // (The Data) Geometry Data
     // Since data is isolated per tab, these live here. We use a "Jumbo" buffer approach to reduce switching.
     ComPtr<ID3D12Resource> vertexBuffer;
@@ -79,6 +79,10 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
 
 	// TODO: We will generalize this to hold materials, shaders, textures etc. unique to this project/tab
     ComPtr<ID3D12DescriptorHeap> srvHeap;
+
+    mutable std::mutex objectsOnGPUMutex;// Make mutex mutable so const references can lock it in rendering paths.
+    // Copy thread will update the following map whenever it adds/removes/modifies an object on GPU.
+    std::map<uint64_t, GpuResourceVertexIndexInfo> objectsOnGPU;
 
     // Track how much of the jumbo buffer is used
     uint64_t vertexDataSize = 0;
@@ -104,7 +108,7 @@ struct DX12ResourcesPerWindow {// Presentation Logic
     ComPtr<ID3D12Resource> depthStencilBuffer;// Depth Buffer (Sized to the window dimensions)
     ComPtr<ID3D12DescriptorHeap> dsvHeap;
 
-    D3D12_VIEWPORT viewport;// Viewport & Scissor (Dependent on Window Size). Not used yet.
+    D3D12_VIEWPORT viewport;// Viewport & Scissor (Dependent on Window Size).
     D3D12_RECT scissorRect;
 
     ComPtr<ID3D12Resource> constantBuffer;
@@ -170,6 +174,7 @@ struct CommandToCopyThread
     CommandToCopyThreadType type;
     std::optional<GeometryData> geometry; // Present for ADD and MODIFY
     uint64_t id; // Always present
+    uint64_t tabID; // NEW: We must know which tab this object belongs to!
 };
 // Thread synchronization between Main Logic thread and Copy thread
 extern std::mutex toCopyThreadMutex;
@@ -192,10 +197,6 @@ struct GpuResourceVertexIndexInfo {
     //uint64_t size;
     // In a real DX12 app, this would hold ID3D12Resource*, D3D12_VERTEX_BUFFER_VIEW, etc.
 };
-
-extern std::mutex objectsOnGPUMutex;
-// Copy thread will update the following map whenever it adds/removes/modifies an object on GPU.
-extern std::map<uint64_t, GpuResourceVertexIndexInfo> objectsOnGPU;
 
 // Packet of work for a Render Thread for one frame
 struct RenderPacket {
@@ -262,9 +263,9 @@ public:
     OneMonitorController screens[MV_MAX_MONITORS];
     int currentMonitorCount = 0; // Global monitor count. It can be 0 when no monitors are found (headless mode)
 
-    ComPtr<IDXGIFactory4> factory; //The OS-level display system manager. Can iterate over GPUs.
-    //ComPtr<IDXGIFactory6> dxgiFactory; 
-    ComPtr<IDXGIAdapter1> hardwareAdapter;// Represents a physical GPU device.
+    // IDXGIFactory6 / IDXGIAdapter4 Prerequisite : Windows 10 1803+ / Windows 11
+    ComPtr<IDXGIFactory6> factory6; //The OS-level display system manager. Can iterate over GPUs.
+    ComPtr<IDXGIAdapter4> hardwareAdapter;// Represents a physical GPU device.
     //Represents 1 logical GPU device on above GPU adapter. Helps create all DirectX12 memory / resources / comments etc.
 
 	ComPtr<ID3D12Device> device; //Very Important: We support EXACTLY 1 GPU device only in this version.
@@ -327,6 +328,7 @@ public:
     void PopulateCommandList(ID3D12GraphicsCommandList* cmdList, //Called by per monitor render thead.
         DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes);
     void WaitForPreviousFrame(DX12ResourcesPerRenderThread dx);
+    void ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UINT newHeight);
 
     // Called when a monitor is unplugged or window is destroyed. Destroys SwapChain/RTVs but KEEPS Geometry.
     void CleanupWindowResources(DX12ResourcesPerWindow& winRes);
@@ -416,9 +418,6 @@ inline void WaitForFenceValue(DX12ResourcesPerWindow dx, UINT64 fenceValue)
 inline std::mutex toCopyThreadMutex;
 inline std::condition_variable toCopyThreadCV;
 inline std::queue<CommandToCopyThread> commandToCopyThreadQueue;
-inline  std::mutex objectsOnGPUMutex;
-// Copy thread will update the following map whenever it adds/removes/modifies an object on GPU.
-inline  std::map<uint64_t, GpuResourceVertexIndexInfo> objectsOnGPU;
 
 // Thread Functions - Just Declaration!
 void GpuCopyThread();

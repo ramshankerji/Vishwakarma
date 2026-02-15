@@ -17,14 +17,54 @@ void शंकर::InitD3DDeviceOnly() {
     }
 #endif
     
-    CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&factory));// Create DXGI factory
+    //Modern Adapter Selection. Prerequisite : Windows 10 1803+ / Windows 11
+    ThrowIfFailed(CreateDXGIFactory2(dxgiFactoryFlags, IID_PPV_ARGS(&factory6)));// Create DXGI factory
+    ComPtr<IDXGIAdapter4> hardwareAdapter;
+    SIZE_T maxDedicatedVideoMemory = 0, maxSharedMemory = 0;
+    bool foundHardware = false;
 
-    // Create device. This should be in a separate function. Because creation of swap chain etc.  is monitor specific.
-    for (UINT adapterIndex = 0; SUCCEEDED(factory->EnumAdapters1(adapterIndex, &hardwareAdapter)); ++adapterIndex) {
-        if (SUCCEEDED(D3D12CreateDevice(hardwareAdapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
-            break;
+    for (UINT adapterIndex = 0;; ++adapterIndex) {
+        ComPtr<IDXGIAdapter4> adapter;
+        // Prefer high performance GPUs (Discrete over Integrated)
+        if (FAILED(factory6->EnumAdapterByGpuPreference(adapterIndex,
+            DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&adapter)))) { break; }// No more adapters
+        DXGI_ADAPTER_DESC1 desc;
+        adapter->GetDesc1(&desc);
+        if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue; // Skip software adapters (WARP)
+		// Check if adapter supports D3D12. Continue if Not D3D12 capable.
+        if (FAILED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, _uuidof(ID3D12Device), nullptr))) continue;
+        foundHardware = true;
+        if (desc.DedicatedVideoMemory > maxDedicatedVideoMemory) { // Pick adapter with highest Dedicated VRAM
+            maxDedicatedVideoMemory = desc.DedicatedVideoMemory;
+            maxSharedMemory = desc.SharedSystemMemory;
+            hardwareAdapter = adapter;
+        }
+        else if (maxDedicatedVideoMemory == 0 && desc.SharedSystemMemory > maxSharedMemory) {
+            maxSharedMemory = desc.SharedSystemMemory; // UMA system case (all dedicated memory = 0)
+            hardwareAdapter = adapter;
         }
     }
+
+    if (hardwareAdapter) {
+        DXGI_ADAPTER_DESC1 desc;
+        hardwareAdapter->GetDesc1(&desc);
+        std::wcout << L"Selected GPU: " << desc.Description << std::endl;
+        std::wcout << L"Dedicated VRAM: " << (desc.DedicatedVideoMemory / (1024 * 1024)) << L" MB" << std::endl;
+        std::wcout << L"Shared Memory:  " << (desc.SharedSystemMemory / (1024 * 1024))   << L" MB" << std::endl;
+        ThrowIfFailed(D3D12CreateDevice(hardwareAdapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)));
+    }
+    else {
+        std::wcout << L"No suitable hardware adapter found. Falling back to WARP." << std::endl;
+        ComPtr<IDXGIAdapter> warpAdapter;
+        ThrowIfFailed(factory6->EnumWarpAdapter(IID_PPV_ARGS(&warpAdapter)));
+        ThrowIfFailed(D3D12CreateDevice(warpAdapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)));
+    }
+
+    // TODO: Upgrade for detection of Highest Feature level supported by the adapter in future.
+    // D3D_FEATURE_LEVEL_12_0 should be available on all Windows 10+ GPUs.
+    // We will require 12_0 as minimum in future when we use more advanced features.
+    D3D_FEATURE_LEVEL featureLevels[] = {
+        D3D_FEATURE_LEVEL_12_2, D3D_FEATURE_LEVEL_12_1, D3D_FEATURE_LEVEL_12_0, D3D_FEATURE_LEVEL_11_0 };
 
     //Copy thread is global. Hence it's variables are initialized here.
     D3D12_COMMAND_QUEUE_DESC queueDesc = {};
@@ -116,11 +156,14 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     swapChainDesc.SampleDesc.Count = 1;
 
     ComPtr<IDXGISwapChain1> tempSwapChain;
-    factory->CreateSwapChainForHwnd(commandQueue,
-        hwnd, &swapChainDesc, nullptr, nullptr, &tempSwapChain);
+    factory6->CreateSwapChainForHwnd(commandQueue, hwnd, &swapChainDesc, nullptr, nullptr, &tempSwapChain);
 
     tempSwapChain.As(&dx.swapChain);
     dx.frameIndex = dx.swapChain->GetCurrentBackBufferIndex();
+
+    dx.viewport = CD3DX12_VIEWPORT( 0.0f, 0.0f, 
+        static_cast<float>(dx.WindowWidth), static_cast<float>(dx.WindowHeight));
+    dx.scissorRect = CD3DX12_RECT( 0, 0, dx.WindowWidth, dx.WindowHeight);
 
     // Create descriptor heap for render target views
     D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
@@ -362,7 +405,7 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
     float aspectRatio = static_cast<float>(winRes.WindowWidth) / static_cast<float>(winRes.WindowHeight);
 
     XMMATRIX projectionMatrix =  XMMatrixPerspectiveFovLH(
-        tabRes.camera.fov, tabRes.camera.aspect, tabRes.camera.nearZ,  tabRes.camera.farZ );
+        tabRes.camera.fov, aspectRatio, tabRes.camera.nearZ,  tabRes.camera.farZ );
 
     // Create world matrix with rotation. Now the camera rotates, not the world !
     DirectX::XMMATRIX worldMatrix = DirectX::XMMatrixIdentity();
@@ -417,22 +460,28 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     // Lock and Iterate through GPU resources to draw them.
+    // Lock the TAB'S mutex and check the TAB'S map.
+    std::lock_guard<std::mutex> lock(tabRes.objectsOnGPUMutex);
+
     // Bind TAB Geometry (Vertex/Index Buffers). IMPORTANT: Verify the tab has valid buffers before binding!
-    if (tabRes.vertexDataSize > 0 or true) { //vertexDataSize not yet populated !
-        commandList->IASetVertexBuffers(0, 1, &tabRes.vertexBufferView);
-        commandList->IASetIndexBuffer(&tabRes.indexBufferView);
-        std::lock_guard<std::mutex> lock(objectsOnGPUMutex);
-        for (const auto& pair : objectsOnGPU)
+    // TODO : vertexDataSize not yet populated! Removes reliance on "vertexDataSize" which is currently always 0.
+    if (!tabRes.objectsOnGPU.empty()) {// Check if the map is empty.
+        // Use the Jumbo Buffer if available (currently unused, but good to keep the binding logic)
+        if (tabRes.vertexDataSize > 0) {
+            commandList->IASetVertexBuffers(0, 1, &tabRes.vertexBufferView);
+            commandList->IASetIndexBuffer(&tabRes.indexBufferView);
+        }
+
+        for (const auto& pair : tabRes.objectsOnGPU)
         {
             // TODO: In the future, you will filter this list based on "Visible in this View"
-            uint64_t id = pair.first;
+            // uint64_t id = pair.first; // Unused variable warning fix
             const GpuResourceVertexIndexInfo& res = pair.second;
             if (res.vertexBufferView.SizeInBytes > 0) {
                 commandList->IASetVertexBuffers(0, 1, &res.vertexBufferView);
                 commandList->IASetIndexBuffer(&res.indexBufferView);
                 commandList->DrawIndexedInstanced(res.indexCount, 1, 0, 0, 0);// 2. Draw
             }
-            //commandList->DrawIndexedInstanced(res.indexCount, 1, 0, 0, 0);
         }
     }
 
@@ -539,7 +588,7 @@ void शंकर::CleanupD3DGlobal() {
     // the Device won't truly be destroyed here, triggering Debug Layer warnings.
     // Ensure CleanupWindowResources/CleanupTabResources are called first!
     device.Reset();
-    factory.Reset();
+    factory6.Reset();
     hardwareAdapter.Reset();
 
 #if defined(_DEBUG)
@@ -598,6 +647,9 @@ void GpuCopyThread() {
             cmd = commandToCopyThreadQueue.front();
             commandToCopyThreadQueue.pop();
         }
+
+		// Find the targe tab. Our static array of tabs is thread-safe for reading.
+        DATASETTAB& targetTab = allTabs[cmd.tabID];
 
         switch (cmd.type)// Process Command
         {
@@ -699,15 +751,15 @@ void GpuCopyThread() {
             newResource.indexBufferView.SizeInBytes = indexBufferSize;
 
             {
-                std::lock_guard<std::mutex> lock(objectsOnGPUMutex);
-                objectsOnGPU[cmd.id] = newResource; // This will add or overwrite
+                std::lock_guard<std::mutex> lock(targetTab.dx.objectsOnGPUMutex);
+                targetTab.dx.objectsOnGPU[cmd.id] = newResource; // This will add or overwrite
             }
             break;
         }
         case CommandToCopyThreadType::REMOVE:
         {
-            std::lock_guard<std::mutex> lock(objectsOnGPUMutex);
-            objectsOnGPU.erase(cmd.id);
+            std::lock_guard<std::mutex> lock(targetTab.dx.objectsOnGPUMutex); // Remove from the specific tab
+            targetTab.dx.objectsOnGPU.erase(cmd.id);
             break;
         }
         } // End of switch (cmd.type)// Process Command
@@ -754,7 +806,6 @@ void GpuRenderThread(int monitorId, int refreshRate) {
     const auto frameDuration = std::chrono::milliseconds(1000 / refreshRate);
 
     // Create synchronization objects
-    gpu.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&threadRes.fence));
     ThrowIfFailed(gpu.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&threadRes.fence)));
     threadRes.fenceValue = 1;
     threadRes.fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
@@ -779,6 +830,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             if (window.currentMonitorIndex != monitorId) continue; // Skip the windows not on this monitor.
             // The Safety Switch: If migrating, pretend this window doesn't exist for now.
             if (window.isMigrating) continue;
+            if (window.isResizing) continue;
             
             // TODO: Ideally, it should be handled in WM_MOVE or nearby. Following is simply safeguard for bugs elsewhere.
             // Check if the window is physically on this monitor, but chemically bound to another queue
@@ -907,7 +959,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
         }
 #endif
 
-        // After rendering, perform garbage collection on VRAM
+        // TODO: After rendering, perform garbage collection on VRAM. Currently lastRenderedFrame is alwasy 1.
         // In a real engine, the last COMPLETED GPU frame is tracked via fences.
         if (lastRenderedFrame > 2) {
             gpu.ProcessDeferredFrees(lastRenderedFrame - 2);
@@ -937,4 +989,59 @@ void GpuRenderThread(int monitorId, int refreshRate) {
     threadRes.commandQueue.Reset();// Command Objects cleanup.
     threadRes.fence.Reset();
     std::cout << "Render Thread (Monitor " << monitorId << ") shutting down.\n" << std::endl;
+}
+
+void शंकर::ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UINT newHeight)
+{
+    if (!dx.swapChain) return;
+    if (newWidth == 0 || newHeight == 0) return; // Minimized
+
+    ComPtr<ID3D12Fence> resizeFence;// Wait for GPU to finish using current buffers
+    ThrowIfFailed(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&resizeFence)));
+    dx.creatorQueue->Signal(resizeFence.Get(), 1);
+
+    HANDLE hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    if (resizeFence->GetCompletedValue() < 1) {
+        resizeFence->SetEventOnCompletion(1, hEvent);
+        WaitForSingleObject(hEvent, INFINITE);
+    }
+    CloseHandle(hEvent);
+
+    for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; ++i) dx.renderTargets[i].Reset();// Release old back buffers
+    dx.depthStencilBuffer.Reset();
+
+    DXGI_SWAP_CHAIN_DESC desc = {};
+    dx.swapChain->GetDesc(&desc);
+    ThrowIfFailed(dx.swapChain->ResizeBuffers( FRAMES_PER_RENDERTARGETS, // Resize swapchain buffers
+        newWidth, newHeight, desc.BufferDesc.Format, desc.Flags));
+
+    dx.frameIndex = dx.swapChain->GetCurrentBackBufferIndex();
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(dx.rtvHeap->GetCPUDescriptorHandleForHeapStart());// Recreate RTVs
+    for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; i++) {
+        ThrowIfFailed(dx.swapChain->GetBuffer(i, IID_PPV_ARGS(&dx.renderTargets[i])));
+        device->CreateRenderTargetView(dx.renderTargets[i].Get(), nullptr, rtvHandle);
+        rtvHandle.Offset(1, dx.rtvDescriptorSize);
+    }
+
+    // Recreate depth buffer
+    D3D12_CLEAR_VALUE depthClear = {};
+    depthClear.Format = DXGI_FORMAT_D32_FLOAT;
+    depthClear.DepthStencil.Depth = 1.0f;
+    depthClear.DepthStencil.Stencil = 0;
+    auto depthHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+    auto depthDesc = CD3DX12_RESOURCE_DESC::Tex2D( DXGI_FORMAT_D32_FLOAT,
+        newWidth, newHeight, 1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+
+    ThrowIfFailed(device->CreateCommittedResource( &depthHeapProps, D3D12_HEAP_FLAG_NONE,
+        &depthDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &depthClear, IID_PPV_ARGS(&dx.depthStencilBuffer)));
+
+    device->CreateDepthStencilView( dx.depthStencilBuffer.Get(), nullptr,
+        dx.dsvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    dx.WindowWidth = newWidth; // Update stored dimensions
+    dx.WindowHeight = newHeight;
+
+    // Update viewport
+    dx.viewport = CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(newWidth), static_cast<float>(newHeight));
+    dx.scissorRect = CD3DX12_RECT(0, 0, newWidth, newHeight);
 }

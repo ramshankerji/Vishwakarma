@@ -137,7 +137,7 @@ inline void addRandomGeometryElement(DATASETTAB* targetTab) {
     //Add the new shape's data to the command queue for the GPU.
     {
         std::lock_guard<std::mutex> lock(toCopyThreadMutex);
-        commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD, geometry, memoryId });
+        commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD, geometry, memoryId, targetTab->tabID });
     }
 
     // Push to the specific tab's ID list, not global currentTab
@@ -352,7 +352,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                     myTab->camera.position.z = myTab->camera.target.z + (dz * scale);
                 }
 
-                std::cout << "Zoom Updated. New Distance: " << newDistance << "\n";// Debug logging (Optional)
+                //std::cout << "Zoom Updated. New Distance: " << newDistance << "\n";// Debug logging (Optional)
                 break;
             }
             case ACTION_TYPE::LBUTTONDOWN:
