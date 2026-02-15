@@ -46,14 +46,43 @@ jobs:
             exit 1
         }
 
+    - name: Count Lines of Code
+      shell: pwsh
+      run: |
+        choco install cloc -y --no-progress --limit-output | Out-Null
+        cloc . --exclude-dir=code-external,build,.git `
+          --include-ext=cpp,h,hpp,hlsl,md,css,js,html `
+          --json --quiet --out=cloc.json
+
+    - name: Generate LOC JSON for Shields.io
+      shell: pwsh
+      run: |
+        # Read cloc output
+        $clocData = Get-Content cloc.json | ConvertFrom-Json
+        $loc = $clocData.SUM.code
+        
+        # Create Shields.io compliant JSON schema
+        $endpointData = @{
+            schemaVersion = 1
+            label = "LOC"
+            message = $loc.ToString()
+            color = "blue"
+        }
+        
+        # Save to loc.json
+        $endpointData | ConvertTo-Json -Compress | Out-File loc.json -Encoding utf8
+
     # Use GitHub CLI to cleanly wipe the old release and create a new one
     - name: Publish Nightly Release
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      shell: pwsh
       run: |
-        # Delete the old release AND the tag together. 
-        # '|| true' ensures we don't fail if this is the very first run.
         gh release delete nightly --cleanup-tag -y || echo "No existing nightly release to delete"
-        
-        # Create the new release and upload the file
-        gh release create nightly "build/Release/Vishwakarma.exe" --title "Nightly Build" --notes "Latest development build, automatically generated." --prerelease
+        # Create the new release and upload the executable and the JSON endpoint file
+        gh release create nightly `
+          build/Release/Vishwakarma.exe `
+          loc.json `
+          --title "Nightly Build" `
+          --notes "Latest development build, automatically generated." `
+          --prerelease
