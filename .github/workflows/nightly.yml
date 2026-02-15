@@ -54,7 +54,33 @@ jobs:
           --include-ext=cpp,h,hpp,hlsl,md,css,js,html `
           --json --quiet --out=cloc.json
 
-    - name: Generate LOC JSON for Shields.io
+    - name: Generate LOC Badge XML
+      shell: pwsh
+      run: |
+        $json = Get-Content cloc.json | ConvertFrom-Json
+        $loc = $json.SUM.code
+
+        $svg = @(
+          '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="20">',
+          '  <linearGradient id="a" x2="0" y2="100%">',
+          '    <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>',
+          '    <stop offset="1" stop-opacity=".1"/>',
+          '  </linearGradient>',
+          '  <rect rx="3" width="160" height="20" fill="#555"/>',
+          '  <rect rx="3" x="80" width="80" height="20" fill="#007ec6"/>',
+          '  <path fill="#007ec6" d="M80 0h4v20h-4z"/>',
+          '  <rect rx="3" width="160" height="20" fill="url(#a)"/>',
+          '  <g fill="#fff" text-anchor="middle"',
+          '     font-family="Verdana,Geneva,DejaVu Sans,sans-serif"',
+          '     font-size="11">',
+          '    <text x="40" y="14">LOC</text>',
+          "    <text x=""120"" y=""14"">$loc</text>",
+          '  </g>',
+          '</svg>'
+        )
+        $svg | Out-File loc-badge.svg -Encoding utf8
+
+    - name: Generate LOC JSON
       shell: pwsh
       run: |
         # Read cloc output
@@ -72,6 +98,20 @@ jobs:
         # Save to loc.json
         $endpointData | ConvertTo-Json -Compress | Out-File loc.json -Encoding utf8
 
+    - name: Publish badge branch
+      shell: pwsh
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        # Create fresh orphan branch
+        git checkout --orphan ci
+        # Remove everything from git index (not working directory)
+        git rm -rf . --ignore-unmatch
+        # Now only add the badge file
+        git add loc-badge.svg loc.json
+        git commit -m "Update LOC badge"
+        git push origin ci --force
+        
     # Use GitHub CLI to cleanly wipe the old release and create a new one
     - name: Publish Nightly Release
       env:
@@ -79,10 +119,10 @@ jobs:
       shell: pwsh
       run: |
         gh release delete nightly --cleanup-tag -y || echo "No existing nightly release to delete"
-        # Create the new release and upload the executable and the JSON endpoint file
+        # Create the new release and upload the file
         gh release create nightly `
           build/Release/Vishwakarma.exe `
-          loc.json `
           --title "Nightly Build" `
           --notes "Latest development build, automatically generated." `
           --prerelease
+

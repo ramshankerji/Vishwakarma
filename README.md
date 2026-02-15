@@ -1,6 +1,6 @@
-![LOC](https://img.shields.io/endpoint?url=https%3A%2F%2Fgithub.com%2Framshankerji%2FVishwakarma%2Freleases%2Fdownload%2Fnightly%2Floc.json)
+![Lines of Code](https://raw.githubusercontent.com/ramshankerji/Vishwakarma/ci/loc-badge.svg)
 
-## স্বাগতম, स्वागत, સ્વાગત, ಸ್ವಾಗತ, خوش آمدید, സ്വാഗതം, ꯈꯨꯔꯨꯝꯖꯔꯤ, ସ୍ୱାଗତ, ਸਵਾਗਤ, ᱥᱣᱟᱜᱟᱛ, ڀلي ڪري آيا, வரவேற்பு, స్వాగతం, خوش آمدید, Welcome.
+## স্বাগতম, स्वागत, સ્વાગત, ಸ್ವಾಗತ, خوش آمدید, സ്വാഗതം, ꯈꯨꯔꯨꯝꯖꯔꯤ, ସ୍ୱାଗତ, ਸਵਾਗਤ, ᱥᱣᱟᱜᱟᱛ, ڀلي ڪري آيا, வரவேற்பு, స్వాగతం, Welcome.
 
 <div style="text-align: center;">
 <img src="code-core/logo.svg"  style="width: 128px; height: auto;" 
