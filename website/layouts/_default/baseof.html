@@ -36,7 +36,8 @@
             min-height: 100vh;
         }
         h1,h2,h3{
-          line-height:1.2
+          line-height:1.2;
+          margin-top: 0; /* Removes the hidden browser-injected space */
         }
         .content-wrapper {
             display: flex;
@@ -78,7 +79,7 @@
         main {
             flex: 1;
             max-width: 210mm; /*A4 paper is 210mm x 297mm */
-            margin: 40px auto;
+            margin: 10px auto 40px auto; /* 10px top, auto right, 40px bottom, auto left */
             padding: 0 10px;
         }
         header {
@@ -112,7 +113,6 @@ header a {
         border-color 0.15s ease,
         background 0.15s ease;
 }
-
 
     </style>
 </head>
