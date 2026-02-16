@@ -6,7 +6,7 @@
 ![LOC](https://raw.githubusercontent.com/ramshankerji/Vishwakarma/ci/loc-badge.svg)
 ![License](https://img.shields.io/badge/License-Custom-lightgrey?style=flat-square)
 
-## স্বাগতম, स्वागत, સ્વાગત, ಸ್ವಾಗತ, خوش آمدید, സ്വാഗതം, ꯈꯨꯔꯨꯝꯖꯔꯤ, ସ୍ୱାଗତ, ਸਵਾਗਤ, ᱥᱣᱟᱜᱟᱛ, ڀلي ڪري آيا, வரவேற்பு, స్వాగతం, Welcome.
+## स्वागत, স্বাগতম, સ્વાગત, ಸ್ವಾಗತ, خوش آمدید, സ്വാഗതം, ꯈꯨꯔꯨꯝꯖꯔꯤ, ସ୍ୱାଗତ, ਸਵਾਗਤ, ᱥᱣᱟᱜᱟᱛ, ڀلي ڪري آيا, வரவேற்பு, స్వాగతం, Welcome.
 
 <div style="text-align: center;">
 <img src="code-core/logo.svg"  style="width: 128px; height: auto;" 
