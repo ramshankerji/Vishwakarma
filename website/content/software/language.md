@@ -23,3 +23,7 @@ Some important C++ Concepts:
 * Template Programming; Standard Library (std::) heavily uses this. In our code, try to avoid Template. Template-heavy code can slow compilation.
 * std::mutex is necessary for better co-ordination between different threads.
 * inline keyword (c++17 onwards) for global variable defined in header only files. Allows the header to be included in multiple .cpp files and at the time of linking, linker considers all instances as just one.
+* c++20 allows beautiful annotated struct initialization. So instead of   
+D3D12_CLEAR_VALUE clearValue = { dx.rttFormat, {0.0f, 0.0f, 0.0f, 1.0f} }; we can write  
+D3D12_CLEAR_VALUE clearValue{ .Format = dx.rttFormat, .Color = {0.0f, 0.0f, 0.0f, 1.0f} };
+* 

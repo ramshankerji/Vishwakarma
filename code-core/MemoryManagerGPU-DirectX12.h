@@ -102,6 +102,14 @@ struct DX12ResourcesPerWindow {// Presentation Logic
     ComPtr<ID3D12Resource>          renderTargets[FRAMES_PER_RENDERTARGETS];
     UINT rtvDescriptorSize = 0;
 
+    // Render To Texture Infrastructure
+    ComPtr<ID3D12Resource>          renderTextures[FRAMES_PER_RENDERTARGETS];
+    ComPtr<ID3D12DescriptorHeap>    rttRtvHeap;
+    ComPtr<ID3D12DescriptorHeap>    rttSrvHeap;
+    DXGI_FORMAT                     rttFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    // TODO: When we will implement HDR support, we wil have change above format to following.
+    //DXGI_FORMAT                     rttFormat = DXGI_FORMAT_R16G16B16A16_FLOAT; // HDR ready
+
     ComPtr<ID3D12RootSignature>     rootSignature;
     ComPtr<ID3D12PipelineState> pipelineState;
 

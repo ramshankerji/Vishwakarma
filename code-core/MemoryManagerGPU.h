@@ -169,8 +169,7 @@ Do this first so you aren't fighting "black screen" bugs later.
 
 Phase 2: The "Freeze" Infrastructure
 Before you break the memory model, build the mechanism that hides the breakage.
-[ ] Render To Texture (RTT) & Full-Screen Quad.
-Goal: Detach the "Drawing" from the "Presenting."
+[Done] Render To Texture (RTT) & Full-Screen Quad. Goal: Detach the "Drawing" from the "Presenting."
 Success State: You can resize the window, and the inner "Canvas" scales or freezes independently of the window border.
 [ ] Face-wise Geometry colors. (Implementation detail).
 [ ] Upgrade Vertices to HDR + Tonemapping. (Do this now while touching pixel shaders).

@@ -77,6 +77,10 @@ inline void addRandomGeometryElement(DATASETTAB* targetTab) {
     // For now, assuming they use default or we will fix memory grouping later. TODO
 
     switch (shapeType) {// Create and randomize the chosen shape.
+        /* Important information, even though we are creating new shapes using "new" keyword,
+        The memory allocation is done on our custom memory manager. Which will clean itself,
+        when the tab is closed or destroyed. This prevents memory leaks in long-running applications. 
+        Currently, it seems to be leaking memory, but it is NOT !*/
     case 0: {
         PYRAMID* shape = new PYRAMID();
         shape->Randomize();

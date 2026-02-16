@@ -958,6 +958,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
 
     case WM_EXITSIZEMOVE:{ // It occurs post - movement, not while the window is actively moving(use WM_MOVING for that).
+        // TODO: Delegate this task from main thread to rendering thread.
         std::wcout << L"WM_EXITSIZEMOVE received. Checking Monitor affinity." << std::endl;
         SingleUIWindow* pWin = nullptr; // Get our internal window object
         uint16_t * windowList = publishedWindowIndexes.load(std::memory_order_acquire);

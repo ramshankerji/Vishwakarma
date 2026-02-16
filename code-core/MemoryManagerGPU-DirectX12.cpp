@@ -2,6 +2,7 @@
 
 #include "MemoryManagerGPU-DirectX12.h"
 #include "विश्वकर्मा.h"
+#include <iomanip>
 
 // Global Variables declared in विश्वकर्मा.cpp
 extern शंकर gpu;
@@ -210,6 +211,50 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
         dx.swapChain->GetBuffer(j, IID_PPV_ARGS(&dx.renderTargets[j]));
         gpu.device->CreateRenderTargetView(dx.renderTargets[j].Get(), nullptr, rtvHandle);
         rtvHandle.Offset(1, dx.rtvDescriptorSize);
+    }
+
+    // CREATE RENDER TEXTURES
+    D3D12_DESCRIPTOR_HEAP_DESC rttRtvHeapDesc = {};
+    rttRtvHeapDesc.NumDescriptors = FRAMES_PER_RENDERTARGETS;
+    rttRtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+    gpu.device->CreateDescriptorHeap(&rttRtvHeapDesc, IID_PPV_ARGS(&dx.rttRtvHeap));
+    dx.rtvDescriptorSize = gpu.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+    D3D12_DESCRIPTOR_HEAP_DESC rttSrvHeapDesc = {};
+    rttSrvHeapDesc.NumDescriptors = FRAMES_PER_RENDERTARGETS;
+    rttSrvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    rttSrvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    gpu.device->CreateDescriptorHeap(&rttSrvHeapDesc, IID_PPV_ARGS(&dx.rttSrvHeap));
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rttRtvHandle(dx.rttRtvHeap->GetCPUDescriptorHandleForHeapStart());
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rttSrvHandle(dx.rttSrvHeap->GetCPUDescriptorHandleForHeapStart());
+    UINT cbvSrvUavDescriptorSize = gpu.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+	//Gemini placed clearValue  / texDesc outside the loop. ChatGPT placed it inside the loop. 
+    //Since clearValue doesn't change per iteration, we can optimize by defining it once outside the loop.
+    auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(dx.rttFormat, dx.WindowWidth, dx.WindowHeight,
+        1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+    D3D12_CLEAR_VALUE clearValue{ .Format = dx.rttFormat, .Color = {0.0f, 0.2f, 0.4f, 1.0f} }; //C++20 allows this beauty!
+
+    for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; i++) {
+        CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
+        gpu.device->CreateCommittedResource( // Create the Resource in RENDER_TARGET state by default
+            &heapProps, D3D12_HEAP_FLAG_NONE,  &texDesc,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clearValue, IID_PPV_ARGS(&dx.renderTextures[i]) );
+
+        gpu.device->CreateRenderTargetView(dx.renderTextures[i].Get(), nullptr, rttRtvHandle); // Create RTV
+        rttRtvHandle.Offset(1, gpu.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV));
+
+        // Create SRV (For passing into Pixel Shader later). Can we create this struct also outside the loop ?
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Format = dx.rttFormat;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = 1;
+
+        gpu.device->CreateShaderResourceView(dx.renderTextures[i].Get(), &srvDesc, rttSrvHandle);
+        //rttSrvHandle.Offset(1, gpu.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV));//ChatGPT5.2
+        rttSrvHandle.Offset(1, cbvSrvUavDescriptorSize); //Gemini 3 Pro
     }
 
     // Create root signature with constant buffer
@@ -450,11 +495,11 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
     CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(winRes.rtvHeap->GetCPUDescriptorHandleForHeapStart(),
         winRes.frameIndex, winRes.rtvDescriptorSize);
     CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(winRes.dsvHeap->GetCPUDescriptorHandleForHeapStart());
-    commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
+	//commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle); //Removed. Already done by GpuRenderThread.
 
     // Clear render target and depth stencil
     const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f }; // Example color, adjust as needed
-    commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+    //commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr); //Removed. Already done by GpuRenderThread.
     commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -851,19 +896,20 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             threadRes.commandList->RSSetViewports(1, &winRes.viewport);
             threadRes.commandList->RSSetScissorRects(1, &winRes.scissorRect);
             
-            // SET RENDER TARGETS (Transition BackBuffer to Render Target)
-            auto barrierStart = CD3DX12_RESOURCE_BARRIER::Transition( winRes.renderTargets[winRes.frameIndex].Get(),
-                D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            auto barrierStart = CD3DX12_RESOURCE_BARRIER::Transition( winRes.renderTextures[winRes.frameIndex].Get(),
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET);
             threadRes.commandList->ResourceBarrier(1, &barrierStart);
 
+            CD3DX12_CPU_DESCRIPTOR_HANDLE rttHandle( winRes.rttRtvHeap->GetCPUDescriptorHandleForHeapStart(),
+                winRes.frameIndex, gpu.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV));
             CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle( winRes.rtvHeap->GetCPUDescriptorHandleForHeapStart(),
                 winRes.frameIndex, winRes.rtvDescriptorSize);
             CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle( winRes.dsvHeap->GetCPUDescriptorHandleForHeapStart());
 
-            threadRes.commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
+            threadRes.commandList->OMSetRenderTargets(1, &rttHandle, FALSE, &dsvHandle);
 
             const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };// Clear
-            threadRes.commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
+            threadRes.commandList->ClearRenderTargetView(rttHandle, clearColor, 0, nullptr);
             threadRes.commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
             // GET TAB DATA & RECORD GEOMETRY
@@ -878,11 +924,29 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes);// Renders geometry.
             }
 
-            // FINALIZE (Transition BackBuffer to Present)
-            auto barrierEnd = CD3DX12_RESOURCE_BARRIER::Transition(
-                winRes.renderTargets[winRes.frameIndex].Get(),
-                D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-            threadRes.commandList->ResourceBarrier(1, &barrierEnd);
+            // Transition RTT: PIXEL_SHADER_RESOURCE → COPY_SOURCE
+            auto rttToCopySource = CD3DX12_RESOURCE_BARRIER::Transition( winRes.renderTextures[winRes.frameIndex].Get(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            threadRes.commandList->ResourceBarrier(1, &rttToCopySource);
+
+            // Transition BackBuffer: PRESENT → COPY_DEST
+            auto bbToCopyDest = CD3DX12_RESOURCE_BARRIER::Transition( winRes.renderTargets[winRes.frameIndex].Get(),
+                    D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST);
+            threadRes.commandList->ResourceBarrier(1, &bbToCopyDest);
+
+            // Copy RTT → BackBuffer
+            threadRes.commandList->CopyResource( winRes.renderTargets[winRes.frameIndex].Get(), // DEST
+                winRes.renderTextures[winRes.frameIndex].Get()); // SRC
+
+            // Transition BackBuffer: COPY_DEST → PRESENT
+            auto bbToPresent = CD3DX12_RESOURCE_BARRIER::Transition( winRes.renderTargets[winRes.frameIndex].Get(),
+                    D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
+            threadRes.commandList->ResourceBarrier(1, &bbToPresent);
+
+            // (Optional) Transition RTT back to SRV for next frame
+            auto rttBackToSRV = CD3DX12_RESOURCE_BARRIER::Transition( winRes.renderTextures[winRes.frameIndex].Get(),
+                    D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            threadRes.commandList->ResourceBarrier(1, &rttBackToSRV);
 
             didRender = true;
 		} // End of loop over all windows on this monitor.
@@ -959,7 +1023,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
         }
 #endif
 
-        // TODO: After rendering, perform garbage collection on VRAM. Currently lastRenderedFrame is alwasy 1.
+        // TODO: After rendering, perform garbage collection on VRAM. Currently lastRenderedFrame is always 1.
         // In a real engine, the last COMPLETED GPU frame is tracked via fences.
         if (lastRenderedFrame > 2) {
             gpu.ProcessDeferredFrees(lastRenderedFrame - 2);
@@ -991,6 +1055,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
     std::cout << "Render Thread (Monitor " << monitorId << ") shutting down.\n" << std::endl;
 }
 
+// Following function is currently called in main UI thread, latter this responsibility will be moved to Render thread.
 void शंकर::ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UINT newHeight)
 {
     if (!dx.swapChain) return;
@@ -1008,14 +1073,15 @@ void शंकर::ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UI
     CloseHandle(hEvent);
 
     for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; ++i) dx.renderTargets[i].Reset();// Release old back buffers
-    dx.depthStencilBuffer.Reset();
+	dx.depthStencilBuffer.Reset(); // Release old depth buffer
+    for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; ++i) dx.renderTextures[i].Reset();// Release RTT textures
 
     DXGI_SWAP_CHAIN_DESC desc = {};
     dx.swapChain->GetDesc(&desc);
     ThrowIfFailed(dx.swapChain->ResizeBuffers( FRAMES_PER_RENDERTARGETS, // Resize swapchain buffers
         newWidth, newHeight, desc.BufferDesc.Format, desc.Flags));
-
     dx.frameIndex = dx.swapChain->GetCurrentBackBufferIndex();
+
     CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(dx.rtvHeap->GetCPUDescriptorHandleForHeapStart());// Recreate RTVs
     for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; i++) {
         ThrowIfFailed(dx.swapChain->GetBuffer(i, IID_PPV_ARGS(&dx.renderTargets[i])));
@@ -1037,6 +1103,33 @@ void शंकर::ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UI
 
     device->CreateDepthStencilView( dx.depthStencilBuffer.Get(), nullptr,
         dx.dsvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    // Recreate RTT Textures
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rttRtvHandle(dx.rttRtvHeap->GetCPUDescriptorHandleForHeapStart());
+    CD3DX12_CPU_DESCRIPTOR_HANDLE rttSrvHandle(dx.rttSrvHeap->GetCPUDescriptorHandleForHeapStart());
+    UINT rttRtvIncrement = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    UINT rttSrvIncrement = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_CLEAR_VALUE clearValue{ .Format = dx.rttFormat, .Color = {0.0f, 0.2f, 0.4f, 1.0f} };
+
+    for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; i++) {
+        auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(dx.rttFormat,
+            newWidth, newHeight, 1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+        CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
+        ThrowIfFailed(device->CreateCommittedResource(&heapProps,
+            D3D12_HEAP_FLAG_NONE, &texDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            &clearValue, IID_PPV_ARGS(&dx.renderTextures[i])));
+        device->CreateRenderTargetView(dx.renderTextures[i].Get(), nullptr, rttRtvHandle);// RTV
+        rttRtvHandle.Offset(1, rttRtvIncrement);
+
+        // SRV
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Format = dx.rttFormat;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels = 1;
+        device->CreateShaderResourceView(dx.renderTextures[i].Get(), &srvDesc, rttSrvHandle);
+        rttSrvHandle.Offset(1, rttSrvIncrement);
+    }
 
     dx.WindowWidth = newWidth; // Update stored dimensions
     dx.WindowHeight = newHeight;
