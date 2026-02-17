@@ -70,7 +70,7 @@ inline void addRandomGeometryElement(DATASETTAB* targetTab) {
 
     // Randomly select a shape type (0-7 for the 8 shapes available).
     // We use the GetRNG() helper function already available in "डेटा-सामान्य-3D.h".
-    std::uniform_int_distribution<int> shapeDist(0, 7);
+    std::uniform_int_distribution<int> shapeDist(0, 8);
     int shapeType = shapeDist(GetRNG());
 
     // Note: Ensure your shape constructors (new PYRAMID()) use the correct memoryGroupNo if needed.
@@ -132,6 +132,13 @@ inline void addRandomGeometryElement(DATASETTAB* targetTab) {
     }
     case 7: {
         FRUSTUM_OF_CONE* shape = new FRUSTUM_OF_CONE();
+        shape->Randomize();
+        geometry = shape->GetGeometry();
+        memoryId = shape->memoryID;
+        break;
+    }
+    case 8: {
+        PIPE* shape = new PIPE();
         shape->Randomize();
         geometry = shape->GetGeometry();
         memoryId = shape->memoryID;

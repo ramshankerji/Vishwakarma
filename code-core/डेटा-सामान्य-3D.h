@@ -41,7 +41,7 @@ struct PYRAMID :public META_DATA{
 struct CUBOID :public META_DATA {
     //Mandatory Fields
     std::vector<XMFLOAT3> vertices; // 8 corner vertices
-    std::vector<XMHALF4> colors;   // 8 colors, one for each vertex
+    XMHALF4 colors;   // Common color for all faces.
 
     //Optional Fields
     uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
@@ -86,7 +86,7 @@ struct CYLINDER :public META_DATA {
 struct PARALLELEPIPED :public META_DATA {
     //Mandatory Fields
     std::vector<XMFLOAT3> vertices; // 8 vertices
-    std::vector<XMHALF4> colors;   // 8 colors
+    XMHALF4 colors;   // common color for entire object. 
 
     //Optional Fields
     uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
@@ -115,7 +115,7 @@ struct SPHERE :public META_DATA {
 struct FRUSTUM_OF_PYRAMID :public META_DATA {
     //Mandatory Fields
     std::vector<XMFLOAT3> vertices; // 8 vertices: 4 for bottom base, 4 for top base
-    XMHALF4 colorBase, colorTop, colorIncline; // There are 3 uniqe type of surfaces on a pyramid frustum.
+    XMHALF4 colorBase, colorTop, colorIncline; // There are 3 unique type of surfaces on a pyramid frustum.
 
     //Optional Fields
     uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
@@ -137,6 +137,28 @@ struct  FRUSTUM_OF_CONE :public META_DATA {
     uint32_t systemFlags;          // 32 booleans for internal use only. Not persisted.
     uint32_t objectLifeCycleFlags; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
+    void Randomize();
+    GeometryData GetGeometry();
+};
+
+struct PIPE : public META_DATA {
+
+    // Mandatory Fields
+    XMFLOAT3 center1;
+    XMFLOAT3 center2;
+    float outsideDiameter;
+    float insideDiameter;
+
+    XMHALF4 colorOuter;
+    XMHALF4 colorInner;
+    XMHALF4 colorCap;
+
+    // Optional Fields
+    uint64_t optionalFieldsFlags;
+    uint32_t systemFlags;
+    uint32_t objectLifeCycleFlags;
+    c_string name;
+
     void Randomize();
     GeometryData GetGeometry();
 };
@@ -168,7 +190,7 @@ inline GeometryData PYRAMID::GetGeometry() {
         };
 
     // Construct vertices with Position, Normal, and Color
-    // Since we are using commone vertex between different surfaces, Intentionally assigning colors[0] for uinformity.
+    // Since we are using common vertex between different surfaces, Intentionally assigning colors[0] for uniformity.
     geometry.vertices[0] = Vertex{ vertices[0], GetCentroidNormal(v0), colors[0] };
     geometry.vertices[1] = Vertex{ vertices[1], GetCentroidNormal(v1), colors[0] };
     geometry.vertices[2] = Vertex{ vertices[2], GetCentroidNormal(v2), colors[0] };
@@ -220,56 +242,62 @@ inline void CUBOID::Randomize() {
     float sz = sizeDist(rng) * 0.5f;
 
     vertices = {
-        XMFLOAT3(cx - sx, cy - sy, cz - sz), XMFLOAT3(cx + sx, cy - sy, cz - sz),
-        XMFLOAT3(cx + sx, cy + sy, cz - sz), XMFLOAT3(cx - sx, cy + sy, cz - sz),
-        XMFLOAT3(cx - sx, cy - sy, cz + sz), XMFLOAT3(cx + sx, cy - sy, cz + sz),
-        XMFLOAT3(cx + sx, cy + sy, cz + sz), XMFLOAT3(cx - sx, cy + sy, cz + sz)
+        XMFLOAT3(cx - sx, cy - sy, cz - sz), // 0
+        XMFLOAT3(cx + sx, cy - sy, cz - sz), // 1
+        XMFLOAT3(cx + sx, cy + sy, cz - sz), // 2
+        XMFLOAT3(cx - sx, cy + sy, cz - sz), // 3
+        XMFLOAT3(cx - sx, cy - sy, cz + sz), // 4
+        XMFLOAT3(cx + sx, cy - sy, cz + sz), // 5
+        XMFLOAT3(cx + sx, cy + sy, cz + sz), // 6
+        XMFLOAT3(cx - sx, cy + sy, cz + sz)  // 7
     };
 
-    colors.resize(8);
-    for (int i = 0; i < 8; ++i) {
-        colors[i] = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-    }
+    // Single common color for entire cuboid
+    colors = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
 }
 
-/*Similar to the Pyramid implementation, calculating the centroid (geometric center) of the cuboid. 
-The normal for each shared corner vertex is then defined as the normalized vector pointing from the center to that corner. 
-This provides a "rounded" shading look, which is the mathematically suitable approach for shared vertices on a convex shape.*/
-
 // CUBOID
+/*Vertex bifurcation applied:- No shared vertices- Each face has independent vertices
+- Proper flat shading- No centroid-based approximation */
 inline GeometryData CUBOID::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
-    geometry.vertices.resize(8);
+    geometry.vertices.clear();
+    geometry.indices.clear();
+    geometry.vertices.reserve(24);
+    geometry.indices.reserve(36);
 
-    // Calculate the geometric center (centroid) of the cuboid.
-    // We use this to calculate an outward-facing normal for each corner vertex.
-    XMVECTOR centroid = XMVectorZero();
-    for (const auto& v : vertices) {
-        centroid += XMLoadFloat3(&v);
-    }
-    centroid /= 8.0f; // Average of 8 vertices
+    // Lambda to add flat shaded quad
+    auto AddFace = [&](int i0, int i1, int i2, int i3)
+        {
+            XMVECTOR v0 = XMLoadFloat3(&vertices[i0]);
+            XMVECTOR v1 = XMLoadFloat3(&vertices[i1]);
+            XMVECTOR v2 = XMLoadFloat3(&vertices[i2]);
+            XMVECTOR normal = XMVector3Normalize( XMVector3Cross(v1 - v0, v2 - v0));// Face normal (flat)
+            XMFLOAT3 normalFloat;
+            XMStoreFloat3(&normalFloat, normal);
+            XMUBYTE4 packedNormal = PackNormal(normalFloat);
+            uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
 
-    // Lambda helper to calculate and pack the normal
-    auto GetCentroidNormal = [&](XMVECTOR vertexPos) -> XMUBYTE4 {
-        XMFLOAT3 normalFloat; // Normal is the direction from centroid to the vertex
-        XMStoreFloat3(&normalFloat, XMVector3Normalize(vertexPos - centroid));
-        return PackNormal(normalFloat);
+            geometry.vertices.push_back(Vertex{ vertices[i0], packedNormal, colors });
+            geometry.vertices.push_back(Vertex{ vertices[i1], packedNormal, colors });
+            geometry.vertices.push_back(Vertex{ vertices[i2], packedNormal, colors });
+            geometry.vertices.push_back(Vertex{ vertices[i3], packedNormal, colors });
+
+            geometry.indices.insert(geometry.indices.end(), {
+                static_cast<uint16_t>(base + 0), static_cast<uint16_t>(base + 1),
+                static_cast<uint16_t>(base + 2), static_cast<uint16_t>(base + 0),
+                static_cast<uint16_t>(base + 2), static_cast<uint16_t>(base + 3)
+            });
         };
 
-    for (size_t i = 0; i < 8; ++i) {
-        XMVECTOR vPos = XMLoadFloat3(&vertices[i]);
-        geometry.vertices[i] = Vertex{ vertices[i], GetCentroidNormal(vPos), colors[i] };
-    }
-
-    geometry.indices = {
-        0, 3, 2, 0, 2, 1, // Front face
-        4, 5, 6, 4, 6, 7, // Back face
-        4, 7, 3, 4, 3, 0, // Left face
-        1, 2, 6, 1, 6, 5, // Right face
-        3, 7, 6, 3, 6, 2, // Top face
-        0, 1, 5, 0, 5, 4  // Bottom face
-    };
+    // Faces (consistent outward winding)
+    AddFace(0, 3, 2, 1); // Front (-Z)
+    AddFace(4, 5, 6, 7); // Back  (+Z)
+    AddFace(4, 7, 3, 0); // Left  (-X)
+    AddFace(1, 2, 6, 5); // Right (+X)
+    AddFace(3, 7, 6, 2); // Top   (+Y)
+    AddFace(0, 1, 5, 4); // Bottom(-Y)
     return geometry;
 }
 
@@ -287,61 +315,67 @@ inline void CONE::Randomize() {
 
     colorBase = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
     colorIncline = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-    
 }
 
 // CONE
-/*Consistent with the previous shapes, using the centroid (geometric average) of all generated vertices to determine the
-"suitable" normal for the shared vertices. This ensures that the apex points roughly up, the base center points down, 
-and the rim vertices point outwards and slightly downwards, providing a smooth shading approximation for the single-mesh 
-structure.*/
+/*Vertex bifurcation applied:- No shared vertices- Each triangle has independent vertices
+- Proper flat shading- No centroid-based approximation */
 inline GeometryData CONE::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
-    const int numSegments = 36; // Must match the logic in Randomize regarding color count
+    const int numSegments = 36;
+    geometry.vertices.clear();
+    geometry.indices.clear();
 
-    geometry.vertices.resize(numSegments + 2);
+    // Reserve enough space. Side: 36 triangles → 108 vertices. Base: 36 triangles → 108 vertices
+    geometry.vertices.reserve(numSegments * 6);
+    geometry.indices.reserve(numSegments * 6);
 
-    // Generate positions first to calculate the Centroid.
-    // We use the centroid to determine the outward-facing normal for shared vertices.
-    std::vector<XMFLOAT3> tempPositions(numSegments + 2);
-    tempPositions[0] = apex;
-    tempPositions[1] = baseCenter;
+    // Lambda to add a flat shaded triangle
+    auto AddTriangle = [&](const XMFLOAT3& a,
+        const XMFLOAT3& b,
+        const XMFLOAT3& c,
+        const XMHALF4& color)
+        {
+            XMVECTOR v0 = XMLoadFloat3(&a);
+            XMVECTOR v1 = XMLoadFloat3(&b);
+            XMVECTOR v2 = XMLoadFloat3(&c);
+            XMVECTOR normal = XMVector3Normalize( XMVector3Cross(v1 - v0, v2 - v0));
+            XMFLOAT3 normalFloat;
+            XMStoreFloat3(&normalFloat, normal);
+            XMUBYTE4 packedNormal = PackNormal(normalFloat);
 
-    XMVECTOR centroidAcc = XMLoadFloat3(&apex) + XMLoadFloat3(&baseCenter);
+            uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
 
+            geometry.vertices.push_back(Vertex{ a, packedNormal, color });
+            geometry.vertices.push_back(Vertex{ b, packedNormal, color });
+            geometry.vertices.push_back(Vertex{ c, packedNormal, color });
+
+            geometry.indices.push_back(base + 0);
+            geometry.indices.push_back(base + 1);
+            geometry.indices.push_back(base + 2);
+        };
+
+    // Generate geometry
     for (int i = 0; i < numSegments; ++i) {
-        float angle = 2.0f * (float)M_PI * i / numSegments;
-        tempPositions[i + 2] = {
-            baseCenter.x + radius * cos(angle),
-            baseCenter.y,
-            baseCenter.z + radius * sin(angle)
-        };
-        centroidAcc += XMLoadFloat3(&tempPositions[i + 2]);
-    }
-    XMVECTOR centroid = centroidAcc / (float)(numSegments + 2);// Calculate average (centroid)
+        int next = (i + 1) % numSegments;
 
-    // Lambda helper to calculate and pack the normal
-    auto GetCentroidNormal = [&](XMVECTOR vertexPos) -> XMUBYTE4 {
-        XMFLOAT3 normalFloat; // Normal is the direction from centroid to the vertex
-        XMStoreFloat3(&normalFloat, XMVector3Normalize(vertexPos - centroid));
-        return PackNormal(normalFloat);
-        };
+        float a0 = 2.0f * XM_PI * i / numSegments;
+        float a1 = 2.0f * XM_PI * next / numSegments;
 
-    for (int i = 0; i < numSegments + 2; ++i) { // Construct Vertices with Position, Normal, and Color
-        XMVECTOR vPos = XMLoadFloat3(&tempPositions[i]);
-        geometry.vertices[i] = Vertex{ tempPositions[i], GetCentroidNormal(vPos), colorIncline };
+        float c0 = cosf(a0);
+        float s0 = sinf(a0);
+        float c1 = cosf(a1);
+        float s1 = sinf(a1);
+
+        // Rim points
+        XMFLOAT3 r0 = { baseCenter.x + radius * c0, baseCenter.y, baseCenter.z + radius * s0 };
+        XMFLOAT3 r1 = { baseCenter.x + radius * c1, baseCenter.y, baseCenter.z + radius * s1 };
+
+        AddTriangle(apex, r0, r1, colorIncline);// Side surface triangle (flat shaded)
+        AddTriangle(baseCenter, r1, r0, colorBase);// Base surface triangle (flat shaded, downward facing via winding)
     }
 
-    for (int i = 0; i < numSegments; ++i) {//Define Indices
-        geometry.indices.push_back(0);// Side surface triangles
-        geometry.indices.push_back(i + 2);
-        geometry.indices.push_back(((i + 1) % numSegments) + 2);
-
-        geometry.indices.push_back(1);// Base surface triangles
-        geometry.indices.push_back(((i + 1) % numSegments) + 2);
-        geometry.indices.push_back(i + 2);
-    }
     return geometry;
 }
 
@@ -364,67 +398,98 @@ inline void CYLINDER::Randomize() {
 }
 
 // CYLINDER
-/*Consistent with the other shapes, the centroid(midpoint between the two base centers) and using the direction from 
-the centroid to each vertex as the normal.This ensures that the cylinder has consistent "smooth" shading for the shared 
-vertices along the rim and caps.*/
+/* Vertex bifurcation applied:- No shared vertices- Each triangle/quad has independent vertices
+- Proper flat shading- No centroid-based fake normals */
 inline GeometryData CYLINDER::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
     const int numSegments = 36;
-    geometry.vertices.resize(2 * numSegments + 2);// Define vertices for both caps
+    geometry.vertices.clear();
+    geometry.indices.clear();
+    geometry.vertices.reserve(numSegments * (3 + 3 + 4));// Reserve enough space
+    geometry.indices.reserve(numSegments * (3 + 3 + 6));
 
-    // Calculate the geometric center (centroid) of the cylinder.
-    // We use this to calculate an outward-facing normal for each vertex.
+    // Axis direction (for correct cap orientation reference if needed)
     XMVECTOR vP1 = XMLoadFloat3(&p1);
     XMVECTOR vP2 = XMLoadFloat3(&p2);
-    XMVECTOR centroid = (vP1 + vP2) * 0.5f;
+    XMVECTOR axis = XMVector3Normalize(vP2 - vP1);
 
-    // Lambda helper to calculate and pack the normal
-    auto GetCentroidNormal = [&](XMVECTOR vertexPos) -> XMUBYTE4 {
-        XMFLOAT3 normalFloat;
-        // Normal is the direction from centroid to the vertex
-        XMStoreFloat3(&normalFloat, XMVector3Normalize(vertexPos - centroid));
-        return PackNormal(normalFloat);
+    // Lambda to add a flat-shaded triangle
+    auto AddTriangle = [&](const XMFLOAT3& a, const XMFLOAT3& b, const XMFLOAT3& c,
+        const XMHALF4& color)
+        {
+            XMVECTOR v0 = XMLoadFloat3(&a);
+            XMVECTOR v1 = XMLoadFloat3(&b);
+            XMVECTOR v2 = XMLoadFloat3(&c);
+
+            XMVECTOR normal = XMVector3Normalize(
+                XMVector3Cross(v1 - v0, v2 - v0));
+
+            XMFLOAT3 normalFloat;
+            XMStoreFloat3(&normalFloat, normal);
+            XMUBYTE4 packedNormal = PackNormal(normalFloat);
+
+            uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
+
+            geometry.vertices.push_back(Vertex{ a, packedNormal, color });
+            geometry.vertices.push_back(Vertex{ b, packedNormal, color });
+            geometry.vertices.push_back(Vertex{ c, packedNormal, color });
+
+            geometry.indices.push_back(base + 0);
+            geometry.indices.push_back(base + 1);
+            geometry.indices.push_back(base + 2);
         };
 
-    geometry.vertices[0] = Vertex{ p1, GetCentroidNormal(vP1), colorBase };// Bottom center
-    geometry.vertices[numSegments + 1] = Vertex{ p2, GetCentroidNormal(vP2), colorTop };// Top center
+    // Lambda to add a flat-shaded quad (two triangles)
+    auto AddQuad = [&](const XMFLOAT3& a,
+        const XMFLOAT3& b,
+        const XMFLOAT3& c,
+        const XMFLOAT3& d,
+        const XMHALF4& color)
+        {
+            XMVECTOR v0 = XMLoadFloat3(&a);
+            XMVECTOR v1 = XMLoadFloat3(&b);
+            XMVECTOR v2 = XMLoadFloat3(&c);
+            XMVECTOR normal = XMVector3Normalize( XMVector3Cross(v1 - v0, v2 - v0));
+            XMFLOAT3 normalFloat;
+            XMStoreFloat3(&normalFloat, normal);
+            XMUBYTE4 packedNormal = PackNormal(normalFloat);
+            uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
 
+            geometry.vertices.push_back(Vertex{ a, packedNormal, color });
+            geometry.vertices.push_back(Vertex{ b, packedNormal, color });
+            geometry.vertices.push_back(Vertex{ c, packedNormal, color });
+            geometry.vertices.push_back(Vertex{ d, packedNormal, color });
+
+            geometry.indices.insert(geometry.indices.end(), {
+                static_cast<uint16_t>(base + 0), static_cast<uint16_t>(base + 1),
+                static_cast<uint16_t>(base + 2), static_cast<uint16_t>(base + 0),
+                static_cast<uint16_t>(base + 2), static_cast<uint16_t>(base + 3)
+            });
+        };
+
+    // Generate geometry
     for (int i = 0; i < numSegments; ++i) {
-        float angle = 2.0f * (float)M_PI * i / numSegments;
-        float cosA = cos(angle);
-        float sinA = sin(angle);
+        int next = (i + 1) % numSegments;
 
-        // Bottom cap rim vertex
-        XMFLOAT3 posBottom = { p1.x + radius * cosA, p1.y, p1.z + radius * sinA };
-        XMVECTOR vPosBottom = XMLoadFloat3(&posBottom);
-        geometry.vertices[i + 1] = Vertex{ posBottom, GetCentroidNormal(vPosBottom), colorIncline };
+        float a0 = 2.0f * XM_PI * i / numSegments;
+        float a1 = 2.0f * XM_PI * next / numSegments;
 
-        // Top cap rim vertex
-        XMFLOAT3 posTop = { p2.x + radius * cosA, p2.y, p2.z + radius * sinA };
-        XMVECTOR vPosTop = XMLoadFloat3(&posTop);
-        geometry.vertices[i + numSegments + 2] = Vertex{ posTop, GetCentroidNormal(vPosTop), colorIncline };
+        float c0 = cosf(a0);
+        float s0 = sinf(a0);
+        float c1 = cosf(a1);
+        float s1 = sinf(a1);
+
+        XMFLOAT3 b0 = { p1.x + radius * c0, p1.y, p1.z + radius * s0 };// Bottom rim points
+        XMFLOAT3 b1 = { p1.x + radius * c1, p1.y, p1.z + radius * s1 };
+        XMFLOAT3 t0 = { p2.x + radius * c0, p2.y, p2.z + radius * s0 };// Top rim points
+        XMFLOAT3 t1 = { p2.x + radius * c1, p2.y, p2.z + radius * s1 };
+
+        AddTriangle(p1, b1, b0, colorBase);// Bottom cap (flat, downward facing via winding)
+        AddTriangle(p2, t0, t1, colorTop);// Top cap (flat, upward facing via winding)
+        AddQuad(b0, b1, t1, t0, colorIncline);// Side wall (flat quad per segment)
     }
 
-    // Define indices
-    for (int i = 0; i < numSegments; ++i) {
-        int next_i = (i + 1) % numSegments;
-        // Bottom cap
-        geometry.indices.push_back(0);
-        geometry.indices.push_back(next_i + 1);
-        geometry.indices.push_back(i + 1);
-        // Top cap
-        geometry.indices.push_back(numSegments + 1);
-        geometry.indices.push_back(i + numSegments + 2);
-        geometry.indices.push_back(next_i + numSegments + 2);
-        // Side wall
-        geometry.indices.push_back(i + 1);
-        geometry.indices.push_back(next_i + 1);
-        geometry.indices.push_back(i + numSegments + 2);
-        geometry.indices.push_back(next_i + 1);
-        geometry.indices.push_back(next_i + numSegments + 2);
-        geometry.indices.push_back(i + numSegments + 2);
-    }
     return geometry;
 }
 
@@ -441,6 +506,7 @@ inline void PARALLELEPIPED::Randomize() {
     XMFLOAT3 vecC = { vecDist(rng), vecDist(rng), vecDist(rng) };
 
     vertices.resize(8);
+
     vertices[0] = origin;
     vertices[1] = { origin.x + vecA.x, origin.y + vecA.y, origin.z + vecA.z };
     vertices[2] = { origin.x + vecB.x, origin.y + vecB.y, origin.z + vecB.z };
@@ -450,48 +516,58 @@ inline void PARALLELEPIPED::Randomize() {
     vertices[6] = { origin.x + vecB.x + vecC.x, origin.y + vecB.y + vecC.y, origin.z + vecB.z + vecC.z };
     vertices[7] = { origin.x + vecA.x + vecB.x + vecC.x, origin.y + vecA.y + vecB.y + vecC.y, origin.z + vecA.z + vecB.z + vecC.z };
 
-    colors.resize(8);
-    for (int i = 0; i < 8; ++i) {
-        colors[i] = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
-    }
+    // Single common color for entire object
+    colors = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
 }
 
 // PARALLELEPIPED
 inline GeometryData PARALLELEPIPED::GetGeometry() {
+
     GeometryData geometry;
     geometry.id = memoryID;
-    geometry.vertices.resize(8);
 
-    // Calculate the geometric center (centroid) of the parallelepiped.
-    // We use this to calculate an outward-facing normal for each vertex.
-    XMVECTOR centroid = XMVectorZero();
-    for (const auto& v : vertices) {
-        centroid += XMLoadFloat3(&v);
-    }
-    centroid /= 8.0f; // Average of 8 vertices
+    geometry.vertices.clear();
+    geometry.indices.clear();
 
-    // Lambda helper to calculate and pack the normal
-    auto GetCentroidNormal = [&](XMVECTOR vertexPos) -> XMUBYTE4 {
-        XMFLOAT3 normalFloat; // Normal is the direction from centroid to the vertex
-        XMStoreFloat3(&normalFloat, XMVector3Normalize(vertexPos - centroid));
-        return PackNormal(normalFloat);
-        };
+    geometry.vertices.reserve(24);
+    geometry.indices.reserve(36);
 
-    for (size_t i = 0; i < 8; ++i) {
-        XMVECTOR vPos = XMLoadFloat3(&vertices[i]);
-        geometry.vertices[i] = Vertex{ vertices[i], GetCentroidNormal(vPos), colors[i] };
-    }
+    auto AddFace = [&](int i0, int i1, int i2, int i3)
+    {
+        XMVECTOR v0 = XMLoadFloat3(&vertices[i0]);
+        XMVECTOR v1 = XMLoadFloat3(&vertices[i1]);
+        XMVECTOR v2 = XMLoadFloat3(&vertices[i2]);
 
-    // Indices are based on vertex combinations
-    geometry.indices = {
-        0,2,4, 0,4,1, // Face defined by vecA, vecB
-        0,3,2,       // Face defined by vecB, vecC (part 1)
-        3,6,2,       // Face defined by vecB, vecC (part 2)
-        0,1,5, 0,5,3, // Face defined by vecA, vecC
-        7,5,1, 7,1,4, // Opposite of vecB, vecC
-        7,6,3, 7,3,5, // Opposite of vecA, vecB
-        7,4,2, 7,2,6  // Opposite of vecA, vecC
+        XMVECTOR edge1 = v1 - v0;
+        XMVECTOR edge2 = v2 - v0;
+        XMVECTOR normal = XMVector3Normalize(XMVector3Cross(edge1, edge2));
+
+        XMFLOAT3 normalFloat;
+        XMStoreFloat3(&normalFloat, normal);
+        XMUBYTE4 packedNormal = PackNormal(normalFloat);
+
+        uint16_t baseIndex = static_cast<uint16_t>(geometry.vertices.size());
+
+        geometry.vertices.push_back(Vertex{ vertices[i0], packedNormal, colors });
+        geometry.vertices.push_back(Vertex{ vertices[i1], packedNormal, colors });
+        geometry.vertices.push_back(Vertex{ vertices[i2], packedNormal, colors });
+        geometry.vertices.push_back(Vertex{ vertices[i3], packedNormal, colors });
+
+        geometry.indices.insert(geometry.indices.end(), {
+            static_cast<uint16_t>(baseIndex + 0), static_cast<uint16_t>(baseIndex + 1),
+            static_cast<uint16_t>(baseIndex + 2), static_cast<uint16_t>(baseIndex + 0),
+            static_cast<uint16_t>(baseIndex + 2), static_cast<uint16_t>(baseIndex + 3)
+        });
     };
+
+    // Faces (consistent winding for outward normals)
+    AddFace(0, 2, 4, 1); // vecA + vecB
+    AddFace(0, 3, 6, 2); // vecB + vecC
+    AddFace(0, 1, 5, 3); // vecA + vecC
+    AddFace(7, 5, 1, 4); // opposite vecB+vecC
+    AddFace(7, 6, 3, 5); // opposite vecA+vecB
+    AddFace(7, 4, 2, 6); // opposite vecA+vecC
+
     return geometry;
 }
 
@@ -512,83 +588,69 @@ inline void SPHERE::Randomize() {
 /*For the sphere, the "suitable" normal for every vertex is exactly the normalized vector from the sphere's 
 center to that vertex. This results in perfectly smooth shading across the surface. 
 Color randomization integrated directly into the vertex generation loop to accommodate the new Vertex structure.*/
+// SPHERE
+/*
+Updated implementation:
+- No explicit pole vertices
+- Full latitude rings generated (including top and bottom)
+- Uniform quad-based indexing across stacks
+- Smooth shading via true spherical normals
+*/
 inline GeometryData SPHERE::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
+    const int sliceCount = 36;   // Longitude
+    const int stackCount = 18;   // Latitude
+    geometry.vertices.clear();
+    geometry.indices.clear();
+    geometry.vertices.reserve((stackCount + 1) * sliceCount);
+    geometry.indices.reserve(stackCount * sliceCount * 6);
 
-    // Using 36 longitude slices and 18 latitude stacks for a reasonable vertex count
-    const int sliceCount = 36;
-    const int stackCount = 18;
+    XMVECTOR vCenter = XMLoadFloat3(&center);
 
-    XMVECTOR vCenter = XMLoadFloat3(&center);// Calculate the center vector for normal calculations
-
-    auto GetSphericalNormal = [&](XMVECTOR vertexPos) -> XMUBYTE4 {// Lambda helper to calculate and pack the normal
+    // Helper for smooth spherical normal
+    auto GetSphericalNormal = [&](XMVECTOR vertexPos) -> XMUBYTE4 {
         XMFLOAT3 normalFloat;
-        // Normal is the direction from center to the vertex (result is already unit length for sphere surface)
         XMStoreFloat3(&normalFloat, XMVector3Normalize(vertexPos - vCenter));
         return PackNormal(normalFloat);
-        };
+    };
 
-    // Add top pole vertex
-    XMFLOAT3 topPos = { center.x, center.y + radius, center.z };
-    geometry.vertices.push_back(Vertex{ topPos, GetSphericalNormal(XMLoadFloat3(&topPos)), color });
+    // Generate full latitude rings (including top and bottom)
+    for (int i = 0; i <= stackCount; ++i) {
 
-    for (int i = 1; i < stackCount; ++i) {// Add middle stacks
-        float phi = (float)M_PI * i / stackCount;
-        float sinPhi = sin(phi);
-        float cosPhi = cos(phi);
+        float phi = XM_PI * i / stackCount; // 0 → PI
+        float sinPhi = sinf(phi);
+        float cosPhi = cosf(phi);
 
         for (int j = 0; j < sliceCount; ++j) {
-            float theta = 2.0f * (float)M_PI * j / sliceCount;
+            float theta = XM_2PI * j / sliceCount; // 0 → 2PI
+
             XMFLOAT3 pos = {
-                center.x + radius * sinPhi * cos(theta),
+                center.x + radius * sinPhi * cosf(theta),
                 center.y + radius * cosPhi,
-                center.z + radius * sinPhi * sin(theta)
+                center.z + radius * sinPhi * sinf(theta)
             };
 
             XMVECTOR vPos = XMLoadFloat3(&pos);
-            geometry.vertices.push_back(Vertex{ pos, GetSphericalNormal(vPos), color });
+            geometry.vertices.push_back( Vertex{ pos, GetSphericalNormal(vPos), color } );
         }
     }
 
-    // Add bottom pole vertex
-    XMFLOAT3 bottomPos = { center.x, center.y - radius, center.z };
-    geometry.vertices.push_back(Vertex{ bottomPos, GetSphericalNormal(XMLoadFloat3(&bottomPos)), color });
-
-    // Top cap indices
-    for (int i = 0; i < sliceCount; ++i) {
-        geometry.indices.push_back(0);
-        geometry.indices.push_back(i + 1);
-        geometry.indices.push_back(((i + 1) % sliceCount) + 1);
-    }
-
-    // Middle stacks indices
-    for (int i = 0; i < stackCount - 2; ++i) {
+    // Connect stacks with quads (2 triangles each)
+    for (int i = 0; i < stackCount; ++i) {
         for (int j = 0; j < sliceCount; ++j) {
             int next_j = (j + 1) % sliceCount;
-            int r0 = 1 + i * sliceCount;
-            int r1 = 1 + (i + 1) * sliceCount;
+            int r0 = i * sliceCount;
+            int r1 = (i + 1) * sliceCount;
 
-            // Quad split into two triangles
             geometry.indices.push_back(r0 + j);
+            geometry.indices.push_back(r1 + j);
+            geometry.indices.push_back(r0 + next_j);
             geometry.indices.push_back(r0 + next_j);
             geometry.indices.push_back(r1 + j);
-
-            geometry.indices.push_back(r0 + next_j);
             geometry.indices.push_back(r1 + next_j);
-            geometry.indices.push_back(r1 + j);
         }
     }
-
-    // Bottom cap indices
-    int bottomPoleIndex = (int)geometry.vertices.size() - 1;
-    int lastStackStartIndex = 1 + (stackCount - 2) * sliceCount;
-    for (int i = 0; i < sliceCount; ++i) {
-        geometry.indices.push_back(bottomPoleIndex);
-        geometry.indices.push_back(((i + 1) % sliceCount) + lastStackStartIndex);
-        geometry.indices.push_back(i + lastStackStartIndex);
-    }
-
     return geometry;
 }
 
@@ -685,69 +747,181 @@ inline void FRUSTUM_OF_CONE::Randomize() {
 
 // FRUSTUM_OF_CONE
 // Ram: After reading most of the previous Shapes code, this one is on blind faith. This code was not read before commit !
-inline GeometryData FRUSTUM_OF_CONE::GetGeometry() {
+inline GeometryData FRUSTUM_OF_CONE::GetGeometry()
+{
     GeometryData geometry;
     geometry.id = memoryID;
     const int numSegments = 36;
+    geometry.vertices.clear();
+    geometry.indices.clear();
+    geometry.vertices.reserve(numSegments * (3 + 3 + 4));
+    geometry.indices.reserve(numSegments * (3 + 3 + 6));
 
-    // Define vertices
-    geometry.vertices.resize(2 * numSegments + 2);
-
-    // Calculate the geometric center (centroid) of the frustum.
-    // We use this to calculate an outward-facing normal for each vertex.
-    XMVECTOR vBottom = XMLoadFloat3(&bottomCenter);
-    XMVECTOR vTop = XMLoadFloat3(&topCenter);
-    XMVECTOR centroid = (vBottom + vTop) * 0.5f;
-
-    // Lambda helper to calculate and pack the normal
-    auto GetCentroidNormal = [&](XMVECTOR vertexPos) -> XMUBYTE4 {
+    auto AddTriangle = [&](const XMFLOAT3& p0, const XMFLOAT3& p1, const XMFLOAT3& p2, const XMHALF4& color) {
+        XMVECTOR v0 = XMLoadFloat3(&p0);
+        XMVECTOR v1 = XMLoadFloat3(&p1);
+        XMVECTOR v2 = XMLoadFloat3(&p2);
+        XMVECTOR normal = XMVector3Normalize( XMVector3Cross(v1 - v0, v2 - v0));
         XMFLOAT3 normalFloat;
-        // Normal is the direction from centroid to the vertex
-        XMStoreFloat3(&normalFloat, XMVector3Normalize(vertexPos - centroid));
-        return PackNormal(normalFloat);
+        XMStoreFloat3(&normalFloat, normal);
+        XMUBYTE4 packedNormal = PackNormal(normalFloat);
+        uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
+
+        geometry.vertices.push_back(Vertex{ p0, packedNormal, color });
+        geometry.vertices.push_back(Vertex{ p1, packedNormal, color });
+        geometry.vertices.push_back(Vertex{ p2, packedNormal, color });
+
+        geometry.indices.push_back(base + 0);
+        geometry.indices.push_back(base + 1);
+        geometry.indices.push_back(base + 2);
+    };
+
+    auto AddQuad = [&](const XMFLOAT3& p0, const XMFLOAT3& p1, const XMFLOAT3& p2, const XMFLOAT3& p3, 
+        const XMHALF4& color){
+
+        XMVECTOR v0 = XMLoadFloat3(&p0);
+        XMVECTOR v1 = XMLoadFloat3(&p1);
+        XMVECTOR v2 = XMLoadFloat3(&p2);
+        XMVECTOR normal = XMVector3Normalize( XMVector3Cross(v1 - v0, v2 - v0));
+        XMFLOAT3 normalFloat;
+        XMStoreFloat3(&normalFloat, normal);
+        XMUBYTE4 packedNormal = PackNormal(normalFloat);
+        uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
+
+        geometry.vertices.push_back(Vertex{ p0, packedNormal, color });
+        geometry.vertices.push_back(Vertex{ p1, packedNormal, color });
+        geometry.vertices.push_back(Vertex{ p2, packedNormal, color });
+        geometry.vertices.push_back(Vertex{ p3, packedNormal, color });
+
+        geometry.indices.insert(geometry.indices.end(), {
+            static_cast<uint16_t>(base + 0),
+            static_cast<uint16_t>(base + 1),
+            static_cast<uint16_t>(base + 2),
+            static_cast<uint16_t>(base + 0),
+            static_cast<uint16_t>(base + 2),
+            static_cast<uint16_t>(base + 3)
+        });
+    };
+
+    for (int i = 0; i < numSegments; ++i) {
+        int next = (i + 1) % numSegments;
+
+        float a0 = 2.0f * XM_PI * i / numSegments;
+        float a1 = 2.0f * XM_PI * next / numSegments;
+
+        float c0 = cosf(a0);
+        float s0 = sinf(a0);
+        float c1 = cosf(a1);
+        float s1 = sinf(a1);
+
+        XMFLOAT3 b0 = { bottomCenter.x + bottomRadius * c0, bottomCenter.y, bottomCenter.z + bottomRadius * s0 };
+        XMFLOAT3 b1 = { bottomCenter.x + bottomRadius * c1, bottomCenter.y, bottomCenter.z + bottomRadius * s1 };
+        XMFLOAT3 t0 = { topCenter.x + topRadius * c0, topCenter.y, topCenter.z + topRadius * s0 };
+        XMFLOAT3 t1 = { topCenter.x + topRadius * c1, topCenter.y, topCenter.z + topRadius * s1 };
+
+        AddTriangle(bottomCenter, b1, b0, colorBase);// Bottom cap (normal automatically downward via winding)
+        AddTriangle(topCenter, t0, t1, colorTop);// Top cap (normal automatically upward)
+        AddQuad(b0, b1, t1, t0, colorIncline);// Side wall (flat quad)
+    }
+
+    return geometry;
+}
+
+inline void PIPE::Randomize() {
+
+    std::uniform_real_distribution<float> posDist(-5.0f, 5.0f);
+    std::uniform_real_distribution<float> sizeDist(0.2f, 0.6f);
+    std::uniform_real_distribution<float> thickDist(0.02f, 0.1f);
+    std::uniform_real_distribution<float> colorDist(0.0f, 1.0f);
+
+    auto& rng = GetRNG();
+
+    center1 = { posDist(rng), posDist(rng), posDist(rng) };
+
+    float length = sizeDist(rng);
+    center2 = { center1.x, center1.y + length, center1.z };
+
+    outsideDiameter = sizeDist(rng);
+    insideDiameter = outsideDiameter - thickDist(rng);
+
+    colorOuter = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+    colorInner = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+    colorCap = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+}
+
+inline GeometryData PIPE::GetGeometry()
+{
+    GeometryData geometry;
+    geometry.id = memoryID;
+    const int numSegments = 36;
+    geometry.vertices.clear();
+    geometry.indices.clear();
+    geometry.vertices.reserve(numSegments * 16);
+    geometry.indices.reserve(numSegments * 24);
+
+    float outerR = outsideDiameter * 0.5f;
+    float innerR = insideDiameter * 0.5f;
+
+    XMVECTOR p1 = XMLoadFloat3(&center1);
+    XMVECTOR p2 = XMLoadFloat3(&center2);
+
+    XMVECTOR axis = XMVector3Normalize(p2 - p1);
+
+    // Build orthonormal basis
+    XMVECTOR up = XMVectorSet(0, 1, 0, 0);
+    if (fabs(XMVectorGetX(XMVector3Dot(axis, up))) > 0.99f) up = XMVectorSet(1, 0, 0, 0);
+
+    XMVECTOR tangent = XMVector3Normalize(XMVector3Cross(up, axis));
+    XMVECTOR bitangent = XMVector3Cross(axis, tangent);
+
+    auto AddQuad = [&](XMVECTOR a, XMVECTOR b, XMVECTOR c, XMVECTOR d,
+        XMVECTOR normalVec, const XMHALF4& color)
+        {
+            XMFLOAT3 normalF;
+            XMStoreFloat3(&normalF, XMVector3Normalize(normalVec));
+            XMUBYTE4 packedNormal = PackNormal(normalF);
+
+            uint16_t base = (uint16_t)geometry.vertices.size();
+
+            XMFLOAT3 pa, pb, pc, pd;
+            XMStoreFloat3(&pa, a);
+            XMStoreFloat3(&pb, b);
+            XMStoreFloat3(&pc, c);
+            XMStoreFloat3(&pd, d);
+
+            geometry.vertices.push_back(Vertex{ pa, packedNormal, color });
+            geometry.vertices.push_back(Vertex{ pb, packedNormal, color });
+            geometry.vertices.push_back(Vertex{ pc, packedNormal, color });
+            geometry.vertices.push_back(Vertex{ pd, packedNormal, color });
+
+            geometry.indices.insert(geometry.indices.end(), {
+                static_cast<uint16_t>(base + 0), static_cast<uint16_t>(base + 1),
+                static_cast<uint16_t>(base + 2), static_cast<uint16_t>(base + 0),
+                static_cast<uint16_t>(base + 2), static_cast<uint16_t>(base + 3)
+            });
         };
 
-    // Bottom center
-    geometry.vertices[0] = Vertex{ bottomCenter, GetCentroidNormal(vBottom), colorBase };
+    for (int i = 0; i < numSegments; ++i){
+        int next = (i + 1) % numSegments;
+        float a0 = XM_2PI * i / numSegments;
+        float a1 = XM_2PI * next / numSegments;
 
-    // Top center
-    geometry.vertices[numSegments + 1] = Vertex{ topCenter, GetCentroidNormal(vTop), colorTop };
+        XMVECTOR dir0 = cosf(a0) * tangent + sinf(a0) * bitangent;
+        XMVECTOR dir1 = cosf(a1) * tangent + sinf(a1) * bitangent;
+        XMVECTOR o1 = p1 + dir0 * outerR;
+        XMVECTOR o2 = p1 + dir1 * outerR;
+        XMVECTOR o3 = p2 + dir1 * outerR;
+        XMVECTOR o4 = p2 + dir0 * outerR;
+        XMVECTOR i1 = p1 + dir0 * innerR;
+        XMVECTOR i2 = p1 + dir1 * innerR;
+        XMVECTOR i3 = p2 + dir1 * innerR;
+        XMVECTOR i4 = p2 + dir0 * innerR;
 
-    for (int i = 0; i < numSegments; ++i) {
-        float angle = 2.0f * (float)M_PI * i / numSegments;
-        float cosA = cos(angle);
-        float sinA = sin(angle);
-
-        // Bottom cap vertices
-        XMFLOAT3 posBottom = { bottomCenter.x + bottomRadius * cosA, bottomCenter.y, bottomCenter.z + bottomRadius * sinA };
-        XMVECTOR vPosBottom = XMLoadFloat3(&posBottom);
-        geometry.vertices[i + 1] = Vertex{ posBottom, GetCentroidNormal(vPosBottom), colorIncline };
-
-        // Top cap vertices
-        XMFLOAT3 posTop = { topCenter.x + topRadius * cosA, topCenter.y, topCenter.z + topRadius * sinA };
-        XMVECTOR vPosTop = XMLoadFloat3(&posTop);
-        geometry.vertices[i + numSegments + 2] = Vertex{ posTop, GetCentroidNormal(vPosTop), colorIncline };
+        AddQuad(o1, o2, o3, o4, dir0, colorOuter);// Outer wall
+        AddQuad(i4, i3, i2, i1, -dir0, colorInner);// Inner wall (reverse normal)
+        AddQuad(i2, i1, o1, o2, -axis, colorCap);// Start cap ring
+        AddQuad(o4, o3, i3, i4, axis, colorCap);// End cap ring
     }
 
-    // Define indices
-    for (int i = 0; i < numSegments; ++i) {
-        int next_i = (i + 1) % numSegments;
-        // Bottom cap
-        geometry.indices.push_back(0);
-        geometry.indices.push_back(next_i + 1);
-        geometry.indices.push_back(i + 1);
-        // Top cap
-        geometry.indices.push_back(numSegments + 1);
-        geometry.indices.push_back(i + numSegments + 2);
-        geometry.indices.push_back(next_i + numSegments + 2);
-        // Side wall
-        geometry.indices.push_back(i + 1);
-        geometry.indices.push_back(next_i + 1);
-        geometry.indices.push_back(i + numSegments + 2);
-
-        geometry.indices.push_back(next_i + 1);
-        geometry.indices.push_back(next_i + numSegments + 2);
-        geometry.indices.push_back(i + numSegments + 2);
-    }
     return geometry;
 }

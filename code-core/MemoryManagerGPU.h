@@ -3,10 +3,10 @@
 /*
 Windows Desktop C++ DirectX12 application for CAD / CAM use.
 
-This file is our Architecture . Premitive data structures common to all platforms may be added here..
+This file is our Architecture . Primitive data structures common to all platforms may be added here..
 
 At startup, pickup the GPU with highest VRAM. All rendering happens here only. Only 1 device supported for rendering. 
-However OS may send the display frame to monitora connected to other / integrated GPU.
+However OS may send the display frame to monitor connected to other / integrated GPU.
 
 VertexLayout Common to all geometry:
 3x4 Bytes for Position, 4 Bytes for Normal, 4 Bytes for Color RGBA / 8 Bytes if HDR Monitor present. = 20 / 24 Bytes per vertex.
@@ -17,12 +17,12 @@ Factor = (Normal.z \times 0.5) + 0.5
 AmbientLight = Lerp(GroundColor, SkyColor, Factor)
 Screen Space Ambient Occlusion (SSAO) to darken creases and corners in future revision.
 
-Seperate render threads (1 per monitor) and single Copy thread. Copy thread is the ringmaster of VRAM!
-Seperate render threads per monitor are in VSync with monitors unique refresh rate.  Hehe seperate render queue per monitor.
+Separate render threads (1 per monitor) and single Copy thread. Copy thread is the ringmaster of VRAM!
+Separate render threads per monitor are in VSync with monitors unique refresh rate.  Here separate render queue per monitor.
 
 We use ExecuteIndirect command with start vertex location instead of DrawIndexedInstanced per object.
 
-I want per tab VRAM isolation, each tab will be completely seperate. Except for unclosable tab 0 which stores common textures and UI elements.
+I want per tab VRAM isolation, each tab will be completely separate. Except for uncloseble tab 0 which stores common textures and UI elements.
 
 Since I want to support 100s of simultaneous tab, I want to start with small heap say 4MB per tab and grow only heap size only when necessary.
 Instead of allocating 1 giant 256MB buffer. Don't manually destroy heaps on tab switch. Use Evict. It allows the OS to handle the caching. 
@@ -36,12 +36,12 @@ Copy thread than update the next double buffer and record the hole in Vertex/ind
 Maintain a Free-List Allocator (e.g., a Segregated Free List) on the CPU. Per Tab.
 The Allocator knows: "I have a 12KB middle gap in Page 3, and a 40KB middle gap in Page 8."When a 10KB request comes in,
 the Allocator immediately returns "Page 3". No iterating through Page objects.
-If freelist says none of existing pages can accomodate new geometry, than create new heap/placedresource buffer.
+If freelist says none of existing pages can accommodate new geometry, than create new heap/placed resource buffer.
 Free list does not track internal holes created from deleting objects. Only middle empty space. Aggregate holes are tracked per page. Defragmented occasionally.
 
 When a buffer gets >25% holes, it does creates a new defragmented buffer, once complete, switches over to new buffer.
 For new geometry addition. Maximum 1 buffer is defragmented at a time (between 2 frames). Since max page size is 64MB, 
-This will not produce high latemcy stall during aync with copy thread.
+This will not produce high latency stall during async with copy thread.
 
 Root Signature puts the "Constants" (View/Proj matrix) in root constants or a very fast descriptor table,
 as these don't change between pages. Only the VBV/IBV and the EI Argument Buffer change per batch/page.
@@ -102,7 +102,7 @@ The Copy Thread should consume batches of updates, coalescing them into single E
 
 "Big Buffer" fallback. If Allocation_Size > Max_Page_Size, allocate a dedicated Committed Resource just for that object, bypassing the paging system.
 Handles large STL. or terrain map. Treat "Big Buffers" as a special Page Type. Add a "Large Object List" to your loop.
-Do not try to jam them into the standard EI logic if they require unique resource bindings per object. 1 seperate draw command for such Jumbo objects.
+Do not try to jam them into the standard EI logic if they require unique resource bindings per object. 1 separate draw command for such Jumbo objects.
 
 Create a separate std::vector<BigObject> in Tab structure. Rendering:
 • ​Loop through Pages (ExecuteIndirect).
@@ -120,7 +120,7 @@ Do not try to "patch" the Argument buffer; regenerate it for that Page.
 Growth Logic: Similar to above defragmentation. How does my copy queue handle async ( without blocking render thread?) 
 addition of 1 small geometry  say 10kb to already existing 64MB heap out of which 50MB is filled up. 
 All Views/frames of that particular tab freeze. However other tabs being handled by render thread keep processing.
-No thread stall. Transition that page to copy destination. Copy new data. Transituon back to render status for render thread to pick up.
+No thread stall. Transition that page to copy destination. Copy new data. Transition back to render status for render thread to pick up.
 
 --------------------------
 RenderToTexture to implement frame freeze since swap chain is FLIP_DISCARD. 
@@ -170,14 +170,12 @@ Do this first so you aren't fighting "black screen" bugs later.
 Phase 2: The "Freeze" Infrastructure
 Before you break the memory model, build the mechanism that hides the breakage.
 [Done] Render To Texture (RTT) & Full-Screen Quad. Goal: Detach the "Drawing" from the "Presenting."
-Success State: You can resize the window, and the inner "Canvas" scales or freezes independently of the window border.
-[ ] Face-wise Geometry colors. (Implementation detail).
 [ ] Upgrade Vertices to HDR + Tonemapping. (Do this now while touching pixel shaders).
 
 Phase 3: The API Pivot (The Hardest Part)
 Switching to ExecuteIndirect changes how you pass data. Do this BEFORE implementing custom heaps to isolate variables.
-[ ] [MISSING] Implement Structured Buffer for World Matrices.
-Critical: You cannot do ExecuteIndirect for multiple objects without a way to tell the shader which object is being drawn. You need a StructuredBuffer<float4x4> and a root constant index.
+[ ] [MISSING] Implement Structured Buffer for World Matrices. Need a StructuredBuffer<float4x4> and a root constant index.
+Critical: You cannot do ExecuteIndirect for multiple objects without a way to tell the shader which object is being drawn. 
 [ ] DrawIndexedInstanced → ExecuteIndirect (EI).
 Advice: Implement this using your current committed resources first. Just get the API call working.
 [ ] Double buffered ExecuteIndirect Arguments.
@@ -186,8 +184,7 @@ Phase 4: The Memory Manager (The "Vishwakarma" Core)
 Now that EI is working, replace the backing memory.
 [ ] [MISSING] Global Upload Ring Buffer.
 Critical: Your copy thread needs a staging area. If you don't build this, your "VRAM Pages" step will stall waiting on CreateCommittedResource for uploads.
-[ ] VRAM Pages per Tab (The Stack Allocator).
-Advice: Implement the "Double-Ended Stack" (Vertex Up, Index Down) here.
+[ ] VRAM Pages per Tab (The Stack Allocator). Advice: Implement the "Double-Ended Stack" (Vertex Up, Index Down) here.
 [ ] CPU-Side Free List Allocator. (The logic that tracks the holes).
 [ ] Tab Management / View Management. (Integrating the heaps into the UI).
 
@@ -196,6 +193,24 @@ Phase 5: Advanced Features & Polish
 [ ] Click Selection / Window Selection. (Requires Raycasting against your CPU Free List/Data structures).
 [ ] Instanced optimization for Pipes.
 [ ] SSAO.
+
+Phase 6: Performance & Telemetry
+[ ] Per-Tab VRAM Usage Graphs. (Helps identify memory leaks or inefficient usage).
+[ ] Page Fragmentation Heatmap. (Visualize which pages are most fragmented).
+[ ] Eviction Frequency Counters. (Track how often eviction occurs and its impact on performance).
+[ ] Copy Queue Stall Tracking. (Identify bottlenecks in the copy thread).
+
+Phase 7: Extreme performance optimizations (Only after all above is done and stable)
+[ ] LOD Optimization. (Using instancing or compute shaders to manage levels of detail based on camera distance).
+[ ] Compute Shader Frustum Culling. (To reduce the number of objects sent to the GPU).
+[ ] Mesh Shader Implementation. (For supported hardware, to further reduce draw call overhead). (Only for pipes)
+[ ] GPU-Based Defragmentation. (Offload defragmentation to the GPU to minimize CPU stalls).
+[ ] Asynchronous Resource Creation. (Use D3D12's async resource creation to further reduce stalls during heap growth or defragmentation).
+[ ] Page Level optimization : Static pages → single draw, Semi-dynamic pages → EI , Highly dynamic pages → EI + GPU compaction
+
+Not to do list:
+Multi-GPU Rendering. (Too complex for initial implementation, and Windows' multi-adapter support is limited).
+Face-wise Geometry colors. (Implementation detail). Maybe necessary for future mechanical parts.
 
 */
 
