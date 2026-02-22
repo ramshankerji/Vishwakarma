@@ -47,11 +47,8 @@ Double buffering (2x) is also 50% more memory efficient Triple Buffering (3x). *
 const UINT FRAMES_PER_RENDERTARGETS = 2; //Initially we are going with double buffering.
 
 // Constants
-const UINT MaxPyramids = 100; // MODIFICATION: Define a max pyramid count for pre-allocation.
-const UINT MaxVertexCount = MaxPyramids * 4;
-const UINT MaxIndexCount = MaxPyramids * 12;
-const UINT MaxVertexBufferSize = MaxVertexCount * sizeof(Vertex);
-const UINT MaxIndexBufferSize = MaxIndexCount * sizeof(UINT16);
+constexpr UINT64 MaxVertexBufferSize = 1024 * 1024 * 64; // 64 MB
+constexpr UINT64 MaxIndexBufferSize = 1024 * 1024 * 16; // 16 MB
 
 /* DirectX 12 resources are organized at 3 levels:
 1. The Data   : Per Tab (Jumbo Buffers for geometry data, materials, textures, etc.)
@@ -83,12 +80,22 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
     mutable std::mutex objectsOnGPUMutex;// Make mutex mutable so const references can lock it in rendering paths.
     // Copy thread will update the following map whenever it adds/removes/modifies an object on GPU.
     std::map<uint64_t, GpuResourceVertexIndexInfo> objectsOnGPU;
+    std::atomic<uint64_t> lastCopyFenceValue = 0;
+    std::atomic<uint64_t> lastRenderFenceValue = 0; // TODO : Upgrade it for multi monitor.
 
     // Track how much of the jumbo buffer is used
     uint64_t vertexDataSize = 0;
     uint64_t indexDataSize = 0;
 
-	CameraState camera; //Reference is updated per frame.
+    ComPtr<ID3D12Resource> worldMatrixBuffer; // TODO: Doublebuffer it. Or make it per Page ?
+    UINT8 * pWorldMatrixDataBegin = nullptr;
+    uint32_t               matrixCapacity = 4096;
+    uint32_t               matrixCount = 0;
+	std::vector<uint32_t>  freeMatrixSlots;   // free-list for matrix indices.
+    //To enable re-use of slots when objects are removed.
+
+	CameraState camera; //Reference is updated per frame. 
+    //Currently per tab, but latter we will have this per view. Since each tab can have multiple views.
 };
 
 struct DX12ResourcesPerWindow {// Presentation Logic
@@ -198,6 +205,7 @@ struct GpuResourceVertexIndexInfo {
     ComPtr<ID3D12Resource> indexBuffer;
     D3D12_INDEX_BUFFER_VIEW indexBufferView;
     UINT indexCount;
+    uint32_t matrixIndex = 0;
 
     //TODO: Latter on we will generalize this structure to hold textures, materials, shaders etc.
     // Currently we are letting the Drive manage the GPU memory fragmentation. Latter we will manage it ourselves.
@@ -362,8 +370,7 @@ void** ppv = reinterpret_cast<void**>(&device);
 
 // Structure to hold transformation matrices
 struct ConstantBuffer {
-    DirectX::XMFLOAT4X4 worldViewProjection;
-    DirectX::XMFLOAT4X4 world;
+    DirectX::XMFLOAT4X4 viewProj;   // 64 bytes
 };
 
 // Externs for communication 
@@ -394,9 +401,7 @@ std::optional<GpuResourceVertexIndexInfo> शंकर::Allocate(size_t size) {
     return info;
 }*/
 
-// =================================================================================================
 // Utility Functions
-// =================================================================================================
 
 // Waits for the previous frame to complete rendering.
 inline void WaitForGpu(DX12ResourcesPerWindow dx)
@@ -419,9 +424,7 @@ inline void WaitForFenceValue(DX12ResourcesPerWindow dx, UINT64 fenceValue)
     }*/
 }
 
-// =================================================================================================
 // Thread Functions
-// =================================================================================================
 // Thread synchronization between Main Logic thread and Copy thread
 inline std::mutex toCopyThreadMutex;
 inline std::condition_variable toCopyThreadCV;

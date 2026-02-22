@@ -253,6 +253,7 @@
   </ItemGroup>
   <ItemGroup>
     <Image Include="..\code-core\logo.ico" />
+    <Image Include="..\website\static\apple-touch-icon.png" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="PixelShader.hlsl">

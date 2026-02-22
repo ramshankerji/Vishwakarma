@@ -192,6 +192,7 @@
     <Image Include="..\code-core\logo.ico">
       <Filter>code-core</Filter>
     </Image>
+    <Image Include="..\website\static\apple-touch-icon.png" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Vishwakarma.rc">

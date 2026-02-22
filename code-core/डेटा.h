@@ -55,7 +55,14 @@ struct GeometryData
     std::vector<Vertex> vertices;
     std::vector<uint16_t> indices;
     XMFLOAT4 color;
-	GeometryData() { color = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f); } // Default color: light gray
+    DirectX::XMFLOAT4X4 worldMatrix;
+	GeometryData() {
+        color = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f); // Default color: light gray
+        worldMatrix = {
+            1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f
+        };
+    }
 };
 
 inline XMUBYTE4 PackNormal(XMFLOAT3 n) {

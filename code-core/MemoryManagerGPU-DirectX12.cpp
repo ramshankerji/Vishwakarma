@@ -134,9 +134,38 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
     tabRes.indexBufferView.Format = DXGI_FORMAT_R16_UINT;
     tabRes.indexBufferView.SizeInBytes = 0; // Starts empty// Will be updated per frame
 
+    // World Matrxi structured buffer. (UPLOAD heap, persistently mapped).
+    auto matrixDesc = CD3DX12_RESOURCE_DESC::Buffer(tabRes.matrixCapacity * sizeof(DirectX::XMFLOAT4X4));
+    auto uploadProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+    ThrowIfFailed(gpu.device->CreateCommittedResource( &uploadProps, D3D12_HEAP_FLAG_NONE, &matrixDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&tabRes.worldMatrixBuffer)));
+
+    ThrowIfFailed(tabRes.worldMatrixBuffer->Map(0, &readRange,
+        reinterpret_cast<void**>(&tabRes.pWorldMatrixDataBegin)));
+
+    // SRV on per-tab shader-visible heap (already declared in struct)
+    D3D12_DESCRIPTOR_HEAP_DESC srvDesc = {};
+    srvDesc.NumDescriptors = 1;
+    srvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    srvDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ThrowIfFailed(gpu.device->CreateDescriptorHeap(&srvDesc, IID_PPV_ARGS(&tabRes.srvHeap)));
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvView = {};
+    srvView.Format = DXGI_FORMAT_UNKNOWN;
+    srvView.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    srvView.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvView.Buffer.FirstElement = 0;
+    srvView.Buffer.NumElements = tabRes.matrixCapacity;
+    srvView.Buffer.StructureByteStride = sizeof(DirectX::XMFLOAT4X4);
+    gpu.device->CreateShaderResourceView(tabRes.worldMatrixBuffer.Get(), &srvView,
+        tabRes.srvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    tabRes.matrixCount = 0;
+    tabRes.freeMatrixSlots.clear();
+
     // Note: No Fence or Wait here. Resource creation is immediate.
     // Data upload sync happens in Copy Thread.
-    std::cout << "Initialized Resources for Tab." << std::endl;
+    std::wcout << "Initialized Resources for Tab." << std::endl;
 }
 
 void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D12CommandQueue* commandQueue) {
@@ -265,15 +294,24 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
         featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
     }
 
-    CD3DX12_DESCRIPTOR_RANGE1 ranges[1] = {};
+    CD3DX12_DESCRIPTOR_RANGE1 ranges[2] = {};
     ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV,
         1, // There will be total 1 Nos. of Constant Buffer Descriptors passed to shaders.
         0, // Base shader register i.e register(b0) in HLSL
         0, // Register space 0. Since we are greenfield project, we don't need separate space 1
-        D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC); //Optimization hint - data doesn't change often
+        //D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC); //Optimization hint - data doesn't change often
+        D3D12_DESCRIPTOR_RANGE_FLAG_NONE); //Now it does change every frame, so no static flag.
+    ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_NONE);
 
-    CD3DX12_ROOT_PARAMETER1 rootParameters[1] = {}; //1: Number of descriptor ranges in this table
-    rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_VERTEX);
+    CD3DX12_ROOT_PARAMETER1 rootParameters[3] = {}; //3: Number of descriptor ranges in this table
+
+    // No descriptor ranges needed!
+    // b0 : ViewProj Constant Buffer (Root Descriptor)
+    rootParameters[0].InitAsConstantBufferView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_VERTEX);
+    // t0 : WorldMatrices Structured Buffer (Root Descriptor)
+    rootParameters[1].InitAsShaderResourceView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_VERTEX);
+    // b1 : matrixIndex (Root Constant - 1 uint) (32-bit constant)
+    rootParameters[2].InitAsConstants(1, 1, 0, D3D12_SHADER_VISIBILITY_VERTEX);
 
     CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
     rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters,
@@ -338,9 +376,11 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     TODO: In future, we will implement index color system using some transformation here. */
     static const char* const vertexShaderCode = R"(
         cbuffer ConstantBuffer : register(b0) {
-            float4x4 worldViewProjection;
-            float4x4 world;
+            // We will pack more data here in future, like time, animation parameters etc.
+            float4x4 viewProj;
         };
+        StructuredBuffer<float4x4> WorldMatrices : register(t0);
+        cbuffer PerDraw : register(b1) { uint matrixIndex; };
 
         struct PSInput {
             float4 position : SV_POSITION;
@@ -351,12 +391,16 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
         PSInput VSMain(float3 position : POSITION, float4 normal : NORMAL, float4 color : COLOR)
         {
             PSInput result;
+            float4x4 world = WorldMatrices[matrixIndex];
+            float4 worldPos = mul(float4(position, 1.0f), world);
+
             // Transform position to homogeneous clip space
-            result.position = mul(float4(position, 1.0f), worldViewProjection);
+            result.position = mul(worldPos, viewProj); // correct order with transposed matrices
 
             // Transform normal to world space
             // Note: If 'world' contains non-uniform scaling, we should use the inverse-transpose.
             // For now, assuming uniform scaling, casting to float3x3 works.
+            // Normal (good enough for CAD; inverse-transpose later if non-uniform scale)
             result.normal = mul(normal.xyz, (float3x3)world);
 
             result.color = color;
@@ -439,7 +483,7 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
     DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes) {
     //int i = 0; // Latter to be iterated over number of screens.
     // Update constant buffer with transformation matrices
-
+    
     // Create view matrix (camera looking at scene from distance)
     XMVECTOR eyePosition = XMLoadFloat3(&tabRes.camera.position);
     XMVECTOR focusPoint = XMLoadFloat3(&tabRes.camera.target);
@@ -451,30 +495,23 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
 
     XMMATRIX projectionMatrix =  XMMatrixPerspectiveFovLH(
         tabRes.camera.fov, aspectRatio, tabRes.camera.nearZ,  tabRes.camera.farZ );
-
+    XMMATRIX viewProj = viewMatrix * projectionMatrix;
+    
     // Create world matrix with rotation. Now the camera rotates, not the world !
-    DirectX::XMMATRIX worldMatrix = DirectX::XMMatrixIdentity();
-
-    // Combine matrices
-    DirectX::XMMATRIX worldViewProjectionMatrix = worldMatrix * viewMatrix * projectionMatrix;
-
     // Update constant buffer
     ConstantBuffer constantBufferData;
-    DirectX::XMStoreFloat4x4(&constantBufferData.worldViewProjection, DirectX::XMMatrixTranspose(worldViewProjectionMatrix));
-    DirectX::XMStoreFloat4x4(&constantBufferData.world, DirectX::XMMatrixTranspose(worldMatrix));
-
+    XMStoreFloat4x4(&constantBufferData.viewProj, XMMatrixTranspose(viewProj));
     memcpy(winRes.cbvDataBegin, &constantBufferData, sizeof(constantBufferData));
-
-    // Set necessary state
+    
+	// Root Signature: The maximum size of a root signature is 64 DWORDs. 1 DWORD = 4 bytes, so that's 256 bytes total.
+    // Root constants: 1 DWORD, i.e. 32-bit values. Root descriptors(64 - bit GPU virtual addresses) cost 2 DWORDs each.
+    // https://learn.microsoft.com/en-us/windows/win32/direct3d12/root-signature-limits
     commandList->SetGraphicsRootSignature(winRes.rootSignature.Get());
     commandList->SetPipelineState(winRes.pipelineState.Get());
-
-    // Set descriptor heaps
-    ID3D12DescriptorHeap* ppHeaps[] = { winRes.cbvHeap.Get() };
-    commandList->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
-
-    // Set root descriptor table
-    commandList->SetGraphicsRootDescriptorTable(0, winRes.cbvHeap->GetGPUDescriptorHandleForHeapStart());
+    // Set root descriptor table. No longer used.
+    // Bind directly using GPU Virtual Addresses!
+    commandList->SetGraphicsRootConstantBufferView(0, winRes.constantBuffer->GetGPUVirtualAddress());
+    commandList->SetGraphicsRootShaderResourceView(1, tabRes.worldMatrixBuffer->GetGPUVirtualAddress());
 
     // Create named variables (l‑values)
     CD3DX12_VIEWPORT viewport(0.0f, 0.0f,
@@ -509,30 +546,46 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
     std::lock_guard<std::mutex> lock(tabRes.objectsOnGPUMutex);
 
     // Bind TAB Geometry (Vertex/Index Buffers). IMPORTANT: Verify the tab has valid buffers before binding!
-    // TODO : vertexDataSize not yet populated! Removes reliance on "vertexDataSize" which is currently always 0.
     if (!tabRes.objectsOnGPU.empty()) {// Check if the map is empty.
-        // Use the Jumbo Buffer if available (currently unused, but good to keep the binding logic)
-        if (tabRes.vertexDataSize > 0) {
-            commandList->IASetVertexBuffers(0, 1, &tabRes.vertexBufferView);
-            commandList->IASetIndexBuffer(&tabRes.indexBufferView);
-        }
+		// Transition the jumbo buffer to readable state from current copy destination state.
+        // We will transition it back to COPY_DEST at the end of this function, so that it is ready for next frame's data upload.
+        
+        CD3DX12_RESOURCE_BARRIER toReadable[2] = {
+            CD3DX12_RESOURCE_BARRIER::Transition( tabRes.vertexBuffer.Get(),
+                D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER),
+            CD3DX12_RESOURCE_BARRIER::Transition( tabRes.indexBuffer.Get(),
+                D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_INDEX_BUFFER)
+        };
+        commandList->ResourceBarrier(2, toReadable);
 
         for (const auto& pair : tabRes.objectsOnGPU)
         {
             // TODO: In the future, you will filter this list based on "Visible in this View"
             // uint64_t id = pair.first; // Unused variable warning fix
             const GpuResourceVertexIndexInfo& res = pair.second;
-            if (res.vertexBufferView.SizeInBytes > 0) {
-                commandList->IASetVertexBuffers(0, 1, &res.vertexBufferView);
-                commandList->IASetIndexBuffer(&res.indexBufferView);
-                commandList->DrawIndexedInstanced(res.indexCount, 1, 0, 0, 0);// 2. Draw
-            }
+            if (res.vertexBufferView.SizeInBytes == 0) continue;
+            commandList->IASetVertexBuffers(0, 1, &res.vertexBufferView);
+            commandList->IASetIndexBuffer(&res.indexBufferView);
+            commandList->SetGraphicsRoot32BitConstant(2, res.matrixIndex, 0);// b1 constant
+            commandList->DrawIndexedInstanced(res.indexCount, 1, 0, 0, 0);// Draw
         }
     }
+
+    // Leave the buffer ready for the next copy on the copy queue
+    CD3DX12_RESOURCE_BARRIER backToCopyDest[2] = {
+        CD3DX12_RESOURCE_BARRIER::Transition( tabRes.vertexBuffer.Get(),
+            D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, D3D12_RESOURCE_STATE_COPY_DEST),
+        CD3DX12_RESOURCE_BARRIER::Transition( tabRes.indexBuffer.Get(),
+            D3D12_RESOURCE_STATE_INDEX_BUFFER, D3D12_RESOURCE_STATE_COPY_DEST)
+    };
+    commandList->ResourceBarrier(2, backToCopyDest);
 
     /* Transition from D3D12_RESOURCE_STATE_RENDER_TARGET to D3D12_RESOURCE_STATE_RENDER_PRESENT
     taken care by parent function. i.e. Render Thread */
     //commandList->Close();// No longer required here. It will be done by render thread.
+
+	//Follownig mutex will release automatically when this function returns, i.e. when lock goes out of scope.
+    //std::lock_guard<std::mutex> lock(tabRes.objectsOnGPUMutex);
 }
 
 void शंकर::WaitForPreviousFrame(DX12ResourcesPerRenderThread dx) {
@@ -582,7 +635,7 @@ void शंकर::CleanupWindowResources(DX12ResourcesPerWindow& winRes) {
     winRes.rootSignature.Reset();
     winRes.pipelineState.Reset();
 
-    std::cout << "Cleaned up Window Resources." << std::endl;
+    std::wcout << "Cleaned up Window Resources." << std::endl;
 }
 
 void शंकर::CleanupTabResources(DX12ResourcesPerTab& tabRes) {
@@ -607,7 +660,15 @@ void शंकर::CleanupTabResources(DX12ResourcesPerTab& tabRes) {
     tabRes.vertexDataSize = 0;
     tabRes.indexDataSize = 0;
 
-    std::cout << "Cleaned up Tab Geometry Resources." << std::endl;
+    if (tabRes.pWorldMatrixDataBegin) {
+        tabRes.worldMatrixBuffer->Unmap(0, nullptr);
+        tabRes.pWorldMatrixDataBegin = nullptr;
+    }
+    tabRes.worldMatrixBuffer.Reset();
+    tabRes.freeMatrixSlots.clear();
+    tabRes.matrixCount = 0;
+
+    std::wcout << "Cleaned up Tab Geometry Resources." << std::endl;
 }
 
 void शंकर::CleanupD3DGlobal() {
@@ -645,7 +706,7 @@ void शंकर::CleanupD3DGlobal() {
     }
 #endif
 
-    std::cout << "Global D3D Shutdown Complete." << std::endl;
+    std::wcout << "Global D3D Shutdown Complete." << std::endl;
 }
 
 // Free memory that is guaranteed to be no longer in use by any rendering frame.
@@ -655,7 +716,7 @@ void शंकर::ProcessDeferredFrees(uint64_t lastCompletedRenderFrame) {
     auto it = deferredFreeQueue.begin();
     while (it != deferredFreeQueue.end()) {
         if (it->frameNumber <= lastCompletedRenderFrame) {
-            //std::cout << "VRAM MANAGER: Reclaiming " << it->resource.size << " bytes." << std::endl;
+            //std::wcout << "VRAM MANAGER: Reclaiming " << it->resource.size << " bytes." << std::endl;
             // In a real allocator, this space would be added to a free list.
             // In our simple bump allocator, we can't easily reuse it without compaction.
             it = deferredFreeQueue.erase(it);
@@ -667,7 +728,7 @@ void शंकर::ProcessDeferredFrees(uint64_t lastCompletedRenderFrame) {
 }
 
 void GpuCopyThread() {
-    std::cout << "GPU Copy Thread started." << std::endl;
+    std::wcout << "GPU Copy Thread started." << std::endl;
     uint64_t lastProcessedFrame = -1;
 
     // Setup Thread-Local Copy Resources. Must use COPY type to match the Copy Command Queue
@@ -695,80 +756,86 @@ void GpuCopyThread() {
 
 		// Find the targe tab. Our static array of tabs is thread-safe for reading.
         DATASETTAB& targetTab = allTabs[cmd.tabID];
+        DX12ResourcesPerTab& tabRes = targetTab.dx;
+        GeometryData geo;
 
         switch (cmd.type)// Process Command
         {
         case CommandToCopyThreadType::ADD:
         case CommandToCopyThreadType::MODIFY:
         {
-            GeometryData geo = cmd.geometry.value();
+            geo = cmd.geometry.value();
             const UINT vertexBufferSize = static_cast<UINT>(geo.vertices.size() * sizeof(Vertex));
             const UINT indexBufferSize = static_cast<UINT>(geo.indices.size() * sizeof(uint16_t));
 
             if (vertexBufferSize == 0 || indexBufferSize == 0) {
-                std::cout << "Warning: Skipping upload of empty geometry ID " << cmd.id << std::endl;
+                std::wcout << "Warning: Skipping upload of empty geometry ID " << cmd.id << std::endl;
                 break; // Exit this case, process next command
             }
 
+            // Matrix slot allocation.
+            uint32_t matrixIndex;
+            auto it = tabRes.objectsOnGPU.find(cmd.id);
+            if (it != tabRes.objectsOnGPU.end() && cmd.type == CommandToCopyThreadType::MODIFY) {
+                matrixIndex = it->second.matrixIndex;   // reuse slot on MODIFY
+            }
+            else {
+                if (!tabRes.freeMatrixSlots.empty()) {
+                    matrixIndex = tabRes.freeMatrixSlots.back();
+                    tabRes.freeMatrixSlots.pop_back();
+                }
+                else {
+                    matrixIndex = tabRes.matrixCount++;
+                    if (matrixIndex >= tabRes.matrixCapacity) {
+                        matrixIndex = 0;// TODO: grow later
+                    }
+                }
+            }
+            // Copy transposed world matrix to upload buffer
+            XMMATRIX worldMat = XMLoadFloat4x4(&geo.worldMatrix);
+            XMStoreFloat4x4(reinterpret_cast<XMFLOAT4X4*>(
+                tabRes.pWorldMatrixDataBegin + matrixIndex * sizeof(XMFLOAT4X4)),
+                XMMatrixTranspose(worldMat));
+
             GpuResourceVertexIndexInfo newResource;
             newResource.indexCount = static_cast<UINT>(geo.indices.size());
-
+            
             // Create an upload heap to transfer data to the GPU.
             ComPtr<ID3D12Resource> vertexUploadHeap;
             ComPtr<ID3D12Resource> indexUploadHeap;
 
-            // Create Destination Resources (Default Heap). Note: Created in COMMON state (implicit) or COPY_DEST
-            CD3DX12_HEAP_PROPERTIES defaultHeapProps(D3D12_HEAP_TYPE_DEFAULT);
-            CD3DX12_RESOURCE_DESC vertexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBufferSize);
-            gpu.device->CreateCommittedResource(&defaultHeapProps, D3D12_HEAP_FLAG_NONE, &vertexBufferDesc,
-                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&newResource.vertexBuffer));
-
-            // Create the index buffer resource on the default heap.
-            CD3DX12_RESOURCE_DESC indexBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(indexBufferSize);
-            gpu.device->CreateCommittedResource(&defaultHeapProps, D3D12_HEAP_FLAG_NONE, &indexBufferDesc,
-                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&newResource.indexBuffer));
-
-            // Create Source Resources (Upload Heap). This is in CPU RAM.
-            CD3DX12_HEAP_PROPERTIES uploadHeapProps(D3D12_HEAP_TYPE_UPLOAD);
-            // Upload heaps must be GENERIC_READ
-            gpu.device->CreateCommittedResource(&uploadHeapProps, D3D12_HEAP_FLAG_NONE, &vertexBufferDesc,
-                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&vertexUploadHeap));
-            gpu.device->CreateCommittedResource(&uploadHeapProps, D3D12_HEAP_FLAG_NONE, &indexBufferDesc,
-                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&indexUploadHeap));
-
             commandAllocator->Reset();// Record copy commands
             commandList->Reset(commandAllocator.Get(), nullptr);
 
+            // Calculate the offset where this new object will sit in the Jumbo Buffer
+            uint64_t currentVertexOffset = tabRes.vertexDataSize;
+            uint64_t currentIndexOffset = tabRes.indexDataSize;
+            // Copy data directly into the permanently mapped Jumbo Upload Buffers
+            memcpy(tabRes.pVertexDataBegin + currentVertexOffset, geo.vertices.data(), vertexBufferSize);
+            memcpy(tabRes.pIndexDataBegin + currentIndexOffset, geo.indices.data(), indexBufferSize);
+            // Command the GPU to copy from the Upload Jumbo Buffer to the Default Jumbo Buffer
+            commandList->CopyBufferRegion(
+                tabRes.vertexBuffer.Get(), currentVertexOffset,      // Destination: Jumbo Buffer
+                tabRes.vertexBufferUpload.Get(), currentVertexOffset,// Source: Jumbo Upload
+                vertexBufferSize);
+            commandList->CopyBufferRegion(
+                tabRes.indexBuffer.Get(), currentIndexOffset,       // Destination: Jumbo Index Buffer
+                tabRes.indexBufferUpload.Get(), currentIndexOffset, // Source: Jumbo Index Upload
+                indexBufferSize);
+            // Update the sizes and save the offset in newResource so the Render Thread knows where to find it
+            tabRes.vertexDataSize += vertexBufferSize;
+            tabRes.indexDataSize += indexBufferSize;
+
             /* UpdateSubresources may introduce ResourceBarriers internally ! Which is not allowed on Copy Queues.
-            with the raw copy command, which is safe because your buffers are already created
-            in a valid state for copying (COMMON or GENERIC_READ).*/
-            
-            // Copy vertex data to the upload heap. Map the Upload Heap (CPU writes data)
-            void* pVertexDataBegin;
-            CD3DX12_RANGE readRange(0, 0); // We do not intend to read from this resource on the CPU.
-            vertexUploadHeap->Map(0, &readRange, &pVertexDataBegin);
-            memcpy(pVertexDataBegin, geo.vertices.data(), vertexBufferSize);
-            vertexUploadHeap->Unmap(0, nullptr);
-
-            void* pIndexDataBegin;
-            indexUploadHeap->Map(0, &readRange, &pIndexDataBegin);
-            memcpy(pIndexDataBegin, geo.indices.data(), indexBufferSize);
-            indexUploadHeap->Unmap(0, nullptr);
-
-            // Record the Copy Command (GPU copies from Upload -> Default)
-            // Note: Destination is in COMMON, which is valid for CopyBufferRegion
-            commandList->CopyBufferRegion(newResource.vertexBuffer.Get(), 0, 
-                vertexUploadHeap.Get(), 0, vertexBufferSize);
-            commandList->CopyBufferRegion(newResource.indexBuffer.Get(), 0, 
-                indexUploadHeap.Get(), 0, indexBufferSize);
-
-            /*DirectX 12 has a feature called "Implicit State Promotion". 
+            with the raw copy command, which is safe because our buffers are already created
+            in a valid state for copying (COMMON or GENERIC_READ).
+            DirectX 12 has a feature called "Implicit State Promotion". 
             If a Buffer is in COMMON state, and you bind it as a Vertex Buffer (Read-Only), 
-            the driver automatically promotes it to the correct state without you issuing a barrier.*/
-            // ResourceBarriers are REMOVED here. Copy Queues cannot execute barriers.
-            // The Render Thread will handle the transition from COPY_DEST/COMMON to VERTEX_BUFFER when it draws.
+            the driver automatically promotes it to the correct state without you issuing a barrier.
+            ResourceBarriers are REMOVED here. Copy Queues cannot execute barriers.
+            The Render Thread will handle the transition from COPY_DEST/COMMON to VERTEX_BUFFER when it draws.*/
 
-            commandList->Close();
+            ThrowIfFailed(commandList->Close());
 
             ID3D12CommandList* ppCommandLists[] = { commandList.Get() };
             gpu.copyCommandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
@@ -779,6 +846,7 @@ void GpuCopyThread() {
             UINT64 fenceToWaitFor = gpu.copyFenceValue;
             gpu.copyCommandQueue->Signal(gpu.copyFence.Get(), fenceToWaitFor);
             gpu.copyFenceValue++; // Increment for next time
+            tabRes.lastCopyFenceValue.store(fenceToWaitFor, std::memory_order_release);
 
             // B. Wait on the CPU side
             if (gpu.copyFence->GetCompletedValue() < fenceToWaitFor) {
@@ -787,13 +855,15 @@ void GpuCopyThread() {
             }
 
             // Finalize and make available to Render thread
-            newResource.vertexBufferView.BufferLocation = newResource.vertexBuffer->GetGPUVirtualAddress();
+            newResource.vertexBufferView.BufferLocation = tabRes.vertexBuffer->GetGPUVirtualAddress() + currentVertexOffset;
             newResource.vertexBufferView.StrideInBytes = sizeof(Vertex);
             newResource.vertexBufferView.SizeInBytes = vertexBufferSize;
 
-            newResource.indexBufferView.BufferLocation = newResource.indexBuffer->GetGPUVirtualAddress();
+            newResource.indexBufferView.BufferLocation = tabRes.indexBuffer->GetGPUVirtualAddress() + currentIndexOffset;
             newResource.indexBufferView.Format = DXGI_FORMAT_R16_UINT;
             newResource.indexBufferView.SizeInBytes = indexBufferSize;
+
+            newResource.matrixIndex = matrixIndex;
 
             {
                 std::lock_guard<std::mutex> lock(targetTab.dx.objectsOnGPUMutex);
@@ -804,18 +874,22 @@ void GpuCopyThread() {
         case CommandToCopyThreadType::REMOVE:
         {
             std::lock_guard<std::mutex> lock(targetTab.dx.objectsOnGPUMutex); // Remove from the specific tab
-            targetTab.dx.objectsOnGPU.erase(cmd.id);
+            auto it = targetTab.dx.objectsOnGPU.find(cmd.id);
+            if (it != targetTab.dx.objectsOnGPU.end()) {
+                targetTab.dx.freeMatrixSlots.push_back(it->second.matrixIndex);
+                targetTab.dx.objectsOnGPU.erase(it);
+            }
             break;
         }
         } // End of switch (cmd.type)// Process Command
     }
 
-    std::cout << "GPU Copy Thread shutting down." << std::endl;
+    std::wcout << "GPU Copy Thread shutting down." << std::endl;
 }
 
 void GpuRenderThread(int monitorId, int refreshRate) {
     // Our architecture is 1 GPU Render thead per Monitor. 
-    std::cout << "Render Thread (Monitor " << monitorId << ", " << refreshRate << "Hz) started." << std::endl;
+    std::wcout << "Render Thread (Monitor " << monitorId << ", " << refreshRate << "Hz) started." << std::endl;
     
 	// Ge the persistent Command Queue for this monitor. Do NOT create a new queue.
     ID3D12CommandQueue* pCommandQueue = gpu.screens[monitorId].commandQueue.Get();
@@ -880,7 +954,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             // TODO: Ideally, it should be handled in WM_MOVE or nearby. Following is simply safeguard for bugs elsewhere.
             // Check if the window is physically on this monitor, but chemically bound to another queue
             if (window.dx.swapChain && window.dx.creatorQueue != threadRes.commandQueue.Get()) {
-                std::cout << "Monitor Mismatch detected! Recreating SwapChain for new Queue." << std::endl;
+                std::wcout << "Monitor Mismatch detected! Recreating SwapChain for new Queue." << std::endl;
                 // Ensure the GPU is done with the OLD queue resources before destroying them
                 // (In a production engine, you would use a fence wait here on the OLD queue)
                 gpu.WaitForPreviousFrame(threadRes);
@@ -921,6 +995,8 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 DATASETTAB& tab = allTabs[tabIndex];
                 DX12ResourcesPerTab& tabRes = tab.dx;
                 tabRes.camera = tab.camera; // Update camera from Tab.
+                uint64_t fenceToWaitFor = tabRes.lastCopyFenceValue.load(std::memory_order_acquire);// Cross-Queue Sync.
+                if (fenceToWaitFor > 0) { threadRes.commandQueue->Wait(gpu.copyFence.Get(), fenceToWaitFor); }
                 gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes);// Renders geometry.
             }
 
@@ -982,6 +1058,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             // SIGNAL the fence for the current frame
             const UINT64 currentFenceValue = threadRes.fenceValue;
             threadRes.commandQueue->Signal(threadRes.fence.Get(), currentFenceValue);
+            //tabRes.lastRenderFenceValue.store(currentFenceValue, std::memory_order_release);
 
             // WAIT: Throttle CPU (Double Buffering Logic). We need to reuse the Command Allocator for the *next* frame.
             // If we have 2 allocators (Double Buffering), we must ensure the GPU is finished with Frame (Current - 1).
@@ -1052,7 +1129,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
 
     threadRes.commandQueue.Reset();// Command Objects cleanup.
     threadRes.fence.Reset();
-    std::cout << "Render Thread (Monitor " << monitorId << ") shutting down.\n" << std::endl;
+    std::wcout << "Render Thread (Monitor " << monitorId << ") shutting down.\n" << std::endl;
 }
 
 // Following function is currently called in main UI thread, latter this responsibility will be moved to Render thread.
