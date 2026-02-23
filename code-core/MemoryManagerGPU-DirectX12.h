@@ -8,6 +8,8 @@
 
 //Tell the HLSL compiler to include debug information into the shader blob.
 #define D3DCOMPILE_DEBUG 1 //TODO: Remove from production build.
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>   // MUST be before d3d12.h
 #include <d3d12.h> //Main DirectX12 API. Included from %WindowsSdkDir\Include%WindowsSDKVersion%\\um
 //helper structures Library. MIT Licensed. Added to the project as git submodule.
 //https://github.com/microsoft/DirectX-Headers/blob/main/include/directx/d3dx12.h
@@ -50,12 +52,38 @@ const UINT FRAMES_PER_RENDERTARGETS = 2; //Initially we are going with double bu
 constexpr UINT64 MaxVertexBufferSize = 1024 * 1024 * 64; // 64 MB
 constexpr UINT64 MaxIndexBufferSize = 1024 * 1024 * 16; // 16 MB
 
+// Represents complete geometry and index data associated with 1 engineering object..
+// This structure holds information about a resource allocated in GPU memory (VRAM)
+struct GpuResourceVertexIndexInfo {
+    ComPtr<ID3D12Resource> vertexBuffer;
+    D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
+    ComPtr<ID3D12Resource> indexBuffer;
+    D3D12_INDEX_BUFFER_VIEW indexBufferView;
+    UINT indexCount;
+    uint32_t matrixIndex = 0;
+
+    //TODO: Latter on we will generalize this structure to hold textures, materials, shaders etc.
+    // Currently we are letting the Drive manage the GPU memory fragmentation. Latter we will manage it ourselves.
+    //uint64_t vramOffset; // Simulated VRAM address
+    //uint64_t size;
+    // In a real DX12 app, this would hold ID3D12Resource*, D3D12_VERTEX_BUFFER_VIEW, etc.
+};
+
+struct IndirectCommand { // OPTIMIZED Indirect Command
+    uint32_t matrixIndex; // 4 Bytes (Root Constant b1)
+	// Since Jumbo buffer ( or pages in future ) remains same, we bind it once.
+    // REMOVED: D3D12_VERTEX_BUFFER_VIEW vbv (Saved 16 Bytes)
+    // REMOVED: D3D12_INDEX_BUFFER_VIEW  ibv (Saved 16 Bytes)
+    D3D12_DRAW_INDEXED_ARGUMENTS drawArguments;// 20 Bytes
+}; // Total size: 24 Bytes (down from 56 Bytes!)
+
 /* DirectX 12 resources are organized at 3 levels:
-1. The Data   : Per Tab (Jumbo Buffers for geometry data, materials, textures, etc.)
+1. The Data   : Per Tab (Jumbo Buffers for geometry data, materials, textures, 
+    Pipeline State Object, Root Signature, Command Signature etc.)
 2. The Target : Per Window (Swap Chain, Render Targets, Depth Stencil Buffer etc.)
 3. The Worker : Per Render Thread. 1 For each monitor. (Command Queue, Command List etc.
     Resources shared across multiple windows on the same monitor) */
-struct GpuResourceVertexIndexInfo; //Forward declaration.
+
 struct DX12ResourcesPerTab { // (The Data) Geometry Data
     // Since data is isolated per tab, these live here. We use a "Jumbo" buffer approach to reduce switching.
     ComPtr<ID3D12Resource> vertexBuffer;
@@ -94,6 +122,21 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
 	std::vector<uint32_t>  freeMatrixSlots;   // free-list for matrix indices.
     //To enable re-use of slots when objects are removed.
 
+	// Initially rootSignature & pipelineState were in PerWindow, but now moved here, 
+    // when adding commandSignature and indirect drawing infrastructure.
+    // Since Root Signature and Pipeline State are closely tied to the command signature, 
+    ComPtr<ID3D12RootSignature> rootSignature;
+    ComPtr<ID3D12PipelineState> pipelineState;
+
+    ComPtr<ID3D12CommandSignature> commandSignature;// Indirect Drawing
+    // Double buffered indirect argument buffers (DEFAULT heap)
+    ComPtr<ID3D12Resource> indirectArgumentBuffer[FRAMES_PER_RENDERTARGETS];
+    // Upload buffers for indirect arguments (persistently mapped)
+    ComPtr<ID3D12Resource> indirectArgumentUpload[FRAMES_PER_RENDERTARGETS];
+    UINT8* pIndirectUploadBegin[FRAMES_PER_RENDERTARGETS] = { nullptr, nullptr };
+    std::atomic<uint32_t> indirectDrawCount[FRAMES_PER_RENDERTARGETS] = { 0, 0 };// Draw count per frame buffer
+    std::atomic<uint32_t> indirectWriteIndex = 0;// Which buffer copy thread is writing
+
 	CameraState camera; //Reference is updated per frame. 
     //Currently per tab, but latter we will have this per view. Since each tab can have multiple views.
 };
@@ -116,9 +159,6 @@ struct DX12ResourcesPerWindow {// Presentation Logic
     DXGI_FORMAT                     rttFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     // TODO: When we will implement HDR support, we wil have change above format to following.
     //DXGI_FORMAT                     rttFormat = DXGI_FORMAT_R16G16B16A16_FLOAT; // HDR ready
-
-    ComPtr<ID3D12RootSignature>     rootSignature;
-    ComPtr<ID3D12PipelineState> pipelineState;
 
     ComPtr<ID3D12Resource> depthStencilBuffer;// Depth Buffer (Sized to the window dimensions)
     ComPtr<ID3D12DescriptorHeap> dsvHeap;
@@ -197,22 +237,6 @@ extern std::condition_variable toCopyThreadCV;
 extern std::queue<CommandToCopyThread> commandToCopyThreadQueue;
 
 extern std::atomic<bool> pauseRenderThreads; // Defined in Main.cpp
-// Represents complete geometry and index data associated with 1 engineering object..
-// This structure holds information about a resource allocated in GPU memory (VRAM)
-struct GpuResourceVertexIndexInfo {
-    ComPtr<ID3D12Resource> vertexBuffer;
-    D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
-    ComPtr<ID3D12Resource> indexBuffer;
-    D3D12_INDEX_BUFFER_VIEW indexBufferView;
-    UINT indexCount;
-    uint32_t matrixIndex = 0;
-
-    //TODO: Latter on we will generalize this structure to hold textures, materials, shaders etc.
-    // Currently we are letting the Drive manage the GPU memory fragmentation. Latter we will manage it ourselves.
-    //uint64_t vramOffset; // Simulated VRAM address
-    //uint64_t size;
-    // In a real DX12 app, this would hold ID3D12Resource*, D3D12_VERTEX_BUFFER_VIEW, etc.
-};
 
 // Packet of work for a Render Thread for one frame
 struct RenderPacket {

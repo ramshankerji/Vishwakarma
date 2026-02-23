@@ -90,29 +90,23 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
 
     // Main Buffer (GPU Local). Create the main vertex buffer on the default heap (GPU-only access).
     ThrowIfFailed(gpu.device->CreateCommittedResource(
-        &defaultHeapProps, D3D12_HEAP_FLAG_NONE,
-        &vbResourceDesc, D3D12_RESOURCE_STATE_COMMON, // Starts Common
+        &defaultHeapProps, D3D12_HEAP_FLAG_NONE, &vbResourceDesc, D3D12_RESOURCE_STATE_COMMON, // Starts Common
         nullptr, IID_PPV_ARGS(&tabRes.vertexBuffer)));
 
     // Upload Buffer (CPU Shared). Create an upload heap for the vertex buffer.
     ThrowIfFailed(gpu.device->CreateCommittedResource(
-        &uploadHeapProps, D3D12_HEAP_FLAG_NONE,
-        &vbResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+        &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &vbResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
         nullptr, IID_PPV_ARGS(&tabRes.vertexBufferUpload)));
 
     // Create Index Buffers (Jumbo). Create Index Buffer Resources (Pre-allocation)
     auto ibResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(MaxIndexBufferSize);
 
-    // Create the main index buffer on the default heap.
-    ThrowIfFailed(gpu.device->CreateCommittedResource(
-        &defaultHeapProps, D3D12_HEAP_FLAG_NONE,
-        &ibResourceDesc, D3D12_RESOURCE_STATE_COMMON,
+    ThrowIfFailed(gpu.device->CreateCommittedResource(// Create the main index buffer on the default heap.
+        &defaultHeapProps, D3D12_HEAP_FLAG_NONE, &ibResourceDesc, D3D12_RESOURCE_STATE_COMMON,
         nullptr, IID_PPV_ARGS(&tabRes.indexBuffer)));
 
-    // Create an upload heap for the index buffer.
-    ThrowIfFailed(gpu.device->CreateCommittedResource(
-        &uploadHeapProps, D3D12_HEAP_FLAG_NONE,
-        &ibResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+    ThrowIfFailed(gpu.device->CreateCommittedResource(// Create an upload heap for the index buffer.
+        &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &ibResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
         nullptr, IID_PPV_ARGS(&tabRes.indexBufferUpload)));
 
     // Map Persistent Pointers (Optimization)
@@ -162,6 +156,204 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
 
     tabRes.matrixCount = 0;
     tabRes.freeMatrixSlots.clear();
+
+    // Create root signature with constant buffer
+    D3D12_FEATURE_DATA_ROOT_SIGNATURE featureData = {};
+    featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_1;
+    //Check if the GPU supports Root Signature version 1.1 (newer, more efficient) or fall back to 1.0.
+    if (FAILED(gpu.device->CheckFeatureSupport(D3D12_FEATURE_ROOT_SIGNATURE, &featureData, sizeof(featureData)))) {
+        featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
+    }
+
+    CD3DX12_DESCRIPTOR_RANGE1 ranges[2] = {};
+    ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV,
+        1, // There will be total 1 Nos. of Constant Buffer Descriptors passed to shaders.
+        0, // Base shader register i.e register(b0) in HLSL
+        0, // Register space 0. Since we are greenfield project, we don't need separate space 1
+        //D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC); //Optimization hint - data doesn't change often
+        D3D12_DESCRIPTOR_RANGE_FLAG_NONE); //Now it does change every frame, so no static flag.
+    ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_NONE);
+
+    CD3DX12_ROOT_PARAMETER1 rootParameters[3] = {}; //3: Number of descriptor ranges in this table
+
+    // No descriptor ranges needed!
+    // b0 : ViewProj Constant Buffer (Root Descriptor)
+    rootParameters[0].InitAsConstantBufferView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_VERTEX);
+    // t0 : WorldMatrices Structured Buffer (Root Descriptor)
+    rootParameters[1].InitAsShaderResourceView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_VERTEX);
+    // b1 : matrixIndex (Root Constant - 1 uint) (32-bit constant)
+    rootParameters[2].InitAsConstants(1, 1, 0, D3D12_SHADER_VISIBILITY_VERTEX);
+
+    CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
+    rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters,
+        0, nullptr, // Static samplers (none used here)
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT); //allows vertex input
+
+    //Root Signatures ( basically a data-structure storing constant buffer, descriptor table ranges etc.
+    //are required to be serialized, i.e. to be converted into a binary data GPU can understand.
+    //Root signatures are immutable once created and optimized for the GPU's command processor. 
+    ComPtr<ID3DBlob> signature;
+    ComPtr<ID3DBlob> error;
+    D3DX12SerializeVersionedRootSignature(&rootSignatureDesc, featureData.HighestVersion, &signature, &error);
+    gpu.device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(),
+        IID_PPV_ARGS(&tabRes.rootSignature));
+
+    /* Note that The root signature is like a function declaration. It defines the interface but doesn't
+    contain actual data. Now that we have declared the data layout, time to prepare for movement
+    of the data from CPU RAM to GPU RAM. This way we update the constant every frame without
+    changing the root signature. */
+
+    // Create the shader
+    ComPtr<ID3DBlob> vertexShader;
+    ComPtr<ID3DBlob> pixelShader;
+
+#if defined(_DEBUG)
+    UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#else
+    UINT compileFlags = 0;
+#endif
+
+    /* 3D shader code with matrix transformations.
+    Shaders are like a mini sub-program, which runs on the GPU FOR EACH VERTEX. Massively parallel.
+    In the following shader code, we do only 1 transformation: Transform the vertex 3D co-ordinate
+    to screen co-ordinate. Color is passed forward as it is without change.
+    TODO: In future, we will implement index color system using some transformation here. */
+    static const char* const vertexShaderCode = R"(
+        cbuffer ConstantBuffer : register(b0) {
+            // We will pack more data here in future, like time, animation parameters etc.
+            float4x4 viewProj;
+        };
+        StructuredBuffer<float4x4> WorldMatrices : register(t0);
+        cbuffer PerDraw : register(b1) { uint matrixIndex; };
+
+        struct PSInput {
+            float4 position : SV_POSITION;
+            float4 color : COLOR;
+            float3 normal : NORMAL;
+        };
+
+        PSInput VSMain(float3 position : POSITION, float4 normal : NORMAL, float4 color : COLOR)
+        {
+            PSInput result;
+            float4x4 world = WorldMatrices[matrixIndex];
+            float4 worldPos = mul(float4(position, 1.0f), world);
+
+            // Transform position to homogeneous clip space
+            result.position = mul(worldPos, viewProj); // correct order with transposed matrices
+
+            // Transform normal to world space
+            // Note: If 'world' contains non-uniform scaling, we should use the inverse-transpose.
+            // For now, assuming uniform scaling, casting to float3x3 works.
+            // Normal (good enough for CAD; inverse-transpose later if non-uniform scale)
+            result.normal = mul(normal.xyz, (float3x3)world);
+
+            result.color = color;
+            return result;
+        }
+    )";
+
+    /* Simple pass - through shader that outputs the interpolated vertex color for each pixel
+    No lighting calculations or texture sampling - just renders solid colors */
+    static const char* const pixelShaderCode = R"(
+        struct PSInput {
+            float4 position : SV_POSITION;
+            float4 color : COLOR;
+            float3 normal : NORMAL;
+        };
+
+        float4 PSMain(PSInput input) : SV_TARGET {
+            float3 norm = normalize(input.normal);// Re-normalize interpolants
+
+            // Hemispherical Lighting Settings
+            float3 up = float3(0.0f, 0.0f, 1.0f); // World Up
+            // Sky: Bright, slightly bluish white (multiplies your vertex color by ~0.95)
+            float3 skyColor = float3(0.9f, 0.95f, 1.0f);
+            // Ground: Mid-grey (multiplies by ~0.4). This ensures the shadowed parts are still visible, not pitch black.
+            float3 groundColor = float3(0.4f, 0.4f, 0.45f);
+
+            // Calculate blend factor [-1, 1] -> [0, 1] . Dot product gives 1.0 facing up, -1.0 facing down.
+            float t = 0.5f * (dot(norm, up) + 1.0f);
+            float3 ambientLight = lerp(groundColor, skyColor, t); // Interpolate lighting
+            return float4(input.color.rgb * ambientLight, input.color.a); // Apply lighting to surface color
+        }
+    )";
+
+    D3DCompile(vertexShaderCode, strlen(vertexShaderCode), nullptr, nullptr, nullptr,
+        "VSMain", "vs_5_0", compileFlags, 0, &vertexShader, nullptr);
+    D3DCompile(pixelShaderCode, strlen(pixelShaderCode), nullptr, nullptr, nullptr,
+        "PSMain", "ps_5_0", compileFlags, 0, &pixelShader, nullptr);
+
+    // Define the vertex input layout
+    D3D12_INPUT_ELEMENT_DESC inputElementDescs[] = {
+        // Position: 3 Floats (12 bytes)
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        // Normal: 4 Bytes Packed (Packed into 1 element, Offset 12)
+        // DXGI_FORMAT_R8G8B8A8_SNORM automatically unpacks 0..255 to -1.0..1.0 float in shader
+        { "NORMAL"  , 0, DXGI_FORMAT_R8G8B8A8_SNORM,  0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },// Offset 12
+        // Note that DXGI_FORMAT_R16G16B16A16_FLOAT has 10 bits for Precision, so it is already HDR capable.
+        // Additional sign bit and exponent bit enable lighting calculation to exceed the [ 0 , 1 ] bracket.
+        // Eventually they are clamped by the GPU, when sending to Swap Chain.
+        { "COLOR"   , 0, DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 16, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }// Offset 12+4=16
+    };
+
+    // Create the pipeline state object with depth testing enabled
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
+    psoDesc.pRootSignature = tabRes.rootSignature.Get();
+    psoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader.Get());
+    psoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader.Get());
+    psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT); //(default = replace)
+    psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT); // Enable depth testing
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT; // Set depth stencil format
+    psoDesc.SampleDesc.Count = 1;
+    gpu.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&tabRes.pipelineState));
+    vertexShader.Reset(); //Release memory once we have created pipelineState.
+    pixelShader.Reset();  //Release memory suggested by Claude code review.
+    signature.Reset();
+    if (error) error.Reset();
+
+    // Following part of the code is to fascilitate Indirect Drawing.
+    // Command Signature
+    D3D12_INDIRECT_ARGUMENT_DESC args[2] = {};
+    args[0].Type = D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT;
+    args[0].Constant.RootParameterIndex = 2;   // b1 matrixIndex
+    args[0].Constant.Num32BitValuesToSet = 1;
+    args[0].Constant.DestOffsetIn32BitValues = 0;
+    args[1].Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
+    D3D12_COMMAND_SIGNATURE_DESC sigDesc = {};
+    sigDesc.pArgumentDescs = args;
+    sigDesc.NumArgumentDescs = _countof(args);
+    sigDesc.ByteStride = sizeof(IndirectCommand);
+    ThrowIfFailed(gpu.device->CreateCommandSignature(// root signature NOT required (already bound)
+        &sigDesc, tabRes.rootSignature.Get(), IID_PPV_ARGS(&tabRes.commandSignature)));
+
+    //Create Double Buffered Indirect Buffers
+    const UINT maxCommands = 65536;
+    const UINT64 bufferSize = maxCommands * sizeof(IndirectCommand);
+
+    auto defaultHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+    auto uploadHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+    auto bufDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize);
+
+    for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; i++) {
+        ThrowIfFailed(gpu.device->CreateCommittedResource(// DEFAULT (GPU read)
+            &defaultHeap, D3D12_HEAP_FLAG_NONE, &bufDesc, D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr, IID_PPV_ARGS(&tabRes.indirectArgumentBuffer[i])));
+
+        ThrowIfFailed(gpu.device->CreateCommittedResource(// UPLOAD
+            &uploadHeap, D3D12_HEAP_FLAG_NONE, &bufDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr, IID_PPV_ARGS(&tabRes.indirectArgumentUpload[i])));
+
+        CD3DX12_RANGE readRange(0, 0);
+        ThrowIfFailed(tabRes.indirectArgumentUpload[i]->Map(
+            0, &readRange, reinterpret_cast<void**>(&tabRes.pIndirectUploadBegin[i])));
+        tabRes.indirectDrawCount[i] = 0;
+    }
 
     // Note: No Fence or Wait here. Resource creation is immediate.
     // Data upload sync happens in Copy Thread.
@@ -286,52 +478,6 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
         rttSrvHandle.Offset(1, cbvSrvUavDescriptorSize); //Gemini 3 Pro
     }
 
-    // Create root signature with constant buffer
-    D3D12_FEATURE_DATA_ROOT_SIGNATURE featureData = {};
-    featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_1;
-    //Check if the GPU supports Root Signature version 1.1 (newer, more efficient) or fall back to 1.0.
-    if (FAILED(gpu.device->CheckFeatureSupport(D3D12_FEATURE_ROOT_SIGNATURE, &featureData, sizeof(featureData)))) {
-        featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
-    }
-
-    CD3DX12_DESCRIPTOR_RANGE1 ranges[2] = {};
-    ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV,
-        1, // There will be total 1 Nos. of Constant Buffer Descriptors passed to shaders.
-        0, // Base shader register i.e register(b0) in HLSL
-        0, // Register space 0. Since we are greenfield project, we don't need separate space 1
-        //D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC); //Optimization hint - data doesn't change often
-        D3D12_DESCRIPTOR_RANGE_FLAG_NONE); //Now it does change every frame, so no static flag.
-    ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_NONE);
-
-    CD3DX12_ROOT_PARAMETER1 rootParameters[3] = {}; //3: Number of descriptor ranges in this table
-
-    // No descriptor ranges needed!
-    // b0 : ViewProj Constant Buffer (Root Descriptor)
-    rootParameters[0].InitAsConstantBufferView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_VERTEX);
-    // t0 : WorldMatrices Structured Buffer (Root Descriptor)
-    rootParameters[1].InitAsShaderResourceView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_VERTEX);
-    // b1 : matrixIndex (Root Constant - 1 uint) (32-bit constant)
-    rootParameters[2].InitAsConstants(1, 1, 0, D3D12_SHADER_VISIBILITY_VERTEX);
-
-    CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
-    rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters,
-        0, nullptr, // Static samplers (none used here)
-        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT); //allows vertex input
-
-    //Root Signatures ( basically a data-structure storing constant buffer, descriptor table ranges etc.
-    //are required to be serialized, i.e. to be converted into a binary data GPU can understand.
-    //Root signatures are immutable once created and optimized for the GPU's command processor. 
-    ComPtr<ID3DBlob> signature;
-    ComPtr<ID3DBlob> error;
-    D3DX12SerializeVersionedRootSignature(&rootSignatureDesc, featureData.HighestVersion, &signature, &error);
-    gpu.device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(),
-        IID_PPV_ARGS(&dx.rootSignature));
-
-    /* Note that The root signature is like a function declaration. It defines the interface but doesn't
-    contain actual data. Now that we have declared the data layout, time to prepare for movement
-    of the data from CPU RAM to GPU RAM. This way we update the constant every frame without
-    changing the root signature. */
-
     // Create constant buffer descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC cbvHeapDesc = {};
     cbvHeapDesc.NumDescriptors = 1;
@@ -359,119 +505,7 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     CD3DX12_RANGE readRange(0, 0); //CPU won't read from this buffer (write-only optimization)
     dx.constantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&dx.cbvDataBegin));
 
-    // Create the shader
-    ComPtr<ID3DBlob> vertexShader;
-    ComPtr<ID3DBlob> pixelShader;
-
-#if defined(_DEBUG)
-    UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#else
-    UINT compileFlags = 0;
-#endif
-
-    /* 3D shader code with matrix transformations.
-    Shaders are like a mini sub-program, which runs on the GPU FOR EACH VERTEX. Massively parallel.
-    In the following shader code, we do only 1 transformation: Transform the vertex 3D co-ordinate
-    to screen co-ordinate. Color is passed forward as it is without change.
-    TODO: In future, we will implement index color system using some transformation here. */
-    static const char* const vertexShaderCode = R"(
-        cbuffer ConstantBuffer : register(b0) {
-            // We will pack more data here in future, like time, animation parameters etc.
-            float4x4 viewProj;
-        };
-        StructuredBuffer<float4x4> WorldMatrices : register(t0);
-        cbuffer PerDraw : register(b1) { uint matrixIndex; };
-
-        struct PSInput {
-            float4 position : SV_POSITION;
-            float4 color : COLOR;
-            float3 normal : NORMAL;
-        };
-
-        PSInput VSMain(float3 position : POSITION, float4 normal : NORMAL, float4 color : COLOR)
-        {
-            PSInput result;
-            float4x4 world = WorldMatrices[matrixIndex];
-            float4 worldPos = mul(float4(position, 1.0f), world);
-
-            // Transform position to homogeneous clip space
-            result.position = mul(worldPos, viewProj); // correct order with transposed matrices
-
-            // Transform normal to world space
-            // Note: If 'world' contains non-uniform scaling, we should use the inverse-transpose.
-            // For now, assuming uniform scaling, casting to float3x3 works.
-            // Normal (good enough for CAD; inverse-transpose later if non-uniform scale)
-            result.normal = mul(normal.xyz, (float3x3)world);
-
-            result.color = color;
-            return result;
-        }
-    )";
-
-    /* Simple pass - through shader that outputs the interpolated vertex color for each pixel
-    No lighting calculations or texture sampling - just renders solid colors */
-    static const char* const pixelShaderCode = R"(
-        struct PSInput {
-            float4 position : SV_POSITION;
-            float4 color : COLOR;
-            float3 normal : NORMAL;
-        };
-
-        float4 PSMain(PSInput input) : SV_TARGET {
-            float3 norm = normalize(input.normal);// Re-normalize interpolants
-
-            // Hemispherical Lighting Settings
-            float3 up = float3(0.0f, 0.0f, 1.0f); // World Up
-            // Sky: Bright, slightly bluish white (multiplies your vertex color by ~0.95)
-            float3 skyColor = float3(0.9f, 0.95f, 1.0f);
-            // Ground: Mid-grey (multiplies by ~0.4). This ensures the shadowed parts are still visible, not pitch black.
-            float3 groundColor = float3(0.4f, 0.4f, 0.45f);
-
-            // Calculate blend factor [-1, 1] -> [0, 1] . Dot product gives 1.0 facing up, -1.0 facing down.
-            float t = 0.5f * (dot(norm, up) + 1.0f);
-            float3 ambientLight = lerp(groundColor, skyColor, t); // Interpolate lighting
-            return float4(input.color.rgb * ambientLight, input.color.a); // Apply lighting to surface color
-        }
-    )";
-
-    D3DCompile(vertexShaderCode, strlen(vertexShaderCode), nullptr, nullptr, nullptr,
-        "VSMain", "vs_5_0", compileFlags, 0, &vertexShader, nullptr);
-    D3DCompile(pixelShaderCode, strlen(pixelShaderCode), nullptr, nullptr, nullptr,
-        "PSMain", "ps_5_0", compileFlags, 0, &pixelShader, nullptr);
-
-    // Define the vertex input layout
-    D3D12_INPUT_ELEMENT_DESC inputElementDescs[] = {
-        // Position: 3 Floats (12 bytes)
-        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-        // Normal: 4 Bytes Packed (Packed into 1 element, Offset 12)
-        // DXGI_FORMAT_R8G8B8A8_SNORM automatically unpacks 0..255 to -1.0..1.0 float in shader
-        { "NORMAL"  , 0, DXGI_FORMAT_R8G8B8A8_SNORM,  0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },// Offset 12
-        // Note that DXGI_FORMAT_R16G16B16A16_FLOAT has 10 bits for Precision, so it is already HDR capable.
-        // Additional sign bit and exponent bit enable lighting calculation to exceed the [ 0 , 1 ] bracket.
-        // Eventually they are clamped by the GPU, when sending to Swap Chain.
-        { "COLOR"   , 0, DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 16, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }// Offset 12+4=16
-    };
-
-    // Create the pipeline state object with depth testing enabled
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
-    psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
-    psoDesc.pRootSignature = dx.rootSignature.Get();
-    psoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader.Get());
-    psoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader.Get());
-    psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-    psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT); //(default = replace)
-    psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT); // Enable depth testing
-    psoDesc.SampleMask = UINT_MAX;
-    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    psoDesc.NumRenderTargets = 1;
-    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
-    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT; // Set depth stencil format
-    psoDesc.SampleDesc.Count = 1;
-    gpu.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&dx.pipelineState));
-    vertexShader.Reset(); //Release memory once we have created pipelineState.
-    pixelShader.Reset();  //Release memory suggested by Claude code review.
-    signature.Reset();
-    if (error) error.Reset();
+    
 
     // Upto this point, setting of Graphics Engine is complete. Now we generate the actual 
     
@@ -506,8 +540,8 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
 	// Root Signature: The maximum size of a root signature is 64 DWORDs. 1 DWORD = 4 bytes, so that's 256 bytes total.
     // Root constants: 1 DWORD, i.e. 32-bit values. Root descriptors(64 - bit GPU virtual addresses) cost 2 DWORDs each.
     // https://learn.microsoft.com/en-us/windows/win32/direct3d12/root-signature-limits
-    commandList->SetGraphicsRootSignature(winRes.rootSignature.Get());
-    commandList->SetPipelineState(winRes.pipelineState.Get());
+    commandList->SetGraphicsRootSignature(tabRes.rootSignature.Get());
+    commandList->SetPipelineState(tabRes.pipelineState.Get());
     // Set root descriptor table. No longer used.
     // Bind directly using GPU Virtual Addresses!
     commandList->SetGraphicsRootConstantBufferView(0, winRes.constantBuffer->GetGPUVirtualAddress());
@@ -632,8 +666,6 @@ void शंकर::CleanupWindowResources(DX12ResourcesPerWindow& winRes) {
     // Pipeline Objects (Specific to this window context)
     winRes.constantBuffer.Reset();
     winRes.cbvHeap.Reset();
-    winRes.rootSignature.Reset();
-    winRes.pipelineState.Reset();
 
     std::wcout << "Cleaned up Window Resources." << std::endl;
 }
@@ -667,6 +699,9 @@ void शंकर::CleanupTabResources(DX12ResourcesPerTab& tabRes) {
     tabRes.worldMatrixBuffer.Reset();
     tabRes.freeMatrixSlots.clear();
     tabRes.matrixCount = 0;
+
+    tabRes.rootSignature.Reset();
+    tabRes.pipelineState.Reset();
 
     std::wcout << "Cleaned up Tab Geometry Resources." << std::endl;
 }
