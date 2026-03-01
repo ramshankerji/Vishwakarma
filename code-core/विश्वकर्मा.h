@@ -6,7 +6,6 @@
 #include "MemoryManagerCPU.h"
 #include "MemoryManagerGPU-DirectX12.h"
 #include "UserInputProcessing.h"
-extern struct CPU_RAM_4MB;
 
 #pragma once //It prevents multiple inclusions of the same header file.
 
@@ -72,8 +71,8 @@ struct DATASETTAB {
     std::wstring fileName;
 	std::vector<VIEW_INSIDE_DATASETTAB> views; //All views need not be inside single windows. Some views can be in other windows.
     int activeViewIndex = 0;
-    float color[4];
-    float colorHue;
+    float color[4] = {};
+    float colorHue = 0;
 
     // Each opened dataSet is considered / shown as a TAB. It could consist of multiple .yyy & .zzz file.
     // It could either load from local disc attached to OS OR loaded from remote network share OR loaded from same application running on other computer on network.
@@ -87,7 +86,7 @@ struct DATASETTAB {
     Tab codes.*/
     int mode = 0;
 
-    uint32_t tabNo; //This also act as memoryGroupNo of the memory chunks in which engineering objects created under this tabs are located.
+    uint32_t tabNo=0; //This also act as memoryGroupNo of the memory chunks in which engineering objects created under this tabs are located.
 
     /* In general, unless explicitly tuned, windows file full path including the "c:\" and terminating NULL character is 3+256+1=260
     character long. If long path is enabled, it is 2^16-1=32767
@@ -95,17 +94,17 @@ struct DATASETTAB {
     Linux also has 255 Character as file system Limit.  https://en.wikipedia.org/wiki/Ext4
     */
     int isShortPath = 0; //0: when it's a short path, 1 when it is long.
-    char shortFileName[256]; // Example: "DesignFile.bha"
-    char shortFilePath[256]; // Example: "C:\Folder1\Folder2\Folder3\"
+    char shortFileName[256] = {}; // Example: "DesignFile.bha"
+    char shortFilePath[256] = {}; // Example: "C:\Folder1\Folder2\Folder3\"
     char* longFileName = NULL;
     char* longFilePath = NULL;
     NETWORK_INTERFACE networkFile; //If we are loading from same application running on another network computer.
 
     // Encryption Keys and ID of the file.
-    char* filePublicKey[57]; //ED448 Public Key
-    char* fileSecretKey[57]; //ED448 Private Key
-    char* fileNonce[16]; //Internal AES encryption key of the file.
-    char* fileID[16]; //SHA256 of Public Key truncated to 1st 128 bits.
+    char* filePublicKey[57] = {}; //ED448 Public Key
+    char* fileSecretKey[57] = {}; //ED448 Private Key
+    char* fileNonce[16] = {}; //Internal AES encryption key of the file.
+    char* fileID[16] = {}; //SHA256 of Public Key truncated to 1st 128 bits.
 
 	std::vector<uint64_t> allIDsInThisTab; //List of all engineering object IDs in this tab.
 

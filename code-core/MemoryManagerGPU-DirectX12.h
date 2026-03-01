@@ -189,10 +189,6 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
     UINT8* pVertexDataBegin = nullptr;// Pointer for mapped vertex upload buffer
     UINT8* pIndexDataBegin = nullptr;  // Pointer for mapped index upload buffer
 
-    // Views into the buffers (to be bound during Draw)
-    D3D12_VERTEX_BUFFER_VIEW vertexBufferView;
-    D3D12_INDEX_BUFFER_VIEW indexBufferView;
-
 	// TODO: We will generalize this to hold materials, shaders, textures etc. unique to this project/tab
     ComPtr<ID3D12DescriptorHeap> srvHeap;
 
@@ -235,7 +231,6 @@ struct DX12ResourcesPerWindow {// Presentation Logic
 	//ComPtr<ID3D12CommandQueue>    commandQueue; // Moved to OneMonitorController
     ComPtr<ID3D12DescriptorHeap>    rtvHeap;
     ComPtr<ID3D12Resource>          renderTargets[FRAMES_PER_RENDERTARGETS];
-    UINT rtvDescriptorSize = 0;
 
     // Render To Texture Infrastructure
     ComPtr<ID3D12Resource>          renderTextures[FRAMES_PER_RENDERTARGETS];
@@ -308,13 +303,13 @@ struct OneMonitorController { // Variables stored per monitor.
 };
 
 // Commands sent from Generator thread(s) to the Copy thread
-enum class CommandToCopyThreadType { ADD, MODIFY, REMOVE };
+enum class CommandToCopyThreadType { NONE = 0, ADD, MODIFY, REMOVE };
 struct CommandToCopyThread
 {
     CommandToCopyThreadType type;
     std::optional<GeometryData> geometry; // Present for ADD and MODIFY
-    uint64_t id; // Always present
-    uint64_t tabID; // NEW: We must know which tab this object belongs to!
+    uint64_t id = 0; // Always present
+    uint64_t tabID = 0; // NEW: We must know which tab this object belongs to!
 };
 // Thread synchronization between Main Logic thread and Copy thread
 extern std::mutex toCopyThreadMutex;
@@ -448,11 +443,11 @@ public:
 	//Descreptior sizes for RTV and CBV/SRV/UAV. We need these to calculate offsets in descriptor heaps.
 	// These are initialized during device creation and remain constant. i.e. They are hardware properties of GPU.
     // We store them here for easy access across threads.
-    UINT rtvDescriptorSize, cbvSrvUavDescriptorSize;
+	UINT rtvDescriptorSize = 0, cbvSrvUavDescriptorSize = 0; //Initialized during device creation.
 
     void ProcessDeferredFrees(uint64_t lastCompletedRenderFrame);
 
-	शंकर() {}; // Our Main function inilsizes DirectX12 global resources by calling InitD3DDeviceOnly().
+	//शंकर() {}; // Our Main function inilsizes DirectX12 global resources by calling InitD3DDeviceOnly().
     void InitD3DDeviceOnly();
     void InitD3DPerTab(DX12ResourcesPerTab& tabRes); // Call this when a new Tab is created
     void InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D12CommandQueue* commandQueue);

@@ -27,12 +27,11 @@ struct PYRAMID :public META_DATA{
     std::vector<XMHALF4> colors; // RGBA format.
 
     //Optional Fields
-    uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
-    uint32_t systemFlags;          // 32 booleans for internal use only. Not persisted.
-    uint32_t objectLifeCycleFlags; // 32 booleans used as compact stored object properties. Persisted.
+    uint64_t optionalFieldsFlags = 0;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
+    uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
+    uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
 
-    PYRAMID() {};
 	void Randomize(); // Assign random position, size, colors etc.
     GeometryData GetGeometry(); // Simply returns the vertices with colors and indexes.
     void CalculateGeometry() {}; // Calculate the geometry, potentially taking into account cutouts.
@@ -41,12 +40,12 @@ struct PYRAMID :public META_DATA{
 struct CUBOID :public META_DATA {
     //Mandatory Fields
     std::vector<XMFLOAT3> vertices; // 8 corner vertices
-    XMHALF4 colors;   // Common color for all faces.
+    XMHALF4 colors = {};   // Common color for all faces.
 
     //Optional Fields
-    uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
-    uint32_t systemFlags;          // 32 booleans for internal use only. Not persisted.
-    uint32_t objectLifeCycleFlags; // 32 booleans used as compact stored object properties. Persisted.
+    uint64_t optionalFieldsFlags = 0;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
+    uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
+    uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
@@ -54,15 +53,15 @@ struct CUBOID :public META_DATA {
 
 struct CONE :public META_DATA {
     //Mandatory Fields
-    XMFLOAT3 apex;
-    XMFLOAT3 baseCenter;
-    float radius;
-    XMHALF4 colorBase, colorIncline; // Cone has only 2 surface.
+    XMFLOAT3 apex = {};
+    XMFLOAT3 baseCenter = {};
+    float radius = 1;
+    XMHALF4 colorBase = {}, colorIncline = {}; // Cone has only 2 surface.
 
     //Optional Fields
-    uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
-    uint32_t systemFlags;          // 32 booleans for internal use only. Not persisted.
-    uint32_t objectLifeCycleFlags; // 32 booleans used as compact stored object properties. Persisted.
+    uint64_t optionalFieldsFlags = 0;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
+    uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
+    uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
@@ -70,14 +69,14 @@ struct CONE :public META_DATA {
 
 struct CYLINDER :public META_DATA {
     //Mandatory Fields
-    XMFLOAT3 p1, p2; // Center points of the two circular bases
-    float radius;
-    XMHALF4 colorBase, colorTop, colorIncline; // 1 Unique color for each surface.
+    XMFLOAT3 p1 = {}, p2 = {}; // Center points of the two circular bases
+    float radius = 1;
+    XMHALF4 colorBase = {}, colorTop = {}, colorIncline = {}; // 1 Unique color for each surface.
 
     //Optional Fields
-    uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
-    uint32_t systemFlags;          // 32 booleans for internal use only. Not persisted.
-    uint32_t objectLifeCycleFlags; // 32 booleans used as compact stored object properties. Persisted.
+    uint64_t optionalFieldsFlags = 0;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
+    uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
+    uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
@@ -86,12 +85,12 @@ struct CYLINDER :public META_DATA {
 struct PARALLELEPIPED :public META_DATA {
     //Mandatory Fields
     std::vector<XMFLOAT3> vertices; // 8 vertices
-    XMHALF4 colors;   // common color for entire object. 
+    XMHALF4 colors = {};   // common color for entire object. 
 
     //Optional Fields
-    uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
-    uint32_t systemFlags;          // 32 booleans for internal use only. Not persisted.
-    uint32_t objectLifeCycleFlags; // 32 booleans used as compact stored object properties. Persisted.
+    uint64_t optionalFieldsFlags = 0;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
+    uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
+    uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
@@ -101,12 +100,12 @@ struct SPHERE :public META_DATA {
     //Mandatory Fields
     XMFLOAT3 center;
     float radius;
-    XMHALF4 color; // SInce entire sphere is 1 surface, it has got only 1 color.
+    XMHALF4 color = {}; // SInce entire sphere is 1 surface, it has got only 1 color.
 
     //Optional Fields
-    uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
-    uint32_t systemFlags;          // 32 booleans for internal use only. Not persisted.
-    uint32_t objectLifeCycleFlags; // 32 booleans used as compact stored object properties. Persisted.
+    uint64_t optionalFieldsFlags = 0;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
+    uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
+    uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
@@ -115,12 +114,12 @@ struct SPHERE :public META_DATA {
 struct FRUSTUM_OF_PYRAMID :public META_DATA {
     //Mandatory Fields
     std::vector<XMFLOAT3> vertices; // 8 vertices: 4 for bottom base, 4 for top base
-    XMHALF4 colorBase, colorTop, colorIncline; // There are 3 unique type of surfaces on a pyramid frustum.
+    XMHALF4 colorBase = {}, colorTop = {}, colorIncline = {}; // There are 3 unique type of surfaces on a pyramid frustum.
 
     //Optional Fields
-    uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
-    uint32_t systemFlags;          // 32 booleans for internal use only. Not persisted.
-    uint32_t objectLifeCycleFlags; // 32 booleans used as compact stored object properties. Persisted.
+    uint64_t optionalFieldsFlags = 0;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
+    uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
+    uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
@@ -128,14 +127,14 @@ struct FRUSTUM_OF_PYRAMID :public META_DATA {
 
 struct  FRUSTUM_OF_CONE :public META_DATA {
     //Mandatory Fields
-    XMFLOAT3 bottomCenter, topCenter;
-    float bottomRadius, topRadius;
-    XMHALF4 colorBase, colorTop, colorIncline; // Cone has only 3 surface.
+    XMFLOAT3 bottomCenter = {}, topCenter = {};
+    float bottomRadius = 1, topRadius = 1;
+    XMHALF4 colorBase = {}, colorTop = {}, colorIncline = {}; // Cone has only 3 surface.
 
     //Optional Fields
-    uint64_t optionalFieldsFlags;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
-    uint32_t systemFlags;          // 32 booleans for internal use only. Not persisted.
-    uint32_t objectLifeCycleFlags; // 32 booleans used as compact stored object properties. Persisted.
+    uint64_t optionalFieldsFlags = 0;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
+    uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
+    uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
@@ -144,19 +143,17 @@ struct  FRUSTUM_OF_CONE :public META_DATA {
 struct PIPE : public META_DATA {
 
     // Mandatory Fields
-    XMFLOAT3 center1;
-    XMFLOAT3 center2;
-    float outsideDiameter;
-    float insideDiameter;
+    XMFLOAT3 center1 = {};
+    XMFLOAT3 center2 = {};
+    float outsideDiameter = 1;
+    float insideDiameter = 1;
 
-    XMHALF4 colorOuter;
-    XMHALF4 colorInner;
-    XMHALF4 colorCap;
+    XMHALF4 colorOuter = {}, colorInner = {}, colorCap = {};
 
     // Optional Fields
-    uint64_t optionalFieldsFlags;
-    uint32_t systemFlags;
-    uint32_t objectLifeCycleFlags;
+    uint64_t optionalFieldsFlags = 0;
+    uint32_t systemFlags = 0;
+    uint32_t objectLifeCycleFlags = 0;
     c_string name;
 
     void Randomize();

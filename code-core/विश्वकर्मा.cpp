@@ -66,7 +66,7 @@ std::mt19937 gen(rd()); //rd(): Calls the device we made above to get a single r
 inline void addRandomGeometryElement(DATASETTAB* targetTab) {
 	if (!targetTab) return; //Safety against NULL pointer dereference.
     GeometryData geometry;// These will hold the data of the randomly created shape.
-    uint64_t memoryId;
+    uint64_t memoryId = 0;
 
     // Randomly select a shape type (0-7 for the 8 shapes available).
     // We use the GetRNG() helper function already available in "डेटा-सामान्य-3D.h".
@@ -218,7 +218,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         auto inputStart = std::chrono::steady_clock::now();
 		bool isOrbiting = false, isPanning = false; // Track if we are in orbit/panning based on mouse state and modifiers.
         float distance = 0.0;
-		float dx, dy, dz, vx, vy, vz;
+        float dx, dy, dz, vx, vy, vz;
 
         while (myTab->userInputQueue->try_pop(input)) {
             inputCount++;
@@ -232,8 +232,8 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 // Orbit if Middle Mouse is down, but NOT panning, OR if Alt+Left Click
                 isOrbiting = (!isPanning && myTab->mouseMiddleDown) || (myTab->mouseLeftDown && myTab->isAltDown);
 
-                dx = (input.x - myTab->lastMouseX);
-                dy = (input.y - myTab->lastMouseY);
+                dx = float(input.x - myTab->lastMouseX);
+                dy = float(input.y - myTab->lastMouseY);
 
                 // Calculate Vector from Target to Camera (View Vector)
                 vx = myTab->camera.position.x - myTab->camera.target.x;

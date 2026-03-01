@@ -102,7 +102,7 @@ struct CHUNK_METADATA { // Should not be more than 4KB in size.
 
     static const uint32_t freeByteRangesMaxSize = 498;
     FREE_RAM_RANGES freeByteRangesList[freeByteRangesMaxSize]; //Track the free space within the 4 MB Range.
-    std::byte headerPadding[4]; //Reserve bytes. Deduct from here if new variable required inside this struct.
+    std::byte headerPadding[4] = {}; //Reserve bytes. Deduct from here if new variable required inside this struct.
 };
 static_assert(sizeof(CHUNK_METADATA) == 4096, "CHUNK_METADATA must be exactly 4KB (4096 bytes)");
 struct CPU_RAM_4MB : CHUNK_METADATA {
@@ -320,7 +320,7 @@ private:
     std::unordered_map<std::byte*, uint64_t> largeAllocatedBlocks; // Maps ptr -> size for freeing
 
     CPU_RAM_4MB* getNewChunkForTab(uint32_t memoryGroupNo);
-    std::byte* allocateFromSmallPool(uint64_t size, uint32_t memoryGroupNo);
+    std::byte* allocateFromSmallPool(uint32_t size, uint32_t memoryGroupNo);
     std::byte* allocateFromLargePool(uint64_t size, uint32_t memoryGroupNo);
     void freeInLargePool(std::byte* ptr);
 
@@ -384,7 +384,7 @@ inline std::byte* राम::Allocate(uint64_t size, uint32_t memoryGroupNo) {
 
     std::byte* ptr = nullptr;
     if (totalSize <= LARGE_ALLOC_THRESHOLD) {
-        ptr = allocateFromSmallPool(totalSize, memoryGroupNo);
+        ptr = allocateFromSmallPool(uint32_t(totalSize), memoryGroupNo); // This will allocate max 4MB only.
     }
     else {
         ptr = allocateFromLargePool(totalSize, memoryGroupNo);
@@ -474,7 +474,7 @@ inline CPU_RAM_4MB* राम::getNewChunkForTab(uint32_t memoryGroupNo) {
 }
 
 //A simple bump allocator for small objects within 4MB chunks.
-inline std::byte* राम::allocateFromSmallPool(uint64_t size, uint32_t memoryGroupNo) {
+inline std::byte* राम::allocateFromSmallPool(uint32_t size, uint32_t memoryGroupNo) {
     CPU_RAM_4MB* currentChunk = nullptr;
     /* Fast Path: First, we get a pointer to the current chunk for this tab.
     This read operation needs to be protected by the global lock to prevent race conditions

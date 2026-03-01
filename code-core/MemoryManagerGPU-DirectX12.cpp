@@ -120,17 +120,6 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
     ThrowIfFailed(tabRes.vertexBufferUpload->Map(0, &readRange, reinterpret_cast<void**>(&tabRes.pVertexDataBegin)));
     ThrowIfFailed(tabRes.indexBufferUpload->Map(0, &readRange, reinterpret_cast<void**>(&tabRes.pIndexDataBegin)));
 
-    // Initialize Views (To be updated later by Copy Thread/Render Thread as size changes)
-    // Initialize the buffer views with default (but valid) values.
-    // The sizes will be updated each frame in PopulateCommandList.
-    tabRes.vertexBufferView.BufferLocation = tabRes.vertexBuffer->GetGPUVirtualAddress();
-    tabRes.vertexBufferView.StrideInBytes = sizeof(Vertex);
-    tabRes.vertexBufferView.SizeInBytes = 0; // Starts empty// Will be updated per frame
-
-    tabRes.indexBufferView.BufferLocation = tabRes.indexBuffer->GetGPUVirtualAddress();
-    tabRes.indexBufferView.Format = DXGI_FORMAT_R16_UINT;
-    tabRes.indexBufferView.SizeInBytes = 0; // Starts empty// Will be updated per frame
-
     // World Matrxi structured buffer. (UPLOAD heap, persistently mapped).
     auto matrixDesc = CD3DX12_RESOURCE_DESC::Buffer(tabRes.matrixCapacity * sizeof(DirectX::XMFLOAT4X4));
     auto uploadProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
@@ -375,8 +364,6 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     gpu.device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&dx.rtvHeap));
 
-    dx.rtvDescriptorSize = gpu.rtvDescriptorSize;
-
     // Create depth stencil descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
     dsvHeapDesc.NumDescriptors = 1;
@@ -412,7 +399,7 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     for (UINT j = 0; j < FRAMES_PER_RENDERTARGETS; j++) {
         dx.swapChain->GetBuffer(j, IID_PPV_ARGS(&dx.renderTargets[j]));
         gpu.device->CreateRenderTargetView(dx.renderTargets[j].Get(), nullptr, rtvHandle);
-        rtvHandle.Offset(1, dx.rtvDescriptorSize);
+        rtvHandle.Offset(1, gpu.rtvDescriptorSize);
     }
 
     // CREATE RENDER TEXTURES
@@ -420,7 +407,6 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     rttRtvHeapDesc.NumDescriptors = FRAMES_PER_RENDERTARGETS;
     rttRtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     gpu.device->CreateDescriptorHeap(&rttRtvHeapDesc, IID_PPV_ARGS(&dx.rttRtvHeap));
-    dx.rtvDescriptorSize = gpu.rtvDescriptorSize;
 
     D3D12_DESCRIPTOR_HEAP_DESC rttSrvHeapDesc = {};
     rttSrvHeapDesc.NumDescriptors = FRAMES_PER_RENDERTARGETS;
@@ -542,7 +528,7 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
 
     // Record commands
     CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(winRes.rtvHeap->GetCPUDescriptorHandleForHeapStart(),
-        winRes.frameIndex, winRes.rtvDescriptorSize);
+        winRes.frameIndex, gpu.rtvDescriptorSize);
     CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle(winRes.dsvHeap->GetCPUDescriptorHandleForHeapStart());
 	//commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle); //Removed. Already done by GpuRenderThread.
 
@@ -724,7 +710,7 @@ void शंकर::ProcessDeferredFrees(uint64_t lastCompletedRenderFrame) {
     }
 }
 
-std::unique_ptr<GeometryPage> CreateNewPage()
+std::unique_ptr<GeometryPage> static CreateNewPage()
 {
     auto page = std::make_unique<GeometryPage>();
     page->pageSize = 4 * 1024 * 1024;
@@ -1173,7 +1159,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             CD3DX12_CPU_DESCRIPTOR_HANDLE rttHandle( winRes.rttRtvHeap->GetCPUDescriptorHandleForHeapStart(),
                 winRes.frameIndex, gpu.rtvDescriptorSize);
             CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle( winRes.rtvHeap->GetCPUDescriptorHandleForHeapStart(),
-                winRes.frameIndex, winRes.rtvDescriptorSize);
+                winRes.frameIndex, gpu.rtvDescriptorSize);
             CD3DX12_CPU_DESCRIPTOR_HANDLE dsvHandle( winRes.dsvHeap->GetCPUDescriptorHandleForHeapStart());
 
             threadRes.commandList->OMSetRenderTargets(1, &rttHandle, FALSE, &dsvHandle);
@@ -1357,7 +1343,7 @@ void शंकर::ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UI
     for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; i++) {
         ThrowIfFailed(dx.swapChain->GetBuffer(i, IID_PPV_ARGS(&dx.renderTargets[i])));
         device->CreateRenderTargetView(dx.renderTargets[i].Get(), nullptr, rtvHandle);
-        rtvHandle.Offset(1, dx.rtvDescriptorSize);
+        rtvHandle.Offset(1, gpu.rtvDescriptorSize);
     }
 
     // Recreate depth buffer
