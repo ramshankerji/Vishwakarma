@@ -43,6 +43,41 @@ Each page will be accompanied by a corresponding ExecuteIndirect argument buffer
 Each TAB will also have it's dedicated World Matrix buffer.
 When we defragment a page, we must simultaneously rebuild its corresponding Argument Buffer.
 
+LOCK FREE VRAM MANAGEMENT:
+We will now be using ExecuteIndirect command + versioned geometry pages. Page max size 4 MB (initially).
+On geometry modify (Add / Modify / Delete)
+If the amount of new geometry (+ filled up last active page) is more than 4 MB page threshold, create new pages. 
+Do not touch existing ones. And then publish. Otherwise:
+Allocate new page. By Copy Queue. Copy Queue makes a READ-ONLY operation (allowed) on existing page to create a newPage. 
+This newPage is not published for rendering it.
+DirectQueue0, DirectQueue1, DirectQueue2 and so on can keep rendering as usual. Leave oldPage in COMMON state permanently.
+Never explicitly transition it to VERTEX.
+Render / CopySource both allowed on respective Queue by implicit promotion of COMMON stage.
+CopyQueue: Finalize this VRAM copied newPage as required. Upload delta. For additions, just add, 
+for modify / delete, if page free space < threshold → rebuild /defragment page.
+Publish pointer swap atomically. Once all render threads have passed a fence, Retire old page later by releasing buffers.
+
+Geometry will NOT be stored in CPU RAM once it is uploaded to VRAM due to memory efficiency reason. 
+Keeping memory scarcity on iGPU systems!
+They are generated on demand by engineering thread and simply handed over to copy queue. 
+However to be able to defragment, copy queue stores the Byte/Index ranges of all objects loaded into a Page.
+
+Copy queue prepares newPage ( VertexBuffer, IndexBuffer, ExecuteIndirec Buffers) and uploads it to VRAM.
+This (PCIe transfer) happens in parallel while the other render threads are already running.
+So, iteration over all objects has been removed altogether from the engine. 
+Further, there are 2 level of batching. Engineering thread will batch the changes together to some extent, 
+and copy thread will also batch the changes by emptying the submission list.
+
+There will be multiple render threads running at different VSync refresh rates (say 1 at 60 Hz, 1 at 144 Hz, 1 at 30 Hz).
+Each monitor has its own render thread, command queue / allocator / commandlist.
+
+Geometry pages: • Created in COMMON • Never explicitly transitioned • Only used in read-only states
+• Copied from (COPY_SOURCE) • Copied into (COPY_DEST) only before publishing. Once published, 
+there is no write operation on it. •Drawn from (VERTEX / INDEX / INDIRECT)
+
+Our strict invariants: • Geometry pages are immutable after publish.• No explicit state transitions for page buffers.
+• All page swaps are atomic. • Old pages are destroyed only after all queues retire.
+
 There will be multiple views per tab.
 Each View will maintain a pair ( double buffered ) of ExecuteIndirect command buffer.
 When an object is deleted, copy thread receive command from engineering thread. 
@@ -63,6 +98,7 @@ This will not produce high latency stall during async with copy thread.
 Root Signature puts the "Constants" (View/Proj matrix) in root constants or a very fast descriptor table,
 as these don't change between pages. Only the VBV/IBV and the EI Argument Buffer change per batch/page.
 
+OBJECT REPRESENTATION:
 Here is the realistic "Worst Case" Hierarchy for a CAD Frame:
 • ​Index Depth: 16-bit vs 32-bit (Hardware Requirement) Examples: Nuts/Bolts (16) vs Engine Blocks (32)
 • ​Transparency: Opaque vs Transparent (Sorting Requirement). Transparent objects must be drawn last for alpha blending.
@@ -194,16 +230,15 @@ Switching to ExecuteIndirect changes how you pass data. Do this BEFORE implement
 [Done] Implement Structured Buffer for World Matrix. StructuredBuffer<float4x4> and a root constant index.
 Critical: We cannot do ExecuteIndirect for multiple objects without a way to tell the shader which object 
     is being drawn. 
-[ ] DrawIndexedInstanced → ExecuteIndirect (EI).
+[Done] DrawIndexedInstanced → ExecuteIndirect (EI).
 Advice: Implement this using your current committed resources first. Just get the API call working.
-[ ] Double buffered ExecuteIndirect Arguments.
 
 Phase 4: The Memory Manager (The "Vishwakarma" Core)
 Now that EI is working, replace the backing memory.
 [ ] [MISSING] Global Upload Ring Buffer.
 Critical: Copy thread needs a staging area. If we don't build this, 
 our "VRAM Pages" step will stall waiting on CreateCommittedResource for uploads.
-[ ] VRAM Pages per Tab (The Stack Allocator). Advice: Implement the "Double-Ended Stack" (Vertex Up, Index Down) here.
+[Done] VRAM Pages per Tab (The Stack Allocator). Advice: Implement the "Double-Ended Stack" (Vertex Up, Index Down) here.
 [ ] CPU-Side Free List Allocator. (The logic that tracks the holes).
 [ ] Tab Management / View Management. (Integrating the heaps into the UI).
 

@@ -76,6 +76,97 @@ struct IndirectCommand { // OPTIMIZED Indirect Command
     // REMOVED: D3D12_INDEX_BUFFER_VIEW  ibv (Saved 16 Bytes)
     D3D12_DRAW_INDEXED_ARGUMENTS drawArguments;// 20 Bytes
 }; // Total size: 24 Bytes (down from 56 Bytes!)
+static_assert(sizeof(IndirectCommand) == 24, "IndirectCommand must be exactly 24 bytes.");
+
+/* Page Metadata: GeometryPlacementRecordInPage (CPU-side only).
+One entry per geometry object inside a GeometryPage. Used by Copy Thread for defragmentation, 
+rebuilds, and future features. (frustum culling, ray-cast selection, LOD, etc.).
+Total size = 56 bytes (tightly packed, cache-friendly). */
+struct GeometryPlacementRecordInPage {
+    uint64_t objectID;           // Unique 64-bit ID across entire process (unchanged)
+
+    // Byte offsets into this page's vertex/index buffers (page max = 4 MB → uint32_t is safe)
+    // Vertex region (grows upward)
+    uint32_t vertexByteOffset; // Start of this object's vertices in the page (bytes)
+    uint32_t vertexSize;       // In bytes
+
+    // Index region (grows downward)
+    uint32_t indexByteOffset;    // Start of this object's indices in the page (bytes)
+    uint32_t indexSize;          // In bytes
+
+    uint32_t indexCount;         // Number of indices (not bytes) For ExecuteIndirect
+    uint32_t matrixIndex;        // Index into the per-tab WorldMatrix structured buffer
+
+    // Axis-Aligned Bounding Box (AABB) – stored as float32 only (24 bytes total)
+    // Always present for future use (frustum culling, selection, etc.).
+    // Set to {0,0,0} / {0,0,0} if we don't need it yet – costs nothing extra.
+    float minX, minY, minZ, maxX, maxY, maxZ; // Minimum corner (X,Y,Z) Maximum corner (X,Y,Z)
+
+    // Optional padding for perfect 8-byte alignment (not needed – compiler will pad anyway)
+    uint64_t _padding = 0;   // modify type only if you add more fields later
+};
+
+static_assert(sizeof(GeometryPlacementRecordInPage) == 64, 
+    "GeometryPlacementRecordInPage must be exactly 64 bytes for optimal cache/line usage.");
+
+struct GeometryPage {
+    // GPU RESOURCES. Single unified 4 MB buffer
+    Microsoft::WRL::ComPtr<ID3D12Resource> buffer;// Layout:[Vertex Region ↑ ][Free Space][ Index Region ↓ ]
+    Microsoft::WRL::ComPtr<ID3D12Resource> indirectBuffer;// ExecuteIndirect argument buffer for this page
+    uint32_t indirectCount = 0; // Number of valid indirect draw commands
+
+    // ALLOCATION STATE (CPU-side only)
+    uint32_t vertexHead = 0; // Vertex region grows upward from 0
+    // Index region grows downward from pageSize
+    uint32_t indexTail = 0;  // Initialized to pageSize
+    uint32_t pageSize = 0;   // Typically 4 * 1024 * 1024
+    static constexpr uint32_t SAFETY_GAP = 64; // alignment guard
+
+    // FRAGMENTATION TRACKING
+    uint32_t liveBytes  = 0;   // Actively used bytes
+    uint32_t holeBytes  = 0;   // Deleted object space
+    uint32_t objectCount = 0;  // Active objects
+
+    // VERSIONING & LIFETIME CONTROL
+    uint32_t version = 0;                // Incremented on rebuild
+    std::atomic<bool> published = false; // Immutable once true
+    uint64_t retireFence = 0; // Fence value after which this page is safe to destroy
+
+    std::vector<GeometryPlacementRecordInPage> objects; // CPU METADATA (NO GEOMETRY STORED)
+
+    // UTILITY
+    bool IsFull(uint32_t incomingVertexBytes, uint32_t incomingIndexBytes) const  {
+        uint32_t alignedVertexHead = AlignUp(vertexHead, 16);
+        uint32_t alignedIndexTail  = AlignDown(indexTail - incomingIndexBytes, 4);
+        return (alignedVertexHead + SAFETY_GAP >= alignedIndexTail);
+    }
+
+    static uint32_t AlignUp(uint32_t value, uint32_t alignment) {
+        return (value + alignment - 1) & ~(alignment - 1);
+    }
+
+    static uint32_t AlignDown(uint32_t value, uint32_t alignment) {
+        return value & ~(alignment - 1);
+    }
+};
+
+struct BigGeometryObject {
+    Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> indirectBuffer;
+    uint32_t indexCount = 0;
+    uint32_t matrixIndex = 0;
+    uint64_t retireFence = 0;
+    std::atomic<bool> published = false;
+};
+
+struct TabGeometryStorage {
+    std::vector<std::unique_ptr<GeometryPage>> opaquePages; // Opaque geometry pages
+    std::vector<std::unique_ptr<GeometryPage>> transparentPages; // Transparent geometry pages
+    std::vector<std::unique_ptr<GeometryPage>> wireframePages; // Wireframe pages (if used)
+    std::vector<std::unique_ptr<BigGeometryObject>> bigObjects; // Dedicated large objects
+    std::atomic<uint32_t> currentVersion = 0;
+    std::vector<std::unique_ptr<GeometryPage>> retiredPages;
+};
 
 /* DirectX 12 resources are organized at 3 levels:
 1. The Data   : Per Tab (Jumbo Buffers for geometry data, materials, textures, 
@@ -115,7 +206,7 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
     uint64_t vertexDataSize = 0;
     uint64_t indexDataSize = 0;
 
-    ComPtr<ID3D12Resource> worldMatrixBuffer; // TODO: Doublebuffer it. Or make it per Page ?
+    ComPtr<ID3D12Resource> worldMatrixBuffer; // TODO: Doublebuffer it per frame.
     UINT8 * pWorldMatrixDataBegin = nullptr;
     uint32_t               matrixCapacity = 4096;
     uint32_t               matrixCount = 0;
@@ -129,13 +220,6 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
     ComPtr<ID3D12PipelineState> pipelineState;
 
     ComPtr<ID3D12CommandSignature> commandSignature;// Indirect Drawing
-    // Double buffered indirect argument buffers (DEFAULT heap)
-    ComPtr<ID3D12Resource> indirectArgumentBuffer[FRAMES_PER_RENDERTARGETS];
-    // Upload buffers for indirect arguments (persistently mapped)
-    ComPtr<ID3D12Resource> indirectArgumentUpload[FRAMES_PER_RENDERTARGETS];
-    UINT8* pIndirectUploadBegin[FRAMES_PER_RENDERTARGETS] = { nullptr, nullptr };
-    std::atomic<uint32_t> indirectDrawCount[FRAMES_PER_RENDERTARGETS] = { 0, 0 };// Draw count per frame buffer
-    std::atomic<uint32_t> indirectWriteIndex = 0;// Which buffer copy thread is writing
 
 	CameraState camera; //Reference is updated per frame. 
     //Currently per tab, but latter we will have this per view. Since each tab can have multiple views.
@@ -144,7 +228,8 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
 struct DX12ResourcesPerWindow {// Presentation Logic
     int WindowWidth = 800;//Current ViewPort ( Rendering area ) size. excluding task-bar etc.
     int WindowHeight = 600;
-    ID3D12CommandQueue* creatorQueue = nullptr; // Track which queue this windows was created with. To assist with migrations.
+    ID3D12CommandQueue* creatorQueue = nullptr; // Track which queue this windows was created with. 
+    //To assist with migrations.
     
     ComPtr<IDXGISwapChain3>         swapChain; // The link to the OS Window
 	//ComPtr<ID3D12CommandQueue>    commandQueue; // Moved to OneMonitorController
@@ -334,7 +419,8 @@ public:
 
 	ComPtr<ID3D12CommandQueue> copyCommandQueue; // There is only 1 across the application.
     ComPtr<ID3D12Fence> copyFence;// Synchronization for Copy Queue
-    UINT64 copyFenceValue = 0;
+	std::atomic<uint64_t> copyFenceValue = 1; // thread safe.
+    //Start from 1 to avoid confusion with default fence value of 0.
     HANDLE copyFenceEvent = nullptr;
 
 public:
@@ -359,6 +445,11 @@ public:
 	// Allocate space in VRAM. Returns the handle. What is this used for?
     // std::optional<GpuResourceVertexIndexInfo> Allocate(size_t size);
 
+	//Descreptior sizes for RTV and CBV/SRV/UAV. We need these to calculate offsets in descriptor heaps.
+	// These are initialized during device creation and remain constant. i.e. They are hardware properties of GPU.
+    // We store them here for easy access across threads.
+    UINT rtvDescriptorSize, cbvSrvUavDescriptorSize;
+
     void ProcessDeferredFrees(uint64_t lastCompletedRenderFrame);
 
 	शंकर() {}; // Our Main function inilsizes DirectX12 global resources by calling InitD3DDeviceOnly().
@@ -366,7 +457,7 @@ public:
     void InitD3DPerTab(DX12ResourcesPerTab& tabRes); // Call this when a new Tab is created
     void InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D12CommandQueue* commandQueue);
     void PopulateCommandList(ID3D12GraphicsCommandList* cmdList, //Called by per monitor render thead.
-        DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes);
+        DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage);
     void WaitForPreviousFrame(DX12ResourcesPerRenderThread dx);
     void ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UINT newHeight);
 

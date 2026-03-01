@@ -114,6 +114,7 @@ struct DATASETTAB {
     //ThreadSafeQueueCPU todoCPUQueue;   // Dedicated Work Queue for this tab's engineering thread. Self TODOs.
     std::unique_ptr<ThreadSafeQueueCPU> userInputQueue;
     std::unique_ptr<ThreadSafeQueueCPU> todoCPUQueue;
+    TabGeometryStorage geometry;
 
     /*Self TODOs are modification to enginering world data, like create new Beam, Modify existing Column etc.
     This is different from userInputQueue because this 2nd queue can come from filesystem thread, 
