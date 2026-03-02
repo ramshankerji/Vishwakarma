@@ -78,44 +78,30 @@ void शंकर::InitD3DDeviceOnly() {
     device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&copyFence));
     copyFenceValue = 1;
     copyFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+
+    rttFormat = DXGI_FORMAT_R8G8B8A8_UNORM; //Initially. Latter upgrade during HDR implementation.
+    //When imlementing HDR, check if hardware support this.
 }
 
 // Implementation
 void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
-    // Create Default Heap Properties
-    // Now we will now pre-allocate large buffers that can be updated every frame.
-    // Create Vertex Buffer Resources (Pre-allocation)
-    auto defaultHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-    auto uploadHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
 
+    // Map Persistent Pointers (Optimization). We map once and keep it mapped for the lifetime of the Tab.
+    auto uploadHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
     // Create Vertex Buffers (Jumbo)
     auto vbResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(MaxVertexBufferSize);
-
-    // Main Buffer (GPU Local). Create the main vertex buffer on the default heap (GPU-only access).
-    ThrowIfFailed(gpu.device->CreateCommittedResource(
-        &defaultHeapProps, D3D12_HEAP_FLAG_NONE, &vbResourceDesc, D3D12_RESOURCE_STATE_COMMON, // Starts Common
-        nullptr, IID_PPV_ARGS(&tabRes.vertexBuffer)));
 
     // Upload Buffer (CPU Shared). Create an upload heap for the vertex buffer.
     ThrowIfFailed(gpu.device->CreateCommittedResource(
         &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &vbResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
         nullptr, IID_PPV_ARGS(&tabRes.vertexBufferUpload)));
-
+        
     // Create Index Buffers (Jumbo). Create Index Buffer Resources (Pre-allocation)
     auto ibResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(MaxIndexBufferSize);
-
-    ThrowIfFailed(gpu.device->CreateCommittedResource(// Create the main index buffer on the default heap.
-        &defaultHeapProps, D3D12_HEAP_FLAG_NONE, &ibResourceDesc, D3D12_RESOURCE_STATE_COMMON,
-        nullptr, IID_PPV_ARGS(&tabRes.indexBuffer)));
-
     ThrowIfFailed(gpu.device->CreateCommittedResource(// Create an upload heap for the index buffer.
         &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &ibResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
         nullptr, IID_PPV_ARGS(&tabRes.indexBufferUpload)));
-
-    // Map Persistent Pointers (Optimization)
-    // We map once and keep it mapped for the lifetime of the Tab.
     // Persistently map the upload buffers. We won't unmap them until cleanup.
-    // This is efficient as we avoid map/unmap calls every frame.
     CD3DX12_RANGE readRange(0, 0); // CPU won't read from these
     ThrowIfFailed(tabRes.vertexBufferUpload->Map(0, &readRange, reinterpret_cast<void**>(&tabRes.pVertexDataBegin)));
     ThrowIfFailed(tabRes.indexBufferUpload->Map(0, &readRange, reinterpret_cast<void**>(&tabRes.pIndexDataBegin)));
@@ -301,7 +287,7 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
     psoDesc.SampleMask = UINT_MAX;
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets = 1;
-    psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+    psoDesc.RTVFormats[0] = gpu.rttFormat;
     psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT; // Set depth stencil format
     psoDesc.SampleDesc.Count = 1;
     gpu.device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&tabRes.pipelineState));
@@ -310,7 +296,7 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
     signature.Reset();
     if (error) error.Reset();
 
-    // Following part of the code is to fascilitate Indirect Drawing.
+    // Following part of the code is to facilitate Indirect Drawing.
     // Command Signature
     D3D12_INDIRECT_ARGUMENT_DESC args[2] = {};
     args[0].Type = D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT;
@@ -342,7 +328,7 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     swapChainDesc.BufferCount = FRAMES_PER_RENDERTARGETS;
     swapChainDesc.Width = dx.WindowWidth;
     swapChainDesc.Height = dx.WindowHeight;
-    swapChainDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    swapChainDesc.Format = gpu.rttFormat;
     swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
     swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     swapChainDesc.SampleDesc.Count = 1;
@@ -420,9 +406,9 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
 
 	//Gemini placed clearValue  / texDesc outside the loop. ChatGPT placed it inside the loop. 
     //Since clearValue doesn't change per iteration, we can optimize by defining it once outside the loop.
-    auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(dx.rttFormat, dx.WindowWidth, dx.WindowHeight,
+    auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(gpu.rttFormat, dx.WindowWidth, dx.WindowHeight,
         1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
-    D3D12_CLEAR_VALUE clearValue{ .Format = dx.rttFormat, .Color = {0.0f, 0.2f, 0.4f, 1.0f} }; //C++20 allows this beauty!
+    D3D12_CLEAR_VALUE clearValue{ .Format = gpu.rttFormat, .Color = {0.0f, 0.2f, 0.4f, 1.0f} }; //C++20 allows this beauty!
 
     for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; i++) {
         CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
@@ -436,7 +422,7 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
         // Create SRV (For passing into Pixel Shader later). Can we create this struct also outside the loop ?
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvDesc.Format = dx.rttFormat;
+        srvDesc.Format = gpu.rttFormat;
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Texture2D.MipLevels = 1;
 
@@ -710,7 +696,7 @@ void शंकर::ProcessDeferredFrees(uint64_t lastCompletedRenderFrame) {
     }
 }
 
-std::unique_ptr<GeometryPage> static CreateNewPage()
+std::unique_ptr<GeometryPage> CreateNewPage() //Do not make this static function. It accesses global gpu singleton.
 {
     auto page = std::make_unique<GeometryPage>();
     page->pageSize = 4 * 1024 * 1024;
@@ -869,7 +855,10 @@ void GpuCopyThread() {
             GeometryPage* oldPage = storage.opaquePages.back().get();
             oldPage->retireFence = gpu.renderFenceValue;// retire old page
             storage.retiredPages.push_back( std::move(storage.opaquePages.back()));
-            storage.opaquePages.push_back( std::move(newPage));// publish new page
+            storage.opaquePages.back() = std::move(newPage);// publish new page
+            //Remember, render threads only READ the pages.
+            // TODO: WARNING: Above 2 lines have a race condition. To be resolved latter. 
+            // Do not use std::vector<std::atomic<>> for performance reasons. Find better solution!
         };
 
         switch (cmd.type)// Process Command
@@ -932,16 +921,12 @@ void GpuCopyThread() {
                 break;
             }
 
-            auto newPage = CreateNewPage();
             commandAllocator->Reset();
             commandList->Reset(commandAllocator.Get(), nullptr);
+
+            auto newPage = CreateNewPage();
             commandList->CopyResource( newPage->buffer.Get(), oldPage->buffer.Get());
             commandList->CopyResource( newPage->indirectBuffer.Get(), oldPage->indirectBuffer.Get());
-            ThrowIfFailed(commandList->Close());
-
-            ID3D12CommandList* lists[] = { commandList.Get() };
-            gpu.copyCommandQueue->ExecuteCommandLists(1, lists);
-
             newPage->objects = oldPage->objects;
             newPage->vertexHead = oldPage->vertexHead;
             newPage->indexTail = oldPage->indexTail;
@@ -969,26 +954,11 @@ void GpuCopyThread() {
 
             upload->Unmap(0, nullptr);
 
-            commandAllocator->Reset();
-            commandList->Reset(commandAllocator.Get(), nullptr);
             // Copy vertices
             commandList->CopyBufferRegion(newPage->buffer.Get(), vOffset, upload.Get(), 0, vertexBytes);
             // Copy indices
             commandList->CopyBufferRegion(newPage->buffer.Get(), iOffset, upload.Get(), vertexBytes, indexBytes);
-
-            ThrowIfFailed(commandList->Close());
-
-            ID3D12CommandList* lists2[] = { commandList.Get() };
-            gpu.copyCommandQueue->ExecuteCommandLists(1, lists2);
-
-            uint64_t fenceValue = gpu.copyFenceValue.fetch_add(1);
-            gpu.copyCommandQueue->Signal(gpu.copyFence.Get(), fenceValue);
-
-            if (gpu.copyFence->GetCompletedValue() < fenceValue) {
-                gpu.copyFence->SetEventOnCompletion( fenceValue,  gpu.copyFenceEvent);
-                WaitForSingleObject(gpu.copyFenceEvent, INFINITE);
-            }
-
+            
             // Update page metadata
             GeometryPlacementRecordInPage rec{};
             rec.objectID = cmd.id;
@@ -1030,14 +1000,12 @@ void GpuCopyThread() {
             indirectUpload->Map(0, &readRange,  reinterpret_cast<void**>(&mapped));
             memcpy(mapped, commands.data(), commands.size() * sizeof(IndirectCommand));
             indirectUpload->Unmap(0, nullptr);
-
-            commandAllocator->Reset();
-            commandList->Reset(commandAllocator.Get(), nullptr);
-
+            
             commandList->CopyBufferRegion( newPage->indirectBuffer.Get(),
                 0, indirectUpload.Get(), 0, commands.size() * sizeof(IndirectCommand));
 
             ThrowIfFailed(commandList->Close());
+            ID3D12CommandList* lists[] = { commandList.Get() };
             gpu.copyCommandQueue->ExecuteCommandLists(1, lists);
             gpu.copyCommandQueue->Signal(gpu.copyFence.Get(), gpu.copyFenceValue++);
             newPage->indirectCount = static_cast<uint32_t>(commands.size());
@@ -1069,7 +1037,7 @@ void GpuCopyThread() {
 }
 
 void GpuRenderThread(int monitorId, int refreshRate) {
-    // Our architecture is 1 GPU Render thead per Monitor. 
+    // Our architecture is 1 GPU Render thread per Monitor. 
     std::wcout << "Render Thread (Monitor " << monitorId << ", " << refreshRate << "Hz) started." << std::endl;
     
 	// Ge the persistent Command Queue for this monitor. Do NOT create a new queue.
@@ -1296,7 +1264,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
         //At this cleanup stage, do not waith INFINITE. Otherwise we may get stuck waiting forever.
         DWORD waitResult = WaitForSingleObject(threadRes.fenceEvent, 5000);  // 5 sec timeout
         if (waitResult != WAIT_OBJECT_0) {
-            std::cerr << "Render thead cleanup Fence wait timed out!\n" << std::endl;
+            std::cerr << "Render thread cleanup Fence wait timed out!\n" << std::endl;
             // Force exit or log
         }
     }
@@ -1364,10 +1332,10 @@ void शंकर::ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UI
     // Recreate RTT Textures
     CD3DX12_CPU_DESCRIPTOR_HANDLE rttRtvHandle(dx.rttRtvHeap->GetCPUDescriptorHandleForHeapStart());
     CD3DX12_CPU_DESCRIPTOR_HANDLE rttSrvHandle(dx.rttSrvHeap->GetCPUDescriptorHandleForHeapStart());
-    D3D12_CLEAR_VALUE clearValue{ .Format = dx.rttFormat, .Color = {0.0f, 0.2f, 0.4f, 1.0f} };
+    D3D12_CLEAR_VALUE clearValue{ .Format = gpu.rttFormat, .Color = {0.0f, 0.2f, 0.4f, 1.0f} };
 
     for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; i++) {
-        auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(dx.rttFormat,
+        auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(gpu.rttFormat,
             newWidth, newHeight, 1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
         CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
         ThrowIfFailed(device->CreateCommittedResource(&heapProps,
@@ -1379,7 +1347,7 @@ void शंकर::ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UI
         // SRV
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvDesc.Format = dx.rttFormat;
+        srvDesc.Format = gpu.rttFormat;
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Texture2D.MipLevels = 1;
         device->CreateShaderResourceView(dx.renderTextures[i].Get(), &srvDesc, rttSrvHandle);

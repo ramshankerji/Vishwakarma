@@ -138,7 +138,7 @@ struct GeometryPage {
     bool IsFull(uint32_t incomingVertexBytes, uint32_t incomingIndexBytes) const  {
         uint32_t alignedVertexHead = AlignUp(vertexHead, 16);
         uint32_t alignedIndexTail  = AlignDown(indexTail - incomingIndexBytes, 4);
-        return (alignedVertexHead + SAFETY_GAP >= alignedIndexTail);
+		return (alignedVertexHead + incomingVertexBytes + SAFETY_GAP > alignedIndexTail);
     }
 
     static uint32_t AlignUp(uint32_t value, uint32_t alignment) {
@@ -236,7 +236,7 @@ struct DX12ResourcesPerWindow {// Presentation Logic
     ComPtr<ID3D12Resource>          renderTextures[FRAMES_PER_RENDERTARGETS];
     ComPtr<ID3D12DescriptorHeap>    rttRtvHeap;
     ComPtr<ID3D12DescriptorHeap>    rttSrvHeap;
-    DXGI_FORMAT                     rttFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    
     // TODO: When we will implement HDR support, we wil have change above format to following.
     //DXGI_FORMAT                     rttFormat = DXGI_FORMAT_R16G16B16A16_FLOAT; // HDR ready
 
@@ -390,6 +390,7 @@ public:
 
 	ComPtr<ID3D12Device> device; //Very Important: We support EXACTLY 1 GPU device only in this version.
     bool isGPUEngineInitialized = false; //TODO: To be implemented.
+    DXGI_FORMAT rttFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     
     //Following to be added latter.
     //ID3D12DescriptorHeapMgr    ← Global descriptor allocator
@@ -419,9 +420,6 @@ public:
     HANDLE copyFenceEvent = nullptr;
 
 public:
-    UINT8* pVertexDataBegin = nullptr; // MODIFICATION: Pointer for mapped vertex upload buffer
-    UINT8* pIndexDataBegin = nullptr;  // MODIFICATION: Pointer for mapped index upload buffer
-
     // Maps our CPU ObjectID to its resource info in VRAM
     std::unordered_map<uint64_t, GpuResourceVertexIndexInfo> resourceMap;
 
@@ -440,18 +438,18 @@ public:
 	// Allocate space in VRAM. Returns the handle. What is this used for?
     // std::optional<GpuResourceVertexIndexInfo> Allocate(size_t size);
 
-	//Descreptior sizes for RTV and CBV/SRV/UAV. We need these to calculate offsets in descriptor heaps.
+	// Descriptor sizes for RTV and CBV/SRV/UAV. We need these to calculate offsets in descriptor heaps.
 	// These are initialized during device creation and remain constant. i.e. They are hardware properties of GPU.
     // We store them here for easy access across threads.
 	UINT rtvDescriptorSize = 0, cbvSrvUavDescriptorSize = 0; //Initialized during device creation.
 
     void ProcessDeferredFrees(uint64_t lastCompletedRenderFrame);
 
-	//शंकर() {}; // Our Main function inilsizes DirectX12 global resources by calling InitD3DDeviceOnly().
+	//शंकर() {}; // Our Main function initializes DirectX12 global resources by calling InitD3DDeviceOnly().
     void InitD3DDeviceOnly();
     void InitD3DPerTab(DX12ResourcesPerTab& tabRes); // Call this when a new Tab is created
     void InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D12CommandQueue* commandQueue);
-    void PopulateCommandList(ID3D12GraphicsCommandList* cmdList, //Called by per monitor render thead.
+    void PopulateCommandList(ID3D12GraphicsCommandList* cmdList, //Called by per monitor render thread.
         DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage);
     void WaitForPreviousFrame(DX12ResourcesPerRenderThread dx);
     void ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UINT newHeight);

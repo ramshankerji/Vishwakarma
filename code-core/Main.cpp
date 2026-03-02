@@ -1003,7 +1003,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         pauseRenderThreads = true;
 
         // Join render threads to ensure they stop BEFORE window destruction
-        // TODO : Warning : This will terminate ALL render theads. Revisit this code when multi window is implemented.
+        // TODO : Warning : This will terminate ALL render threads. Revisit this code when multi window is implemented.
         for (auto& t : renderThreads) {
             if (t.joinable()) {
                 t.join();

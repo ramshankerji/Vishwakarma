@@ -12,6 +12,11 @@ VertexLayout Common to all geometry:
 3x4 Bytes for Position, 4 Bytes for Normal, 4 Bytes for Color RGBA / 8 Bytes if HDR Monitor present. 
     = 20 / 24 Bytes per vertex.
 Anyway go with 24 Bytes format ONLY. Tone mapping (HDR -> SDR) should happen in the Pixel Shader.
+Initial Development will be on R8G8B8A8, latter when we implement HDR, will will upgrade this.
+Some hardware may not support HDR, so keep both version of shaders.
+Further, wether to load HDR or SDR shaders is decided at the application startup times.
+If graphics card support HDR and there is at least 1 monitor present with HDR capability, sitch to HDR.
+Once HDR ON, the application maintains HDR shaders even if HDR monitors disconnects. Till app closes.
 
 Initially Hemispheric Ambient Lighting
 Factor = (Normal.z \times 0.5) + 0.5
@@ -130,7 +135,7 @@ Vertex and Index buffer in same Page : superior architectural choice for three r
 This can slightly improve cache hit rates.
 ​Vertices start at Offset 0 and grow UP. ​Indices start at Offset Max (4MB) and grow DOWN.
 ​Free Space is always the gap in the middle. ​Page Full when Vertex_Head_Ptr meets or crosses Index_Tail_Ptr.
-32 Bytes mandatory gap in middle to address alignment concerns.
+64 Bytes mandatory gap in middle to address alignment concerns.
 
 Lazy Creation.
 ​When a user creates a new Tab, allocated memory = 0 MB.
@@ -297,21 +302,9 @@ struct CameraState { // Each view gets its own camera state.
     }
 };
 
-inline void InitCamera(CameraState& cam, float aspectRatio)
-{
-    cam.position = { 0.0f, -10.0f, 2.0f };
-    cam.target = { 0.0f, 0.0f,  0.0f };
-    cam.up = { 0.0f, 0.0f,  1.0f }; // Z-Up is perfect for an XY orbit.
-
-    cam.fov = DirectX::XMConvertToRadians(60.0f);
-    cam.aspect = aspectRatio;
-    cam.nearZ = 0.1f;
-    cam.farZ = 1000.0f;
-}
-
 inline void UpdateCameraOrbit(CameraState& cam)
 {
-    static float rotationAngle = 0.0f;
+    static float rotationAngle = 0.0f; // Remove static when implementing tab UI.
     rotationAngle += 0.002f;   // per-frame speed 
 
     // Calculate the 2D radius from the target on the XY plane. We ignore Z here to prevent the "spiral away" bug.
