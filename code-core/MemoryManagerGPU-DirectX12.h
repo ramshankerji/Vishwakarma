@@ -103,7 +103,7 @@ struct GeometryPlacementRecordInPage {
     float minX, minY, minZ, maxX, maxY, maxZ; // Minimum corner (X,Y,Z) Maximum corner (X,Y,Z)
 
     // Optional padding for perfect 8-byte alignment (not needed – compiler will pad anyway)
-    uint64_t _padding = 0;   // modify type only if you add more fields later
+	bool isDeleted = false; // Marked for deletion (soft delete, for defragmentation)
 };
 
 static_assert(sizeof(GeometryPlacementRecordInPage) == 64, 
@@ -159,13 +159,32 @@ struct BigGeometryObject {
     std::atomic<bool> published = false;
 };
 
+struct GeometryPageSnapshot {// A lightweight, immutable snapshot of the current pages.
+    // We use raw pointers here because the Render thread only needs to observe them.
+    // Iterating over a contiguous array of pointers is extremely cache-friendly.
+    std::vector<GeometryPage*> pages;
+};
+
 struct TabGeometryStorage {
+    // THE RCU POINTER: Render threads read this, Copy thread writes to it.
+    std::atomic<GeometryPageSnapshot*> activeSnapshot{ nullptr };
+    // WRITER-ONLY STATE: Only the Copy thread touches these, so they need no locks/atomics.
+    std::vector<std::unique_ptr<GeometryPage>> activePages; // Actually owns the memory
+
+    // Cleanup queues for the Copy thread
+    struct RetiredSnapshot { GeometryPageSnapshot* snapshot; uint64_t retireFence; };
+    struct RetiredPage { std::unique_ptr<GeometryPage> page; uint64_t retireFence; };
+    std::vector<RetiredSnapshot> retiredSnapshots;
+    std::vector<RetiredPage> retiredPages;
+
+    /* TODO: RCU version of all of the following vectors need to be developed. Only 1st done so far.
     std::vector<std::unique_ptr<GeometryPage>> opaquePages; // Opaque geometry pages
     std::vector<std::unique_ptr<GeometryPage>> transparentPages; // Transparent geometry pages
     std::vector<std::unique_ptr<GeometryPage>> wireframePages; // Wireframe pages (if used)
     std::vector<std::unique_ptr<BigGeometryObject>> bigObjects; // Dedicated large objects
     std::atomic<uint32_t> currentVersion = 0;
     std::vector<std::unique_ptr<GeometryPage>> retiredPages;
+    */
 };
 
 /* DirectX 12 resources are organized at 3 levels:
@@ -195,8 +214,6 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
     mutable std::mutex objectsOnGPUMutex;// Make mutex mutable so const references can lock it in rendering paths.
     // Copy thread will update the following map whenever it adds/removes/modifies an object on GPU.
     std::map<uint64_t, GpuResourceVertexIndexInfo> objectsOnGPU;
-    std::atomic<uint64_t> lastCopyFenceValue = 0;
-    std::atomic<uint64_t> lastRenderFenceValue = 0; // TODO : Upgrade it for multi monitor.
 
     // Track how much of the jumbo buffer is used
     uint64_t vertexDataSize = 0;
@@ -250,7 +267,8 @@ struct DX12ResourcesPerWindow {// Presentation Logic
     ComPtr<ID3D12DescriptorHeap> cbvHeap;
     UINT8* cbvDataBegin = nullptr;
 
-	UINT frameIndex = 0; // Remember this is different from allocatorIndex in Render Thread. It can change even during windows resize.
+	UINT frameIndex = 0; // Remember this is different from allocatorIndex in Render Thread.
+    // It can change even during windows resize.
 };
 
 struct DX12ResourcesPerRenderThread { // This one is created 1 for each monitor.
@@ -268,8 +286,7 @@ struct DX12ResourcesPerRenderThread { // This one is created 1 for each monitor.
 
     // Synchronization (Per Window VSync)
     HANDLE fenceEvent = nullptr;
-    ComPtr<ID3D12Fence> fence;
-    UINT64 fenceValue = 0;
+    ComPtr<ID3D12Fence> fence; // TODO: Discard this. use the fence inside monitor.
 };
 
 struct OneMonitorController { // Variables stored per monitor.
@@ -298,8 +315,13 @@ struct OneMonitorController { // Variables stored per monitor.
     bool isVirtualMonitor = false;       // To support headless mode.
 
     // DirectX12 Resources.
+	// TODO: Move these to per render thread structure.
 	ComPtr<ID3D12CommandQueue> commandQueue;    // Persistent. Survives thread restarts.
     bool hasActiveThread = false;// We need to know if this specific monitor is currently being serviced by a thread
+    ComPtr<ID3D12Fence> renderFence; // Signalled each frame by GpuRenderThread
+    uint64_t renderFenceValue = 0; // Last value signalled (written by render thread)
+    // Above is intentionally NOT std::atomic since gpu.renderFenceValue is the std::atomic serving all monitors.
+    HANDLE renderFenceEvent = nullptr;
 };
 
 // Commands sent from Generator thread(s) to the Copy thread
@@ -379,7 +401,6 @@ inline ThreadSafeQueueGPU g_gpuCommandQueue;
 // भगवान शंकर की कृपा बनी रहे. Corresponding object is named "gpu".
 class शंकर {
 public:
-    //std::vector<OneMonitorController> screens;
     OneMonitorController screens[MV_MAX_MONITORS];
     int currentMonitorCount = 0; // Global monitor count. It can be 0 when no monitors are found (headless mode)
 
@@ -409,9 +430,12 @@ public:
     while Queue B immediately push work work to the GPU for the faster monitor.*/
 
     ComPtr<ID3D12CommandQueue> renderCommandQueue; // Only used by Monitor No. 0 i.e. 1st Render Thread.
+	/* Now moved to one monitor controller, since we need to track it per monitor for multi monitor support.
     ComPtr<ID3D12Fence> renderFence;// Synchronization for Render Queue
     UINT64 renderFenceValue = 0;
     HANDLE renderFenceEvent = nullptr;
+    */
+    std::atomic<uint64_t> renderFenceValue = 0; // Global. This is in addition to per monitor render fence value.
 
 	ComPtr<ID3D12CommandQueue> copyCommandQueue; // There is only 1 across the application.
     ComPtr<ID3D12Fence> copyFence;// Synchronization for Copy Queue

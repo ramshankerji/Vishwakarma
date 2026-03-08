@@ -3,6 +3,7 @@
 #include "MemoryManagerGPU-DirectX12.h"
 #include "विश्वकर्मा.h"
 #include <iomanip>
+#include <unordered_set>
 
 // Global Variables declared in विश्वकर्मा.cpp
 extern शंकर gpu;
@@ -80,7 +81,7 @@ void शंकर::InitD3DDeviceOnly() {
     copyFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
     rttFormat = DXGI_FORMAT_R8G8B8A8_UNORM; //Initially. Latter upgrade during HDR implementation.
-    //When imlementing HDR, check if hardware support this.
+    //When implementing HDR, check if hardware support this.
 }
 
 // Implementation
@@ -106,7 +107,7 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
     ThrowIfFailed(tabRes.vertexBufferUpload->Map(0, &readRange, reinterpret_cast<void**>(&tabRes.pVertexDataBegin)));
     ThrowIfFailed(tabRes.indexBufferUpload->Map(0, &readRange, reinterpret_cast<void**>(&tabRes.pIndexDataBegin)));
 
-    // World Matrxi structured buffer. (UPLOAD heap, persistently mapped).
+    // World Matrix structured buffer. (UPLOAD heap, persistently mapped).
     auto matrixDesc = CD3DX12_RESOURCE_DESC::Buffer(tabRes.matrixCapacity * sizeof(DirectX::XMFLOAT4X4));
     auto uploadProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
     ThrowIfFailed(gpu.device->CreateCommittedResource( &uploadProps, D3D12_HEAP_FLAG_NONE, &matrixDesc,
@@ -526,28 +527,33 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     // PAGE-BASED RENDERING (Solid Opaque Only)
+    GeometryPageSnapshot* snapshot = storage.activeSnapshot.load(std::memory_order_acquire);
+    if (snapshot) {
+        for (GeometryPage* pagePtr : snapshot->pages) {
+            GeometryPage& page = *pagePtr;
+            if (!page.published.load(std::memory_order_acquire)) continue;
+            if (page.indirectCount == 0) continue;
 
-    for (auto& pagePtr : storage.opaquePages) {
-        GeometryPage& page = *pagePtr;
-        if (!page.published.load(std::memory_order_acquire)) continue;
-        if (page.indirectCount == 0) continue;
+            D3D12_VERTEX_BUFFER_VIEW vbv{};
+            vbv.BufferLocation = page.buffer->GetGPUVirtualAddress();
+            vbv.SizeInBytes = page.pageSize;
+            vbv.StrideInBytes = sizeof(Vertex);
 
-        D3D12_VERTEX_BUFFER_VIEW vbv{};
-        vbv.BufferLocation = page.buffer->GetGPUVirtualAddress();
-        vbv.SizeInBytes = page.pageSize;
-        vbv.StrideInBytes = sizeof(Vertex);
+            D3D12_INDEX_BUFFER_VIEW ibv{};
+            ibv.BufferLocation = page.buffer->GetGPUVirtualAddress();
+            ibv.SizeInBytes = page.pageSize;
+            ibv.Format = DXGI_FORMAT_R16_UINT;
 
-        D3D12_INDEX_BUFFER_VIEW ibv{};
-        ibv.BufferLocation = page.buffer->GetGPUVirtualAddress();
-        ibv.SizeInBytes = page.pageSize;
-        ibv.Format = DXGI_FORMAT_R16_UINT;
+            commandList->IASetVertexBuffers(0, 1, &vbv);
+            commandList->IASetIndexBuffer(&ibv);
 
-        commandList->IASetVertexBuffers(0, 1, &vbv);
-        commandList->IASetIndexBuffer(&ibv);
+            commandList->ExecuteIndirect( tabRes.commandSignature.Get(),
+                page.indirectCount, page.indirectBuffer.Get(), 0, nullptr, 0);
+        }
+    } // End of if (snapshot)
+	// TODO: Add support for transparent pages with proper sorting and blending states.
+    // TODO: Similarly for all varients of geometry, like wireframe, hugoObjects etc. all unique PSO.
 
-        commandList->ExecuteIndirect( tabRes.commandSignature.Get(),
-            page.indirectCount, page.indirectBuffer.Get(), 0, nullptr, 0);
-    }
     /* Transition from D3D12_RESOURCE_STATE_RENDER_TARGET to D3D12_RESOURCE_STATE_RENDER_PRESENT
     taken care by parent function. i.e. Render Thread */
     //commandList->Close();// No longer required here. It will be done by render thread.
@@ -558,11 +564,10 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
 
 void शंकर::WaitForPreviousFrame(DX12ResourcesPerRenderThread dx) {
     // Signal and increment the fence value
-    const UINT64 currentFenceValue = dx.fenceValue;
+    const UINT64 currentFenceValue = gpu.renderFenceValue.fetch_add(1);
     //Tells the GPU command queue to "signal" (mark) the fence with the current fence value when it 
     //finishes executing all previously submitted commands.
     dx.commandQueue->Signal(dx.fence.Get(), currentFenceValue);
-    dx.fenceValue++;
 
     // Wait until the previous frame is finished
     if (dx.fence->GetCompletedValue() < currentFenceValue) {
@@ -600,6 +605,12 @@ void शंकर::CleanupWindowResources(DX12ResourcesPerWindow& winRes) {
     // Pipeline Objects (Specific to this window context)
     winRes.constantBuffer.Reset();
     winRes.cbvHeap.Reset();
+
+    for (int i = 0; i < FRAMES_PER_RENDERTARGETS; ++i) {
+        winRes.renderTextures[i].Reset();
+    }
+    winRes.rttRtvHeap.Reset();
+    winRes.rttSrvHeap.Reset();
 
     std::wcout << "Cleaned up Window Resources." << std::endl;
 }
@@ -734,63 +745,164 @@ void GpuCopyThread() {
     if (FAILED(hr)) std::cerr << "Failed to create Copy List" << std::endl;
     commandList->Close(); // Close initially so we can Reset in the loop
 
+    auto PublishPages = [&](TabGeometryStorage& storage, const std::vector<GeometryPage*>& oldPagesToReplace,
+        std::vector<std::unique_ptr<GeometryPage>> replacementPages,
+        std::vector<std::unique_ptr<GeometryPage>> newPagesToAppend)
+    {
+        if (oldPagesToReplace.size() != replacementPages.size()) {// Ensure vectors are matched for replacement
+            std::cerr << "RCU Error: Mismatch between old pages and replacement pages count." << std::endl;
+            return;
+        }
+
+        // Mark all new/replacement pages as published before exposing them
+        for (auto& page : replacementPages) page->published.store(true, std::memory_order_release);
+        for (auto& page : newPagesToAppend) page->published.store(true, std::memory_order_release);
+
+        uint64_t currentRenderFence = gpu.renderFenceValue; // Tag with current render frame
+
+        // Update the writer's authoritative list (activePages). Replace old pages
+        for (size_t i = 0; i < oldPagesToReplace.size(); ++i) {
+            GeometryPage* targetOldPage = oldPagesToReplace[i];
+
+            // Find the unique_ptr in activePages that matches this raw pointer
+            auto it = std::find_if(storage.activePages.begin(), storage.activePages.end(),
+                [targetOldPage](const std::unique_ptr<GeometryPage>& p) { return p.get() == targetOldPage; });
+
+            if (it != storage.activePages.end()) { // Move the old page into the retirement queue
+                storage.retiredPages.push_back({ std::move(*it), currentRenderFence });
+                *it = std::move(replacementPages[i]);// Slot the replacement page into the exact same position
+            }
+        }
+        for (auto& newPage : newPagesToAppend) { // Append new pages
+            storage.activePages.push_back(std::move(newPage));
+        }
+
+        // Build the new RCU Snapshot
+        GeometryPageSnapshot* newSnapshot = new GeometryPageSnapshot();
+        newSnapshot->pages.reserve(storage.activePages.size());
+        for (const auto& pagePtr : storage.activePages) {
+            newSnapshot->pages.push_back(pagePtr.get()); // Read-only pointers for the Render thread
+        }
+        // Atomically Publish the new snapshot.  exchange() swaps the pointer and returns the old one.
+        GeometryPageSnapshot* oldSnapshot = storage.activeSnapshot.exchange(newSnapshot, std::memory_order_acq_rel);
+        // Retire the old snapshot (the struct itself) so it can be deleted later
+        if (oldSnapshot) storage.retiredSnapshots.push_back({ oldSnapshot, currentRenderFence });
+
+        /* Future Notes: DO NOT try to implement versioned page arrays technique.
+        Since our page size is 4MB, and currently none of state of art graphics card has exceed 128 GB Memory,
+        our worst case is still ~32000 Pages, in real world we expect it to be less than 1000.
+        Hence no need to add additional complexity. RCU is already complex enough !
+        TODO: Add page count to telemetry.*/
+    };
+    
+    struct ObjectLocation {
+        GeometryPage* page;   // page where object currently resides
+        uint32_t slot;        // index in page->objects
+    };
+    // Copy-thread-private bookkeeping: objectIndex maps each. objectID to which VRAM page (raw ptr) currently owns it.
+    std::unordered_map<uint64_t, ObjectLocation> objectLocation;
+
     while (!shutdownSignal) {
         CommandToCopyThread cmd;
+
+        // Make a local copy of all commands to process in this iteration, to minimize lock holding time.
+        // TODO: Add throttling here ? Like only 100k commands are processed at once ? Or some % of GPU VRAM Capacity?
+        std::vector<CommandToCopyThread> batch;
         {
             std::unique_lock<std::mutex> lock(toCopyThreadMutex);
             toCopyThreadCV.wait(lock, [] { return !commandToCopyThreadQueue.empty() || shutdownSignal; });
 
-            if (shutdownSignal && commandToCopyThreadQueue.empty()) break;
+            while (!commandToCopyThreadQueue.empty()) {
+                batch.push_back(std::move(commandToCopyThreadQueue.front()));
+                commandToCopyThreadQueue.pop();
+            }
+        } // lock released here. We have a local batch of commands to process without holding the lock.
+        if (shutdownSignal) break; // Exit if shutdown was signaled while waiting.
 
-            cmd = commandToCopyThreadQueue.front();
-            commandToCopyThreadQueue.pop();
+        std::unordered_set<GeometryPage*> affectedPages;
+        std::unordered_map<GeometryPage*, std::unique_ptr<GeometryPage>> clonedPages;
+        std::vector<std::unique_ptr<GeometryPage>> newPages;
+
+        // Pass 1: Identify affected pages. We will clone these pages,
+        //apply modifications to the clones, and then publish atomically.
+        for (auto& cmd : batch) {
+            if (cmd.type == CommandToCopyThreadType::ADD) continue; // handled later
+            auto it = objectLocation.find(cmd.id);
+            if (it != objectLocation.end()) affectedPages.insert(it->second.page);
         }
 
-		// Find the targe tab. Our static array of tabs is thread-safe for reading.
-        DATASETTAB& targetTab = allTabs[cmd.tabID];
-        DX12ResourcesPerTab& tabRes = targetTab.dx;
-        GeometryData geo;
+        //Pass 2: Clone Affected Pages (RCU copy)
+        commandAllocator->Reset();
+        commandList->Reset(commandAllocator.Get(), nullptr);
 
-        /* UpdateSubresources may introduce ResourceBarriers internally ! Which is not allowed on Copy Queues.
-        with the raw copy command, which is safe because our buffers are already created
-        in a valid state for copying (COMMON or GENERIC_READ).
-        DirectX 12 has a feature called "Implicit State Promotion". 
-        If a Buffer is in COMMON state, and you bind it as a Vertex Buffer (Read-Only), 
-        the driver automatically promotes it to the correct state without you issuing a barrier.
-        ResourceBarriers are REMOVED here. Copy Queues cannot execute barriers.
-        The Render Thread will handle the transition from COPY_DEST/COMMON to VERTEX_BUFFER when it draws.*/
-        
-        // SOLID OPAQUE PAGE ARCHITECTURE (Immutable Pages)
+        for (GeometryPage* oldPage : affectedPages) {
+            auto newPage = CreateNewPage();
 
-        TabGeometryStorage& storage = targetTab.geometry; // per-tab storage
+            commandList->CopyResource(newPage->buffer.Get(), oldPage->buffer.Get());
+            // TODO: Copy with defragmentation using metadata.
+            commandList->CopyResource(newPage->indirectBuffer.Get(), oldPage->indirectBuffer.Get());
 
-        auto AppendObjectToPage = [&](GeometryPage* page, const GeometryData& geo, uint32_t matrixIndex) {
+            newPage->objects = oldPage->objects;
+            newPage->vertexHead = oldPage->vertexHead;
+            newPage->indexTail = oldPage->indexTail;
+            newPage->objectCount = oldPage->objectCount;
+            newPage->version = oldPage->version + 1;
+
+            clonedPages[oldPage] = std::move(newPage);
+        }
+
+        ThrowIfFailed(commandList->Close());
+        ID3D12CommandList* lists[] = { commandList.Get() };
+        gpu.copyCommandQueue->ExecuteCommandLists(1, lists);
+        uint64_t fenceValue = gpu.copyFenceValue.fetch_add(1);
+        gpu.copyCommandQueue->Signal(gpu.copyFence.Get(), fenceValue);
+
+        if (gpu.copyFence->GetCompletedValue() < fenceValue) {
+            // TODO: Can we delay this wait until just before we need to access the cloned pages ? 
+            // This would allow some CPU-GPU parallelism.
+            gpu.copyFence->SetEventOnCompletion(fenceValue, gpu.copyFenceEvent);
+            WaitForSingleObject(gpu.copyFenceEvent, INFINITE);
+        }
+
+        // Pass 3 — Apply every command in the batch to the (already-cloned) pages.
+        // Re-open the command list for Pass-3 GPU work (geometry uploads for ADD/MODIFY-grow cases).
+        commandAllocator->Reset();
+        commandList->Reset(commandAllocator.Get(), nullptr);
+
+        // Staging uploads produced during this pass. Kept alive until after ExecuteCommandLists + fence-wait.
+        std::vector<ComPtr<ID3D12Resource>> pass3Uploads;
+
+        // Common lambda: write vertex+index data into a page Used by both ADD (to last/new page) and MODIFY-grow paths.
+        // Records CopyBufferRegion into the open commandList.Returns the filled-in placement record; caller appends it.
+        auto RecordGeometryUpload = [&](GeometryPage* dstPage, const GeometryData& geo, uint32_t matrixIndex)
+            -> GeometryPlacementRecordInPage {
             const uint32_t vertexBytes = static_cast<uint32_t>(geo.vertices.size() * sizeof(Vertex));
             const uint32_t indexBytes = static_cast<uint32_t>(geo.indices.size() * sizeof(uint16_t));
-            uint32_t vOffset = GeometryPage::AlignUp(page->vertexHead, 16);
-            uint32_t iOffset = GeometryPage::AlignDown(page->indexTail - indexBytes, 4);
-            // Upload staging buffer. Create an upload heap to transfer data to the GPU.
+
+            const uint32_t vOffset = GeometryPage::AlignUp(dstPage->vertexHead, 16);
+            const uint32_t iOffset = GeometryPage::AlignDown(dstPage->indexTail - indexBytes, 4);
+
+            // CPU-side staging upload buffer (vertex + index packed)
             ComPtr<ID3D12Resource> upload;
             CD3DX12_HEAP_PROPERTIES uploadHeap(D3D12_HEAP_TYPE_UPLOAD);
             auto uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBytes + indexBytes);
 
-            ThrowIfFailed( gpu.device->CreateCommittedResource( &uploadHeap, D3D12_HEAP_FLAG_NONE,
-                &uploadDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)));
+            ThrowIfFailed(gpu.device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &uploadDesc,
+                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)));
 
             uint8_t* mapped = nullptr;
             CD3DX12_RANGE readRange(0, 0);
-            upload->Map( 0, &readRange, reinterpret_cast<void**>(&mapped));
+            upload->Map(0, &readRange, reinterpret_cast<void**>(&mapped));
             memcpy(mapped, geo.vertices.data(), vertexBytes);
             memcpy(mapped + vertexBytes, geo.indices.data(), indexBytes);
             upload->Unmap(0, nullptr);
 
-            // GPU copy. Command the GPU to copy from the Upload Jumbo Buffer to the Default Jumbo Buffer
-            commandAllocator->Reset();
-            commandList->Reset(commandAllocator.Get(), nullptr);
-            commandList->CopyBufferRegion( page->buffer.Get(), vOffset, upload.Get(), 0, vertexBytes);
-            commandList->CopyBufferRegion( page->buffer.Get(), iOffset, upload.Get(), vertexBytes, indexBytes);
+            // Record GPU copies (no Execute yet — batched at end of Pass 3)
+            commandList->CopyBufferRegion(dstPage->buffer.Get(), vOffset, upload.Get(), 0, vertexBytes);
+            commandList->CopyBufferRegion(dstPage->buffer.Get(), iOffset, upload.Get(), vertexBytes, indexBytes);
+            pass3Uploads.push_back(std::move(upload)); // Keep upload buffer alive until the fence fires
 
-            // Metadata
+            // Build and return the placement record (caller updates page state)
             GeometryPlacementRecordInPage rec{};
             rec.objectID = geo.id;
             rec.vertexByteOffset = vOffset;
@@ -799,240 +911,481 @@ void GpuCopyThread() {
             rec.indexSize = indexBytes;
             rec.indexCount = static_cast<uint32_t>(geo.indices.size());
             rec.matrixIndex = matrixIndex;
+            return rec;
+            };
 
-            page->objects.push_back(rec);
-            page->vertexHead = vOffset + vertexBytes;
-            page->indexTail = iOffset;
-            page->objectCount++;
+        for (auto& cmd : batch) { // Iterate over batch
+            // Find the targe tab. Our static array of tabs is thread-safe for reading.
+            DATASETTAB& targetTab = allTabs[cmd.tabID];
+            DX12ResourcesPerTab& tabRes = targetTab.dx;
+            TabGeometryStorage& storage = targetTab.geometry; // per-tab storage
+            //GeometryData geo;
 
-            // Rebuild indirect buffer
-            const size_t count = page->objects.size();
-            std::vector<IndirectCommand> commands;
-            commands.resize(count);
+            switch (cmd.type)// Process Command
+            {
+            case CommandToCopyThreadType::ADD:
+            {
+                //std::wcout << "Adding New object ID: " << cmd.id << std::endl;
+                if (!cmd.geometry.has_value()) break;
+                const GeometryData& geo = cmd.geometry.value();
 
-            for (size_t i = 0; i < count; ++i) {
-                const auto& obj = page->objects[i];
-                auto& ic = commands[i];
-                ic.matrixIndex = obj.matrixIndex;
-                ic.drawArguments.IndexCountPerInstance = obj.indexCount;
-                ic.drawArguments.InstanceCount = 1;
-                ic.drawArguments.StartIndexLocation = obj.indexByteOffset / sizeof(uint16_t);
-                ic.drawArguments.BaseVertexLocation = obj.vertexByteOffset / sizeof(Vertex);
-                ic.drawArguments.StartInstanceLocation = 0;
+                const uint32_t vertexBytes = static_cast<uint32_t>(geo.vertices.size() * sizeof(Vertex));
+                const uint32_t indexBytes =  static_cast<uint32_t>(geo.indices.size() * sizeof(uint16_t));
+                if (vertexBytes == 0 || indexBytes == 0) {
+                    std::wcout << "Warning: Skipping upload of empty geometry ID " << cmd.id << std::endl;
+                    break; // Exit this case, process next command
+                }
+
+                // ADD is treated as MODIFY if object already exists anywhere.
+                // (fall through by re-routing; handled in MODIFY case below)
+                auto locIt = objectLocation.find(cmd.id);
+                if (locIt != objectLocation.end()) { goto handle_modify; }
+
+                {
+                    uint32_t matrixIndex; // Allocate a matrix slot (new object)
+                    if (!tabRes.freeMatrixSlots.empty()) {
+                        matrixIndex = tabRes.freeMatrixSlots.back();
+                        tabRes.freeMatrixSlots.pop_back();
+                    } else {
+                        matrixIndex = tabRes.matrixCount++;
+                        if (matrixIndex >= tabRes.matrixCapacity) matrixIndex = 0; // TODO: handle growth
+                    }
+
+                    // Copy transposed world matrix to upload buffer
+                    XMMATRIX worldMat = XMLoadFloat4x4(&geo.worldMatrix);
+                    XMStoreFloat4x4(reinterpret_cast<XMFLOAT4X4*>(
+                        tabRes.pWorldMatrixDataBegin + matrixIndex * sizeof(XMFLOAT4X4)),
+                        XMMatrixTranspose(worldMat));
+                    
+                    //We will try to fit this geometry in the last page for better packing.
+                    // If it doesn't fit, we will create a new page.
+                    GeometryPage* dstPage = nullptr;// Find or create the destination page
+
+                    if (!newPages.empty() && !newPages.back()->IsFull(vertexBytes, indexBytes)) {
+                        dstPage = newPages.back().get();// Reuse the last newly-created page if it still has room
+                    }
+                    else if (!storage.activePages.empty() &&
+                        !storage.activePages.back()->IsFull(vertexBytes, indexBytes)) {
+                        // The last active page has room — we need its clone.
+                        // Clone it now if not already cloned (it wasn't in affectedPages because this is an ADD).
+                        GeometryPage* lastActive = storage.activePages.back().get();
+
+                        if (clonedPages.find(lastActive) == clonedPages.end()) {
+                            auto cloned = CreateNewPage();
+                            commandList->CopyResource(cloned->buffer.Get(), lastActive->buffer.Get());
+                            commandList->CopyResource(cloned->indirectBuffer.Get(), lastActive->indirectBuffer.Get());
+                            cloned->objects = lastActive->objects;
+                            cloned->vertexHead = lastActive->vertexHead;
+                            cloned->indexTail = lastActive->indexTail;
+                            cloned->objectCount = lastActive->objectCount;
+                            cloned->version = lastActive->version + 1;
+                            clonedPages[lastActive] = std::move(cloned);
+                        }
+                        dstPage = clonedPages[lastActive].get();
+                    } else { // No room anywhere — allocate a brand-new page
+                        newPages.push_back(CreateNewPage());
+                        dstPage = newPages.back().get();
+                    }
+
+                    // Record the geometry upload into commandList
+                    auto rec = RecordGeometryUpload(dstPage, geo, matrixIndex);
+
+                    // Update page CPU state
+                    dstPage->objects.push_back(rec);
+                    dstPage->vertexHead = rec.vertexByteOffset + rec.vertexSize;
+                    dstPage->indexTail = rec.indexByteOffset;
+                    dstPage->objectCount++;
+
+                    // Update the copy-thread's private location map
+                    uint32_t slot = static_cast<uint32_t>(dstPage->objects.size() - 1);
+                    objectLocation[cmd.id] = { dstPage, slot };
+                }
+                //std::wcout << "Added New object ID: " << cmd.id << std::endl;
+                break;
             }
 
-            ComPtr<ID3D12Resource> indirectUpload;
-            auto indirectDesc = CD3DX12_RESOURCE_DESC::Buffer(commands.size() * sizeof(IndirectCommand));
-            ThrowIfFailed( gpu.device->CreateCommittedResource( &uploadHeap, D3D12_HEAP_FLAG_NONE,
-                    &indirectDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&indirectUpload)));
-            indirectUpload->Map( 0, &readRange, reinterpret_cast<void**>(&mapped));
-            memcpy(mapped, commands.data(), commands.size() * sizeof(IndirectCommand));
-            indirectUpload->Unmap(0, nullptr);
-            commandList->CopyBufferRegion( page->indirectBuffer.Get(),
-                0, indirectUpload.Get(), 0, commands.size() * sizeof(IndirectCommand));
-            ThrowIfFailed(commandList->Close());
+            case CommandToCopyThreadType::MODIFY:
+            handle_modify: // This is GOTO jump from ADD thread, if the ID already existed.
+            {
+                if (!cmd.geometry.has_value()) break;
+                const GeometryData& geo = cmd.geometry.value();
+
+                const uint32_t newVertexBytes = static_cast<uint32_t>(geo.vertices.size() * sizeof(Vertex));
+                const uint32_t newIndexBytes = static_cast<uint32_t>(geo.indices.size() * sizeof(uint16_t));
+
+                if (newVertexBytes == 0 || newIndexBytes == 0) break;
+
+                auto locIt = objectLocation.find(cmd.id);
+                if (locIt == objectLocation.end()) {
+                    // Object not yet on GPU — treat as a plain ADD
+                    // (Re-route: set type to ADD and fall through next iteration
+                    //  is not possible here, so we inline the ADD path.)
+                    CommandToCopyThread addCmd = cmd;
+                    addCmd.type = CommandToCopyThreadType::ADD;
+                    // Push back to batch so it is processed below (safe because
+                    // we only append and the range-for already captured its end).
+                    // Simpler: just handle inline like ADD-new path.
+                    uint32_t matrixIndex;
+                    if (!tabRes.freeMatrixSlots.empty()) {
+                        matrixIndex = tabRes.freeMatrixSlots.back();
+                        tabRes.freeMatrixSlots.pop_back();
+                    } else {
+                        matrixIndex = tabRes.matrixCount++;
+                        if (matrixIndex >= tabRes.matrixCapacity)
+                            matrixIndex = 0;
+                    }
+                    XMMATRIX worldMat = XMLoadFloat4x4(&geo.worldMatrix);
+                    XMStoreFloat4x4(reinterpret_cast<XMFLOAT4X4*>(tabRes.pWorldMatrixDataBegin +
+                        matrixIndex * sizeof(XMFLOAT4X4)), XMMatrixTranspose(worldMat));
+
+                    GeometryPage* dstPage = nullptr;
+                    if (!newPages.empty() && !newPages.back()->IsFull(newVertexBytes, newIndexBytes))
+                        dstPage = newPages.back().get();
+                    else if (!storage.activePages.empty() &&
+                        !storage.activePages.back()->IsFull(newVertexBytes, newIndexBytes)) {
+                        GeometryPage* last = storage.activePages.back().get();
+                        if (clonedPages.find(last) == clonedPages.end()) {
+                            auto cloned = CreateNewPage();
+                            commandList->CopyResource(cloned->buffer.Get(), last->buffer.Get());
+                            commandList->CopyResource(cloned->indirectBuffer.Get(), last->indirectBuffer.Get());
+                            cloned->objects = last->objects;
+                            cloned->vertexHead = last->vertexHead;
+                            cloned->indexTail = last->indexTail;
+                            cloned->objectCount = last->objectCount;
+                            cloned->version = last->version + 1;
+                            clonedPages[last] = std::move(cloned);
+                        }
+                        dstPage = clonedPages[last].get();
+                    } else {
+                        newPages.push_back(CreateNewPage());
+                        dstPage = newPages.back().get();
+                    }
+                    auto rec = RecordGeometryUpload(dstPage, geo, matrixIndex);
+                    dstPage->objects.push_back(rec);
+                    dstPage->vertexHead = rec.vertexByteOffset + rec.vertexSize;
+                    dstPage->indexTail = rec.indexByteOffset;
+                    dstPage->objectCount++;
+                    objectLocation[cmd.id] = { dstPage, static_cast<uint32_t>(dstPage->objects.size() - 1) };
+                    break;
+                }
+
+                // Object exists — work on its owning cloned page
+                GeometryPage* oldPage = locIt->second.page;
+                uint32_t      slotIndex = locIt->second.slot;
+
+                // Resolve which mutable page we are working with: It will be in clonedPages (was in affectedPages 
+                // from Pass 1), because Pass 1 already included pages from existing objectLocation.
+                GeometryPage* workPage = nullptr;
+                auto cloneIt = clonedPages.find(oldPage);
+                if (cloneIt != clonedPages.end()) workPage = cloneIt->second.get();
+                else workPage = oldPage; // Fallback (shouldn't happen in correct flow)
+
+                GeometryPlacementRecordInPage& oldRec = workPage->objects[slotIndex];
+
+                // Update world matrix (slot is reused)
+                XMMATRIX worldMat = XMLoadFloat4x4(&geo.worldMatrix);
+                XMStoreFloat4x4(reinterpret_cast<XMFLOAT4X4*>(tabRes.pWorldMatrixDataBegin +
+                    oldRec.matrixIndex * sizeof(XMFLOAT4X4)), XMMatrixTranspose(worldMat));
+
+                const bool fitsInPlace = (newVertexBytes <= oldRec.vertexSize) && (newIndexBytes <= oldRec.indexSize);
+
+                if (fitsInPlace) {
+                    // MODIFY-shrink/equal: overwrite in-place . Upload new geometry directly over the old region
+                    ComPtr<ID3D12Resource> upload;
+                    CD3DX12_HEAP_PROPERTIES uploadHeap(D3D12_HEAP_TYPE_UPLOAD);
+                    auto uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(newVertexBytes + newIndexBytes);
+                    ThrowIfFailed(gpu.device->CreateCommittedResource( &uploadHeap, D3D12_HEAP_FLAG_NONE, &uploadDesc,
+                        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)));
+
+                    uint8_t* mapped = nullptr;
+                    CD3DX12_RANGE readRange(0, 0);
+                    upload->Map(0, &readRange, reinterpret_cast<void**>(&mapped));
+                    memcpy(mapped, geo.vertices.data(), newVertexBytes);
+                    memcpy(mapped + newVertexBytes, geo.indices.data(), newIndexBytes);
+                    upload->Unmap(0, nullptr);
+
+                    // Overwrite existing region on the cloned page
+                    commandList->CopyBufferRegion(workPage->buffer.Get(), oldRec.vertexByteOffset, 
+                        upload.Get(), 0, newVertexBytes);
+                    commandList->CopyBufferRegion(workPage->buffer.Get(), oldRec.indexByteOffset,
+                        upload.Get(), newVertexBytes, newIndexBytes);
+
+                    pass3Uploads.push_back(std::move(upload));
+
+                    // Update metadata (sizes may have shrunk; offsets unchanged)
+                    oldRec.vertexSize = newVertexBytes;
+                    oldRec.indexSize = newIndexBytes;
+                    oldRec.indexCount = static_cast<uint32_t>(geo.indices.size());
+                    // objectLocation slot index stays the same
+                } else { // MODIFY-grow: mark old slot free, append to last page ─
+                    oldRec.isDeleted = true;   // soft-delete in metadata
+                    workPage->holeBytes += oldRec.vertexSize + oldRec.indexSize;
+                    workPage->objectCount--;
+
+                    GeometryPage* dstPage = nullptr;// Find (or create) a page with room for the larger geometry
+
+                    // Try the last active page's clone first
+                    if (!newPages.empty() && !newPages.back()->IsFull(newVertexBytes, newIndexBytes)) {
+                        dstPage = newPages.back().get();
+                    }
+                    else if (!storage.activePages.empty()) {
+                        GeometryPage* last = storage.activePages.back().get();
+                        auto lastCloneIt = clonedPages.find(last);
+                        GeometryPage* lastClone =
+                            (lastCloneIt != clonedPages.end())
+                            ? lastCloneIt->second.get()
+                            : nullptr;
+
+                        if (lastClone && !lastClone->IsFull(newVertexBytes, newIndexBytes)) dstPage = lastClone;
+                    }
+
+                    if (!dstPage) {
+                        newPages.push_back(CreateNewPage());
+                        dstPage = newPages.back().get();
+                    }
+
+                    uint32_t matrixIndex; // Allocate a fresh matrix slot for the relocated geometry
+                    if (!tabRes.freeMatrixSlots.empty()) {
+                        matrixIndex = tabRes.freeMatrixSlots.back();
+                        tabRes.freeMatrixSlots.pop_back();
+                    } else {
+                        matrixIndex = tabRes.matrixCount++;
+                        if (matrixIndex >= tabRes.matrixCapacity) matrixIndex = 0; // TODO: Overflow safety. Improve latter.
+                    }
+                    // Free the old matrix slot
+                    tabRes.freeMatrixSlots.push_back(oldRec.matrixIndex);
+                    XMStoreFloat4x4(reinterpret_cast<XMFLOAT4X4*>(tabRes.pWorldMatrixDataBegin +
+                        matrixIndex * sizeof(XMFLOAT4X4)), XMMatrixTranspose(worldMat));
+
+                    auto rec = RecordGeometryUpload(dstPage, geo, matrixIndex);
+                    dstPage->objects.push_back(rec);
+                    dstPage->vertexHead = rec.vertexByteOffset + rec.vertexSize;
+                    dstPage->indexTail = rec.indexByteOffset;
+                    dstPage->objectCount++;
+
+                    objectLocation[cmd.id] = { dstPage, static_cast<uint32_t>(dstPage->objects.size() - 1) };
+                }
+                break;
+            }
+
+            case CommandToCopyThreadType::REMOVE:
+            {
+                auto locIt = objectLocation.find(cmd.id);
+                if (locIt == objectLocation.end()) break; // not on GPU, nothing to do
+
+                GeometryPage* oldPage = locIt->second.page;
+                uint32_t      slotIndex = locIt->second.slot;
+
+                // Resolve mutable clone
+                GeometryPage* workPage = nullptr;
+                auto cloneIt = clonedPages.find(oldPage);
+                if (cloneIt != clonedPages.end()) workPage = cloneIt->second.get();
+                else workPage = oldPage;
+
+                GeometryPlacementRecordInPage& rec = workPage->objects[slotIndex];
+
+                // Soft-delete: mark the slot; IndirectBuffer rebuild will skip it
+                rec.isDeleted = true;
+                workPage->holeBytes += rec.vertexSize + rec.indexSize;
+                workPage->objectCount--;
+                tabRes.freeMatrixSlots.push_back(rec.matrixIndex); // Free the matrix slot for reuse
+                objectLocation.erase(locIt);// Remove from local bookkeeping
+                break;
+            }
+
+            default: break;
+            } // End of switch (cmd.type)// Process Command
+        } // end for (batch)
+
+        // Single GPU Execute for all Pass-3 geometry uploads
+        ThrowIfFailed(commandList->Close());
+        {
             ID3D12CommandList* lists[] = { commandList.Get() };
             gpu.copyCommandQueue->ExecuteCommandLists(1, lists);
-
-            uint64_t fenceValue = gpu.copyFenceValue.fetch_add(1);
-            gpu.copyCommandQueue->Signal(gpu.copyFence.Get(), fenceValue);
-
-            // Synchronization (Critical) 
-            // We must wait for the copy to finish before 'vertexUploadHeap' goes out of scope.
-            if (gpu.copyFence->GetCompletedValue() < fenceValue) {
-                gpu.copyFence->SetEventOnCompletion( fenceValue, gpu.copyFenceEvent);
-                WaitForSingleObject( gpu.copyFenceEvent, INFINITE);
-            }
-
-            page->indirectCount = static_cast<uint32_t>(commands.size());
-        };
-
-        auto PublishPage = [&](TabGeometryStorage& storage, std::unique_ptr<GeometryPage> newPage) {
-            newPage->published.store( true, std::memory_order_release);
-            // first page ever
-            if (storage.opaquePages.empty()) { storage.opaquePages.push_back( std::move(newPage)); return; }
-
-            GeometryPage* oldPage = storage.opaquePages.back().get();
-            oldPage->retireFence = gpu.renderFenceValue;// retire old page
-            storage.retiredPages.push_back( std::move(storage.opaquePages.back()));
-            storage.opaquePages.back() = std::move(newPage);// publish new page
-            //Remember, render threads only READ the pages.
-            // TODO: WARNING: Above 2 lines have a race condition. To be resolved latter. 
-            // Do not use std::vector<std::atomic<>> for performance reasons. Find better solution!
-        };
-
-        switch (cmd.type)// Process Command
+        }
         {
-        case CommandToCopyThreadType::ADD:
-        case CommandToCopyThreadType::MODIFY:
+            uint64_t fenceVal = gpu.copyFenceValue.fetch_add(1);
+            gpu.copyCommandQueue->Signal(gpu.copyFence.Get(), fenceVal);
+            if (gpu.copyFence->GetCompletedValue() < fenceVal) {
+                gpu.copyFence->SetEventOnCompletion(fenceVal, gpu.copyFenceEvent);
+                WaitForSingleObject(gpu.copyFenceEvent, INFINITE);
+            }
+        }
+        pass3Uploads.clear();// Upload staging buffers are now safe to release
+
+        // Rebuild Indirect Buffers (outside the per-command loop) Runs once per modified or new page, 
+        // after all commands are applied. Only live objects (isDeleted == false) are emitted.
+        // We rebuild into CPU staging, then do one more command record
+        // + execute (or we can reuse the same allocator/list with a Reset).
         {
-            geo = cmd.geometry.value();
-
-            const uint32_t vertexBytes = static_cast<uint32_t>(geo.vertices.size() * sizeof(Vertex));
-            const uint32_t indexBytes =  static_cast<uint32_t>(geo.indices.size() * sizeof(uint16_t));
-            if (vertexBytes == 0 || indexBytes == 0) {
-                std::wcout << "Warning: Skipping upload of empty geometry ID " << cmd.id << std::endl;
-                break; // Exit this case, process next command
-            }
-
-            // Matrix slot allocation.
-            uint32_t matrixIndex;
-            auto it = tabRes.objectsOnGPU.find(cmd.id);
-            if (it != tabRes.objectsOnGPU.end() && cmd.type == CommandToCopyThreadType::MODIFY) {
-                matrixIndex = it->second.matrixIndex; // reuse slot on MODIFY
-            }
-            else {
-                if (!tabRes.freeMatrixSlots.empty()) {
-                    matrixIndex = tabRes.freeMatrixSlots.back();
-                    tabRes.freeMatrixSlots.pop_back();
-                }
-                else {
-                    matrixIndex = tabRes.matrixCount++;
-                    if (matrixIndex >= tabRes.matrixCapacity) {
-                        matrixIndex = 0;// TODO: grow later
-                    }
-                }
-            }
-
-            // Copy transposed world matrix to upload buffer
-            XMMATRIX worldMat = XMLoadFloat4x4(&geo.worldMatrix);
-            XMStoreFloat4x4(reinterpret_cast<XMFLOAT4X4*>(
-                tabRes.pWorldMatrixDataBegin + matrixIndex * sizeof(XMFLOAT4X4)),
-                XMMatrixTranspose(worldMat));
-
-            //We will try to fit this geometry in the last page for better packing.
-            // If it doesn't fit, we will create a new page.
-
-            GeometryPage* oldPage = nullptr;
-            if (!storage.opaquePages.empty()) oldPage = storage.opaquePages.back().get();
-			if (!oldPage) { // If there is no old page, simply create one and add the geometry to it.
-                auto page = CreateNewPage();  // helper
-                AppendObjectToPage(page.get(), geo, matrixIndex);
-                PublishPage(storage, std::move(page));
-                break;
-            }
-
-			// If old page exists but is full, create a new page and add the geometry to it.
-            // If not enough space → create new page (no compaction)
-            if (oldPage->IsFull(vertexBytes, indexBytes)) {
-                auto page = CreateNewPage();  // helper
-                AppendObjectToPage(page.get(), geo, matrixIndex);
-                PublishPage(storage, std::move(page));
-                break;
-            }
-
             commandAllocator->Reset();
             commandList->Reset(commandAllocator.Get(), nullptr);
 
-            auto newPage = CreateNewPage();
-            commandList->CopyResource( newPage->buffer.Get(), oldPage->buffer.Get());
-            commandList->CopyResource( newPage->indirectBuffer.Get(), oldPage->indirectBuffer.Get());
-            newPage->objects = oldPage->objects;
-            newPage->vertexHead = oldPage->vertexHead;
-            newPage->indexTail = oldPage->indexTail;
-            newPage->objectCount = oldPage->objectCount;
-            newPage->version = oldPage->version + 1;
+            std::vector<ComPtr<ID3D12Resource>> indirectUploads;
 
-            //Append the New Object to newPage
-            uint32_t vOffset = GeometryPage::AlignUp(newPage->vertexHead, 16);
-            uint32_t iOffset = GeometryPage::AlignDown(newPage->indexTail - indexBytes, 4);
+            // Helper that rebuilds a single page's indirect buffer
+            auto RebuildIndirectBuffer = [&](GeometryPage* page) {
+                std::vector<IndirectCommand> commands;
+                commands.reserve(page->objects.size());
 
-            // Upload staging buffers
-            ComPtr<ID3D12Resource> upload;
-            CD3DX12_HEAP_PROPERTIES uploadHeap(D3D12_HEAP_TYPE_UPLOAD);
-            auto uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBytes + indexBytes);
+                for (const auto& obj : page->objects) {
+                    if (obj.isDeleted) continue; // skip soft-deleted slots
 
-            ThrowIfFailed(gpu.device->CreateCommittedResource( &uploadHeap, D3D12_HEAP_FLAG_NONE,
-                &uploadDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)));
+                    IndirectCommand ic{};
+                    ic.matrixIndex = obj.matrixIndex;
+                    ic.drawArguments.IndexCountPerInstance = obj.indexCount;
+                    ic.drawArguments.InstanceCount = 1;
+                    ic.drawArguments.StartIndexLocation = obj.indexByteOffset / sizeof(uint16_t);
+                    ic.drawArguments.BaseVertexLocation = obj.vertexByteOffset / sizeof(Vertex);
+                    ic.drawArguments.StartInstanceLocation = 0;
 
-            uint8_t* mapped = nullptr;
-            CD3DX12_RANGE readRange(0, 0);
-            upload->Map(0, &readRange, reinterpret_cast<void**>(&mapped));
+                    commands.push_back(ic);
+                }
 
-            memcpy(mapped, geo.vertices.data(), vertexBytes);
-            memcpy(mapped + vertexBytes, geo.indices.data(), indexBytes);
+                page->indirectCount = static_cast<uint32_t>(commands.size());
+                if (commands.empty()) return; // nothing to upload
 
-            upload->Unmap(0, nullptr);
+                ComPtr<ID3D12Resource> indirectUpload;
+                CD3DX12_HEAP_PROPERTIES uploadHeap(D3D12_HEAP_TYPE_UPLOAD);
+                auto iuDesc = CD3DX12_RESOURCE_DESC::Buffer(commands.size() * sizeof(IndirectCommand));
 
-            // Copy vertices
-            commandList->CopyBufferRegion(newPage->buffer.Get(), vOffset, upload.Get(), 0, vertexBytes);
-            // Copy indices
-            commandList->CopyBufferRegion(newPage->buffer.Get(), iOffset, upload.Get(), vertexBytes, indexBytes);
-            
-            // Update page metadata
-            GeometryPlacementRecordInPage rec{};
-            rec.objectID = cmd.id;
-            rec.vertexByteOffset = vOffset;
-            rec.vertexSize = vertexBytes;
-            rec.indexByteOffset = iOffset;
-            rec.indexSize = indexBytes;
-            rec.indexCount = static_cast<uint32_t>(geo.indices.size());
-            rec.matrixIndex = matrixIndex;
+                ThrowIfFailed(gpu.device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &iuDesc,
+                    D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&indirectUpload)));
 
-            newPage->objects.push_back(rec);
-            newPage->vertexHead = vOffset + vertexBytes;
-            newPage->indexTail = iOffset;
-            newPage->objectCount++;
+                uint8_t* mapped = nullptr;
+                CD3DX12_RANGE readRange(0, 0);
+                indirectUpload->Map(0, &readRange, reinterpret_cast<void**>(&mapped));
+                memcpy(mapped, commands.data(), commands.size() * sizeof(IndirectCommand));
+                indirectUpload->Unmap(0, nullptr);
 
-            // Rebuild Indirect Buffer (simple rebuild, no patching)
-            std::vector<IndirectCommand> commands;
-            commands.reserve(newPage->objects.size());
+                commandList->CopyBufferRegion(page->indirectBuffer.Get(), 0, indirectUpload.Get(), 0,
+                    commands.size() * sizeof(IndirectCommand));
 
-            for (auto& obj : newPage->objects) {
-                IndirectCommand ic{};
-                ic.matrixIndex = obj.matrixIndex;
-                ic.drawArguments.IndexCountPerInstance = obj.indexCount;
-                ic.drawArguments.InstanceCount = 1;
-                ic.drawArguments.StartIndexLocation = obj.indexByteOffset / sizeof(uint16_t);
-                ic.drawArguments.BaseVertexLocation = obj.vertexByteOffset / sizeof(Vertex);
-                ic.drawArguments.StartInstanceLocation = 0;
+                indirectUploads.push_back(std::move(indirectUpload));
+                };
 
-                commands.push_back(ic);
-            }
+            // Rebuild for every cloned (modified) page
+            for (auto& [oldRaw, clonedPage] : clonedPages) RebuildIndirectBuffer(clonedPage.get());
+            // Rebuild for every brand-new page
+            for (auto& page : newPages) RebuildIndirectBuffer(page.get());
 
-            // Upload indirect
-            ComPtr<ID3D12Resource> indirectUpload;
-            auto iuDesc = CD3DX12_RESOURCE_DESC::Buffer( commands.size() * sizeof(IndirectCommand));
-
-            ThrowIfFailed(gpu.device->CreateCommittedResource( &uploadHeap, D3D12_HEAP_FLAG_NONE,
-                &iuDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&indirectUpload)));
-
-            indirectUpload->Map(0, &readRange,  reinterpret_cast<void**>(&mapped));
-            memcpy(mapped, commands.data(), commands.size() * sizeof(IndirectCommand));
-            indirectUpload->Unmap(0, nullptr);
-            
-            commandList->CopyBufferRegion( newPage->indirectBuffer.Get(),
-                0, indirectUpload.Get(), 0, commands.size() * sizeof(IndirectCommand));
-
+            // Sync Copy queue.
             ThrowIfFailed(commandList->Close());
             ID3D12CommandList* lists[] = { commandList.Get() };
             gpu.copyCommandQueue->ExecuteCommandLists(1, lists);
-            gpu.copyCommandQueue->Signal(gpu.copyFence.Get(), gpu.copyFenceValue++);
-            newPage->indirectCount = static_cast<uint32_t>(commands.size());
-
-            UINT64 finalFence = gpu.copyFenceValue - 1;
-            if (gpu.copyFence->GetCompletedValue() < finalFence) {
-                gpu.copyFence->SetEventOnCompletion( finalFence, gpu.copyFenceEvent);
+            uint64_t fenceValue = gpu.copyFenceValue.fetch_add(1);
+            gpu.copyCommandQueue->Signal(gpu.copyFence.Get(), fenceValue);
+            if (gpu.copyFence->GetCompletedValue() < fenceValue) {
+                gpu.copyFence->SetEventOnCompletion(fenceValue, gpu.copyFenceEvent);
                 WaitForSingleObject(gpu.copyFenceEvent, INFINITE);
             }
 
-            newPage->published.store(true, std::memory_order_release);
-            // retire old page
-            oldPage->retireFence = gpu.renderFenceValue;
-            storage.retiredPages.push_back(std::move(storage.opaquePages.back()));
-            storage.opaquePages.back() = std::move(newPage);
-
-            break;
+            indirectUploads.clear(); // staging buffers safe to free
         }
 
-        case CommandToCopyThreadType::REMOVE:
+        // Final RCU Publish (Single Atomic Operation). Gather per-tab publish work. Since commands can span multiple
+        // tabs, group replacements and appends by their TabGeometryStorage.
+        // Because clonedPages and newPages can belong to different tabs we need to route them to the correct storage.
+        // The clonedPages map already contains the raw oldPage ptr which we can match
+        // back to its owning storage via the batch's tabID.
         {
-            // TODO: To be implemented.
-            break;
-        }
-        } // End of switch (cmd.type)// Process Command
-    }
+            // Build a per-storage publish manifest
+            struct PublishWork {
+                std::vector<GeometryPage*>               oldPages;
+                std::vector<std::unique_ptr<GeometryPage>> replacements;
+                std::vector<std::unique_ptr<GeometryPage>> appends;
+            };
+            // Key: pointer to TabGeometryStorage (stable address)
+            std::unordered_map<TabGeometryStorage*, PublishWork> publishMap;
 
+            // Route cloned (replacement) pages
+            for (auto& [oldRaw, clonedPage] : clonedPages) {
+                // Find which storage owns this oldRaw page
+                TabGeometryStorage* ownerStorage = nullptr;
+                for (auto& cmd2 : batch) {
+                    TabGeometryStorage& s = allTabs[cmd2.tabID].geometry;
+                    for (auto& ap : s.activePages) {
+                        if (ap.get() == oldRaw) { ownerStorage = &s; break; }
+                    }
+                    if (ownerStorage) break;
+                }
+                if (!ownerStorage) continue; // shouldn't happen
+
+                auto& work = publishMap[ownerStorage];
+                work.oldPages.push_back(oldRaw);
+                work.replacements.push_back(std::move(clonedPage));
+            }
+
+            // Route new (append) pages — they belong to the last tab that
+            // triggered a page allocation; track this via newPages ownership.
+            // Since newPages are always appended to the storage of the command
+            // that caused them, we tag each during allocation above (see below).
+            // For now, associate them with the tab of the last ADD/MODIFY cmd.
+            // (A production system would track this per-page; sufficient here.)
+            for (auto& page : newPages) {
+                // Find the storage that the objectLocation points to for this page
+                TabGeometryStorage* ownerStorage = nullptr;
+                for (auto& cmd2 : batch) {
+                    TabGeometryStorage& s = allTabs[cmd2.tabID].geometry;
+                    // Check if any existing active page or cloned page matches —
+                    // or if this is a fresh page we should attach to this tab.
+                    // We simply attach new pages to the tab of the first ADD cmd.
+                    if (cmd2.type == CommandToCopyThreadType::ADD ||
+                        cmd2.type == CommandToCopyThreadType::MODIFY) {
+                        ownerStorage = &allTabs[cmd2.tabID].geometry;
+                        break;
+                    }
+                }
+                if (ownerStorage)
+                    publishMap[ownerStorage].appends.push_back(std::move(page));
+            }
+            newPages.clear(); // ownership transferred
+
+            // Execute one PublishPages call per affected tab
+            for (auto& [storagePtr, work] : publishMap) {
+                PublishPages( *storagePtr, work.oldPages, std::move(work.replacements),
+                    std::move(work.appends));
+            }
+
+        }
+        // End of Pass 3 + Publish 
+
+        ///////////////////////////////////////////////////////////////
+
+        /* UpdateSubresources may introduce ResourceBarriers internally ! Which is not allowed on Copy Queues.
+        with the raw copy command, which is safe because our buffers are already created
+        in a valid state for copying (COMMON or GENERIC_READ).
+        DirectX 12 has a feature called "Implicit State Promotion".
+        If a Buffer is in COMMON state, and you bind it as a Vertex Buffer (Read-Only),
+        the driver automatically promotes it to the correct state without you issuing a barrier.
+        ResourceBarriers are REMOVED here. Copy Queues cannot execute barriers.
+        The Render Thread will handle the transition from COPY_DEST/COMMON to VERTEX_BUFFER when it draws.*/
+
+        // TODO: Improvise the following code to consider per monitor renderFence.
+        // Since all monitors could be running at different frame rates, renderFence is not sufficient.
+        // TODO: Throttle this to run at max once every 100ms or so. Or maybe every 1 second.
+        /* Retire page logic: Fix latter.
+        uint64_t completedRenderFence = gpu.renderFence->GetCompletedValue();
+        storage.retiredSnapshots.erase( // Clean up old snapshots
+            std::remove_if(storage.retiredSnapshots.begin(), storage.retiredSnapshots.end(),
+                [&](const auto& rs) {
+                    if (completedRenderFence >= rs.retireFence) {
+                        delete rs.snapshot; // Safe to delete, Render thread has moved on
+                        return true;
+                    }
+                    return false;
+                }),
+            storage.retiredSnapshots.end()
+        );
+        storage.retiredPages.erase( // Clean up old pages
+            std::remove_if(storage.retiredPages.begin(), storage.retiredPages.end(),
+                [&](const auto& rp) {
+                    return completedRenderFence >= rp.retireFence;
+                }),
+            storage.retiredPages.end()
+        );
+        */
+    }
     std::wcout << "GPU Copy Thread shutting down." << std::endl;
 }
 
@@ -1054,18 +1407,12 @@ void GpuRenderThread(int monitorId, int refreshRate) {
     // Create one allocator per frame-in-flight (Double Buffering)
     for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; i++) {
         ThrowIfFailed(gpu.device->CreateCommandAllocator(
-            D3D12_COMMAND_LIST_TYPE_DIRECT,
-            IID_PPV_ARGS(&threadRes.commandAllocators[i])
-        ));
+            D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&threadRes.commandAllocators[i]) ));
     }
     // Create the Command List (Only 1 needed, we reset it repeatedly)
-    ThrowIfFailed(gpu.device->CreateCommandList(
-        0,
-        D3D12_COMMAND_LIST_TYPE_DIRECT,
-        threadRes.commandAllocators[0].Get(),
-        nullptr, // Pipeline state set later
-        IID_PPV_ARGS(&threadRes.commandList)
-    ));
+    ThrowIfFailed(gpu.device->CreateCommandList( 0, D3D12_COMMAND_LIST_TYPE_DIRECT,
+        threadRes.commandAllocators[0].Get(), nullptr, // Pipeline state set later
+        IID_PPV_ARGS(&threadRes.commandList) ));
 
     // Command lists are created in the recording state, but our loop expects them closed initially.
     threadRes.commandList->Close();
@@ -1075,7 +1422,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
 
     // Create synchronization objects
     ThrowIfFailed(gpu.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&threadRes.fence)));
-    threadRes.fenceValue = 1;
+    UINT64 currentFenceValue = 0; // TODO: Is it OK to start separate render threads with same 0 value ?
     threadRes.fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
     while (!shutdownSignal && !pauseRenderThreads) {
@@ -1096,10 +1443,45 @@ void GpuRenderThread(int monitorId, int refreshRate) {
         for (uint16_t wi = 0; wi < windowCount; ++wi) {
             SingleUIWindow& window = allWindows[windowList[wi]];
 
+            // Check if user have migrated this windows to a different monitor. This is marked by UI thread.
+            uint32_t state = window.migrationState.load(std::memory_order_acquire);
+            if (state == 1 && window.currentMonitorIndex == monitorId){
+                std::wcout << "Source thread releasing window\n";
+                // Wait GPU idle
+                UINT64 waitValue = gpu.screens[window.currentMonitorIndex].renderFenceValue;
+                auto& screen = gpu.screens[window.currentMonitorIndex];
+                if (screen.renderFence->GetCompletedValue() < waitValue){
+                    screen.renderFence->SetEventOnCompletion(waitValue, screen.renderFenceEvent);
+                    WaitForSingleObject(screen.renderFenceEvent, INFINITE);
+                }
+                window.isMigrating = true;
+                gpu.CleanupWindowResources(window.dx);
+                window.migrationState.store(2, std::memory_order_release);
+                continue;
+            }
+
+            // Check if any other render thread released this thread for migration and we need to acquired it.
+            else if (state == 2 && window.requestedMonitorIndex == monitorId) {
+                uint32_t expected = 2;
+                if (!window.migrationState.compare_exchange_strong(expected, 3, std::memory_order_acq_rel))
+                    continue;
+
+                int newMonitor = window.requestedMonitorIndex;
+                std::wcout << "Destination thread acquiring window\n";
+
+                gpu.InitD3DPerWindow( window.dx, window.hWnd, gpu.screens[newMonitor].commandQueue.Get() );
+                window.currentMonitorIndex = newMonitor;
+                window.isMigrating = false;
+                window.migrationState.store(0, std::memory_order_release);
+                std::wcout << "Migration complete\n";
+                continue;
+            }
+
             if (window.currentMonitorIndex != monitorId) continue; // Skip the windows not on this monitor.
             // The Safety Switch: If migrating, pretend this window doesn't exist for now.
             if (window.isMigrating) continue;
             if (window.isResizing) continue;
+            if (!window.dx.swapChain) continue;
             
             // TODO: Ideally, it should be handled in WM_MOVE or nearby. Following is simply safeguard for bugs elsewhere.
             // Check if the window is physically on this monitor, but chemically bound to another queue
@@ -1145,8 +1527,10 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 DATASETTAB& tab = allTabs[tabIndex];
                 DX12ResourcesPerTab& tabRes = tab.dx;
                 tabRes.camera = tab.camera; // Update camera from Tab.
-                uint64_t fenceToWaitFor = tabRes.lastCopyFenceValue.load(std::memory_order_acquire);// Cross-Queue Sync.
-                if (fenceToWaitFor > 0) { threadRes.commandQueue->Wait(gpu.copyFence.Get(), fenceToWaitFor); }
+                uint64_t fenceToWaitFor = gpu.copyFenceValue.load(std::memory_order_acquire);// Cross-Queue Sync.
+                //if (fenceToWaitFor > 0) { threadRes.commandQueue->Wait(gpu.copyFence.Get(), fenceToWaitFor); }
+                //Above is commented out because render thread now no longer need to wait for copyFence,
+                //because, now render thread operate over READ ONLY page list.
                 gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes, tab.geometry);// Renders geometry.
             }
 
@@ -1195,6 +1579,8 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 SingleUIWindow& window = allWindows[windowList[wi]];
 
                 if (window.currentMonitorIndex != monitorId) continue;
+                if (window.isResizing) continue;
+                if (window.isMigrating) continue;
                 HRESULT hr = window.dx.swapChain->Present(1, 0);
                 if (FAILED(hr)) { std::cerr << "Present failed: " << hr << std::endl; }
 				// Do NOT Handle Fences here. It will be handled after all windows are presented.
@@ -1204,14 +1590,17 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             }
 
             // SIGNAL the fence for the current frame
-            const UINT64 currentFenceValue = threadRes.fenceValue;
+            currentFenceValue = gpu.renderFenceValue.fetch_add(1);
             threadRes.commandQueue->Signal(threadRes.fence.Get(), currentFenceValue);
             //tabRes.lastRenderFenceValue.store(currentFenceValue, std::memory_order_release);
+            // Mirror into the globally-visible per-monitor fence so PruneOneRetiredPage can see it.
+            threadRes.commandQueue->Signal(gpu.screens[monitorId].renderFence.Get(), currentFenceValue);
+            gpu.screens[monitorId].renderFenceValue = currentFenceValue; // Submitted value. Not necessarilly executed.
 
             // WAIT: Throttle CPU (Double Buffering Logic). We need to reuse the Command Allocator for the *next* frame.
             // If we have 2 allocators (Double Buffering), we must ensure the GPU is finished with Frame (Current - 1).
-            if (threadRes.fenceValue >= FRAMES_PER_RENDERTARGETS) {
-                const UINT64 fenceValueToWaitFor = threadRes.fenceValue - FRAMES_PER_RENDERTARGETS + 1;
+            if (currentFenceValue >= FRAMES_PER_RENDERTARGETS) {
+                const UINT64 fenceValueToWaitFor = currentFenceValue - FRAMES_PER_RENDERTARGETS + 1;
 
                 // If the GPU hasn't reached that point yet, we sleep the CPU thread.
                 if (threadRes.fence->GetCompletedValue() < fenceValueToWaitFor) {
@@ -1219,11 +1608,9 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                     WaitForSingleObject(threadRes.fenceEvent, INFINITE);
                 }
             }
-            threadRes.fenceValue++; // ADVANCE: Prepare for the next loop
             // Update the Thread's allocator index (0 -> 1 -> 0 -> 1). This is separate from the window's back buffer index!
             threadRes.allocatorIndex = (threadRes.allocatorIndex + 1) % FRAMES_PER_RENDERTARGETS;
-        }
-        else { // Idle handling
+        } else { // Idle handling
             // If I have no windows, I just wait (maybe for a VSync or sleep). Maybe we are running without a monitor !
             // This fulfills "waiting for some windows to be dragged into it" ?
             std::this_thread::sleep_for(std::chrono::milliseconds(16));
@@ -1256,12 +1643,12 @@ void GpuRenderThread(int monitorId, int refreshRate) {
     }
 
 	// Cleanup Thread-Local Resources. We cannot destroy resources currently being read by the GPU!
-    const UINT64 fenceValueToWaitFor = threadRes.fenceValue;
+    const UINT64 fenceValueToWaitFor = currentFenceValue;
 
     // If the GPU hasn't reached that point yet, we sleep the CPU thread.
     if (threadRes.fence->GetCompletedValue() < fenceValueToWaitFor) {
         threadRes.fence->SetEventOnCompletion(fenceValueToWaitFor, threadRes.fenceEvent);
-        //At this cleanup stage, do not waith INFINITE. Otherwise we may get stuck waiting forever.
+        //At this cleanup stage, do not wait INFINITE. Otherwise we may get stuck waiting forever.
         DWORD waitResult = WaitForSingleObject(threadRes.fenceEvent, 5000);  // 5 sec timeout
         if (waitResult != WAIT_OBJECT_0) {
             std::cerr << "Render thread cleanup Fence wait timed out!\n" << std::endl;
@@ -1303,7 +1690,7 @@ void शंकर::ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UI
 
     DXGI_SWAP_CHAIN_DESC desc = {};
     dx.swapChain->GetDesc(&desc);
-    ThrowIfFailed(dx.swapChain->ResizeBuffers( FRAMES_PER_RENDERTARGETS, // Resize swapchain buffers
+    ThrowIfFailed(dx.swapChain->ResizeBuffers( FRAMES_PER_RENDERTARGETS, // Resize swap-chain buffers
         newWidth, newHeight, desc.BufferDesc.Format, desc.Flags));
     dx.frameIndex = dx.swapChain->GetCurrentBackBufferIndex();
 

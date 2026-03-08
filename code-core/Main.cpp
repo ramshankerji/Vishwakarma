@@ -287,8 +287,8 @@ void FetchAllMonitorDetails() // Main function to fetch all monitor details
 }
 
 // Helper to find a monitor in the OLD list by name
-int FindMonitorIndexByName(const std::vector<OneMonitorController>& list, const std::wstring& name) {
-    for (int i = 0; i < list.size(); ++i) { if (list[i].monitorName == name) return i; }
+int FindMonitorIndexByName(OneMonitorController list[MV_MAX_MONITORS], const std::wstring& name) {
+    for (int i = 0; i < MV_MAX_MONITORS; ++i) { if (list[i].monitorName == name) return i; }
     return -1;
 }
 int FindMonitorIndexByName(const OneMonitorController* list, int count, const std::wstring& name) {
@@ -318,24 +318,58 @@ void UpdateWindowMonitorAffinity(SingleUIWindow& window, int newMonitorIndex) {
     Associating a new swap chain to an existing windows is well supported and fast enough. */
     
     window.isMigrating = true;// SWITCH OFF RENDERING. The threads will now skip this window in their loops.
+    // Memory fence: ensure the flag is visible to all CPU cores before we proceed, 
+    // so the render thread cannot observe a stale false.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
 
     // We must ensure the GPU is done with the old SwapChain before destroying it.
-    int oldIndex = window.currentMonitorIndex;
-    if (oldIndex >= 0) {
-        // You need to pass the *Window's* specific resources which hold the fence? 
-        // Actually, use the Monitor's Queue directly for a hard flush.
-        ID3D12CommandQueue* oldQueue = gpu.screens[oldIndex].commandQueue.Get();
+    int oldMonitorIndex = window.currentMonitorIndex;
+    if (oldMonitorIndex >= 0 && oldMonitorIndex < gpu.currentMonitorCount) {
+        OneMonitorController& oldMonitor = gpu.screens[oldMonitorIndex];
+        ID3D12CommandQueue* oldQueue = oldMonitor.commandQueue.Get();
 
-        // Simple flush to ensure safety
-        ComPtr<ID3D12Fence> flushFence;
-        gpu.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&flushFence));
-        oldQueue->Signal(flushFence.Get(), 1);
-        HANDLE hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-        if (flushFence->GetCompletedValue() < 1) {
-            flushFence->SetEventOnCompletion(1, hEvent);
-            WaitForSingleObject(hEvent, INFINITE);
+        if (oldQueue && oldMonitor.renderFence) {
+            // Pick a drain value that is strictly ABOVE anything the render thread has already signalled so this Signal is 
+            // guaranteed to arrive AFTER all previously submitted work.
+            uint64_t drainValue = oldMonitor.renderFenceValue + 1;
+
+            HRESULT hr = oldQueue->Signal(oldMonitor.renderFence.Get(), drainValue);
+            if (SUCCEEDED(hr)) {
+                // Lazily create the fence event if the render thread hasn't
+                // initialised it yet (can happen if migration fires very early).
+                HANDLE hEvent = oldMonitor.renderFenceEvent;
+                bool   ownedEvent = false;
+                if (!hEvent) {
+                    hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+                    ownedEvent = true;
+                }
+
+                if (oldMonitor.renderFence->GetCompletedValue() < drainValue) {
+                    oldMonitor.renderFence->SetEventOnCompletion(drainValue, hEvent);
+                    // 3-second timeout: if we exceed this the device is likely
+                    // already lost, so we log and continue rather than hang forever.
+                    DWORD waitResult = WaitForSingleObject(hEvent, 3000);
+                    if (waitResult != WAIT_OBJECT_0) {
+                        std::wcerr << L"[Migration] WARNING: GPU drain timed out for Monitor "
+                            << oldMonitorIndex << L". Device may be lost." << std::endl;
+                        // We proceed anyway: if the device is truly lost,
+                        // CleanupWindowResources will encounter COM errors that are already handled gracefully.
+                    }
+                }
+                // Update the stored fence value so future callers know the last signalled value.
+                oldMonitor.renderFenceValue = drainValue;
+                if (ownedEvent) CloseHandle(hEvent);
+            } else {
+                std::wcerr << L"[Migration] WARNING: Signal on old queue failed (hr="
+                    << std::hex << hr << L"). Skipping GPU drain." << std::endl;
+            }
+        } else {
+            // Queue or fence not yet initialised (window was never rendered on
+            // this monitor — e.g. created programmatically and never shown).
+            // No GPU work was ever submitted, so no drain needed.
+            std::wcout << L"[Migration] Old monitor " << oldMonitorIndex
+                << L" has no queue/fence. Skipping GPU drain." << std::endl;
         }
-        CloseHandle(hEvent);
     }
 
     gpu.CleanupWindowResources(window.dx);// Now it is safe to destroy the old SwapChain.
@@ -384,6 +418,9 @@ void RestartRenderThreads() { // The "Safe" Restart Function. Runs for initial r
 		for (int j = 0; j < oldMonitorCount; j++) {
             if (oldScreens[j].monitorName == gpu.screens[i].monitorName) {
                 gpu.screens[i].commandQueue = oldScreens[j].commandQueue;
+                gpu.screens[i].renderFence = oldScreens[j].renderFence;
+                gpu.screens[i].renderFenceEvent = oldScreens[j].renderFenceEvent;
+                gpu.screens[i].renderFenceValue = oldScreens[j].renderFenceValue;
                 std::wcout << L"Preserved Queue for: " << gpu.screens[i].monitorName << std::endl;
 				matchFound = true;
                 break;
@@ -394,7 +431,16 @@ void RestartRenderThreads() { // The "Safe" Restart Function. Runs for initial r
             D3D12_COMMAND_QUEUE_DESC queueDesc = {};
             queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
             gpu.device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&gpu.screens[i].commandQueue));
+            ThrowIfFailed(gpu.device->CreateFence( 0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gpu.screens[i].renderFence)));
+            gpu.screens[i].renderFenceValue = 1;
+            gpu.screens[i].renderFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
             std::wcout << L"Created New Queue for: " << gpu.screens[i].monitorName << std::endl;
+        }
+
+        if (gpu.screens[i].renderFence.Get() == nullptr) { //TODO: Temporary fix. Move this pto proper place.
+            ThrowIfFailed(gpu.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gpu.screens[i].renderFence)));
+            gpu.screens[i].renderFenceValue = 1;
+            gpu.screens[i].renderFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
         }
     }
 
@@ -933,10 +979,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
     case WM_SIZE:
     {   
-        //Handle resizing of the window. This can be triggered by user resizing or maximize/unmaximize. 
+        // Handle resizing of the window. This can be triggered by user resizing or maximize/unmaxmime. 
         // We need to resize the swap chain buffers accordingly.
         // TODO: optimize for minimized state by pausing rendering and skipping buffer presentation.
-		// TODO: Setup a timer to resize evend during middle of resizing, 
+		// TODO: Setup a timer to resize event during middle of resizing, 
         // but with a lower frequency to avoid excessive GPU work. This will make resizing smoother.
 		if (wParam == SIZE_MINIMIZED) return 0; // For now we just skip resizing logic.
         UINT newWidth = LOWORD(lParam);
@@ -978,22 +1024,22 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
             // Trigger Migration if monitor changed
             if (newMonitorIdx != -1 && pWin->currentMonitorIndex != newMonitorIdx) {
-                // This function contains the logic: 
-                // isMigrating=true -> Flush Old Queue -> Cleanup -> Recreate on New Queue -> isMigrating=false
-                UpdateWindowMonitorAffinity(*pWin, newMonitorIdx);
+                pWin->requestedMonitorIndex = newMonitorIdx;
+                uint32_t expected = 0;
+                pWin->migrationState.compare_exchange_strong(expected, 1, std::memory_order_release);
+                std::wcout <<"Migration requested: "<< pWin->currentMonitorIndex<< " to " <<newMonitorIdx<< std::endl;
             }
             else std::wcout << L"No change. Currently on " << gpu.screens[pWin->currentMonitorIndex].friendlyName << std::endl;
 
             if (pWin->nextRequestedWidth != pWin->currentWidth or pWin->nextRequestedHeight != pWin->currentHeight) {
 				std::wcout << L"Resizing window buffers to : " << pWin->nextRequestedWidth << L" x " 
                     << pWin->nextRequestedHeight << std::endl;
-                pWin->isResizing = true; // Switch OFF rendering.
+                pWin->isResizing.store(true);// Switch OFF rendering.
                 gpu.ResizeD3DWindow(pWin->dx, pWin->nextRequestedWidth, pWin->nextRequestedHeight);
                 pWin->currentWidth = pWin->nextRequestedWidth;
                 pWin->currentHeight = pWin->nextRequestedHeight;
-				pWin->isResizing = false; // Switch ON rendering.
+				pWin->isResizing.store(false); // Switch ON rendering.
             }
-            
         }
         break;
         }
@@ -1005,9 +1051,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         // Join render threads to ensure they stop BEFORE window destruction
         // TODO : Warning : This will terminate ALL render threads. Revisit this code when multi window is implemented.
         for (auto& t : renderThreads) {
-            if (t.joinable()) {
-                t.join();
-            }
+            if (t.joinable()) { t.join(); }
         }
         std::wcout << "WM_CLOSE: All render threads joined." << std::endl;
 

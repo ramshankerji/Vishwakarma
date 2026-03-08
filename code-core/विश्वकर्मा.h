@@ -58,7 +58,7 @@ struct NETWORK_INTERFACE {
 
 struct VIEW_INSIDE_DATASETTAB {
     // Each dataSet tab can have multiple views.
-    uint64_t viewID; //Unique view ID inside this dataSet tab. Randomely generated.
+    uint64_t viewID; //Unique view ID inside this dataSet tab. Randomly generated.
 	bool isExtratedInOwnWindow = false; //If true, this view is shown in some other window.
 	std::wstring viewName; //User assigned name of the view.
     float backgroundColor[4]; //RGBA
@@ -153,13 +153,17 @@ struct SingleUIWindow {
     std::vector<int> tabIds;
     int activeTabIndex = -1;
     int currentMonitorIndex; // The index of monitor returned by Windows API. It changes on monitor addition/removal.
+    int requestedMonitorIndex;
+    std::atomic<uint32_t> migrationState{ 0 };
+    /*  0 : Normal rendering, 1 : UI requested migration, 2 : Source render thread released window
+    3 : Destination render thread acquiring, 4 : Destination initialized resources, 0 : Back to normal */
 
     RECT tabBandRect{};
     RECT viewBandRect{};
     RECT contentRect{};
 
-	std::atomic<bool> isMigrating = false;// The "Switch" to turn rendering ON/OFF during migration.
-    std::atomic<bool> isResizing = false;
+	std::atomic<bool> isMigrating{ false };;// The "Switch" to turn rendering ON/OFF during migration.
+    std::atomic<bool> isResizing{ false };
 	uint16_t nextRequestedWidth = 0, nextRequestedHeight = 0;
 	uint16_t currentWidth = 0, currentHeight = 0;
 
@@ -172,12 +176,15 @@ struct SingleUIWindow {
         tabIds(other.tabIds),
         activeTabIndex(other.activeTabIndex),
         currentMonitorIndex(other.currentMonitorIndex),
+        requestedMonitorIndex(other.requestedMonitorIndex),
         tabBandRect(other.tabBandRect),
         viewBandRect(other.viewBandRect),
         contentRect(other.contentRect),
         dx(other.dx) // ComPtrs handle copying correctly
     {
         isMigrating.store(other.isMigrating.load());
+        migrationState.store(other.migrationState.load());
+        isResizing.store(other.isResizing.load());
     }
 
     // Move Constructor (Critical for std::vector performance)
@@ -186,12 +193,15 @@ struct SingleUIWindow {
         tabIds(std::move(other.tabIds)),
         activeTabIndex(other.activeTabIndex),
         currentMonitorIndex(other.currentMonitorIndex),
+        requestedMonitorIndex(other.requestedMonitorIndex),
         tabBandRect(other.tabBandRect),
         viewBandRect(other.viewBandRect),
         contentRect(other.contentRect),
         dx(std::move(other.dx)) // Transfer ownership
     {
+        migrationState.store(other.migrationState.load());
         isMigrating.store(other.isMigrating.load());
+        isResizing.store(other.isResizing.load());
     }
 
     // Assignment Operator
@@ -201,11 +211,14 @@ struct SingleUIWindow {
             tabIds = other.tabIds;
             activeTabIndex = other.activeTabIndex;
             currentMonitorIndex = other.currentMonitorIndex;
+            requestedMonitorIndex = other.requestedMonitorIndex;
             tabBandRect = other.tabBandRect;
             viewBandRect = other.viewBandRect;
             contentRect = other.contentRect;
             dx = other.dx;
+            migrationState.store(other.migrationState.load());
             isMigrating.store(other.isMigrating.load());
+            isResizing.store(other.isResizing.load());
         }
         return *this;
     }
