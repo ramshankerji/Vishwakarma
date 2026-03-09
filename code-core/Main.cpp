@@ -187,6 +187,17 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
         currentScreen->screenPhysicalHeight = static_cast<int>(inchesHeight * 25.4);
     }
 
+    // Default initialization if physical calc fails. Fallback: 1 inch = 25.4 mm
+    if (currentScreen->screenPhysicalWidth == 0) {
+        currentScreen->screenPhysicalWidth = static_cast<int>((currentScreen->screenPixelWidth / (float)currentScreen->dpiX) * 25.4f);
+        currentScreen->screenPhysicalHeight = static_cast<int>((currentScreen->screenPixelHeight / (float)currentScreen->dpiY) * 25.4f);
+    }
+
+    // Calculate drawable area dimensions (work area)
+    currentScreen->WindowWidth = currentScreen->workAreaRect.right - currentScreen->workAreaRect.left;
+    currentScreen->WindowHeight = currentScreen->workAreaRect.bottom - currentScreen->workAreaRect.top;
+    currentScreen->isScreenInitalized = true;// Mark as initialized
+
     // Debug output
     std::wcout << L"Monitor " << gpu.currentMonitorCount << L":" << std::endl;
     std::wcout << L"Device: " << currentScreen->monitorName << std::endl;
@@ -200,17 +211,6 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
     std::wcout << L"Refresh: " << currentScreen->refreshRate << L" Hz" << std::endl;
     std::wcout << L"Color Depth: " << currentScreen->colorDepth << L" bits" << std::endl;
     std::wcout << std::endl;
-
-    // Default initialization if physical calc fails. Fallback: 1 inch = 25.4 mm
-    if (currentScreen->screenPhysicalWidth == 0) {
-        currentScreen->screenPhysicalWidth = static_cast<int>((currentScreen->screenPixelWidth / (float)currentScreen->dpiX) * 25.4f);
-        currentScreen->screenPhysicalHeight = static_cast<int>((currentScreen->screenPixelHeight / (float)currentScreen->dpiY) * 25.4f);
-    }
-
-    // Calculate drawable area dimensions (work area)
-    currentScreen->WindowWidth = currentScreen->workAreaRect.right - currentScreen->workAreaRect.left;
-    currentScreen->WindowHeight = currentScreen->workAreaRect.bottom - currentScreen->workAreaRect.top;
-    currentScreen->isScreenInitalized = true;// Mark as initialized
     
     gpu.currentMonitorCount++; // Increment count after successful initialization
     return TRUE; // Continue enumeration
@@ -514,6 +514,8 @@ void AllocateConsoleWindow() {
 
 static const wchar_t szWindowClass[] = L"विश्वकर्मा"; // The main window class name.
 static const wchar_t* szTitle = L"विश्वकर्मा 0 :-)"; // The string that appears in the application's title bar.
+std::wstring exePath;
+unsigned char* imgData = nullptr;
 
 HINSTANCE hInst;// Stored instance handle for use in Win32 API calls such as FindResource
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);// Forward declarations of functions included in this code module.
@@ -548,7 +550,6 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     wcex.cbClsExtra = 0;
     wcex.cbWndExtra = 0;
     wcex.hInstance = hInstance;
-    wcex.hIcon = LoadIcon(wcex.hInstance, IDI_APPLICATION);
     wcex.hCursor = LoadCursor(NULL, IDC_ARROW);
     wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wcex.lpszMenuName = NULL;
@@ -556,6 +557,8 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     wcex.hIcon = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
     //wcex.hIconSm = LoadIcon(wcex.hInstance, IDI_APPLICATION);
     wcex.hIconSm = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_APP_ICON));
+
+    exePath = GetExecutablePath();
 
     if (!RegisterClassExW(&wcex))
     {
@@ -739,15 +742,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     static unsigned char* image_data = NULL;
     static int width, height;
-    std::wstring exePath = GetExecutablePath();
     int size_needed = WideCharToMultiByte(
         CP_UTF8, 0, &exePath[0], static_cast<int>(exePath.size()), NULL, 0, NULL, NULL);
     std::string str(size_needed, 0);
     WideCharToMultiByte(CP_UTF8, 0, &exePath[0], static_cast<int>(exePath.size()), &str[0], size_needed, NULL, NULL);
-
-    std::string fullPath = str + "\\logo.png";
-
-    unsigned char* imgData = nullptr;
     int w, h;
 
     DATASETTAB* tab = GetActiveTabFromHwnd(hWnd);

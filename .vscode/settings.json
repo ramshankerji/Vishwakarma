@@ -1,5 +1,6 @@
 {
     "cSpell.words": [
+        "AABB",
         "absl",
         "anded",
         "broadcastsi",
@@ -27,6 +28,7 @@
         "HRESULT",
         "HRSRC",
         "IDXGI",
+        "interpolants",
         "jmpbuf",
         "LBUTTONDOWN",
         "LBUTTONUP",

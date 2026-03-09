@@ -195,9 +195,6 @@ struct TabGeometryStorage {
     Resources shared across multiple windows on the same monitor) */
 
 struct DX12ResourcesPerTab { // (The Data) Geometry Data
-    // Since data is isolated per tab, these live here. We use a "Jumbo" buffer approach to reduce switching.
-    ComPtr<ID3D12Resource> vertexBuffer;
-    ComPtr<ID3D12Resource> indexBuffer;
 
     // Upload Heaps (CPU -> GPU Transfer)
     // Moved here because the Copy Thread writes to these when adding objects to the TAB.
@@ -215,13 +212,10 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
     // Copy thread will update the following map whenever it adds/removes/modifies an object on GPU.
     std::map<uint64_t, GpuResourceVertexIndexInfo> objectsOnGPU;
 
-    // Track how much of the jumbo buffer is used
-    uint64_t vertexDataSize = 0;
-    uint64_t indexDataSize = 0;
-
+    //Copy thread owns/writes following variables exclusively. Render threads only read it. Without Lock.
     ComPtr<ID3D12Resource> worldMatrixBuffer; // TODO: Doublebuffer it per frame.
     UINT8 * pWorldMatrixDataBegin = nullptr;
-    uint32_t               matrixCapacity = 4096;
+    uint32_t               matrixCapacity = 4096; 
     uint32_t               matrixCount = 0;
 	std::vector<uint32_t>  freeMatrixSlots;   // free-list for matrix indices.
     //To enable re-use of slots when objects are removed.
@@ -298,6 +292,7 @@ struct OneMonitorController { // Variables stored per monitor.
     int screenPhysicalHeight = 0; // in mm
     int WindowWidth = 800;//Current ViewPort ( Rendering area ) size. excluding task-bar etc.
     int WindowHeight = 600;
+    bool isActive = false;
 
     HMONITOR hMonitor = NULL; // Monitor handle. Remains fixed as long as monitor is not disconnected / disabled.
     std::wstring monitorName;            // Monitor device name (e.g., "\\\\.\\DISPLAY1")
@@ -333,10 +328,6 @@ struct CommandToCopyThread
     uint64_t id = 0; // Always present
     uint64_t tabID = 0; // NEW: We must know which tab this object belongs to!
 };
-// Thread synchronization between Main Logic thread and Copy thread
-extern std::mutex toCopyThreadMutex;
-extern std::condition_variable toCopyThreadCV;
-extern std::queue<CommandToCopyThread> commandToCopyThreadQueue;
 
 extern std::atomic<bool> pauseRenderThreads; // Defined in Main.cpp
 
@@ -355,8 +346,7 @@ private:
     const HRESULT hr;
 };
 
-inline void ThrowIfFailed(HRESULT hr)
-{
+inline void ThrowIfFailed(HRESULT hr) {
     if (FAILED(hr)) { throw HrException(hr); }
 }
 
@@ -372,9 +362,7 @@ public:
     // Non-blocking pop
     bool try_pop(CommandToCopyThread& value) {
         std::lock_guard<std::mutex> lock(mutex);
-        if (fifoQueue.empty()) {
-            return false;
-        }
+        if (fifoQueue.empty()) { return false; }
         value = std::move(fifoQueue.front());
         fifoQueue.pop();
         return true;
@@ -429,12 +417,6 @@ public:
     By using 4 Queues, Queue A can sit blocked waiting for VSync, 
     while Queue B immediately push work work to the GPU for the faster monitor.*/
 
-    ComPtr<ID3D12CommandQueue> renderCommandQueue; // Only used by Monitor No. 0 i.e. 1st Render Thread.
-	/* Now moved to one monitor controller, since we need to track it per monitor for multi monitor support.
-    ComPtr<ID3D12Fence> renderFence;// Synchronization for Render Queue
-    UINT64 renderFenceValue = 0;
-    HANDLE renderFenceEvent = nullptr;
-    */
     std::atomic<uint64_t> renderFenceValue = 0; // Global. This is in addition to per monitor render fence value.
 
 	ComPtr<ID3D12CommandQueue> copyCommandQueue; // There is only 1 across the application.
@@ -475,7 +457,7 @@ public:
     void InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D12CommandQueue* commandQueue);
     void PopulateCommandList(ID3D12GraphicsCommandList* cmdList, //Called by per monitor render thread.
         DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage);
-    void WaitForPreviousFrame(DX12ResourcesPerRenderThread dx);
+    void WaitForPreviousFrame(const DX12ResourcesPerRenderThread& dx);
     void ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UINT newHeight);
 
     // Called when a monitor is unplugged or window is destroyed. Destroys SwapChain/RTVs but KEEPS Geometry.
@@ -507,7 +489,6 @@ struct ConstantBuffer {
 
 // Externs for communication 
 extern std::atomic<bool> shutdownSignal;
-extern ThreadSafeQueueGPU g_gpuCommandQueue;
 
 // Logic Thread "Fence"
 extern std::mutex g_logicFenceMutex;
