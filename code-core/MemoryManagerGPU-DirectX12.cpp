@@ -1394,7 +1394,7 @@ void GpuCopyThread() {
             // Skip monitors whose render thread never started or has already exited and torn down its fence.
             if (!gpu.screens[i].renderFence) continue; // fence not created yet
             if (gpu.screens[i].renderFenceValue == 0) continue; // thread never signalled
-            if (!gpu.screens[i].isActive)  continue; // Skip inactive monitors
+            if (!gpu.screens[i].isScreenInitalized)  continue; // Skip inactive monitors
 
             // GetCompletedValue() is safe to call from any thread at any time;
             // it reads a value the GPU writes atomically.
@@ -1440,7 +1440,15 @@ void GpuCopyThread() {
             }
         }
     } // End of while (!shutdownSignal)
-    
+    // Inside CleanupTabResources or at the end of GpuCopyThread. Application is about to exit anyway.
+    // Still we release as much memory ouselves as possible to reduce debug warnings.
+    uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
+    uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+    for (uint16_t i = 0; i < tabCount; ++i) {
+        TabGeometryStorage& storage = allTabs[tabList[i]].geometry;
+        for (auto& rs : storage.retiredSnapshots) { delete rs.snapshot; }
+        storage.retiredSnapshots.clear();
+    }
     std::wcout << "GPU Copy Thread shutting down." << std::endl;
 }
 
@@ -1474,7 +1482,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
     // Command lists are created in the recording state, but our loop expects them closed initially.
     threadRes.commandList->Close();
 
-    uint64_t lastRenderedFrame = -1;
+    uint64_t lastRenderedFrame = 0;
     const auto frameDuration = std::chrono::milliseconds(1000 / refreshRate);
 
     // Create synchronization objects
@@ -1690,11 +1698,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
         }
 #endif
 
-        // TODO: After rendering, perform garbage collection on VRAM. Currently lastRenderedFrame is always 1.
-        // In a real engine, the last COMPLETED GPU frame is tracked via fences.
-        if (lastRenderedFrame > 2) {
-            gpu.ProcessDeferredFrees(lastRenderedFrame - 2);
-        }
+        // VRAM is completely managed by COPY thread. Hence this thread need not release any memory release.
     }
 
 	// Cleanup Thread-Local Resources. We cannot destroy resources currently being read by the GPU!

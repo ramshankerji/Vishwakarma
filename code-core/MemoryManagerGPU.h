@@ -233,8 +233,7 @@ Before you break the memory model, build the mechanism that hides the breakage.
 Phase 3: The API Pivot (The Hardest Part)
 Switching to ExecuteIndirect changes how you pass data. Do this BEFORE implementing custom heaps to isolate variables.
 [Done] Implement Structured Buffer for World Matrix. StructuredBuffer<float4x4> and a root constant index.
-Critical: We cannot do ExecuteIndirect for multiple objects without a way to tell the shader which object 
-    is being drawn. 
+We cannot do ExecuteIndirect for multiple objects without a way to tell the shader which object is being drawn. 
 [Done] DrawIndexedInstanced → ExecuteIndirect (EI).
 Advice: Implement this using your current committed resources first. Just get the API call working.
 
@@ -248,6 +247,7 @@ our "VRAM Pages" step will stall waiting on CreateCommittedResource for uploads.
 [ ] Tab Management / View Management. (Integrating the heaps into the UI).
 
 Phase 5: Advanced Features & Polish
+[ ] Migrated to Shader Model 6.
 [ ] VRAM Defragmentation. (Now safe to implement because RTT exists).
 [ ] Click Selection / Window Selection. (Requires Raycasting against your CPU Free List/Data structures).
 [ ] Instanced optimization for Pipes.

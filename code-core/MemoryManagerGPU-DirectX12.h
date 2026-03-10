@@ -292,7 +292,6 @@ struct OneMonitorController { // Variables stored per monitor.
     int screenPhysicalHeight = 0; // in mm
     int WindowWidth = 800;//Current ViewPort ( Rendering area ) size. excluding task-bar etc.
     int WindowHeight = 600;
-    bool isActive = false;
 
     HMONITOR hMonitor = NULL; // Monitor handle. Remains fixed as long as monitor is not disconnected / disabled.
     std::wstring monitorName;            // Monitor device name (e.g., "\\\\.\\DISPLAY1")
