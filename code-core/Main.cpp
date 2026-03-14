@@ -154,6 +154,7 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
     }
     DISPLAY_DEVICEW displayDevice = {};// Get physical dimensions and additional display properties
     displayDevice.cb = sizeof(DISPLAY_DEVICEW);
+    // TODO: Windows requires displayDevice.cb to be reset every iteration. ?
 
     // Find the display device that matches this monitor
     for (DWORD deviceNum = 0; EnumDisplayDevicesW(NULL, deviceNum, &displayDevice, 0); deviceNum++) {
@@ -287,10 +288,6 @@ void FetchAllMonitorDetails() // Main function to fetch all monitor details
 }
 
 // Helper to find a monitor in the OLD list by name
-int FindMonitorIndexByName(OneMonitorController list[MV_MAX_MONITORS], const std::wstring& name) {
-    for (int i = 0; i < MV_MAX_MONITORS; ++i) { if (list[i].monitorName == name) return i; }
-    return -1;
-}
 int FindMonitorIndexByName(const OneMonitorController* list, int count, const std::wstring& name) {
     for (int i = 0; i < count; ++i) { if (list[i].monitorName == name) return i; }
     return -1;

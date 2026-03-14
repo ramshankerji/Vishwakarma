@@ -136,6 +136,8 @@ struct GeometryPage {
 
     // UTILITY
     bool IsFull(uint32_t incomingVertexBytes, uint32_t incomingIndexBytes) const  {
+        //If: incomingIndexBytes > indexTail then : indexTail - incomingIndexBytes wraps to huge value.
+        if (incomingIndexBytes > indexTail) return true;
         uint32_t alignedVertexHead = AlignUp(vertexHead, 16);
         uint32_t alignedIndexTail  = AlignDown(indexTail - incomingIndexBytes, 4);
 		return (alignedVertexHead + incomingVertexBytes + SAFETY_GAP > alignedIndexTail);

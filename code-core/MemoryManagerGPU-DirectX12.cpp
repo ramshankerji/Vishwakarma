@@ -361,7 +361,8 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     swapChainDesc.SampleDesc.Count = 1;
 
     ComPtr<IDXGISwapChain1> tempSwapChain;
-    factory6->CreateSwapChainForHwnd(commandQueue, hwnd, &swapChainDesc, nullptr, nullptr, &tempSwapChain);
+    ThrowIfFailed(factory6->CreateSwapChainForHwnd(commandQueue, hwnd, &swapChainDesc, 
+        nullptr, nullptr, &tempSwapChain));
 
     tempSwapChain.As(&dx.swapChain);
     dx.frameIndex = dx.swapChain->GetCurrentBackBufferIndex();
@@ -375,14 +376,14 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     rtvHeapDesc.NumDescriptors = FRAMES_PER_RENDERTARGETS; //One RTV per frame buffer for multi-buffering support
     rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    gpu.device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&dx.rtvHeap));
+    ThrowIfFailed(gpu.device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&dx.rtvHeap)));
 
     // Create depth stencil descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
     dsvHeapDesc.NumDescriptors = 1;
     dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
     dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    gpu.device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&dx.dsvHeap));
+    ThrowIfFailed(gpu.device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&dx.dsvHeap)));
 
     // Create depth stencil buffer
     D3D12_CLEAR_VALUE depthOptimizedClearValue = {};
@@ -395,11 +396,11 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
         DXGI_FORMAT_D32_FLOAT, dx.WindowWidth, dx.WindowHeight,
         1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
 
-    gpu.device->CreateCommittedResource(
+    ThrowIfFailed(gpu.device->CreateCommittedResource(
         &depthHeapProps, D3D12_HEAP_FLAG_NONE,
         &depthResourceDesc, D3D12_RESOURCE_STATE_DEPTH_WRITE,
         &depthOptimizedClearValue, IID_PPV_ARGS(&dx.depthStencilBuffer)
-    );
+    ));
     //Observe that depthStencilBuffer has been created on D3D12_HEAP_TYPE_DEFAULT, i.e. main GPU memory
     //dsvHeap is created on D3D12_DESCRIPTOR_HEAP_TYPE_DSV. 
     //All DESCRIPTOR HEAPs are stored on Small Fast gpu memory. It is normal D3D12 design.
@@ -419,13 +420,13 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     D3D12_DESCRIPTOR_HEAP_DESC rttRtvHeapDesc = {};
     rttRtvHeapDesc.NumDescriptors = FRAMES_PER_RENDERTARGETS;
     rttRtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-    gpu.device->CreateDescriptorHeap(&rttRtvHeapDesc, IID_PPV_ARGS(&dx.rttRtvHeap));
+    ThrowIfFailed(gpu.device->CreateDescriptorHeap(&rttRtvHeapDesc, IID_PPV_ARGS(&dx.rttRtvHeap)));
 
     D3D12_DESCRIPTOR_HEAP_DESC rttSrvHeapDesc = {};
     rttSrvHeapDesc.NumDescriptors = FRAMES_PER_RENDERTARGETS;
     rttSrvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     rttSrvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    gpu.device->CreateDescriptorHeap(&rttSrvHeapDesc, IID_PPV_ARGS(&dx.rttSrvHeap));
+    ThrowIfFailed(gpu.device->CreateDescriptorHeap(&rttSrvHeapDesc, IID_PPV_ARGS(&dx.rttSrvHeap)));
 
     CD3DX12_CPU_DESCRIPTOR_HANDLE rttRtvHandle(dx.rttRtvHeap->GetCPUDescriptorHandleForHeapStart());
     CD3DX12_CPU_DESCRIPTOR_HANDLE rttSrvHandle(dx.rttSrvHeap->GetCPUDescriptorHandleForHeapStart());
@@ -462,7 +463,7 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     cbvHeapDesc.NumDescriptors = 1;
     cbvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     cbvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    gpu.device->CreateDescriptorHeap(&cbvHeapDesc, IID_PPV_ARGS(&dx.cbvHeap));
+    ThrowIfFailed(gpu.device->CreateDescriptorHeap(&cbvHeapDesc, IID_PPV_ARGS(&dx.cbvHeap)));
 
     // Create constant buffer
     /* Our HLSL constant buffer contains: float4x4 worldViewProjection; 64 bytes (4x4 floats = 16*4=64)
@@ -470,9 +471,9 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     auto cbHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
     auto cbResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(256); // Constant buffers must be 256-byte aligned
 
-    gpu.device->CreateCommittedResource(&cbHeapProps, D3D12_HEAP_FLAG_NONE,
+    ThrowIfFailed(gpu.device->CreateCommittedResource(&cbHeapProps, D3D12_HEAP_FLAG_NONE,
         &cbResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr, IID_PPV_ARGS(&dx.constantBuffer));
+        nullptr, IID_PPV_ARGS(&dx.constantBuffer)));
 
     // Create constant buffer view
     D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
@@ -502,6 +503,7 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
     DirectX::XMMATRIX viewMatrix = DirectX::XMMatrixLookAtLH(eyePosition, focusPoint, upDirection);
 
     // Create projection matrix
+    if (winRes.WindowHeight == 0) return; //Prevent divide by 0. If minimized window: WindowHeight = 0.
     float aspectRatio = static_cast<float>(winRes.WindowWidth) / static_cast<float>(winRes.WindowHeight);
 
     XMMATRIX projectionMatrix =  XMMatrixPerspectiveFovLH(
@@ -677,9 +679,10 @@ void शंकर::CleanupD3DGlobal() {
     // 1. Sync and Cleanup Copy Engine
     if (copyCommandQueue && copyFence) {
         // Simple wait: Signal and wait for it
-        copyCommandQueue->Signal(copyFence.Get(), copyFenceValue);
-        if (copyFence->GetCompletedValue() < copyFenceValue) {
-            copyFence->SetEventOnCompletion(copyFenceValue, copyFenceEvent);
+        uint64_t flushValue = copyFenceValue.fetch_add(1);
+        copyCommandQueue->Signal(copyFence.Get(), flushValue);
+        if (copyFence->GetCompletedValue() < flushValue) {
+            copyFence->SetEventOnCompletion(flushValue, copyFenceEvent);
             WaitForSingleObject(copyFenceEvent, INFINITE);
         }
     }
@@ -743,6 +746,8 @@ std::unique_ptr<GeometryPage> CreateNewPage() //Do not make this static function
     gpu.device->CreateCommittedResource( &heap, D3D12_HEAP_FLAG_NONE, &indirectDesc,
         D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&page->indirectBuffer));
 
+    static std::atomic<uint64_t> totalPages = 0; //Telemetry helper / counter.
+    //std::wcout << "New page allocated. New Page Counter: " << ++totalPages << std::endl;
     return page;
 }
 
@@ -866,16 +871,51 @@ void GpuCopyThread() {
 
             GeometryPage* newPage = nullptr;
 
+            // Pre-Pass: Deduplicate commands for this tab. If the same object is modified twice,
+            // or added then modified, etc., we need only FINAL state in this batch to persist.
+            std::unordered_map<uint64_t, size_t> latestCommandIndex;
+            for (size_t i = 0; i < batch.size(); ++i) {
+                if (batch[i].tabID == tabID) { latestCommandIndex[batch[i].id] = i; }
+            }
+
+            std::vector<CommandToCopyThread> deduplicatedBatch;
+            deduplicatedBatch.reserve(batch.size());
+            for (size_t i = 0; i < batch.size(); ++i) {
+                if (batch[i].tabID != tabID) continue;
+                // Only keep the command if it is the absolute latest operation for this ID
+                if (latestCommandIndex[batch[i].id] == i) { deduplicatedBatch.push_back(batch[i]); }
+            }
+
+            // Update the tabTouched flag based on our deduplicated list
+            if (deduplicatedBatch.empty()) continue; // No command for this tab. Skip this tab.
+            tabTouched = true;
+
             // Pass 1: Identify affected pages. We will clone these pages,
             //apply modifications to the clones, and then publish atomically.
-            for (auto& cmd : batch) {
-                if (cmd.tabID != tabID) continue;
-                tabTouched = true;
+            for (auto& cmd : deduplicatedBatch) {
                 if (cmd.type == CommandToCopyThreadType::ADD) continue; // handled later
                 auto it = objectLocation.find(cmd.id);
                 if (it != objectLocation.end()) affectedPages.insert(it->second.page);
             }
-            if (!tabTouched) continue; // No command for this tab. Skip this tab.
+
+            // Find page with largest hole in the middle.
+            GeometryPage* bestAppendCandidate = nullptr;
+            size_t maxHole = 0;
+            for (const auto& pagePtr : storage.activePages) {
+                GeometryPage* p = pagePtr.get();
+                if (!p->published.load(std::memory_order_acquire)) continue; //Just for extra safety.
+
+                size_t hole = p->indexTail - p->vertexHead;  // middle contiguous free space
+                if (hole > maxHole) {
+                    maxHole = hole;
+                    bestAppendCandidate = p;
+                }
+            }
+            // If this best page is not already being cloned, force-clone it so we can append safely
+            if (bestAppendCandidate && affectedPages.find(bestAppendCandidate) == affectedPages.end()) {
+                affectedPages.insert(bestAppendCandidate);
+            }
+
             commandAllocator->Reset(); // Prepare command allocator for more work !
             commandList->Reset(commandAllocator.Get(), nullptr); // Opens command list for closing.
 
@@ -911,6 +951,7 @@ void GpuCopyThread() {
                 }
             }
 
+            GeometryPage* addTargetPage = nullptr;
             if (!affectedPages.empty()) { // If no pages cloned, we don't need these GPU operations.
                 ThrowIfFailed(commandList->Close());
                 ID3D12CommandList* lists[] = { commandList.Get() };
@@ -925,10 +966,19 @@ void GpuCopyThread() {
                     WaitForSingleObject(gpu.copyFenceEvent, INFINITE);
                 }
 
+                if (bestAppendCandidate) {
+                    auto cloneIt = clonedPages.find(bestAppendCandidate);
+                    if (cloneIt != clonedPages.end()) addTargetPage = cloneIt->second.get(); // mutable clone
+                    else addTargetPage = bestAppendCandidate; // already mutable this batch (rare)
+                }
+
                 // Re-open the command list for Pass-3 GPU work (geometry uploads for ADD/MODIFY-grow cases).
                 commandAllocator->Reset();
                 commandList->Reset(commandAllocator.Get(), nullptr);
             }
+
+            //std::wcout << "activePages: " << storage.activePages.size() << 
+            //    ", clonedPages:" << clonedPages.size() << std::endl;
 
             // Pass 3 — Apply every command in the batch to the (already-cloned) pages.
             
@@ -980,7 +1030,7 @@ void GpuCopyThread() {
             uint32_t matrixIndex; // Allocate a matrix slot (new object)
             XMMATRIX worldMat;
 
-            for (auto& cmd : batch) { // Iterate over batch
+            for (auto& cmd : deduplicatedBatch) { // Iterate over batch
                 if (cmd.tabID != tabID) continue;
                 // Find the targe tab. Our static array of tabs is thread-safe for reading.
 
@@ -997,6 +1047,9 @@ void GpuCopyThread() {
                 uint32_t slotIndex = 0;
                 matrixIndex = 0;
 
+                // We mandatorily check if ID still exist even if the command is ADD as a safety measure.
+                // This is also necessary when REMOVE + ADD command is received in same batch and deduped.
+                // TODO: Future, add a fast path ADDINITIAL in future for quick initial loading at startup.
                 switch (cmd.type)// Process Command
                 {
                 case CommandToCopyThreadType::ADD:
@@ -1028,23 +1081,27 @@ void GpuCopyThread() {
                         tabRes.pWorldMatrixDataBegin + matrixIndex * sizeof(XMFLOAT4X4)),
                         XMMatrixTranspose(worldMat));
 
-                    if (!newPage || newPage->IsFull(vertexBytes, indexBytes)) {
-                        newPages.push_back(CreateNewPage());
-                        newPage = newPages.back().get();
-                    }
+                    if (!addTargetPage || addTargetPage->IsFull(vertexBytes, indexBytes)) {
+                        // addTargetPage is full (or didn't exist) → create a brand-new page
+                        if (!newPage || newPage->IsFull(vertexBytes, indexBytes)) {
+                            newPages.push_back(CreateNewPage());
+                            newPage = newPages.back().get();
+                        }
+                        addTargetPage = newPage;   // switch target to the new page
+                    } // At this point addTargetPage is guaranteed to have space
 
                     // Record the geometry upload into commandList
-                    rec = RecordGeometryUpload(newPage, *geo, matrixIndex);
+                    rec = RecordGeometryUpload(addTargetPage, *geo, matrixIndex);
 
                     // Update page CPU state
-                    newPage->objects.push_back(rec);
-                    newPage->vertexHead = rec.vertexByteOffset + rec.vertexSize;
-                    newPage->indexTail = rec.indexByteOffset;
-                    newPage->objectCount++;
+                    addTargetPage->objects.push_back(rec);
+                    addTargetPage->vertexHead = rec.vertexByteOffset + rec.vertexSize;
+                    addTargetPage->indexTail = rec.indexByteOffset;
+                    addTargetPage->objectCount++;
 
                     // Update the copy-thread's private location map
-                    slotIndex = static_cast<uint32_t>(newPage->objects.size() - 1);
-                    objectLocation[cmd.id] = { newPage, slotIndex };
+                    slotIndex = static_cast<uint32_t>(addTargetPage->objects.size() - 1);
+                    objectLocation[cmd.id] = { addTargetPage, slotIndex };
 
                     //std::wcout << "Added New object ID: " << cmd.id << std::endl;
                     break;
@@ -1319,6 +1376,7 @@ void GpuCopyThread() {
         TabGeometryStorage& storage = allTabs[tabList[i]].geometry;
         for (auto& rs : storage.retiredSnapshots) { delete rs.snapshot; }
         storage.retiredSnapshots.clear();
+        storage.retiredPages.clear();
     }
     std::wcout << "GPU Copy Thread shutting down." << std::endl;
 }
@@ -1418,7 +1476,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             // The Safety Switch: If migrating, pretend this window doesn't exist for now.
             if (window.isMigrating) continue;
 
-            // Resize handling. Render thread might have signalled windows resize. Trigger it if requried.
+            // Resize handling. Render thread might have signalled windows resize. Trigger it if required.
             if (window.resizeState.load(std::memory_order_acquire) == 1) {
                 uint32_t reqW = window.nextRequestedWidth.load(std::memory_order_relaxed);
                 uint32_t reqH = window.nextRequestedHeight.load(std::memory_order_relaxed);
