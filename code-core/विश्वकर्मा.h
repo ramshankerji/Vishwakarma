@@ -158,14 +158,16 @@ struct SingleUIWindow {
     /*  0 : Normal rendering, 1 : UI requested migration, 2 : Source render thread released window
     3 : Destination render thread acquiring, 4 : Destination initialized resources, 0 : Back to normal */
 
+    std::atomic<uint32_t> resizeState{ 0 }; // Resize state machine. 0:idle, 1:resize requested by UI thread
+    std::atomic<uint32_t> nextRequestedWidth{ 800 }, nextRequestedHeight{ 600 };
+
     RECT tabBandRect{};
     RECT viewBandRect{};
     RECT contentRect{};
 
 	std::atomic<bool> isMigrating{ false };;// The "Switch" to turn rendering ON/OFF during migration.
     std::atomic<bool> isResizing{ false };
-	uint16_t nextRequestedWidth = 0, nextRequestedHeight = 0;
-	uint16_t currentWidth = 0, currentHeight = 0;
+	uint16_t currentWidth = 800, currentHeight = 600;
 
     DX12ResourcesPerWindow dx;
 

@@ -980,8 +980,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         // Handle resizing of the window. This can be triggered by user resizing or maximize/unmaxmime. 
         // We need to resize the swap chain buffers accordingly.
         // TODO: optimize for minimized state by pausing rendering and skipping buffer presentation.
-		// TODO: Setup a timer to resize event during middle of resizing, 
-        // but with a lower frequency to avoid excessive GPU work. This will make resizing smoother.
 		if (wParam == SIZE_MINIMIZED) return 0; // For now we just skip resizing logic.
         UINT newWidth = LOWORD(lParam);
         UINT newHeight = HIWORD(lParam);
@@ -991,10 +989,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
         for (uint16_t i = 0; i < windowCount; ++i) {
             SingleUIWindow& window = allWindows[windowList[i]];
-            if (window.hWnd == hWnd) {
-                window.nextRequestedWidth = newWidth;
-                window.nextRequestedHeight = newHeight;
-                // gpu.ResizeD3DWindow(window.dx, newWidth, newHeight); Called in WM_EXITSIZEMOVE.
+            if (window.hWnd == hWnd) { // Simply keep storing latest value. Render thead will pick it up when it has time.
+                window.nextRequestedWidth.store(newWidth, std::memory_order_relaxed);
+                window.nextRequestedHeight.store(newHeight, std::memory_order_relaxed);
                 break;
             }
         }
@@ -1002,13 +999,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
 
     case WM_EXITSIZEMOVE:{ // It occurs post - movement, not while the window is actively moving(use WM_MOVING for that).
-        // TODO: Delegate this task from main thread to rendering thread.
         std::wcout << L"WM_EXITSIZEMOVE received. Checking Monitor affinity." << std::endl;
         SingleUIWindow* pWin = nullptr; // Get our internal window object
         uint16_t * windowList = publishedWindowIndexes.load(std::memory_order_acquire);
         uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
-        for (uint16_t wi = 0; wi < windowCount; ++wi)
-        {
+        for (uint16_t wi = 0; wi < windowCount; ++wi) {
             SingleUIWindow& w = allWindows[windowList[wi]];
             if (w.hWnd == hWnd) { pWin = &w; break; }
         }
@@ -1029,14 +1024,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
             else std::wcout << L"No change. Currently on " << gpu.screens[pWin->currentMonitorIndex].friendlyName << std::endl;
 
-            if (pWin->nextRequestedWidth != pWin->currentWidth or pWin->nextRequestedHeight != pWin->currentHeight) {
-				std::wcout << L"Resizing window buffers to : " << pWin->nextRequestedWidth << L" x " 
+            uint32_t reqW = pWin->nextRequestedWidth.load(std::memory_order_relaxed);
+            uint32_t reqH = pWin->nextRequestedHeight.load(std::memory_order_relaxed);
+            if (reqW != pWin->currentWidth || reqH != pWin->currentHeight) {
+                pWin->resizeState.store(1, std::memory_order_release);  // signal render thread
+                std::wcout << L"Resizing Requested: " << pWin->nextRequestedWidth << L" x "
                     << pWin->nextRequestedHeight << std::endl;
-                pWin->isResizing.store(true);// Switch OFF rendering.
-                gpu.ResizeD3DWindow(pWin->dx, pWin->nextRequestedWidth, pWin->nextRequestedHeight);
-                pWin->currentWidth = pWin->nextRequestedWidth;
-                pWin->currentHeight = pWin->nextRequestedHeight;
-				pWin->isResizing.store(false); // Switch ON rendering.
             }
         }
         break;

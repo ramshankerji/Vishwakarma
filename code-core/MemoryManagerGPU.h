@@ -245,6 +245,7 @@ our "VRAM Pages" step will stall waiting on CreateCommittedResource for uploads.
 [Done] VRAM Pages per Tab (The Stack Allocator). Advice: Implement the "Double-Ended Stack" (Vertex Up, Index Down) here.
 [ ] CPU-Side Free List Allocator. (The logic that tracks the holes).
 [ ] Tab Management / View Management. (Integrating the heaps into the UI).
+[ ] Basic Ribbon UI.
 
 Phase 5: Advanced Features & Polish
 [ ] Migrated to Shader Model 6.
