@@ -223,6 +223,7 @@
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="MemoryManagerGPU-DirectX12.cpp" />
     <ClCompile Include="preCompiledHeadersWindows.cpp" />
+    <ClCompile Include="UserInterface-DirectX12.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\code-core\ID.h" />
@@ -249,6 +250,8 @@
     <ClInclude Include="preCompiledHeadersWindows.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="UserInputProcessing.h" />
+    <ClInclude Include="UserInterface-DirectX12.h" />
+    <ClInclude Include="UserInterface-TextTranslations.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Vishwakarma.rc" />

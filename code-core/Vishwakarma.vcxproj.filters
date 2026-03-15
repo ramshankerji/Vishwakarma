@@ -109,6 +109,9 @@
     <ClCompile Include="FreeType.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
+    <ClCompile Include="UserInterface-DirectX12.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="preCompiledHeadersWindows.h">
@@ -181,6 +184,12 @@
       <Filter>code-core</Filter>
     </ClInclude>
     <ClInclude Include="ConstantsText.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="UserInterface-DirectX12.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="UserInterface-TextTranslations.h">
       <Filter>code-core</Filter>
     </ClInclude>
   </ItemGroup>
