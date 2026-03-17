@@ -278,6 +278,7 @@ Face-wise Geometry colors. (Implementation detail). Maybe necessary for future m
 
 */
 
+#pragma once
 #include <DirectXMath.h>
 
 struct CameraState { // Each view gets its own camera state. 

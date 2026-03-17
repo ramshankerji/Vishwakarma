@@ -10,12 +10,15 @@
 #include <vector>
 #include <unordered_map>
 #include <iostream>
+#include <atomic>
 
 #include "ConstantsApplication.h"
-#include "MemoryManagerGPU.h"
 #include "UserInterface-TextTranslations.h"
-#include "डेटा.h"
-#include "विश्वकर्मा.h"
+
+// Do not #include "विश्वकर्मा.h" otherwise it will lead to circular dependency error. Declare this struct exist.
+struct SingleUIWindow; // Add this forward declaration:
+
+using Microsoft::WRL::ComPtr;
 
 /*
 User Interface Design: Render the entire UI in DirectX12 itself. UI is a post-geometry overlay.
@@ -108,16 +111,25 @@ Compiler builds: static constexpr translation tables
 Runtime: no file loading, no parsing, pure compile-time arrays
 */
 
+// UI Layout Constants (millimeters)
+constexpr float UI_TAB_BAR_HEIGHT_MM = 4.0f;
+constexpr float UI_RIBBON_HEIGHT_MM = 20.0f;
+constexpr float UI_VIEWLIST_HEIGHT_MM = 4.0f;
+constexpr float UI_DIVIDER_WIDTH_PX = 1.0f;
 
-#include <unordered_map>
-#include <d3dx12.h>
-struct UIVertex {
-    float x, y;
-    float u, v;
+// Colors (ABGR)
+constexpr uint32_t COLOR_UI_BG_DARK = 0xFF1E1E1E;
+constexpr uint32_t COLOR_UI_TAB_ACTIVE = 0xFF2D2D30;
+constexpr uint32_t COLOR_UI_TAB_INACTIVE = 0xFF3E3E42;
+constexpr uint32_t COLOR_UI_TAB_HOVER = 0xFF3F3F46;
+constexpr uint32_t COLOR_UI_TEXT = 0xFFFFFFFF;
+
+struct UIVertex {// Vertex format
+    float x, y, u, v;
     uint32_t color; // ABGR format for DX12 standard
 };
 
-struct Glyph { // Store glyph info:
+struct Glyph { // Store glyph info: Glyph metadata (Phase 4B)
     float uvMinX, uvMinY, uvMaxX, uvMaxY; // Normalized UV coordinates in the atlas (0.0 to 1.0)
     int width, height; // Pixel dimensions for drawing the quad
     int bearingX, bearingY; // Positional offsets (Crucial for baseline alignment)
@@ -125,9 +137,9 @@ struct Glyph { // Store glyph info:
 };
 
 // Use char32_t for full UTF-32 Unicode support (necessary for all languages)
-inline std::unordered_map<uint32_t, Glyph> glyphLookup; // Lookup table.
+inline std::unordered_map<char32_t, Glyph> glyphLookup; // Lookup table.
 
-struct UIButton {
+struct UIButton { // UI Button abstraction
     uint32_t id; // Unique hash for immediate mode tracking
     RECT physicalRect; // Calculated dynamically based on DPI
     const wchar_t* label; // UTF-32 string for HarfBuzz
@@ -136,29 +148,40 @@ struct UIButton {
     bool enabled;
 };
 
-struct UITabBarState {
+struct UITabBarState { // Tab bar state
     int hoveredTab = -1;
     int activeTab; // copied from window.activeTabIndex
 };
 
-struct DX12ResourcesUI {
-    ComPtr<ID3D12Resource> uiAtlasTexture;   // 1024×1024 or 2048×2048 RGBA (or R8 for alpha-only)
+struct DX12ResourcesUI { // GPU resources
+    ComPtr<ID3D12Resource> uiAtlasTexture; // 1024×1024 or 2048×2048 RGBA (or R8 for alpha-only)
     ComPtr<ID3D12Resource> uiVertexBuffer; // Dynamic upload buffer for vertices
     ComPtr<ID3D12Resource> uiIndexBuffer;  // Dynamic upload buffer for indices
 
-    UINT8* pVertexDataBegin; // Mapped pointer for immediate writing
-    UINT8* pIndexDataBegin;
+    UINT8* pVertexDataBegin = nullptr; // Mapped pointer for immediate writing
+    UINT8* pIndexDataBegin = nullptr;
+    UINT8* pOrthoDataBegin = nullptr;
 
     ID3D12Resource* iconAtlas; // Required ?
     ComPtr<ID3D12PipelineState> uiPSO;
     ComPtr<ID3D12RootSignature> uiRootSignature;
+    ComPtr<ID3D12Resource> uiOrthoConstantBuffer;
+
+    uint32_t maxVertices = 65536;
+    uint32_t maxIndices = 65536 * 3;
 };
 
-struct UIDrawContext {
+struct UIDrawContext { // Draw context
     UIVertex* vertexPtr;
     uint16_t* indexPtr;
-    int vertexCount;
-    int indexCount;
+    uint32_t vertexCount, indexCount;
 };
 
-void RenderUIOverlay(SingleUIWindow& window);
+// DirectX12 Immediate Mode UI System (Phase 4A). Tab Bar Rendering Only
+// External interfaces of User Interface sub module of the code.
+void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device);
+void CleanupUIResources( DX12ResourcesUI& uiRes);
+
+void PushRect( UIDrawContext& ctx, float x, float y, float w, float h, uint32_t color, DX12ResourcesUI& uiRes);
+void RenderUIOverlay( SingleUIWindow& window, ID3D12GraphicsCommandList* cmdList,
+    DX12ResourcesUI& uiRes, float monitorDPI);

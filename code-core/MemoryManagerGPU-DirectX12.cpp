@@ -1,6 +1,7 @@
 ﻿// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
 
 #include "MemoryManagerGPU-DirectX12.h"
+#include "UserInterface-DirectX12.h"
 #include "विश्वकर्मा.h"
 #include <iomanip>
 #include <unordered_set>
@@ -1543,6 +1544,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 //Above is commented out because render thread now no longer need to wait for copyFence,
                 //because, now render thread operate over READ ONLY page list.
                 gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes, tab.geometry);// Renders geometry.
+                RenderUIOverlay( window, threadRes.commandList.Get(), gpu.uiResources, gpu.screens[monitorId].dpiX);
             }
 
             // Transition RTT: PIXEL_SHADER_RESOURCE → COPY_SOURCE

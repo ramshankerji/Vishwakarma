@@ -35,6 +35,7 @@
 #include "डेटा-गतिशील-मशीन.h"
 #include "MemoryManagerCPU.h"
 #include "MemoryManagerGPU-DirectX12.h"
+#include "UserInterface-DirectX12.h"
 
 #include "UserInputProcessing.h"
 #include "Input_UI_Network_File.h"
@@ -574,6 +575,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     // Initialize D3D12. We need this before we can start GPU Copy thread and Render thread.
     // Window Creation and InitD3DGlobal (Happens ONCE) 
     gpu.InitD3DDeviceOnly();// Initialize Global D3D Device - DO NOT CALL THIS AGAIN
+    InitUIResources(gpu.uiResources, gpu.device.Get());
     
     // Now that the Device exists, create a Command Queue for every monitor found.
     for (auto& screen : gpu.screens) {
@@ -711,6 +713,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
     for (uint16_t i = 0; i < tabCount; ++i) gpu.CleanupTabResources(allTabs[tabList[i]].dx);
 
+    CleanupUIResources(gpu.uiResources);
     gpu.CleanupD3DGlobal();// Global Cleanup
     
     //Cleanup Freetype library.

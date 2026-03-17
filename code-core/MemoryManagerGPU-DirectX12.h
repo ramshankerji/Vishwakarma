@@ -32,6 +32,7 @@
 
 #include "ConstantsApplication.h"
 #include "MemoryManagerGPU.h"
+#include "UserInterface-DirectX12.h"
 #include "डेटा.h"
 
 using namespace Microsoft::WRL;
@@ -401,6 +402,8 @@ public:
 	ComPtr<ID3D12Device> device; //Very Important: We support EXACTLY 1 GPU device only in this version.
     bool isGPUEngineInitialized = false; //TODO: To be implemented.
     DXGI_FORMAT rttFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    DX12ResourcesUI uiResources;
     
     //Following to be added latter.
     //ID3D12DescriptorHeapMgr    ← Global descriptor allocator
