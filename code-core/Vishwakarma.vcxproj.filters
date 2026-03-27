@@ -192,6 +192,9 @@
     <ClInclude Include="UserInterface-TextTranslations.h">
       <Filter>code-core</Filter>
     </ClInclude>
+    <ClInclude Include="UserInterface.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="VertexShader.hlsl" />

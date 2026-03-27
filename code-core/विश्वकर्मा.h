@@ -169,6 +169,9 @@ struct SingleUIWindow {
     std::atomic<bool> isResizing{ false };
 	uint16_t currentWidth = 800, currentHeight = 600;
 
+    UIInput uiInput; // per-window input snapshot
+    UIAction activeDropdownAction = UIAction::INVALID;
+
     DX12ResourcesPerWindow dx;
 
     // BOILERPLATE TO FIX C2672 ERROR

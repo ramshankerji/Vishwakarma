@@ -7,6 +7,7 @@
 extern शंकर gpu;
 extern std::atomic<uint16_t*> publishedTabIndexes;
 extern std::atomic<uint16_t>  publishedTabCount;
+std::atomic<uint32_t> actionWriteIndex;
 // Shader compilation helper
 static void CompileShader( const char* code, const char* entry, const char* target, UINT flags,
     ComPtr<ID3DBlob>& outBlob) {
@@ -176,10 +177,48 @@ void PushRect( UIDrawContext& ctx, float x, float y, float w, float h,
     ctx.indexCount += 6;
 }
 
-// RenderUIOverlay
-void RenderUIOverlay( SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX12ResourcesUI& uiRes,
-    float monitorDPI) {
+// Returns true if clicked this frame
+bool PushInteractiveRect(UIDrawContext& ctx, float x, float y, float w, float h, uint32_t baseColor,
+    uint32_t id, const UIInput& input, DX12ResourcesUI& uiRes, bool enabled = true) {
+    uint32_t color = baseColor;
 
+    bool hovered = enabled && (input.mouseX >= x && input.mouseX < x + w &&
+        input.mouseY >= y && input.mouseY < y + h);
+
+    if (hovered) color = 0xFF555555; // hover tint (TODO: theme-aware)
+    if (hovered && input.leftButtonDown) color = 0xFF333333; // pressed tint
+    if (!enabled) color = 0xFF1E1E1E; // If disabled, force a darker/grayer base color
+    
+    PushRect(ctx, x, y, w, h, color, uiRes);
+
+    if (!enabled) return false;// Disabled controls do NOT respond to clicks
+    if (hovered && input.leftButtonPressedThisFrame) {
+        return true;
+    }
+    return false;
+}
+
+// Convenience for tabs (fixed width for now)
+bool PushTab(UIDrawContext& ctx, float x, float w, float h, uint16_t tabID, bool isActive,
+    const UIInput& input, DX12ResourcesUI& uiRes) {
+    
+    uint32_t color = isActive ? COLOR_UI_TAB_ACTIVE : COLOR_UI_TAB_INACTIVE;
+    uint32_t actionID = 0x10000000u | tabID;   // high bit = tab family
+
+    if (PushInteractiveRect(ctx, x, 0, w, h, color, actionID, input, uiRes)) {
+        // Optional immediate feedback (UI thread)
+        // window.activeTabIndex = tabID;   // you can still do it here if you want instant visual
+        return true;
+    }
+    return false;
+}
+
+// This function renders the list of tabs, all top menu buttons (with dropdowns if required),
+// side favourite / frequent buttons bars, right side property window, bottom status bar.
+// This is also responsible for all relevant DirectX12 configurations required for rendering User Interface.
+void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX12ResourcesUI& uiRes,
+    float monitorDPI, const UIInput& input) {
+    
     if (!cmd) return; //Defensive check.
 
     cmd->SetPipelineState(uiRes.uiPSO.Get());
@@ -202,24 +241,108 @@ void RenderUIOverlay( SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX
     ctx.vertexCount = 0;
     ctx.indexCount = 0;
     float pixelsPerMM = monitorDPI / 25.4f;
-    
-    // Tab bar rendering
+    float buttonWidthPx = UI_BUTTON_WIDTH_MM * pixelsPerMM;
     float tabBarHeight = UI_TAB_BAR_HEIGHT_MM * pixelsPerMM;
+    float ribbonY = tabBarHeight + UI_DIVIDER_WIDTH_PX;   // ← only one declaration
+
+    // ENGINEERING / PROJECT TABs
     float tabWidth = 120.0f;
+    float currentX = 0.0f;
 
     uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
     uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
 
-    float currentX = 0;
-
     for (uint16_t i = 0; i < tabCount; i++) {
         uint16_t tabID = tabList[i];
         bool active = (window.activeTabIndex == tabID);
-        uint32_t color = active ? COLOR_UI_TAB_ACTIVE : COLOR_UI_TAB_INACTIVE;
-        PushRect(ctx, currentX, 0, tabWidth, tabBarHeight, color, uiRes);
+        if (PushTab(ctx, currentX, tabWidth, tabBarHeight, tabID, active, input, uiRes)) {
+            window.activeTabIndex = tabID; // instant visual feedback
+        }
         currentX += tabWidth;
     }
 
+    // TOP BUTTONS (ACTION GROUP BAR)
+    currentX = 20.0f; // reset X for action groups
+
+    const float buttonBaseHeight = 32.0f;
+    const float buttonGap = 4.0f;
+    const float subGroupGap = 18.0f;
+    const float groupGap = 28.0f;
+
+    uint32_t currentActionGroupIndex = 0xFFFFFFFF;
+    uint32_t currentSubGroupID = 0xFFFFFFFF;
+
+    float groupLabelY = ribbonY;
+    float subGroupLabelY = ribbonY + 18.0f;
+
+    for (size_t i = 0; i < TotalUIControls; ++i) {
+        const auto& ctrl = AllUIControls[i];
+
+        if (ctrl.actionGrpupIndex != currentActionGroupIndex) { // Action Group change
+            if (currentActionGroupIndex != 0xFFFFFFFF) currentX += groupGap;
+            currentActionGroupIndex = ctrl.actionGrpupIndex;
+            currentSubGroupID = 0xFFFFFFFF;
+
+            PushRect(ctx, currentX, groupLabelY, 6, 48, 0xFF555555, uiRes); // group separator
+            currentX += 12.0f;
+        }
+        
+        if (ctrl.actionSubGroupID != currentSubGroupID) { // Sub-Group change
+            if (currentSubGroupID != 0xFFFFFFFF) {currentX += subGroupGap;}
+            currentSubGroupID = ctrl.actionSubGroupID;
+
+            PushRect(ctx, currentX, subGroupLabelY, 110, 16, 0xFF2D2D30, uiRes); // sub-group label bar
+            currentX += 8.0f;
+        }
+
+        // Button geometry (vertical stacking support)
+        float btnWidth = (ctrl.defaultWidthPX > 0)
+            ? ctrl.defaultWidthPX * pixelsPerMM / 25.4f   // interpret as mm
+            : buttonWidthPx;
+        float btnHeight = buttonBaseHeight * ctrl.noOfVerticalSlots;
+        float btnY = ribbonY + 38.0f;
+
+        if (ctrl.noOfVerticalSlots > 1) {btnY += ctrl.verticalSlotNo * buttonBaseHeight;}
+        uint32_t baseColor = ctrl.isEnabled ? 0xFF2D2D30 : 0xFF1E1E1E;// Render
+
+        if (ctrl.type == 1 || ctrl.type == 2) {                     // Button or Dropdown trigger
+            bool clicked = PushInteractiveRect(ctx, currentX, btnY, btnWidth, btnHeight,
+                baseColor, (uint32_t)ctrl.action, input, uiRes, ctrl.isEnabled);
+
+            if (clicked && ctrl.isEnabled) {
+                PushUIAction((uint32_t)ctrl.action);
+                if (ctrl.zIndex == 1) { // Dropdown trigger
+                    window.activeDropdownAction = ctrl.action;
+                }
+            }
+
+            if (!ctrl.isEnabled) { // Gray-out overlay for disabled controls
+                PushRect(ctx, currentX, btnY, btnWidth, btnHeight, 0xAA333333, uiRes);
+            }
+        }
+        else if (ctrl.type == 3) {
+            // Future textbox
+            PushRect(ctx, currentX, btnY, btnWidth, btnHeight, 0xFF1E1E1E, uiRes);
+        }
+        else {
+            // Plain label
+            PushRect(ctx, currentX, btnY, btnWidth, btnHeight, 0xFF2D2D30, uiRes);
+        }
+
+        currentX += btnWidth + buttonGap;
+    }
+
+    currentX += 30.0f;// Final padding
+
+    // ACTIVE DROPDOWN (placeholder)
+    if (window.activeDropdownAction != UIAction::INVALID) {
+        float dropX = 400.0f;   // TODO: track real button X for proper positioning
+        float dropY = ribbonY + 80.0f;
+        PushRect(ctx, dropX, dropY, 160, 220, 0xFF1E1E1E, uiRes);
+        window.activeDropdownAction = UIAction::INVALID;   // immediate-mode auto-close
+    }
+
+    // DRAW ALL UI GEOMETRY
     if (ctx.indexCount == 0) return;
 
     D3D12_VERTEX_BUFFER_VIEW vbv{};

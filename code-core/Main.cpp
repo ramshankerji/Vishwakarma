@@ -727,6 +727,14 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     return (int)msg.wParam;
 }
 
+// Helper to sync modifiers for the current window (called on every input message)
+static void SyncModifiersForWindow(SingleUIWindow* window) {
+    if (!window) return;
+    window->uiInput.shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+    window->uiInput.ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    window->uiInput.altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+}
+
 // PURPOSE:  Processes messages for the main window.
 // This is the function which runs whenever something changes from Operating System and we are expected to update ourselves.
 // Even the user input such as keyboard presses, mouse clicks, open/close are notified to this function.
@@ -756,6 +764,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
     uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
 
+    SingleUIWindow* currentWindow = nullptr;
+    for (uint16_t i = 0; i < windowCount; ++i) {
+        if (allWindows[windowList[i]].hWnd == hWnd) {
+            currentWindow = &allWindows[windowList[i]];
+            break;
+        }
+    }
+
     switch (message)
     {
     /*
@@ -781,6 +797,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ad.delta = 0;
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+            SyncModifiersForWindow(currentWindow);
         }
         return 0;
     
@@ -793,6 +810,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ad.delta = 0;
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+            SyncModifiersForWindow(currentWindow);
         }
         return 0;
 
@@ -806,6 +824,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ad.delta = 0;
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+            SyncModifiersForWindow(currentWindow);
         }
         return 0;
 
@@ -830,6 +849,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+            SyncModifiersForWindow(currentWindow);
         }
         return 0;
 
@@ -842,6 +862,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+            SyncModifiersForWindow(currentWindow);
         }
         return 0;
     
@@ -854,6 +875,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+            SyncModifiersForWindow(currentWindow);
         }
         return 0;
     
@@ -866,6 +888,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+            SyncModifiersForWindow(currentWindow);
         }
         return 0;
     
@@ -878,6 +901,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+            SyncModifiersForWindow(currentWindow);
         }
         return 0;
     
@@ -890,6 +914,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+            SyncModifiersForWindow(currentWindow);
         }
         return 0;
     
@@ -902,6 +927,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ad.delta = static_cast<int>(wParam); // Button/modifier flags (MK_LBUTTON, etc. )
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+            SyncModifiersForWindow(currentWindow);
         }
         return 0;
     
@@ -916,6 +942,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ad.delta = GET_WHEEL_DELTA_WPARAM(wParam);
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+            SyncModifiersForWindow(currentWindow);
         }
         return 0;
 

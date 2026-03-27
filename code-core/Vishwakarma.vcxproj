@@ -252,6 +252,7 @@
     <ClInclude Include="UserInputProcessing.h" />
     <ClInclude Include="UserInterface-DirectX12.h" />
     <ClInclude Include="UserInterface-TextTranslations.h" />
+    <ClInclude Include="UserInterface.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Vishwakarma.rc" />

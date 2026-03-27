@@ -1535,6 +1535,16 @@ void GpuRenderThread(int monitorId, int refreshRate) {
 			// In fact the Populate Command List can change it multiple times per window if needed.
             int tabIndex = window.activeTabIndex;
 
+            // TAKE SNAPSHOT HERE (eliminates all race conditions)
+            UIInput inputSnapshot = window.uiInput;   // cheap copy (struct is ~100 bytes)
+            // Reset the "this-frame" flags for next frame (main thread will set them again)
+            window.uiInput.leftButtonPressedThisFrame = false;
+            window.uiInput.leftButtonReleasedThisFrame = false;
+            window.uiInput.rightButtonPressedThisFrame = false;
+            window.uiInput.middleButtonPressedThisFrame = false;
+            window.uiInput.mouseWheelDelta = 0;
+            window.uiInput.textInputCount = 0;
+
             if (tabIndex >= 0) {
                 DATASETTAB& tab = allTabs[tabIndex];
                 DX12ResourcesPerTab& tabRes = tab.dx;
@@ -1544,7 +1554,9 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 //Above is commented out because render thread now no longer need to wait for copyFence,
                 //because, now render thread operate over READ ONLY page list.
                 gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes, tab.geometry);// Renders geometry.
-                RenderUIOverlay( window, threadRes.commandList.Get(), gpu.uiResources, gpu.screens[monitorId].dpiX);
+                // Render User Interface using safe snapshot copy of current Input. 
+                RenderUIOverlay( window, threadRes.commandList.Get(), gpu.uiResources,
+                    static_cast<float>(gpu.screens[monitorId].dpiX), inputSnapshot);
             }
 
             // Transition RTT: PIXEL_SHADER_RESOURCE → COPY_SOURCE
