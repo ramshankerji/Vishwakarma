@@ -8,6 +8,8 @@
 
 // Global Variables declared in विश्वकर्मा.cpp
 extern शंकर gpu;
+UploadQueue gUploadQueue;
+extern std::atomic<uint64_t> atlasFence;
 
 void शंकर::InitD3DDeviceOnly() {
     UINT dxgiFactoryFlags = 0;
@@ -752,6 +754,63 @@ std::unique_ptr<GeometryPage> CreateNewPage() //Do not make this static function
     return page;
 }
 
+void ProcessTextureUpload(UploadRequest& req)
+{
+    auto& desc = req.texture;
+
+    // Create DEFAULT heap texture
+    auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(desc.format, desc.width, desc.height);
+    ComPtr<ID3D12Resource> texture;
+    CD3DX12_HEAP_PROPERTIES defaultHeap(D3D12_HEAP_TYPE_DEFAULT);
+    ThrowIfFailed(gpu.device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE,
+        &texDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture)));
+
+    UINT64 uploadSize; //Create upload buffer
+    gpu.device->GetCopyableFootprints(&texDesc, 0, 1, 0, nullptr, nullptr, nullptr, &uploadSize);
+
+    ComPtr<ID3D12Resource> uploadBuffer;
+    auto bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
+    ThrowIfFailed(gpu.device->CreateCommittedResource( &defaultHeap, D3D12_HEAP_FLAG_NONE,
+        &bufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuffer) ));
+
+    // Create command list (copy queue)
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> cmd;
+    gpu.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY, IID_PPV_ARGS(&allocator));
+    gpu.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COPY, allocator.Get(), nullptr, IID_PPV_ARGS(&cmd));
+    // Copy data
+    D3D12_SUBRESOURCE_DATA data = {};
+    data.pData = desc.pixels;
+    data.RowPitch = desc.rowPitch;
+    data.SlicePitch = desc.rowPitch * desc.height;
+    UpdateSubresources(cmd.Get(), texture.Get(), uploadBuffer.Get(), 0, 0, 1, &data);
+
+    auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(texture.Get(),
+        D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    cmd->ResourceBarrier(1, &barrier);
+    cmd->Close();
+    ID3D12CommandList* lists[] = { cmd.Get() }; // Now execute on copy queue.
+    gpu.copyCommandQueue->ExecuteCommandLists(1, lists);
+
+    // Use the pre-reserved fence value from InitUIResources
+    uint64_t fenceValueToSignal = 0;
+    if (req.completionFence) {
+        // This is the value we reserved in InitUIResources with fetch_add(1)
+        fenceValueToSignal = req.completionFence->load(std::memory_order_acquire);
+    } else {
+        // Fallback for any future non-UI uploads
+        fenceValueToSignal = gpu.copyFenceValue.fetch_add(1, std::memory_order_relaxed);
+    }
+    // Signal the exact fence value that the UI thread is waiting for
+    gpu.copyCommandQueue->Signal(gpu.copyFence.Get(), fenceValueToSignal);
+    if (req.completionFence) { // Write back the final value (render thread reads it)
+        req.completionFence->store(fenceValueToSignal, std::memory_order_release);
+    }
+
+    *req.outResource = texture;   // Give caller the final texture
+    // uploadBuffer is kept alive until this function returns (safe)
+}
+
 void GpuCopyThread() {
     /* Different monitors have their own render threads, running at different refresh rates.
     The Copy thread must never ask : What frame is rendering?.
@@ -832,7 +891,18 @@ void GpuCopyThread() {
     // Copy-thread-private bookkeeping: objectIndex maps each. objectID to which VRAM page (raw ptr) currently owns it.
     std::unordered_map<uint64_t, ObjectLocation> objectLocation;
 
-    while (!shutdownSignal) {
+    while (!shutdownSignal) { // Texture uploads are processed sequentially, Geometry updates are processed in batches.
+		// TEXTURE UPLOADS (Processed immediately as they come in, to minimize latency for textures)
+        uint32_t read = gUploadQueue.readIndex.load(std::memory_order_relaxed);
+        uint32_t write = gUploadQueue.writeIndex.load(std::memory_order_acquire);
+        while (read < write)  {
+            UploadRequest& req = gUploadQueue.requests[read % MAX_UPLOAD_REQUESTS];
+            if (req.type == UploadType::Texture2D) { ProcessTextureUpload(req); }
+            read++;
+            gUploadQueue.readIndex.store(read, std::memory_order_release);
+        }
+
+		// GEOMETRY UPDATE BATCH PROCESSING
         CommandToCopyThread cmd;
         gpu.copyFenceValue.fetch_add(1); // Move forward wrt previous completed fence value.
         // Intentionally +1 here to decouple current iteration of while loop from previous iteration.
@@ -1554,9 +1624,15 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 //Above is commented out because render thread now no longer need to wait for copyFence,
                 //because, now render thread operate over READ ONLY page list.
                 gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes, tab.geometry);// Renders geometry.
-                // Render User Interface using safe snapshot copy of current Input. 
-                RenderUIOverlay( window, threadRes.commandList.Get(), gpu.uiResources,
-                    static_cast<float>(gpu.screens[monitorId].dpiX), inputSnapshot);
+                // Render User Interface using safe snapshot copy of current Input.
+
+                if (atlasFence.load(std::memory_order_acquire) == 0 ||
+                    gpu.copyFence->GetCompletedValue() < atlasFence.load()) {
+                    ; // atlas not ready → skip UI
+                } else {
+                    RenderUIOverlay(window, threadRes.commandList.Get(), gpu.uiResources,
+                        static_cast<float>(gpu.screens[monitorId].dpiX), inputSnapshot);
+                }
             }
 
             // Transition RTT: PIXEL_SHADER_RESOURCE → COPY_SOURCE

@@ -1,10 +1,15 @@
 // Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
 #pragma once
+#include <iostream>
 #include <cstdint>
 #include <unordered_map>
-
 #include <array>
-#include "UserInterface-TextTranslations.h"   // localization
+
+#include <ft2build.h>
+#include FT_FREETYPE_H
+
+#include "FontManager.h" // FreeType font atlas generation
+#include "UserInterface-TextTranslations.h" // localization
 
 /*
 This file is our User Inteface Design document.
@@ -88,6 +93,36 @@ Definitions of ribbon tab groups shall be different from basic button list.
 Such that user could add the same buttons at different locations. Example apart from main location in ribbon, 
 a button could also be added to Quick Favorite bar / button list in the right side of screen pane.
 
+All UI strings are compile time assigned an immutable uint32 ID to translation vsv file.
+Each language get's its own translation csv file. Ex:
+UserInterfaceTranslation_<2 digit language code>_languageName.csv
+
+WorldID, ShortWordName, English, Human, Comments, ChatGPT, Gemini, Grok, Claude  
+1, Home, Home, Home Button, Home Button, Home Button, Home Button, Home Button, Home Button
+2, Copy, Copy, Copy Button, Copy Button, Copy Button, Copy Button, Copy Button, Copy Button
+3, Edit, Edit, Edit Button, Edit Button, Edit Button, Edit Button, Edit Button, Edit Button
+4, Draw, Draw, Draw Button, Draw Button, Draw Button, Draw Button, Draw Button, Draw Button
+5, Erase, Erase, Erase Button, Erase Button, Erase Button, Erase Button, Erase Button, Erase Button
+6, Close, Close, Close Button, Close Button, Close Button, Close Button, Close(Button), Close(Button)
+ 
+Corresponding statically compiled translated header need to be generated as part of build process.
+This CSV to .h translation will happen using a python script named UserInterfaceTranslationCompiler.py file. 
+All of the csv, .py and .h/.cpp shall be checked into git. Compiled code will produce following 2 files only.
+They will represent all langauages.
+ 
+UserInterfaceTranslationCompiled.h
+UserInterfaceTranslationCompiled.cpp
+ 
+C++ code will provide a simple function to return string for corresponding integer string ID.
+All unique alphabet combination shall be rendered in a single texture atlas and handed over 2D buffer
+    for uploading to GPU by UI handling code.
+This texture preparation shall happen at the beginning of application launch in an async thread.
+Till the time this thread completes its texture atlas preparation, UI handler code will keep displaying a blank space.
+For string which have a missing translation corresponding English word shall be displayed. At a time,
+texture atlas of only 1 language shall be active.
+The font files will come from byte steam already loaded by other part of code from embeded Resource.
+ 
+Initial translation shall be performed by AI translator file named UserInterfaceTranslationByAI.py
 
 -- Phased Rollout ( Phase 4 checklist) --
 
@@ -147,6 +182,69 @@ struct Glyph { // Store glyph info: Glyph metadata (Phase 4B)
 
 // Use char32_t for full UTF-32 Unicode support (necessary for all languages)
 inline std::unordered_map<char32_t, Glyph> glyphLookup; // Lookup table.
+extern std::string charset;
+
+struct AtlasBitmap {
+    int width;
+    int height;
+    std::vector<uint8_t> pixels; // 1 channel (R8)
+};
+
+inline AtlasBitmap BuildFontAtlas() {
+    const int atlasW = 512;
+    const int atlasH = 512;
+
+    AtlasBitmap atlas;
+    atlas.width = atlasW;
+    atlas.height = atlasH;
+    atlas.pixels.resize(atlasW * atlasH, 0);
+
+    int penX = 0;
+    int penY = 0;
+    int rowHeight = 0;
+
+    for (char c : charset)
+    {
+        if (FT_Load_Char(ftFace, c, FT_LOAD_RENDER)) continue;
+
+        FT_GlyphSlot g = ftFace->glyph;
+
+        if (penX + g->bitmap.width >= atlasW) {
+            penX = 0;
+            penY += rowHeight;
+            rowHeight = 0;
+        }
+
+        // Copy bitmap
+        for (int y = 0; y < g->bitmap.rows; y++) {
+            for (int x = 0; x < g->bitmap.width; x++) {
+                int dst = (penY + y) * atlasW + (penX + x);
+                atlas.pixels[dst] = g->bitmap.buffer[y * g->bitmap.pitch + x];
+            }
+        }
+
+        // Store glyph metadata
+        Glyph glyph{};
+        glyph.uvMinX = (float)penX / atlasW;
+        glyph.uvMinY = (float)penY / atlasH;
+        glyph.uvMaxX = (float)(penX + g->bitmap.width) / atlasW;
+        glyph.uvMaxY = (float)(penY + g->bitmap.rows) / atlasH;
+
+        glyph.width = g->bitmap.width;
+        glyph.height = g->bitmap.rows;
+        glyph.bearingX = g->bitmap_left;
+        glyph.bearingY = g->bitmap_top;
+        glyph.advanceX = g->advance.x >> 6;
+
+        glyphLookup[c] = glyph;
+
+        penX += g->bitmap.width + 1;
+        int glyphHeight = (int)g->bitmap.rows;
+        if (glyphHeight > rowHeight) { rowHeight = glyphHeight; }
+    }
+
+    return atlas;
+}
 
 struct UIButton { // UI Button abstraction
     uint32_t id; // Unique hash for immediate mode tracking
@@ -162,7 +260,6 @@ struct UITabBarState { // Tab bar state
     int activeTab; // copied from window.activeTabIndex
 };
 
-///////////////////////////////////////////////////////////
 struct UIInput {
     // Mouse position in client pixels (top-left origin). Float for consistent math with UI layout.
     float mouseX = 0.0f, mouseY = 0.0f;

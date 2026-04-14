@@ -106,10 +106,13 @@
     <ClCompile Include="ImageHandling.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
-    <ClCompile Include="FreeType.cpp">
+    <ClCompile Include="FontManager.h">
       <Filter>code-core</Filter>
     </ClCompile>
     <ClCompile Include="UserInterface-DirectX12.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="FontManager.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
   </ItemGroup>

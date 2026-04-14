@@ -386,6 +386,37 @@ private:
 
 inline ThreadSafeQueueGPU g_gpuCommandQueue;
 
+enum class UploadType : uint8_t {
+    Texture2D,
+    Buffer
+};
+
+struct TextureUploadDesc {
+    uint32_t width;
+    uint32_t height;
+    DXGI_FORMAT format;
+    const uint8_t* pixels;
+    uint32_t rowPitch; // CPU row pitch
+};
+
+struct UploadRequest {
+    UploadType type;
+    union {
+        TextureUploadDesc texture;
+        // future: buffer uploads
+    };
+    ComPtr<ID3D12Resource>* outResource;// OUTPUT (written by copy thread)
+    std::atomic<uint64_t>* completionFence;// completion tracking (lock-free)
+};
+
+constexpr uint32_t MAX_UPLOAD_REQUESTS = 1024;
+struct UploadQueue {
+    std::atomic<uint32_t> writeIndex = 0;
+    std::atomic<uint32_t> readIndex = 0;
+    UploadRequest requests[MAX_UPLOAD_REQUESTS];
+};
+extern UploadQueue gUploadQueue;
+
 // VRAM Manager : This class handles the GPU memory dynamically.
 // There will be exactly 1 object of this class in entire application. Hence the special name.
 // भगवान शंकर की कृपा बनी रहे. Corresponding object is named "gpu".

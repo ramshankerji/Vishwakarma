@@ -2,6 +2,7 @@
 #pragma once
 
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX   //
 #include <windows.h>   // MUST be before d3d12.h
 #include <d3d12.h>
 #include <d3dx12.h>
@@ -33,6 +34,8 @@ struct DX12ResourcesUI { // GPU resources
     ComPtr<ID3D12PipelineState> uiPSO;
     ComPtr<ID3D12RootSignature> uiRootSignature;
     ComPtr<ID3D12Resource> uiOrthoConstantBuffer;
+    ComPtr<ID3D12DescriptorHeap> srvHeap;
+    ComPtr<ID3D12DescriptorHeap> samplerHeap;
 
     uint32_t maxVertices = 65536;
     uint32_t maxIndices = 65536 * 3;
@@ -49,6 +52,7 @@ struct UIDrawContext { // Draw context
 void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device);
 void CleanupUIResources( DX12ResourcesUI& uiRes);
 
-void PushRect( UIDrawContext& ctx, float x, float y, float w, float h, uint32_t color, DX12ResourcesUI& uiRes);
+void PushRect(UIDrawContext& ctx, float x, float y, float w, float h, uint32_t color, DX12ResourcesUI& uiRes);
+void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t color, DX12ResourcesUI& uiRes);
 void RenderUIOverlay( SingleUIWindow& window, ID3D12GraphicsCommandList* cmdList,
     DX12ResourcesUI& uiRes, float monitorDPI, const UIInput& input);

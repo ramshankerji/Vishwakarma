@@ -575,7 +575,6 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     // Initialize D3D12. We need this before we can start GPU Copy thread and Render thread.
     // Window Creation and InitD3DGlobal (Happens ONCE) 
     gpu.InitD3DDeviceOnly();// Initialize Global D3D Device - DO NOT CALL THIS AGAIN
-    InitUIResources(gpu.uiResources, gpu.device.Get());
     
     // Now that the Device exists, create a Command Queue for every monitor found.
     for (auto& screen : gpu.screens) {
@@ -661,6 +660,9 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     threads.emplace_back(FileInputThread);
     threads.emplace_back(GpuCopyThread);
 
+    InitUIResources(gpu.uiResources, gpu.device.Get()); //Prepare and upload UI resources (e.g. fonts, icons) to GPU.
+    //Above function depends on GpuCopyThread, hence it can't be done earlier.
+    std::wcout << L"Hello...." << std::endl;
     // LAUNCH 3 ENGINEERING THREADS (One per Tab). Main logic thread. The ringmaster of the application.
 	// TODO: 3 Initial threads is during development. Final application will have dynamic thread management.
     for (int i = 0; i < 3; ++i) {
