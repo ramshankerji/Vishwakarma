@@ -61,6 +61,8 @@ std::shared_mutex monitorMutex; //Where there is topology change, pause windows 
 std::vector<std::thread> renderThreads;
 std::atomic<bool> pauseRenderThreads = false;
 
+extern void PrintHResult(int);
+
 // Forward declarations of thread functions
 void NetworkInputThread();
 void FileInputThread();
@@ -389,7 +391,7 @@ void RestartRenderThreads() { // The "Safe" Restart Function. Runs for initial r
 	// Adding a monitor is a RARE event, so a brief pause in rendering is acceptable.
     // Either the user intentionally added / removed a monitor manually, so he expects windows to move around.
     // Or maybe electricity went out and external display connected to laptop turned off. These are rare event.
-
+    
 	pauseRenderThreads = true; // Pause Logic. Causes render threads (if running) to exit their loops safely.
     for (auto& t : renderThreads) { if (t.joinable()) t.join(); }
     renderThreads.clear();
@@ -408,7 +410,7 @@ void RestartRenderThreads() { // The "Safe" Restart Function. Runs for initial r
 	EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, 0); 
     // Handle Headless/Virtual Monitor logic if needed (copy from your FetchAllMonitorDetails)
     //if (gpu.screens.empty()) { /* ... Insert headless logic here ... */ }
-
+    
     // MERGE: Create Queues OR Salvage them from oldScreens
 	bool matchFound = false;
     for (int i = 0; i < gpu.currentMonitorCount; i++) {
@@ -435,7 +437,7 @@ void RestartRenderThreads() { // The "Safe" Restart Function. Runs for initial r
             std::wcout << L"Created New Queue for: " << gpu.screens[i].monitorName << std::endl;
         }
 
-        if (gpu.screens[i].renderFence.Get() == nullptr) { //TODO: Temporary fix. Move this pto proper place.
+        if (gpu.screens[i].renderFence.Get() == nullptr) { //TODO: Temporary fix. Move this pto proper place.   
             ThrowIfFailed(gpu.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gpu.screens[i].renderFence)));
             gpu.screens[i].renderFenceValue = 1;
             gpu.screens[i].renderFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);

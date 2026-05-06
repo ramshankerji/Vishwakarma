@@ -11,6 +11,37 @@ extern शंकर gpu;
 UploadQueue gUploadQueue;
 extern std::atomic<uint64_t> atlasFence;
 
+void PrintHResult(int i) {
+    HRESULT reason = gpu.device->GetDeviceRemovedReason();
+	std::cerr << "HResult Check " << i << ": ";
+    std::cerr << "Device Removed Reason: ";
+    switch (reason) {
+    case S_OK:
+        std::cerr << "S_OK (Device NOT removed?)";
+        break;
+    case DXGI_ERROR_DEVICE_REMOVED:
+        std::cerr << "DXGI_ERROR_DEVICE_REMOVED";
+        break;
+    case DXGI_ERROR_DEVICE_HUNG:
+        std::cerr << "DXGI_ERROR_DEVICE_HUNG (Bad GPU commands)";
+        break;
+    case DXGI_ERROR_DEVICE_RESET:
+        std::cerr << "DXGI_ERROR_DEVICE_RESET";
+        break;
+    case DXGI_ERROR_DRIVER_INTERNAL_ERROR:
+        std::cerr << "DXGI_ERROR_DRIVER_INTERNAL_ERROR";
+        break;
+    case DXGI_ERROR_INVALID_CALL:
+        std::cerr << "DXGI_ERROR_INVALID_CALL (API misuse)";
+        break;
+    default:
+        std::cerr << "Unknown HRESULT: 0x"
+            << std::hex << reason << std::dec;
+        break;
+    }
+    std::cerr << std::endl;
+}
+
 void शंकर::InitD3DDeviceOnly() {
     UINT dxgiFactoryFlags = 0;
 #if defined(_DEBUG)
@@ -408,7 +439,7 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     //dsvHeap is created on D3D12_DESCRIPTOR_HEAP_TYPE_DSV. 
     //All DESCRIPTOR HEAPs are stored on Small Fast gpu memory. It is normal D3D12 design.
 
-    gpu.device->CreateDepthStencilView(dx.depthStencilBuffer.Get(), nullptr,
+    gpu.device->CreateDepthStencilView(dx.depthStencilBuffer.Get(), nullptr, 
         dx.dsvHeap->GetCPUDescriptorHandleForHeapStart());
 
     // Create render target views
@@ -418,6 +449,9 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
         gpu.device->CreateRenderTargetView(dx.renderTargets[j].Get(), nullptr, rtvHandle);
         rtvHandle.Offset(1, gpu.rtvDescriptorSize);
     }
+
+    // Check for any device removal reasons before we start creating resources. This can help catch issues early in initialization.
+    PrintHResult(1000);
 
     // CREATE RENDER TEXTURES
     D3D12_DESCRIPTOR_HEAP_DESC rttRtvHeapDesc = {};
@@ -440,12 +474,12 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(gpu.rttFormat, dx.WindowWidth, dx.WindowHeight,
         1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
     D3D12_CLEAR_VALUE clearValue{ .Format = gpu.rttFormat, .Color = {0.0f, 0.2f, 0.4f, 1.0f} }; //C++20 allows this beauty!
-
+    
     for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; i++) {
         CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
-        gpu.device->CreateCommittedResource( // Create the Resource in RENDER_TARGET state by default
+        ThrowIfFailed(gpu.device->CreateCommittedResource( // Create the Resource in RENDER_TARGET state by default
             &heapProps, D3D12_HEAP_FLAG_NONE,  &texDesc,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clearValue, IID_PPV_ARGS(&dx.renderTextures[i]) );
+            D3D12_RESOURCE_STATE_RENDER_TARGET, &clearValue, IID_PPV_ARGS(&dx.renderTextures[i]) ));
 
         gpu.device->CreateRenderTargetView(dx.renderTextures[i].Get(), nullptr, rttRtvHandle); // Create RTV
         rttRtvHandle.Offset(1, gpu.rtvDescriptorSize);
@@ -754,25 +788,29 @@ std::unique_ptr<GeometryPage> CreateNewPage() //Do not make this static function
     return page;
 }
 
-void ProcessTextureUpload(UploadRequest& req)
-{
+void ProcessTextureUpload(UploadRequest& req){
     auto& desc = req.texture;
-
+    //std::wcout << "Debugging Process Texture Upload.";
+    
     // Create DEFAULT heap texture
     auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(desc.format, desc.width, desc.height);
     ComPtr<ID3D12Resource> texture;
     CD3DX12_HEAP_PROPERTIES defaultHeap(D3D12_HEAP_TYPE_DEFAULT);
+    // Note that we create the texture in COMMON state. Copy Queue automatically transitions it to COPY_DEST when we copy,
+	// Similarly, Render Queue will transition it to PIXEL_SHADER_RESOURCE when binding to shader.
+	// This allows us to avoid explicit resource barriers. COMMON is the recommended state for resoure across multiple queues.
     ThrowIfFailed(gpu.device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE,
-        &texDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&texture)));
-
+        &texDesc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&texture)));
+    
     UINT64 uploadSize; //Create upload buffer
     gpu.device->GetCopyableFootprints(&texDesc, 0, 1, 0, nullptr, nullptr, nullptr, &uploadSize);
-
+    
     ComPtr<ID3D12Resource> uploadBuffer;
     auto bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(uploadSize);
-    ThrowIfFailed(gpu.device->CreateCommittedResource( &defaultHeap, D3D12_HEAP_FLAG_NONE,
+    CD3DX12_HEAP_PROPERTIES uploadHeap(D3D12_HEAP_TYPE_UPLOAD);
+    ThrowIfFailed(gpu.device->CreateCommittedResource( &uploadHeap, D3D12_HEAP_FLAG_NONE,
         &bufferDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uploadBuffer) ));
-
+    
     // Create command list (copy queue)
     ComPtr<ID3D12CommandAllocator> allocator;
     ComPtr<ID3D12GraphicsCommandList> cmd;
@@ -784,14 +822,11 @@ void ProcessTextureUpload(UploadRequest& req)
     data.RowPitch = desc.rowPitch;
     data.SlicePitch = desc.rowPitch * desc.height;
     UpdateSubresources(cmd.Get(), texture.Get(), uploadBuffer.Get(), 0, 0, 1, &data);
-
-    auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(texture.Get(),
-        D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    cmd->ResourceBarrier(1, &barrier);
+    
     cmd->Close();
     ID3D12CommandList* lists[] = { cmd.Get() }; // Now execute on copy queue.
     gpu.copyCommandQueue->ExecuteCommandLists(1, lists);
-
+    
     // Use the pre-reserved fence value from InitUIResources
     uint64_t fenceValueToSignal = 0;
     if (req.completionFence) {
@@ -806,9 +841,20 @@ void ProcessTextureUpload(UploadRequest& req)
     if (req.completionFence) { // Write back the final value (render thread reads it)
         req.completionFence->store(fenceValueToSignal, std::memory_order_release);
     }
-
+    
     *req.outResource = texture;   // Give caller the final texture
     // uploadBuffer is kept alive until this function returns (safe)
+
+    // Force the CPU to wait here until the GPU has finished executing the commands.
+    // This ensures 'uploadBuffer', 'allocator', and 'cmd' are not destroyed while in use.
+    if (gpu.copyFence->GetCompletedValue() < fenceValueToSignal) {
+        gpu.copyFence->SetEventOnCompletion(fenceValueToSignal, gpu.copyFenceEvent);
+        WaitForSingleObject(gpu.copyFenceEvent, INFINITE);
+    }
+
+    if (req.completionFence) { // Write back the final value (render thread reads it)
+        req.completionFence->store(fenceValueToSignal, std::memory_order_release);
+    }
 }
 
 void GpuCopyThread() {
@@ -890,7 +936,7 @@ void GpuCopyThread() {
     };
     // Copy-thread-private bookkeeping: objectIndex maps each. objectID to which VRAM page (raw ptr) currently owns it.
     std::unordered_map<uint64_t, ObjectLocation> objectLocation;
-
+    int counter = 0;
     while (!shutdownSignal) { // Texture uploads are processed sequentially, Geometry updates are processed in batches.
 		// TEXTURE UPLOADS (Processed immediately as they come in, to minimize latency for textures)
         uint32_t read = gUploadQueue.readIndex.load(std::memory_order_relaxed);
@@ -912,7 +958,14 @@ void GpuCopyThread() {
         std::vector<CommandToCopyThread> batch;
         {
             std::unique_lock<std::mutex> lock(toCopyThreadMutex);
-            toCopyThreadCV.wait(lock, [] { return !commandToCopyThreadQueue.empty() || shutdownSignal; });
+
+            // Wake up if there is Geometry OR Texture Uploads OR Shutdown
+            toCopyThreadCV.wait(lock, [&] {
+                bool hasGeometry = !commandToCopyThreadQueue.empty();
+                bool hasTextures = gUploadQueue.readIndex.load(std::memory_order_relaxed) 
+                    < gUploadQueue.writeIndex.load(std::memory_order_relaxed);
+                return hasGeometry || hasTextures || shutdownSignal;
+                });
 
             while (!commandToCopyThreadQueue.empty()) {
                 batch.push_back(std::move(commandToCopyThreadQueue.front()));

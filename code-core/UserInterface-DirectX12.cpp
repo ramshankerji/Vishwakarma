@@ -5,9 +5,11 @@
 #include "FontManager.h"
 #include <MemoryManagerGPU-DirectX12.h>
 #include "विश्वकर्मा.h"
+#include "TextureSaver.h"
 extern शंकर gpu;
 extern std::atomic<uint16_t*> publishedTabIndexes;
 extern std::atomic<uint16_t>  publishedTabCount;
+extern void PrintHResult(int);
 std::atomic<uint32_t> actionWriteIndex;
 std::string charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 std::atomic<uint64_t> atlasFence = 0;
@@ -82,7 +84,7 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
 
     ThrowIfFailed(device->CreateRootSignature(0, signature->GetBufferPointer(),
         signature->GetBufferSize(), IID_PPV_ARGS(&uiRes.uiRootSignature)));
-
+    
     // Create SRV descriptor heap (1 texture)
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
     heapDesc.NumDescriptors = 1;
@@ -198,7 +200,7 @@ float4 PSMain(PSInput input) : SV_TARGET {
     psoDesc.SampleDesc.Count = 1;
 
     ThrowIfFailed( device->CreateGraphicsPipelineState( &psoDesc, IID_PPV_ARGS(&uiRes.uiPSO)));
-
+    
     // Vertex buffer
     auto uploadHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
 
@@ -219,9 +221,9 @@ float4 PSMain(PSInput input) : SV_TARGET {
     uiRes.uiIndexBuffer->Map(  0, &readRange, reinterpret_cast<void**>(&uiRes.pIndexDataBegin));
     uiRes.uiOrthoConstantBuffer->Map( 0, &readRange, reinterpret_cast<void**>(&uiRes.pOrthoDataBegin));
     std::wcout << L"UI Resources Initialized (Phase 4A)\n";
-
+    
     AtlasBitmap atlas = BuildFontAtlas();// BUILD ATLAS ON CPU
-
+    
     TextureUploadDesc desc = {};
     desc.width = atlas.width;
     desc.height = atlas.height;
@@ -229,12 +231,19 @@ float4 PSMain(PSInput input) : SV_TARGET {
     desc.pixels = atlas.pixels.data();
     desc.rowPitch = atlas.width;
 
+    int bytesPerPixel = 1; // Use 4 if DXGI_FORMAT_R8G8B8A8_UNORM, use 1 if DXGI_FORMAT_R8_UNORM
+    bool isSaved = SaveToBmp("font_atlas_debug.bmp", atlas.pixels.data(),
+        atlas.width, atlas.height, bytesPerPixel);
+    if (isSaved) std::cout << "SUCCESS: Debug atlas saved to working directory." << std::endl;
+    else std::cerr << "FAIL: Could not save debug atlas. Pointer might be invalid!" << std::endl;
+
     SubmitTextureUpload(desc, &uiRes.uiAtlasTexture, &atlasFence);// Enqueue the upload through upload queue
     // RESERVED FENCE VALUE FOR THIS UPLOAD (this is the key change)
     // The copy thread MUST eventually signal exactly this value.
     uint64_t atlasReadyFence = gpu.copyFenceValue.fetch_add(1, std::memory_order_relaxed);
     // Tell everyone (including the render thread) what fence value to wait for
     atlasFence.store(atlasReadyFence, std::memory_order_release);
+	toCopyThreadCV.notify_one(); // Wakeup CPU thread to process the newly uploaded texture.
     // CPU-blocking wait until Copy Queue has processed this upload
     if (gpu.copyFence->GetCompletedValue() < atlasReadyFence) {
         ThrowIfFailed(gpu.copyFence->SetEventOnCompletion(atlasReadyFence, gpu.copyFenceEvent));
@@ -247,10 +256,10 @@ float4 PSMain(PSInput input) : SV_TARGET {
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels = 1;
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-
+    
     device->CreateShaderResourceView(uiRes.uiAtlasTexture.Get(), &srvDesc,
         uiRes.srvHeap->GetCPUDescriptorHandleForHeapStart());
-
+    
     std::wcout << L"UI Atlas uploaded and SRV created (fence = " << atlasReadyFence << L")\n";
 }
 
@@ -316,6 +325,10 @@ void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t c
 
     for (const char* p = text; *p; ++p)
     {
+        // Bounds Checking (Crucial for text strings)
+        if (ctx.vertexCount + 4 > uiRes.maxVertices) return;
+        if (ctx.indexCount + 6 > uiRes.maxIndices) return;
+
         char c = *p;
         if (glyphLookup.find(c) == glyphLookup.end()) continue;
 
@@ -325,24 +338,25 @@ void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t c
         float ypos = y - g.bearingY;
         float w = (float)g.width;
         float h = (float)g.height;
-        uint16_t base = ctx.vertexCount;
+        uint16_t base = ctx.vertexCount; // The base index for the index buffer (Absolute)
         
-        // Add 4 vertices
+        // Add 4 vertices. Write relative to the current pointer (0, 1, 2, 3)
         uint32_t vidx = ctx.vertexCount;
-        ctx.vertexPtr[vidx + 0] = { xpos,     ypos,     g.uvMinX, g.uvMinY, color };
-        ctx.vertexPtr[vidx + 1] = { xpos + w, ypos,     g.uvMaxX, g.uvMinY, color };
-        ctx.vertexPtr[vidx + 2] = { xpos + w, ypos + h, g.uvMaxX, g.uvMaxY, color };
-        ctx.vertexPtr[vidx + 3] = { xpos,     ypos + h, g.uvMinX, g.uvMaxY, color };
+        ctx.vertexPtr[0] = { xpos,     ypos,     g.uvMinX, g.uvMinY, color };
+        ctx.vertexPtr[1] = { xpos + w, ypos,     g.uvMaxX, g.uvMinY, color };
+        ctx.vertexPtr[2] = { xpos + w, ypos + h, g.uvMaxX, g.uvMaxY, color };
+        ctx.vertexPtr[3] = { xpos,     ypos + h, g.uvMinX, g.uvMaxY, color };
 
-        // Add 6 indices
+        // Add 6 indices. Write indices relative to the current index pointer
         uint32_t iidx = ctx.indexCount;
-        ctx.indexPtr[iidx + 0] = vidx + 0;
-        ctx.indexPtr[iidx + 1] = vidx + 1;
-        ctx.indexPtr[iidx + 2] = vidx + 2;
-        ctx.indexPtr[iidx + 3] = vidx + 0;
-        ctx.indexPtr[iidx + 4] = vidx + 2;
-        ctx.indexPtr[iidx + 5] = vidx + 3;
+        ctx.indexPtr[0] = vidx + 0;
+        ctx.indexPtr[1] = vidx + 1;
+        ctx.indexPtr[2] = vidx + 2;
+        ctx.indexPtr[3] = vidx + 0;
+        ctx.indexPtr[4] = vidx + 2;
+        ctx.indexPtr[5] = vidx + 3;
 
+        // Advance pointers and counts
         ctx.vertexPtr += 4;
         ctx.indexPtr += 6;
         ctx.vertexCount += 4;

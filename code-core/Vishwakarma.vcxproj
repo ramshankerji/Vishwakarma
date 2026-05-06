@@ -251,6 +251,7 @@ FT_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     <ClInclude Include="MemoryManagerGPU-Vulkan1.1.h" />
     <ClInclude Include="preCompiledHeadersWindows.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="TextureSaver.h" />
     <ClInclude Include="UserInputProcessing.h" />
     <ClInclude Include="UserInterface-DirectX12.h" />
     <ClInclude Include="UserInterface-TextTranslations.h" />
