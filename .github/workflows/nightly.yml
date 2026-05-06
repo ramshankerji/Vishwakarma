@@ -29,8 +29,9 @@ jobs:
         if (!(Test-Path $dst)) {
           Copy-Item $src $dst
         }
-
-    - name: Build
+    - name: Build FreeType
+      run: msbuild code-external/freetype/builds/windows/vc2010/freetype.vcxproj /p:Configuration="Release Static" /p:Platform=x64
+    - name: Build Main Project in Release Mode
       #run: msbuild Vishwakarma.sln /p:Configuration=Release /p:Platform=x64
       # We are forcing to downgrade to v143 since this is what is available on GitHub Actions runners.
       run: msbuild Vishwakarma.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143

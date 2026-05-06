@@ -101,8 +101,8 @@ FT_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>Shcore.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\code-external\libpng-code\build\Debug;..\code-external\zlib\build\Debug;..\code-external\freetype\objs\x64\Debug\;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>Shcore.lib;%(AdditionalDependencies);freetype.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\code-external\libpng-code\build\Debug;..\code-external\zlib\build\Debug;..\code-external\freetype\objs\x64\Release Static\;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
       <Command>
