@@ -77,7 +77,8 @@ All these 46 languages translate to 13 unique scripts. Unicode handles all of th
 | Script        | Languages                             |
 | ------------- | ------------------------------------- |
 | Latin         | English, German, French, Spanish, etc |
-| Devanagari    | Hindi, Marathi, Nepali etc            |
+| Cyrillic      | Russian, Ukrainian, Bulgarian, etc    |
+| Devanagari    | Hindi, Marathi, Nepali, Sanskrit etc  |
 | Bengali       | Bengali, Assamese                     |
 | Gurmukhi      | Punjabi                               |
 | Gujarati      | Gujarati                              |
@@ -86,6 +87,8 @@ All these 46 languages translate to 13 unique scripts. Unicode handles all of th
 | Telugu        | Telugu                                |
 | Kannada       | Kannada                               |
 | Malayalam     | Malayalam                             |
+| Meetei Mayek  | Manipuri (Meitei)                     |
+| Ol Chiki      | Santali                               |
 | Arabic script | Urdu, Arabic, Persian, Kashmiri       |
 | Chinese Han   | Chinese + Japanese Kanji              |
 | Japanese kana | Hiragana/Katakana                     |
