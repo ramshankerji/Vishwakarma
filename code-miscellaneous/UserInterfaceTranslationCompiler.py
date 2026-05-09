@@ -1,105 +1,132 @@
 # Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
 """
-This build-time script reads UserInterfaceTranslation.csv and generates:
-    UserInterfaceTranslationCompiled.h
-    UserInterfaceTranslationCompiled.cpp
+Build-time compiler for UI translations.
 
-The generated files contain a static compile-time translation table for all 46 languages.
-- Multiple translator rows (Human, Comments, ChatGPT, Gemini, Grok, Claude) per WorldID are supported.
-- The script prefers the "Grok" row when available (as per your request for Grok-centric workflow).
-- If no Grok row exists for a WorldID, it falls back to the first row.
-- Missing translations fall back to English at runtime.
-- All strings are stored as UTF-32 (char32_t) for full Unicode support across all scripts.
+Input files:
+    code-miscellaneous/UserInterfaceTranslation.csv
+    code-miscellaneous/UserInterfaceTranslation_01_Hindi.csv
+    ...
+    code-miscellaneous/UserInterfaceTranslation_45_Hungarian.csv
+
+Generated files:
+    code-core/UserInterfaceTranslationCompiled.h
+    code-core/UserInterfaceTranslationCompiled.cpp
+
+The English CSV is the canonical list of WorldID values. Per-language CSVs are
+joined by WorldID and may be maintained independently by translators.
 """
 
 import csv
 import sys
 from pathlib import Path
-from collections import defaultdict
 from typing import Dict, List, Tuple
 
-# Must match the exact order and count in UILanguage enum (UserInterface-TextTranslations.h)
-LANGUAGE_COLUMN_PREFIXES = [f"{i:02d}." for i in range(46)]
-LANGUAGE_NAMES = [
+
+# Must match the exact order in UILanguage (UserInterface-TextTranslations.h).
+LANGUAGES = [
     "English", "Hindi", "Bengali", "Marathi", "Telugu", "Tamil", "Gujarati", "Urdu",
     "Kannada", "Odia", "Malayalam", "Punjabi", "Assamese", "Maithili", "Santali",
     "Kashmiri", "Nepali", "Sindhi", "Dogri", "Konkani", "Manipuri", "Bodo", "Sanskrit",
     "ChineseSimplified", "ChineseTraditional", "Spanish", "Portuguese", "Russian",
     "French", "Arabic", "Indonesian", "German", "Japanese", "Vietnamese", "Turkish",
     "Persian", "Korean", "Italian", "Thai", "Polish", "Ukrainian", "Dutch", "Filipino",
-    "Swedish", "Czech", "Hungarian"
+    "Swedish", "Czech", "Hungarian",
 ]
+TRANSLATION_PRIORITY = ["Human", "Grok", "ChatGPT", "Gemini", "Claude"]
 
 def to_cpp_u32_literal(text: str) -> str:
-    """Escape a string for C++ U"" literal (UTF-8 source file)."""
+    """Escape text for a C++ UTF-32 string literal."""
     if not text:
         return 'U""'
-    escaped = (text
-               .replace('\\', '\\\\')
-               .replace('"', '\\"')
-               .replace('\n', '\\n')
-               .replace('\r', '\\r'))
+
+    escaped = (
+        text
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
     return f'U"{escaped}"'
 
 
-def main():
-    csv_path = Path("UserInterfaceTranslation.csv")
-    if not csv_path.exists():
-        print("ERROR: UserInterfaceTranslation.csv not found in current directory.", file=sys.stderr)
-        sys.exit(1)
+def read_csv_by_world_id(path: Path) -> Dict[int, dict]:
+    if not path.exists():
+        return {}
 
-    # Group rows by WorldID
-    groups: Dict[int, List[dict]] = defaultdict(list)
-
-    with csv_path.open(newline='', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
+    rows: Dict[int, dict] = {}
+    with path.open(newline="", encoding="utf-8") as csv_file:
+        reader = csv.DictReader(csv_file)
         if not reader.fieldnames:
-            print("ERROR: CSV has no header.", file=sys.stderr)
-            sys.exit(1)
-
-        # Find language column indices by parsing "00.English", "01.Hindi", etc.
-        lang_col_indices: List[int] = []
-        for i, field in enumerate(reader.fieldnames):
-            for prefix in LANGUAGE_COLUMN_PREFIXES:
-                if field.strip().startswith(prefix):
-                    lang_col_indices.append(i)
-                    break
-
-        if len(lang_col_indices) != 46:
-            print(f"ERROR: Expected 46 language columns, found {len(lang_col_indices)}", file=sys.stderr)
-            sys.exit(1)
+            return rows
 
         for row in reader:
+            world_id_text = (row.get("WorldID") or "").strip()
+            if not world_id_text:
+                continue
+
             try:
-                world_id = int(row["WorldID"])
-            except (KeyError, ValueError):
-                continue  # skip malformed rows
+                world_id = int(world_id_text, 0)
+            except ValueError:
+                print(f"WARNING: Skipping malformed WorldID {world_id_text!r} in {path.name}", file=sys.stderr)
+                continue
 
-            groups[world_id].append(row)
+            rows[world_id] = row
 
-    # Generate data for each WorldID (prefer Grok row)
+    return rows
+
+def select_english_text(row: dict) -> str:
+    return (row.get("English") or row.get("Human") or "").strip()
+
+def select_translated_text(row: dict, english_fallback: str) -> str:
+    for column_name in TRANSLATION_PRIORITY:
+        text = (row.get(column_name) or "").strip()
+        if text and text != english_fallback:
+            return text
+
+    for column_name in TRANSLATION_PRIORITY:
+        text = (row.get(column_name) or "").strip()
+        if text:
+            return text
+
+    return (row.get("English") or english_fallback or "").strip()
+
+def language_csv_path(source_dir: Path, language_index: int, language_name: str) -> Path:
+    return source_dir / f"UserInterfaceTranslation_{language_index:02d}_{language_name}.csv"
+
+def build_translation_data(source_dir: Path) -> List[Tuple[int, List[str]]]:
+    canonical_path = source_dir / "UserInterfaceTranslation.csv"
+    canonical_rows = read_csv_by_world_id(canonical_path)
+    if not canonical_rows:
+        print(f"ERROR: No canonical translations found in {canonical_path}", file=sys.stderr)
+        sys.exit(1)
+
+    language_rows: List[Dict[int, dict]] = [canonical_rows]
+    for language_index, language_name in enumerate(LANGUAGES[1:], start=1):
+        path = language_csv_path(source_dir, language_index, language_name)
+        rows = read_csv_by_world_id(path)
+        if not rows:
+            print(f"WARNING: {path.name} not found or empty; using English fallback.", file=sys.stderr)
+        language_rows.append(rows)
+
     translation_data: List[Tuple[int, List[str]]] = []
+    for world_id in sorted(canonical_rows.keys()):
+        canonical_row = canonical_rows[world_id]
+        english_text = select_english_text(canonical_row)
+        texts = [english_text]
+        for rows in language_rows[1:]:
+            texts.append(select_translated_text(rows.get(world_id, {}), english_text))
 
-    for world_id in sorted(groups.keys()):
-        rows = groups[world_id]
-        # Prefer Grok row if available
-        grok_row = next((r for r in rows if r.get("Translator", "").strip().lower() == "grok"), None)
-        selected_row = grok_row if grok_row else rows[0]
+        translation_data.append((world_id, texts))
 
-        lang_texts: List[str] = []
-        for col_idx in lang_col_indices:
-            text = selected_row.get(reader.fieldnames[col_idx], "").strip()
-            lang_texts.append(text)
+    return translation_data
 
-        translation_data.append((world_id, lang_texts))
-
-    # === Generate UserInterfaceTranslationCompiled.h ===
+def write_compiled_header(output_dir: Path) -> None:
     h_content = """#pragma once
 // Auto-generated by UserInterfaceTranslationCompiler.py - DO NOT EDIT MANUALLY
 // Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
 
-#include "UserInterface-TextTranslations.h"
 #include <cstdint>
+#include "UserInterface-TextTranslations.h"
 
 namespace UITranslations
 {
@@ -112,30 +139,33 @@ namespace UITranslations
 }
 """
 
-    with open("UserInterfaceTranslationCompiled.h", "w", encoding="utf-8") as f:
-        f.write(h_content)
-    print("✓ Generated UserInterfaceTranslationCompiled.h")
+    (output_dir / "UserInterfaceTranslationCompiled.h").write_text(h_content, encoding="utf-8")
 
-    # === Generate UserInterfaceTranslationCompiled.cpp ===
+
+def write_compiled_cpp(output_dir: Path, translation_data: List[Tuple[int, List[str]]]) -> None:
     cpp_header = """// Auto-generated by UserInterfaceTranslationCompiler.py - DO NOT EDIT MANUALLY
 // Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
 
 #include "UserInterfaceTranslationCompiled.h"
-#include <unordered_map>
 #include <array>
+#include <cstddef>
+#include <unordered_map>
 
 namespace UITranslations
 {
-    // Static translation table: WorldID → array of 46 UTF-32 strings (one per language)
+    // Static translation table: WorldID -> array of UTF-32 strings, one per UILanguage value.
     static const std::unordered_map<uint32_t, std::array<const char32_t*, static_cast<size_t>(UILanguage::COUNT)>> g_TranslationMap =
     {
 """
 
     entries = []
     for world_id, lang_texts in translation_data:
+        if len(lang_texts) != len(LANGUAGES):
+            print(f"ERROR: WorldID {world_id} has {len(lang_texts)} translations, expected {len(LANGUAGES)}.", file=sys.stderr)
+            sys.exit(1)
+
         literals = [to_cpp_u32_literal(text) for text in lang_texts]
-        entry = f"        {{ {world_id}, {{ {', '.join(literals)} }} }},"
-        entries.append(entry)
+        entries.append(f"        {{ {world_id}, {{ {', '.join(literals)} }} }},")
 
     cpp_footer = """    };
 
@@ -147,27 +177,39 @@ namespace UITranslations
             return U"";
         }
 
-        size_t langIdx = static_cast<size_t>(language);
-        const char32_t* str = it->second[langIdx];
+        const size_t langIdx = static_cast<size_t>(language);
+        if (langIdx >= static_cast<size_t>(UILanguage::COUNT))
+        {
+            return it->second[0];
+        }
 
-        // Fallback to English if missing/empty (as per specification)
+        const char32_t* str = it->second[langIdx];
         if (str == nullptr || *str == U'\\0')
         {
             return it->second[0];
         }
+
         return str;
     }
 }
 """
 
-    with open("UserInterfaceTranslationCompiled.cpp", "w", encoding="utf-8") as f:
-        f.write(cpp_header)
-        f.write("\n".join(entries))
-        f.write("\n")
-        f.write(cpp_footer)
+    cpp_path = output_dir / "UserInterfaceTranslationCompiled.cpp"
+    cpp_path.write_text(cpp_header + "\n".join(entries) + "\n" + cpp_footer, encoding="utf-8")
 
-    print(f"✓ Generated UserInterfaceTranslationCompiled.cpp with {len(translation_data)} strings")
-    print("   All 46 languages supported. Texture atlas preparation (Phase 4B) will use these strings.")
+
+def main() -> None:
+    script_dir = Path(__file__).resolve().parent
+    repo_root = script_dir.parent
+    output_dir = repo_root / "code-core"
+
+    translation_data = build_translation_data(script_dir)
+    write_compiled_header(output_dir)
+    write_compiled_cpp(output_dir, translation_data)
+
+    print(f"Generated {output_dir / 'UserInterfaceTranslationCompiled.h'}")
+    print(f"Generated {output_dir / 'UserInterfaceTranslationCompiled.cpp'}")
+    print(f"Compiled {len(translation_data)} strings across {len(LANGUAGES)} languages.")
 
 
 if __name__ == "__main__":
