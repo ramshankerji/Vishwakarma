@@ -291,11 +291,6 @@ void PushRect( UIDrawContext& ctx, float x, float y, float w, float h,
     ctx.indexPtr[3] = base + 0;
     ctx.indexPtr[4] = base + 2;
     ctx.indexPtr[5] = base + 3;
-
-    ctx.vertexPtr += 4;
-    ctx.indexPtr += 6;
-    ctx.vertexCount += 4;
-    ctx.indexCount += 6;
 }
 
 // Returns true if clicked this frame
@@ -322,12 +317,13 @@ bool PushInteractiveRect(UIDrawContext& ctx, float x, float y, float w, float h,
 void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t color, DX12ResourcesUI& uiRes)
 {
     float cursorX = x;
+    uint32_t glyphCount = 0;
 
     for (const char* p = text; *p; ++p)
     {
         // Bounds Checking (Crucial for text strings)
-        if (ctx.vertexCount + 4 > uiRes.maxVertices) return;
-        if (ctx.indexCount + 6 > uiRes.maxIndices) return;
+        if (ctx.vertexCount + (glyphCount + 1) * 4 > uiRes.maxVertices) return;
+        if (ctx.indexCount + (glyphCount + 1) * 6 > uiRes.maxIndices) return;
 
         char c = *p;
         if (glyphLookup.find(c) == glyphLookup.end()) continue;
@@ -338,30 +334,25 @@ void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t c
         float ypos = y - g.bearingY;
         float w = (float)g.width;
         float h = (float)g.height;
-        uint16_t base = ctx.vertexCount; // The base index for the index buffer (Absolute)
+        uint32_t vertexOffset = glyphCount * 4;
+        uint32_t indexOffset = glyphCount * 6;
         
         // Add 4 vertices. Write relative to the current pointer (0, 1, 2, 3)
-        uint32_t vidx = ctx.vertexCount;
-        ctx.vertexPtr[0] = { xpos,     ypos,     g.uvMinX, g.uvMinY, color };
-        ctx.vertexPtr[1] = { xpos + w, ypos,     g.uvMaxX, g.uvMinY, color };
-        ctx.vertexPtr[2] = { xpos + w, ypos + h, g.uvMaxX, g.uvMaxY, color };
-        ctx.vertexPtr[3] = { xpos,     ypos + h, g.uvMinX, g.uvMaxY, color };
+        uint32_t vidx = ctx.vertexCount + vertexOffset;
+        ctx.vertexPtr[vertexOffset + 0] = { xpos,     ypos,     g.uvMinX, g.uvMinY, color };
+        ctx.vertexPtr[vertexOffset + 1] = { xpos + w, ypos,     g.uvMaxX, g.uvMinY, color };
+        ctx.vertexPtr[vertexOffset + 2] = { xpos + w, ypos + h, g.uvMaxX, g.uvMaxY, color };
+        ctx.vertexPtr[vertexOffset + 3] = { xpos,     ypos + h, g.uvMinX, g.uvMaxY, color };
 
         // Add 6 indices. Write indices relative to the current index pointer
-        uint32_t iidx = ctx.indexCount;
-        ctx.indexPtr[0] = vidx + 0;
-        ctx.indexPtr[1] = vidx + 1;
-        ctx.indexPtr[2] = vidx + 2;
-        ctx.indexPtr[3] = vidx + 0;
-        ctx.indexPtr[4] = vidx + 2;
-        ctx.indexPtr[5] = vidx + 3;
+        ctx.indexPtr[indexOffset + 0] = vidx + 0;
+        ctx.indexPtr[indexOffset + 1] = vidx + 1;
+        ctx.indexPtr[indexOffset + 2] = vidx + 2;
+        ctx.indexPtr[indexOffset + 3] = vidx + 0;
+        ctx.indexPtr[indexOffset + 4] = vidx + 2;
+        ctx.indexPtr[indexOffset + 5] = vidx + 3;
 
-        // Advance pointers and counts
-        ctx.vertexPtr += 4;
-        ctx.indexPtr += 6;
-        ctx.vertexCount += 4;
-        ctx.indexCount += 6;
-
+        glyphCount++;
         cursorX += g.advanceX;
     }
 }
@@ -382,7 +373,8 @@ bool PushTab(UIDrawContext& ctx, float x, float w, float h, uint16_t tabID, bool
 }
 
 // This function renders the list of tabs, all top menu buttons (with dropdowns if required),
-// side favourite / frequent buttons bars, right side property window, bottom status bar.
+// side favourite / frequent buttons bars, r
+// ight side property window, bottom status bar.
 // This is also responsible for all relevant DirectX12 configurations required for rendering User Interface.
 void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX12ResourcesUI& uiRes,
     float monitorDPI, const UIInput& input) {
@@ -423,6 +415,62 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     float pixelsPerMM = monitorDPI / 25.4f;
     float buttonWidthPx = UI_BUTTON_WIDTH_MM * pixelsPerMM;
     float tabBarHeight = UI_TAB_BAR_HEIGHT_MM * pixelsPerMM;
+
+    auto canPushRect = [&]() {
+        return ctx.vertexCount + 4 <= uiRes.maxVertices &&
+            ctx.indexCount + 6 <= uiRes.maxIndices;
+    };
+
+    auto advanceRect = [&]() {
+        ctx.vertexPtr += 4;
+        ctx.indexPtr += 6;
+        ctx.vertexCount += 4;
+        ctx.indexCount += 6;
+    };
+
+    auto pushRect = [&](float x, float y, float w, float h, uint32_t color) {
+        bool pushed = canPushRect();
+        PushRect(ctx, x, y, w, h, color, uiRes);
+        if (pushed) advanceRect();
+    };
+
+    auto countTextGlyphs = [&](const char* text) {
+        uint32_t glyphCount = 0;
+        for (const char* p = text; *p; ++p) {
+            if (ctx.vertexCount + (glyphCount + 1) * 4 > uiRes.maxVertices) return glyphCount;
+            if (ctx.indexCount + (glyphCount + 1) * 6 > uiRes.maxIndices) return glyphCount;
+
+            char c = *p;
+            if (glyphLookup.find(c) == glyphLookup.end()) continue;
+
+            glyphCount++;
+        }
+        return glyphCount;
+    };
+
+    auto pushText = [&](float x, float y, const char* text, uint32_t color) {
+        uint32_t glyphCount = countTextGlyphs(text);
+        PushText(ctx, x, y, text, color, uiRes);
+        ctx.vertexPtr += glyphCount * 4;
+        ctx.indexPtr += glyphCount * 6;
+        ctx.vertexCount += glyphCount * 4;
+        ctx.indexCount += glyphCount * 6;
+    };
+
+    auto pushInteractiveRect = [&](float x, float y, float w, float h, uint32_t baseColor,
+        uint32_t id, bool enabled = true) {
+        bool pushed = canPushRect();
+        bool clicked = PushInteractiveRect(ctx, x, y, w, h, baseColor, id, input, uiRes, enabled);
+        if (pushed) advanceRect();
+        return clicked;
+    };
+
+    auto pushTab = [&](float x, float w, float h, uint16_t tabID, bool isActive) {
+        bool pushed = canPushRect();
+        bool clicked = PushTab(ctx, x, w, h, tabID, isActive, input, uiRes);
+        if (pushed) advanceRect();
+        return clicked;
+    };
     float ribbonY = tabBarHeight + UI_DIVIDER_WIDTH_PX;   // ← only one declaration
 
     // ENGINEERING / PROJECT TABs
@@ -435,7 +483,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     for (uint16_t i = 0; i < tabCount; i++) {
         uint16_t tabID = tabList[i];
         bool active = (window.activeTabIndex == tabID);
-        if (PushTab(ctx, currentX, tabWidth, tabBarHeight, tabID, active, input, uiRes)) {
+        if (pushTab(currentX, tabWidth, tabBarHeight, tabID, active)) {
             window.activeTabIndex = tabID; // instant visual feedback
         }
         currentX += tabWidth;
@@ -463,7 +511,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             currentActionGroupIndex = ctrl.actionGrpupIndex;
             currentSubGroupID = 0xFFFFFFFF;
 
-            PushRect(ctx, currentX, groupLabelY, 6, 48, 0xFF555555, uiRes); // group separator
+            pushRect(currentX, groupLabelY, 6, 48, 0xFF555555); // group separator
             currentX += 12.0f;
         }
         
@@ -471,7 +519,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             if (currentSubGroupID != 0xFFFFFFFF) {currentX += subGroupGap;}
             currentSubGroupID = ctrl.actionSubGroupID;
 
-            PushRect(ctx, currentX, subGroupLabelY, 110, 16, 0xFF2D2D30, uiRes); // sub-group label bar
+            pushRect(currentX, subGroupLabelY, 110, 16, 0xFF2D2D30); // sub-group label bar
             currentX += 8.0f;
         }
 
@@ -486,8 +534,8 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         uint32_t baseColor = ctrl.isEnabled ? 0xFF2D2D30 : 0xFF1E1E1E;// Render
 
         if (ctrl.type == 1 || ctrl.type == 2) {                     // Button or Dropdown trigger
-            bool clicked = PushInteractiveRect(ctx, currentX, btnY, btnWidth, btnHeight,
-                baseColor, (uint32_t)ctrl.action, input, uiRes, ctrl.isEnabled);
+            bool clicked = pushInteractiveRect(currentX, btnY, btnWidth, btnHeight,
+                baseColor, (uint32_t)ctrl.action, ctrl.isEnabled);
 
             if (clicked && ctrl.isEnabled) {
                 PushUIAction((uint32_t)ctrl.action);
@@ -497,20 +545,20 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             }
 
             if (!ctrl.isEnabled) { // Gray-out overlay for disabled controls
-                PushRect(ctx, currentX, btnY, btnWidth, btnHeight, 0xAA333333, uiRes);
+                pushRect(currentX, btnY, btnWidth, btnHeight, 0xAA333333);
             }
         }
         else if (ctrl.type == 3) {
             // Future textbox
-            PushRect(ctx, currentX, btnY, btnWidth, btnHeight, 0xFF1E1E1E, uiRes);
+            pushRect(currentX, btnY, btnWidth, btnHeight, 0xFF1E1E1E);
         }
         else {
             // Plain label
-            PushRect(ctx, currentX, btnY, btnWidth, btnHeight, 0xFF2D2D30, uiRes);
+            pushRect(currentX, btnY, btnWidth, btnHeight, 0xFF2D2D30);
         }
 
         // Draw "x" below button
-        PushText(ctx, currentX, btnY + btnHeight + 14.0f, "x", 0xFFFFFFFF, uiRes);// below button
+        pushText(currentX, btnY + btnHeight + 14.0f, "x", 0xFFFFFFFF);// below button
         currentX += btnWidth + buttonGap;
     }
 
@@ -520,7 +568,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     if (window.activeDropdownAction != UIAction::INVALID) {
         float dropX = 400.0f;   // TODO: track real button X for proper positioning
         float dropY = ribbonY + 80.0f;
-        PushRect(ctx, dropX, dropY, 160, 220, 0xFF1E1E1E, uiRes);
+        pushRect(dropX, dropY, 160, 220, 0xFF1E1E1E);
         window.activeDropdownAction = UIAction::INVALID;   // immediate-mode auto-close
     }
 
