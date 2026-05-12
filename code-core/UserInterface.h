@@ -437,7 +437,7 @@ struct UIControlDefinition {
     bool         showText;         // true = show label, false = icon only
     bool         isEnabled;        // true = show this button/label etc, false = gray out this.
     uint8_t      actionGroupIndex; // 0-based index in array of UIActionGroupName for Text reference.
-    uint32_t     actionSubGroupIndex; // Localization ID (hardcoded for now) of the TEXT.
+    uint8_t      actionSubGroupIndex; // Localization ID (hardcoded for now) of the TEXT.
 };
 
 // Action Groups are basically a set of User Control Buttons.
@@ -485,7 +485,12 @@ constexpr UIActionGroupNames topUIActionSubGroupNames[] = {
     { 61 , true , false }, 
     { 62 , true , false }, 
     { 63 , true , false }, 
-    { 64 , true , false }, 
+    { 65 , true , false }, 
+    { 66 , true , false },
+    { 67 , true , false },
+    { 68 , true , false },
+    { 69 , true , false },
+    { 70 , true , false },
 };
 
 // COMPILE-TIME GIANT ARRAY . Lists ALL top primary buttons (excliding right side pane) available in application.
@@ -494,149 +499,149 @@ constexpr UIActionGroupNames topUIActionSubGroupNames[] = {
 constexpr UIControlDefinition AllUIControls[] = {
     // ACTION GROUP 11: Common
     // Subgroup : Project Organization
-    { UIAction::PROJECT_OPEN,          11, U'x', 1, 1, 0, 0, true, false, 1 , 200001 },
-    { UIAction::PROJECT_SAVE,          11, U'x', 1, 1, 0, 0, true, false, 1 , 200001 },
-    { UIAction::PROJECT_CLOSE,         11, U'x', 1, 1, 0, 0, true, false, 1 , 200001 },
+    { UIAction::PROJECT_OPEN,          11, U'x', 1, 1, 0, 0, true, false, 0 , 0 },
+    { UIAction::PROJECT_SAVE,          11, U'x', 1, 1, 0, 0, true, false, 0 , 0 },
+    { UIAction::PROJECT_CLOSE,         11, U'x', 1, 1, 0, 0, true, false, 0 , 0 },
 
     // Subgroup : View
-    { UIAction::VIEW_TREE,             11, U'x', 1, 1, 0, 0, true, false, 1 , 200001 },
-    { UIAction::VIEW_PERSPECTIVE_ISO_DROPDOWN, 11, U'x', 2, 1, 0, 1, true, false, 1 , 200001 }, // Dropdown
-    { UIAction::VIEW_MAX_ZOOM,         11, U'x', 1, 1, 0, 0, true, false, 1 , 200001 },
-    { UIAction::VIEW_ROTATE,           11, U'x', 1, 1, 0, 0, true, false, 1 , 200001 },
-    { UIAction::VIEW_PAN,              11, U'x', 1, 1, 0, 0, true, false, 1 , 200001 },
+    { UIAction::VIEW_TREE,             11, U'x', 1, 2, 0, 0, true, false, 0 , 1 },
+    { UIAction::VIEW_PERSPECTIVE_ISO_DROPDOWN, 11, U'x', 2, 2, 1, 1, true, false, 0 , 1 }, // Dropdown
+    { UIAction::VIEW_MAX_ZOOM,         11, U'x', 1, 3, 0, 0, true, false, 0 , 1 },
+    { UIAction::VIEW_ROTATE,           11, U'x', 1, 3, 1, 0, true, false, 0 , 1 },
+    { UIAction::VIEW_PAN,              11, U'x', 1, 3, 2, 0, true, false, 0 , 1 },
 
     // Subgroup : Select
-    { UIAction::SELECT_GENERAL,        11, U'x', 1, 1, 0, 0, true, false, 1 , 200001 },
-    { UIAction::SELECT_PIPES,          11, U'x', 1, 1, 0, 0, true, false, 1 , 200001 },
-    { UIAction::SELECT_FITTINGS,       11, U'x', 1, 1, 0, 0, true, false, 1 , 200001 },
-    { UIAction::SELECT_REINFORCEMENT,  11, U'x', 1, 1, 0, 0, true, false, 1 , 200001 },
-    { UIAction::SELECT_2D_ONLY,        11, U'x', 1, 1, 0, 0, true, false, 1 , 200001 },
-    { UIAction::SELECT_TEXT,           11, U'x', 1, 1, 0, 0, true, false, 1 , 200001 },
-    { UIAction::SELECT_LINES,          11, U'x', 1, 1, 0, 0, true, false, 1 , 200001 }, 
+    { UIAction::SELECT_GENERAL,        11, U'x', 1, 1, 0, 0, true, false, 0 , 2 },
+    { UIAction::SELECT_PIPES,          11, U'x', 1, 3, 0, 0, true, false, 0 , 2 },
+    { UIAction::SELECT_FITTINGS,       11, U'x', 1, 3, 1, 0, true, false, 0 , 2 },
+    { UIAction::SELECT_REINFORCEMENT,  11, U'x', 1, 3, 2, 0, true, false, 0 , 2 },
+    { UIAction::SELECT_2D_ONLY,        11, U'x', 1, 3, 0, 0, true, false, 0 , 2 },
+    { UIAction::SELECT_TEXT,           11, U'x', 1, 3, 1, 0, true, false, 0 , 2 },
+    { UIAction::SELECT_LINES,          11, U'x', 1, 3, 2, 0, true, false, 0 , 2 }, 
     // ACTION GROUP 12: (2D) General
     // Subgroup : Create 2D Shapes
-    { UIAction::CREATE_LINE,           12, U'x', 1, 1, 0, 0, true, false, 2 , 200001 },
-    { UIAction::CREATE_POLYLINE,       12, U'x', 1, 1, 0, 0, true, false, 2 , 200001 },
-    { UIAction::CREATE_CIRCLE,         12, U'x', 1, 1, 0, 0, true, false, 2 , 200001 },
-    { UIAction::CREATE_ARC,            12, U'x', 1, 1, 0, 0, true, false, 2 , 200001 },
-    { UIAction::CREATE_ELLIPSE,        12, U'x', 1, 1, 0, 0, true, false, 2 , 200001 },
-    { UIAction::CREATE_TEXT,           12, U'x', 1, 1, 0, 0, true, false, 2 , 200001 },
-    { UIAction::CREATE_MULTITEXT,      12, U'x', 1, 1, 0, 0, true, false, 2 , 200001 },
+    { UIAction::CREATE_LINE,           12, U'x', 1, 2, 0, 0, true, false, 1 , 4 },
+    { UIAction::CREATE_POLYLINE,       12, U'x', 1, 2, 1, 0, true, false, 1 , 4 },
+    { UIAction::CREATE_CIRCLE,         12, U'x', 1, 3, 0, 0, true, false, 1 , 4 },
+    { UIAction::CREATE_ARC,            12, U'x', 1, 3, 1, 0, true, false, 1 , 4 },
+    { UIAction::CREATE_ELLIPSE,        12, U'x', 1, 3, 2, 0, true, false, 1 , 4 },
+    { UIAction::CREATE_TEXT,           12, U'x', 1, 2, 0, 0, true, false, 1 , 4 },
+    { UIAction::CREATE_MULTITEXT,      12, U'x', 1, 2, 1, 0, true, false, 1 , 4 },
 
     // SubGroup: Edit
-    { UIAction::EDIT_COPY,             12, U'x', 1, 1, 0, 0, true, false, 2 , 200001 },
-    { UIAction::EDIT_OFFSET,           12, U'x', 1, 1, 0, 0, true, false, 2 , 200001 },
-    { UIAction::EDIT_MOVE,             12, U'x', 1, 1, 0, 0, true, false, 2 , 200001 },
+    { UIAction::EDIT_COPY,             12, U'x', 1, 3, 0, 0, true, false, 1 , 5 },
+    { UIAction::EDIT_OFFSET,           12, U'x', 1, 3, 1, 0, true, false, 1 , 5 },
+    { UIAction::EDIT_MOVE,             12, U'x', 1, 3, 2, 0, true, false, 1 , 5 },
 
     // ACTION GROUP 13: (2D) Advanced
     // Subgroup : Process Equipments
-    { UIAction::CREATE_VVESSEL,        13, U'x', 1, 1, 0, 0, true, false, 3 , 200001 },
-    { UIAction::CREATE_HVESSEL,        13, U'x', 1, 1, 0, 0, true, false, 3 , 200001 },
-    { UIAction::CREATE_EXCHANGE,       13, U'x', 1, 1, 0, 0, true, false, 3 , 200001 },
-    { UIAction::CREATE_PIPE,           13, U'x', 1, 1, 0, 0, true, false, 3 , 200001 },
-    { UIAction::CREATE_INSTRUMENT,     13, U'x', 1, 1, 0, 0, true, false, 3 , 200001 },
-    { UIAction::EDIT_PARAMETER,        13, U'x', 1, 1, 0, 0, true, false, 3 , 200001 },
+    { UIAction::CREATE_VVESSEL,        13, U'x', 1, 3, 0, 0, true, false, 2 , 5 },
+    { UIAction::CREATE_HVESSEL,        13, U'x', 1, 3, 1, 0, true, false, 2 , 5 },
+    { UIAction::CREATE_EXCHANGE,       13, U'x', 1, 3, 2, 0, true, false, 2 , 5 },
+    { UIAction::CREATE_PIPE,           13, U'x', 1, 3, 0, 0, true, false, 2 , 5 },
+    { UIAction::CREATE_INSTRUMENT,     13, U'x', 1, 3, 1, 0, true, false, 2 , 5 },
+    { UIAction::EDIT_PARAMETER,        13, U'x', 1, 3, 2, 0, true, false, 2 , 5 },
 
     // ACTION GROUP 14: (3D)
     // Subgroup : Basic
-    { UIAction::CREATE_FOLDER,         14, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
-    { UIAction::CREATE_GRID,           14, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
-    { UIAction::CREATE_STRUCTURE,      14, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
-    { UIAction::CREATE_LINES_3D,       14, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
+    { UIAction::CREATE_FOLDER,         14, U'x', 1, 2, 0, 0, true, false, 3 , 6 },
+    { UIAction::CREATE_GRID,           14, U'x', 1, 2, 1, 0, true, false, 3 , 6 },
+    { UIAction::CREATE_STRUCTURE,      14, U'x', 1, 2, 0, 0, true, false, 3 , 6 },
+    { UIAction::CREATE_LINES_3D,       14, U'x', 1, 2, 1, 0, true, false, 3 , 6 },
 
     // ACTION GROUP 15: (3D) Inteligent
     // Subgroup : Concrete
-    { UIAction::CONCRETE_COLUMN,       15, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
-    { UIAction::CONCRETE_BEAM,         15, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
-    { UIAction::CONCRETE_SLAB,         15, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
-    { UIAction::CONCRETE_CURVED_SLAB,  15, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
-    { UIAction::CONCRETE_DOME,         15, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
-    { UIAction::CONCRETE_PILE,         15, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
+    { UIAction::CONCRETE_COLUMN,       15, U'x', 1, 3, 0, 0, true, false, 4 , 7 },
+    { UIAction::CONCRETE_BEAM,         15, U'x', 1, 3, 1, 0, true, false, 4 , 7 },
+    { UIAction::CONCRETE_SLAB,         15, U'x', 1, 3, 2, 0, true, false, 4 , 7 },
+    { UIAction::CONCRETE_CURVED_SLAB,  15, U'x', 1, 3, 0, 0, true, false, 4 , 7 },
+    { UIAction::CONCRETE_DOME,         15, U'x', 1, 3, 1, 0, true, false, 4 , 7 },
+    { UIAction::CONCRETE_PILE,         15, U'x', 1, 3, 2, 0, true, false, 4 , 7 },
 
     // Subgroup : Reinforcement
-    { UIAction::REINFORCEMENT_LINEAR,  15, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
-    { UIAction::REINFORCEMENT_SHAPED_DROPDOWN, 15, U'x', 2, 1, 0, 1, true, false, 4 , 200001 },
+    { UIAction::REINFORCEMENT_LINEAR,  15, U'x', 1, 2, 0, 0, true, false, 4 , 8 },
+    { UIAction::REINFORCEMENT_SHAPED_DROPDOWN, 15, U'x', 2, 2, 1, 1, true, false, 4 , 8 },
 
     // Subgroup : Steel, FRP, Glass
-    { UIAction::STEEL_COLUMN,          15, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
-    { UIAction::STEEL_BEAM,            15, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
-    { UIAction::FRP_COLUMN,            15, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
-    { UIAction::FRP_BEAM,              15, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
-    { UIAction::GLASS_PLATE,           15, U'x', 1, 1, 0, 0, true, false, 4 , 200001 },
+    { UIAction::STEEL_COLUMN,          15, U'x', 1, 2, 0, 0, true, false, 4 , 5 },
+    { UIAction::STEEL_BEAM,            15, U'x', 1, 2, 0, 0, true, false, 4 , 5 },
+    { UIAction::FRP_COLUMN,            15, U'x', 1, 3, 0, 0, true, false, 4 , 5 },
+    { UIAction::FRP_BEAM,              15, U'x', 1, 3, 1, 0, true, false, 4 , 5 },
+    { UIAction::GLASS_PLATE,           15, U'x', 1, 3, 2, 0, true, false, 4 , 5 },
+
     // Subgroup : Equipments
-    { UIAction::EQUIPMENT_VVESSEL,     15, U'x', 1, 1, 0, 0, true, false, 5 , 200001 },
-    { UIAction::EQUIPMENT_HVESSEL,     15, U'x', 1, 1, 0, 0, true, false, 5 , 200001 },
-    { UIAction::EQUIPMENT_EXCHANGER,   15, U'x', 1, 1, 0, 0, true, false, 5 , 200001 },
-    { UIAction::EQUIPMENT_PUMP,        15, U'x', 1, 1, 0, 0, true, false, 5 , 200001 },
+    { UIAction::EQUIPMENT_VVESSEL,     15, U'x', 1, 3, 0, 0, true, false, 4 , 6 },
+    { UIAction::EQUIPMENT_HVESSEL,     15, U'x', 1, 3, 1, 0, true, false, 4 , 6 },
+    { UIAction::EQUIPMENT_EXCHANGER,   15, U'x', 1, 3, 2, 0, true, false, 4 , 6 },
+    { UIAction::EQUIPMENT_PUMP,        15, U'x', 1, 3, 0, 0, true, false, 4 , 6 },
 
     // Subgroup : Piping
-    { UIAction::CREATE_PIPING,         15, U'x', 1, 1, 0, 0, true, false, 6 , 200001 },
-    { UIAction::CREATE_SPOOL,          15, U'x', 1, 1, 0, 0, true, false, 6 , 200001 },
-    { UIAction::CREATE_VALVE,          15, U'x', 1, 1, 0, 0, true, false, 6 , 200001 },
-    { UIAction::CREATE_ELBOW,          15, U'x', 1, 1, 0, 0, true, false, 6 , 200001 },
-    { UIAction::CREATE_T,              15, U'x', 1, 1, 0, 0, true, false, 6 , 200001 },
-    { UIAction::CREATE_Y,              15, U'x', 1, 1, 0, 0, true, false, 6 , 200001 },
-    { UIAction::INSTRUMENT_PG,         15, U'x', 1, 1, 0, 0, true, false, 6 , 200001 },
-    { UIAction::INSTRUMENT_TG,         15, U'x', 1, 1, 0, 0, true, false, 6 , 200001 },
-    { UIAction::EDIT_EXTEND,           15, U'x', 1, 1, 0, 0, true, false, 6 , 200001 },
-    { UIAction::EDIT_STRETCH,          15, U'x', 1, 1, 0, 0, true, false, 6 , 200001 },
+    { UIAction::CREATE_PIPING,         15, U'x', 1, 3, 0, 0, true, false, 4 , 7 },
+    { UIAction::CREATE_SPOOL,          15, U'x', 1, 3, 1, 0, true, false, 4 , 7 },
+    { UIAction::CREATE_VALVE,          15, U'x', 1, 3, 2, 0, true, false, 4 , 7 },
+    { UIAction::CREATE_ELBOW,          15, U'x', 1, 3, 0, 0, true, false, 4 , 7 },
+    { UIAction::CREATE_T,              15, U'x', 1, 3, 1, 0, true, false, 4 , 7 },
+    { UIAction::CREATE_Y,              15, U'x', 1, 3, 2, 0, true, false, 4 , 7 },
+    { UIAction::INSTRUMENT_PG,         15, U'x', 1, 3, 0, 0, true, false, 4 , 7 },
+    { UIAction::INSTRUMENT_TG,         15, U'x', 1, 3, 1, 0, true, false, 4 , 7 },
+    { UIAction::EDIT_EXTEND,           15, U'x', 1, 3, 2, 0, true, false, 4 , 7 },
+    { UIAction::EDIT_STRETCH,          15, U'x', 1, 3, 0, 0, true, false, 4 , 7 },
 
 	// ACTION GROUP 16: Simulation and Analysis
     // Subgroup : Loads & Combinations
-    { UIAction::LOAD_CASE,             16, U'x', 1, 1, 0, 0, true, false, 7 , 200001 },
-    { UIAction::LOAD_COMBINATIONS,     16, U'x', 1, 1, 0, 0, true, false, 7 , 200001 },
-    { UIAction::LOAD_SELF_WEIGHT,      16, U'x', 1, 1, 0, 0, true, false, 7 , 200001 },
-    { UIAction::LOAD_UNIFORM,          16, U'x', 1, 1, 0, 0, true, false, 7 , 200001 },
-    { UIAction::LOAD_TRAPEZOIDAL,      16, U'x', 1, 1, 0, 0, true, false, 7 , 200001 },
-    { UIAction::LOAD_PRESSURE,         16, U'x', 1, 1, 0, 0, true, false, 7 , 200001 },
-    { UIAction::LOAD_TEMPERATURE,      16, U'x', 1, 1, 0, 0, true, false, 7 , 200001 },
-
+    { UIAction::LOAD_CASE,             16, U'x', 1, 3, 0, 0, true, false, 5 , 8 },
+    { UIAction::LOAD_COMBINATIONS,     16, U'x', 1, 3, 1, 0, true, false, 5 , 8 },
+    { UIAction::LOAD_SELF_WEIGHT,      16, U'x', 1, 3, 2, 0, true, false, 5 , 8 },
+    { UIAction::LOAD_UNIFORM,          16, U'x', 1, 3, 0, 0, true, false, 5 , 8 },
+    { UIAction::LOAD_TRAPEZOIDAL,      16, U'x', 1, 3, 1, 0, true, false, 5 , 8 },
+    { UIAction::LOAD_PRESSURE,         16, U'x', 1, 3, 2, 0, true, false, 5 , 8 },
+    { UIAction::LOAD_TEMPERATURE,      16, U'x', 1, 3, 0, 0, true, false, 5 , 8 },
     // Subgroup : Supports
-    { UIAction::SUPPORT_FIXED,         16, U'x', 1, 1, 0, 0, true, false, 7 , 200001 },
-    { UIAction::SUPPORT_PINNED,        16, U'x', 1, 1, 0, 0, true, false, 7 , 200001 },
-    { UIAction::SUPPORT_ROLLER,        16, U'x', 1, 1, 0, 0, true, false, 7 , 200001 },
+    { UIAction::SUPPORT_FIXED,         16, U'x', 1, 3, 0, 0, true, false, 5 , 9 },
+    { UIAction::SUPPORT_PINNED,        16, U'x', 1, 3, 1, 0, true, false, 5 , 9 },
+    { UIAction::SUPPORT_ROLLER,        16, U'x', 1, 3, 2, 0, true, false, 5 , 9 },
 
 	// Subgroup : Analysis Types
-    { UIAction::ANALYSIS_3D_FRAME,     16, U'x', 1, 1, 0, 0, true, false, 7 , 200001 },
-    { UIAction::ANALYSIS_STATIC,       16, U'x', 1, 1, 0, 0, true, false, 7 , 200001 },
-    { UIAction::ANALYSIS_SPECTRUM,     16, U'x', 1, 1, 0, 0, true, false, 7 , 200001 },
-    { UIAction::ANALYSIS_TIME_HISTORY, 16, U'x', 1, 1, 0, 0, true, false, 7 , 200001 },
+    { UIAction::ANALYSIS_3D_FRAME,     16, U'x', 1, 3, 0, 0, true, false, 5 , 10 },
+    { UIAction::ANALYSIS_STATIC,       16, U'x', 1, 3, 1, 0, true, false, 5 , 10 },
+    { UIAction::ANALYSIS_SPECTRUM,     16, U'x', 1, 3, 2, 0, true, false, 5 , 10 },
+    { UIAction::ANALYSIS_TIME_HISTORY, 16, U'x', 1, 3, 0, 0, true, false, 5 , 10 },
 
     // ACTION GROUP 17: Code Checking
 	// Subgroup : Indian (BIS)
-    { UIAction::CODE_CIVIL_IS456,      17, U'x', 1, 1, 0, 0, true, false, 8 , 200001 },
-    { UIAction::CODE_CIVIL_IS13920,    17, U'x', 1, 1, 0, 0, true, false, 8 , 200001 },
-    { UIAction::CODE_CIVIL_IS800,      17, U'x', 1, 1, 0, 0, true, false, 8 , 200001 },
+    { UIAction::CODE_CIVIL_IS456,      17, U'x', 1, 3, 0, 0, true, false, 6 , 11 },
+    { UIAction::CODE_CIVIL_IS13920,    17, U'x', 1, 3, 1, 0, true, false, 6 , 11 },
+    { UIAction::CODE_CIVIL_IS800,      17, U'x', 1, 3, 2, 0, true, false, 6 , 11 },
 
     // Subgroup : ASME
-    { UIAction::CODE_MECH_ASME_VIII,   17, U'x', 1, 1, 0, 0, true, false, 8 , 200001 },
+    { UIAction::CODE_MECH_ASME_VIII,   17, U'x', 1, 3, 0, 0, true, false, 6 , 12 },
 
     // ACTION GROUP 18: Documentation
         
     // ACTION GROUP 19: 3D->2D
     // Subgroup : Drawing Extraction
-    { UIAction::GENERAL_DRAWING,       19, U'x', 1, 1, 0, 0, true, false, 9 , 200001 },
-    { UIAction::GENERAL_SHEET,         19, U'x', 1, 1, 0, 0, true, false, 9 , 200001 },
-    { UIAction::GENERAL_3D2DGA,        19, U'x', 1, 1, 0, 0, true, false, 9 , 200001 },
-    { UIAction::GENERAL_ASSEMBLY,      19, U'x', 1, 1, 0, 0, true, false, 9 , 200001 },
-    { UIAction::GENERAL_ISOMETRIC,     19, U'x', 1, 1, 0, 0, true, false, 9 , 200001 },
-    { UIAction::GENERAL_TABLES,        19, U'x', 1, 1, 0, 0, true, false, 9 , 200001 },
+    { UIAction::GENERAL_DRAWING,       19, U'x', 1, 3, 0, 0, true, false, 8 , 13 },
+    { UIAction::GENERAL_SHEET,         19, U'x', 1, 3, 1, 0, true, false, 8 , 13 },
+    { UIAction::GENERAL_3D2DGA,        19, U'x', 1, 3, 2, 0, true, false, 8 , 13 },
+    { UIAction::GENERAL_ASSEMBLY,      19, U'x', 1, 3, 0, 0, true, false, 8 , 13 },
+    { UIAction::GENERAL_ISOMETRIC,     19, U'x', 1, 3, 1, 0, true, false, 8 , 13 },
+    { UIAction::GENERAL_TABLES,        19, U'x', 1, 3, 2, 0, true, false, 8 , 13 },
 
     // ACTION GROUP 20: Time
     // ACTION GROUP 21: Cost
 
     // ACTION GROUP 22: Interoperability & Miscellaneous.
 	// Subgroup : Import & Export
-    { UIAction::IMPORT_STD,            22, U'x', 1, 1, 0, 0, true, false, 12 , 200001 },
-    { UIAction::IMPORT_CII,            22, U'x', 1, 1, 0, 0, true, false, 12 , 200001 },
-    { UIAction::IMPORT_DXF,            22, U'x', 1, 1, 0, 0, true, false, 12 , 200001 },
-    { UIAction::IMPORT_DWG,            22, U'x', 1, 1, 0, 0, true, false, 12 , 200001 },
-    { UIAction::EXPORT_STD,            22, U'x', 1, 1, 0, 0, true, false, 12 , 200001 },
-    { UIAction::EXPORT_DWG,            22, U'x', 1, 1, 0, 0, true, false, 12 , 200001 },
+    { UIAction::IMPORT_STD,            22, U'x', 1, 3, 0, 0, true, false, 11 , 14 },
+    { UIAction::IMPORT_CII,            22, U'x', 1, 3, 1, 0, true, false, 11 , 14 },
+    { UIAction::IMPORT_DXF,            22, U'x', 1, 3, 2, 0, true, false, 11 , 14 },
+    { UIAction::IMPORT_DWG,            22, U'x', 1, 3, 0, 0, true, false, 11 , 14 },
+    { UIAction::EXPORT_STD,            22, U'x', 1, 3, 1, 0, true, false, 11 , 14 },
+    { UIAction::EXPORT_DWG,            22, U'x', 1, 3, 2, 0, true, false, 11 , 14 },
 
     // ACTION GROUP 23: Extensions
 	// Subgroup : All Active Extensions (This will be dynamic in future, but we can hardcode few for now)
-    { UIAction::CODE_CIVIL_IS456,      23, U'x', 1, 1, 0, 0, true, false, 8 , 200001 }
+    { UIAction::CODE_CIVIL_IS456,      23, U'x', 1, 1, 0, 0, true, false, 12 , 15 }
 };
 
 constexpr size_t TotalUIControls = std::size(AllUIControls);

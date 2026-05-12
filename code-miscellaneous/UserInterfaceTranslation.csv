@@ -32,6 +32,7 @@ WordID,ShortWordName,Translator,English,Human,Comments,Grok,ChatGPT,Gemini
 68,DrawingExtraction,Human,Drawing Extraction,Drawing Extraction,,,,
 69,ImportExport,Human,Import & Export,Import & Export,,,,
 70,ActiveExtensions,Human,All Active Extensions,All Active Extensions,,,,
+99,Unknown,Human,Unknown,Unknown,,,,
 8197,ProjectOpen,Human,Project Open,Project Open,Open an existing project,,,
 8198,ProjectSave,Human,Project Save,Project Save,Save current project,,,
 8199,ProjectClose,Human,Project Close,Project Close,Close current project,,,
