@@ -115,6 +115,9 @@
     <ClCompile Include="FontManager.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
+    <ClCompile Include="UserInterfaceTranslationCompiled.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="preCompiledHeadersWindows.h">
@@ -199,6 +202,9 @@
       <Filter>code-core</Filter>
     </ClInclude>
     <ClInclude Include="TextureSaver.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="UserInterfaceTranslationCompiled.h">
       <Filter>code-core</Filter>
     </ClInclude>
   </ItemGroup>

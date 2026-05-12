@@ -6,6 +6,7 @@
 #include <MemoryManagerGPU-DirectX12.h>
 #include "विश्वकर्मा.h"
 #include "TextureSaver.h"
+#include "UserInterfaceTranslationCompiled.h"
 extern शंकर gpu;
 extern std::atomic<uint16_t*> publishedTabIndexes;
 extern std::atomic<uint16_t>  publishedTabCount;
@@ -13,6 +14,19 @@ extern void PrintHResult(int);
 std::atomic<uint32_t> actionWriteIndex;
 std::string charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 std::atomic<uint64_t> atlasFence = 0;
+
+static uint32_t StableRandomUIColour(uint32_t seed) {
+    seed ^= seed >> 16;
+    seed *= 0x7FEB352Du;
+    seed ^= seed >> 15;
+    seed *= 0x846CA68Bu;
+    seed ^= seed >> 16;
+
+    uint32_t r = 80u + ((seed >> 0) & 0x7Fu);
+    uint32_t g = 80u + ((seed >> 8) & 0x7Fu);
+    uint32_t b = 80u + ((seed >> 16) & 0x7Fu);
+    return 0xFF000000u | (b << 16) | (g << 8) | r;
+}
 
 // Shader compilation helper
 static void CompileShader( const char* code, const char* entry, const char* target, UINT flags,
@@ -43,7 +57,7 @@ bool SubmitTextureUpload(const TextureUploadDesc& desc,
 
 void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
     if (!InitFontSystem()) { // FONT system initialization (CPU-side)
-        std::cerr << "Font system initilization failed failed\n";
+        std::cerr << "Font system initialization failed failed\n";
         return;
     }
 
@@ -373,8 +387,7 @@ bool PushTab(UIDrawContext& ctx, float x, float w, float h, uint16_t tabID, bool
 }
 
 // This function renders the list of tabs, all top menu buttons (with dropdowns if required),
-// side favourite / frequent buttons bars, r
-// ight side property window, bottom status bar.
+// side favorite / frequent buttons bars, right side property window, bottom status bar.
 // This is also responsible for all relevant DirectX12 configurations required for rendering User Interface.
 void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX12ResourcesUI& uiRes,
     float monitorDPI, const UIInput& input) {
@@ -413,7 +426,12 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     ctx.vertexCount = 0;
     ctx.indexCount = 0;
     float pixelsPerMM = monitorDPI / 25.4f;
-    float buttonWidthPx = UI_BUTTON_WIDTH_MM * pixelsPerMM;
+    float buttonWidthPx = 40.0f * pixelsPerMM;
+    float buttonHeightPx = 10.0f * pixelsPerMM;
+    float iconReservedWidthPx = 10.0f * pixelsPerMM;
+    float iconSizePx = 8.0f * pixelsPerMM;
+    float textStartOffsetPx = iconReservedWidthPx + 5.0f * pixelsPerMM;
+    float textEndInsetPx = 10.0f * pixelsPerMM;
     float tabBarHeight = UI_TAB_BAR_HEIGHT_MM * pixelsPerMM;
 
     auto canPushRect = [&]() {
@@ -434,35 +452,54 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         if (pushed) advanceRect();
     };
 
-    auto countTextGlyphs = [&](const char* text) {
-        uint32_t glyphCount = 0;
-        for (const char* p = text; *p; ++p) {
-            if (ctx.vertexCount + (glyphCount + 1) * 4 > uiRes.maxVertices) return glyphCount;
-            if (ctx.indexCount + (glyphCount + 1) * 6 > uiRes.maxIndices) return glyphCount;
+    auto pushTextClipped = [&](float x, float y, const char32_t* text, float maxWidth, uint32_t color) {
+        if (!text || maxWidth <= 0.0f) return;
 
-            char c = *p;
-            if (glyphLookup.find(c) == glyphLookup.end()) continue;
+        float cursorX = x;
+        float textRight = x + maxWidth;
 
-            glyphCount++;
+        for (const char32_t* p = text; *p; ++p) {
+            if (*p > 0x7F) continue;
+
+            auto glyphIt = glyphLookup.find(*p);
+            if (glyphIt == glyphLookup.end()) continue;
+
+            const Glyph& g = glyphIt->second;
+            float xpos = cursorX + g.bearingX;
+            float ypos = y - g.bearingY;
+            float glyphRight = xpos + (float)g.width;
+
+            if (glyphRight > textRight) break;
+            if (ctx.vertexCount + 4 > uiRes.maxVertices) return;
+            if (ctx.indexCount + 6 > uiRes.maxIndices) return;
+
+            uint16_t base = ctx.vertexCount;
+            ctx.vertexPtr[0] = { xpos,                  ypos,                   g.uvMinX, g.uvMinY, color };
+            ctx.vertexPtr[1] = { xpos + (float)g.width, ypos,                   g.uvMaxX, g.uvMinY, color };
+            ctx.vertexPtr[2] = { xpos + (float)g.width, ypos + (float)g.height, g.uvMaxX, g.uvMaxY, color };
+            ctx.vertexPtr[3] = { xpos,                  ypos + (float)g.height, g.uvMinX, g.uvMaxY, color };
+
+            ctx.indexPtr[0] = base + 0;
+            ctx.indexPtr[1] = base + 1;
+            ctx.indexPtr[2] = base + 2;
+            ctx.indexPtr[3] = base + 0;
+            ctx.indexPtr[4] = base + 2;
+            ctx.indexPtr[5] = base + 3;
+
+            ctx.vertexPtr += 4;
+            ctx.indexPtr += 6;
+            ctx.vertexCount += 4;
+            ctx.indexCount += 6;
+            cursorX += g.advanceX;
         }
-        return glyphCount;
     };
 
-    auto pushText = [&](float x, float y, const char* text, uint32_t color) {
-        uint32_t glyphCount = countTextGlyphs(text);
-        PushText(ctx, x, y, text, color, uiRes);
-        ctx.vertexPtr += glyphCount * 4;
-        ctx.indexPtr += glyphCount * 6;
-        ctx.vertexCount += glyphCount * 4;
-        ctx.indexCount += glyphCount * 6;
-    };
+    auto textBaselineY = [&](float y, float h) {
+        auto glyphIt = glyphLookup.find(U'M');
+        if (glyphIt == glyphLookup.end()) return y + h * 0.7f;
 
-    auto pushInteractiveRect = [&](float x, float y, float w, float h, uint32_t baseColor,
-        uint32_t id, bool enabled = true) {
-        bool pushed = canPushRect();
-        bool clicked = PushInteractiveRect(ctx, x, y, w, h, baseColor, id, input, uiRes, enabled);
-        if (pushed) advanceRect();
-        return clicked;
+        const Glyph& g = glyphIt->second;
+        return y + h * 0.5f + (float)g.bearingY - (float)g.height * 0.5f;
     };
 
     auto pushTab = [&](float x, float w, float h, uint16_t tabID, bool isActive) {
@@ -492,8 +529,8 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     // TOP BUTTONS (ACTION GROUP BAR)
     currentX = 20.0f; // reset X for action groups
 
-    const float buttonBaseHeight = 32.0f;
-    const float buttonGap = 4.0f;
+    const float buttonBaseHeight = buttonHeightPx;
+    const float buttonGap = UI_BUTTON_GAP_MM * pixelsPerMM;
     const float subGroupGap = 18.0f;
     const float groupGap = 28.0f;
 
@@ -506,36 +543,40 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     for (size_t i = 0; i < TotalUIControls; ++i) {
         const auto& ctrl = AllUIControls[i];
 
-        if (ctrl.actionGrpupIndex != currentActionGroupIndex) { // Action Group change
+        if (ctrl.actionGroupIndex != currentActionGroupIndex) { // Action Group change
             if (currentActionGroupIndex != 0xFFFFFFFF) currentX += groupGap;
-            currentActionGroupIndex = ctrl.actionGrpupIndex;
+            currentActionGroupIndex = ctrl.actionGroupIndex;
             currentSubGroupID = 0xFFFFFFFF;
 
             pushRect(currentX, groupLabelY, 6, 48, 0xFF555555); // group separator
             currentX += 12.0f;
         }
         
-        if (ctrl.actionSubGroupID != currentSubGroupID) { // Sub-Group change
+        if (ctrl.actionSubGroupIndex != currentSubGroupID) { // Sub-Group change
             if (currentSubGroupID != 0xFFFFFFFF) {currentX += subGroupGap;}
-            currentSubGroupID = ctrl.actionSubGroupID;
+            currentSubGroupID = ctrl.actionSubGroupIndex;
 
             pushRect(currentX, subGroupLabelY, 110, 16, 0xFF2D2D30); // sub-group label bar
             currentX += 8.0f;
         }
 
-        // Button geometry (vertical stacking support)
-        float btnWidth = (ctrl.defaultWidthPX > 0)
-            ? ctrl.defaultWidthPX * pixelsPerMM / 25.4f   // interpret as mm
-            : buttonWidthPx;
-        float btnHeight = buttonBaseHeight * ctrl.noOfVerticalSlots;
+        // Button geometry (fixed physical size)
+        float btnWidth = buttonWidthPx;
+        float btnHeight = buttonHeightPx;
         float btnY = ribbonY + 38.0f;
 
         if (ctrl.noOfVerticalSlots > 1) {btnY += ctrl.verticalSlotNo * buttonBaseHeight;}
-        uint32_t baseColor = ctrl.isEnabled ? 0xFF2D2D30 : 0xFF1E1E1E;// Render
+        uint32_t baseColor = StableRandomUIColour((uint32_t)ctrl.action ^ ((uint32_t)i * 0x9E3779B9u));// Render
+        uint32_t iconColor = StableRandomUIColour(((uint32_t)ctrl.action << 1) ^ 0xA511E9B3u ^ (uint32_t)i);
 
         if (ctrl.type == 1 || ctrl.type == 2) {                     // Button or Dropdown trigger
-            bool clicked = pushInteractiveRect(currentX, btnY, btnWidth, btnHeight,
-                baseColor, (uint32_t)ctrl.action, ctrl.isEnabled);
+            bool hovered = ctrl.isEnabled && (input.mouseX >= currentX && input.mouseX < currentX + btnWidth &&
+                input.mouseY >= btnY && input.mouseY < btnY + btnHeight);
+            uint32_t drawColor = hovered && input.leftButtonDown ? 0xFF333333 : baseColor;
+            if (hovered && !input.leftButtonDown) drawColor = 0xFF555555;
+            pushRect(currentX, btnY, btnWidth, btnHeight, drawColor);
+
+            bool clicked = hovered && input.leftButtonPressedThisFrame;
 
             if (clicked && ctrl.isEnabled) {
                 PushUIAction((uint32_t)ctrl.action);
@@ -557,8 +598,21 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             pushRect(currentX, btnY, btnWidth, btnHeight, 0xFF2D2D30);
         }
 
-        // Draw "x" below button
-        pushText(currentX, btnY + btnHeight + 14.0f, "x", 0xFFFFFFFF);// below button
+        float iconX = currentX + (iconReservedWidthPx - iconSizePx) * 0.5f;
+        float iconY = btnY + (btnHeight - iconSizePx) * 0.5f;
+        pushRect(iconX, iconY, iconSizePx, iconSizePx, iconColor);
+
+        if (ctrl.showText) {
+            const char32_t* label = UITranslations::GetUILocalizedString(ctrl.nameStringID, UILanguage::English);
+            if (!label || *label == U'\0') {
+                label = UITranslations::GetUILocalizedString((uint32_t)ctrl.action, UILanguage::English);
+            }
+
+            float textX = currentX + textStartOffsetPx;
+            float textWidth = btnWidth - textStartOffsetPx - textEndInsetPx;
+            pushTextClipped(textX, textBaselineY(btnY, btnHeight), label, textWidth, 0xFFFFFFFF);
+        }
+
         currentX += btnWidth + buttonGap;
     }
 

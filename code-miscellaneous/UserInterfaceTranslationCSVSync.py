@@ -35,7 +35,7 @@ def read_rows(path: Path) -> List[dict]:
 
 def write_rows(path: Path, rows: Iterable[dict]) -> None:
     with path.open("w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=TARGET_FIELDS, extrasaction="ignore")
+        writer = csv.DictWriter(csv_file, fieldnames=TARGET_FIELDS, extraction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 

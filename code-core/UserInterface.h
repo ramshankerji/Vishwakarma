@@ -87,7 +87,7 @@ Each button will have  following:
     localization.h file ).
 4. Width & Height of Icon in pixels. This will start with default value at compile time, 
     but will be multiplied by a specific factor based on screen DPI at runtime of owning monitor.
-5. 1 uint8 ZIndex to handle small drop down menu buttons. To fasciliate 1 active dropdown at a time.
+5. 1 uint8 ZIndex to handle small drop down menu buttons. To facilitate 1 active dropdown at a time.
 
 Definitions of ribbon tab groups shall be different from basic button list. 
 Such that user could add the same buttons at different locations. Example apart from main location in ribbon, 
@@ -108,7 +108,7 @@ WorldID, ShortWordName, English, Human, Comments, ChatGPT, Gemini, Grok, Claude
 Corresponding statically compiled translated header need to be generated as part of build process.
 This CSV to .h translation will happen using a python script named UserInterfaceTranslationCompiler.py file. 
 All of the csv, .py and .h/.cpp shall be checked into git. Compiled code will produce following 2 files only.
-They will represent all langauages.
+They will represent all languages.
  
 UserInterfaceTranslationCompiled.h
 UserInterfaceTranslationCompiled.cpp
@@ -120,7 +120,7 @@ This texture preparation shall happen at the beginning of application launch in 
 Till the time this thread completes its texture atlas preparation, UI handler code will keep displaying a blank space.
 For string which have a missing translation corresponding English word shall be displayed. At a time,
 texture atlas of only 1 language shall be active.
-The font files will come from byte steam already loaded by other part of code from embeded Resource.
+The font files will come from byte steam already loaded by other part of code from embedded Resource.
  
 Initial translation shall be performed by AI translator file named UserInterfaceTranslationByAI.py
 
@@ -154,7 +154,7 @@ Runtime: no file loading, no parsing, pure compile-time arrays
 
 // UI Layout Constants (millimeters)
 constexpr float UI_TAB_BAR_HEIGHT_MM = 4.0f;
-constexpr float UI_RIBBON_HEIGHT_MM = 20.0f;
+constexpr float UI_RIBBON_HEIGHT_MM = 15.0f;
 constexpr float UI_VIEWLIST_HEIGHT_MM = 4.0f;
 constexpr float UI_DIVIDER_WIDTH_PX = 1.0f;
 constexpr float UI_BUTTON_WIDTH_MM = 8.0f;
@@ -292,6 +292,7 @@ inline void PushUIAction(uint32_t id, uint32_t p1 = 0, uint32_t p2 = 0) {
 }
 
 // These are exhausting list of identified action user can perform in our application.
+// These actions can be triggered either by clicking buttons, or thorough automation scripts etc.
 enum class UIAction : uint32_t {
 
     //Action Group 1: Common
@@ -425,7 +426,8 @@ enum class UIAction : uint32_t {
 };
 
 struct UIControlDefinition {
-    UIAction     action;           // Action ID sent to engineering thread
+	UIAction     action;           // Action ID sent to engineering thread, upon clicking this control. 
+    // This is the single source of truth for all buttons, dropdowns, text fields etc.
     uint32_t     nameStringID;     // Localization ID (hardcoded for now) of the TEXT.
     char32_t     iconChar;         // Future icon font codepoint (use 'x' for now)
     uint8_t      type;             // 0=PlainText, 1=Button, 2=Dropdown trigger, 3=Textbox
@@ -435,177 +437,209 @@ struct UIControlDefinition {
     float        defaultWidthPX;   // Base width before DPI scaling
     bool         showText;         // true = show label, false = icon only
     bool         isEnabled;        // true = show this button/label etc, false = gray out this.
-    uint8_t      actionGrpupIndex; // 0-based index in array of UIActionGroupName for Text reference.
-    uint32_t     actionSubGroupID; // Localization ID (hardcoded for now) of the TEXT.
+    uint8_t      actionGroupIndex; // 0-based index in array of UIActionGroupName for Text reference.
+    uint32_t     actionSubGroupIndex; // Localization ID (hardcoded for now) of the TEXT.
 };
 
 // Action Groups are basically a set of User Control Buttons.
 // This struct will be used to group buttons by top Menus, and specialized property panes in the right side.
-struct UIActionGroup {
-    uint32_t labelStringID;     // e.g. 10001 = "Common"
-    uint16_t firstControlIndex; // Index into giant AllUIControls array
-    uint8_t index;              // Simple index to assist with order in future.
+struct UIActionGroupNames {
+    uint32_t labelStringID;     // e.g. 11 = "Common"
     bool isEnabled;             // User may switch off any action groups.
     bool isMinimized;           // Used in right side property panes.
 };
 
-constexpr UIActionGroup topUIActionGroups[] = {
-    { 10001 , 0 , true }, // ACTION GROUP  1: Common
-    { 10002 , 0 , true }, // ACTION GROUP  2: (2D) General
-    { 10003 , 0 , true }, // ACTION GROUP  3: (2D) P&ID
-    { 10004 , 0 , true }, // ACTION GROUP  4: (3D) General
-    { 10005 , 0 , true }, // ACTION GROUP  5: (3D) Equipment
-    { 10006 , 0 , true }, // ACTION GROUP  6: (3D) Piping
-    { 10007 , 0 , true }, // ACTION GROUP  7: Simulation
-    { 10008 , 0 , true }, // ACTION GROUP  8: Code Checking
-    { 10009 , 0 , true }, // ACTION GROUP  9: 3D to 2D
-    { 10010 , 0 , true }, // ACTION GRPUP 10: (4D) Time
-    { 10011 , 0 , true }, // ACTION GROUP 11: (5D) Cost
-    { 10012 , 0 , true }, // ACTION GROUP 12: Interoperability & Miscellaneous
-    { 10013 , 0 , true }, // ACTION GROUP 13: Extensions
+
+constexpr UIActionGroupNames topUIActionGroupNames[] = {
+	// Initially marking all action group enabled, and non-minimized. User can change this at runtime.
+    { 11 , true , false }, // ACTION GROUP  1: Common
+    { 12 , true , false }, // ACTION GROUP  2: (2D) General
+    { 13 , true , false }, // ACTION GROUP  3: (2D) Intelligent
+    { 14 , true , false }, // ACTION GROUP  4: (3D) General
+    { 15 , true , false }, // ACTION GROUP  5: (3D) Intelligent
+    { 16 , true , false }, // ACTION GROUP  6: (3D) Simulation
+    { 17 , true , false }, // ACTION GROUP  7: Design Codes
+    { 18 , true , false }, // ACTION GROUP  8: Documentation
+    { 19 , true , false }, // ACTION GROUP  9: 3D to 2D
+    { 20 , true , false }, // ACTION GROUP 10: (4D) Time
+    { 21 , true , false }, // ACTION GROUP 11: (5D) Cost
+    { 22 , true , false }, // ACTION GROUP 12: Interoperability & Miscellaneous
+    { 23 , true , false }, // ACTION GROUP 13: Extensions
 };
 
 // Initially I wanted to discard the idea of sub-grouping the buttons within each action groups.
 // However, realized that during training / support discussion we usually need to explain the user,
-// To go to specific group and specific sub group. So it ramins for training & quick onboarding purpose. 
+// To go to specific group and specific sub group. So it remains for training & quick onboarding purpose. 
+
+constexpr UIActionGroupNames topUIActionSubGroupNames[] = {
+    // Initially marking all action sub group enabled, and non-minimized. User can change this at runtime.
+    { 51 , true , false }, 
+    { 52 , true , false }, 
+    { 53 , true , false }, 
+    { 54 , true , false }, 
+    { 55 , true , false }, 
+    { 56 , true , false }, 
+    { 57 , true , false }, 
+    { 58 , true , false }, 
+    { 59 , true , false }, 
+    { 60 , true , false }, 
+    { 61 , true , false }, 
+    { 62 , true , false }, 
+    { 63 , true , false }, 
+    { 64 , true , false }, 
+};
 
 // COMPILE-TIME GIANT ARRAY . Lists ALL top primary buttons (excliding right side pane) available in application.
 // This is the single source of truth. ~80+ controls shown here. we can extend to 500+ easily.
 
 constexpr UIControlDefinition AllUIControls[] = {
-    // ACTION GROUP 1: Common
-    // SubGroup: Project Organization
-    { UIAction::PROJECT_OPEN,          2005, U'x', 1, 1, 0, 0, 85.0f, true, false, 1 , 200001 },
-    { UIAction::PROJECT_SAVE,          2006, U'x', 1, 1, 0, 0, 85.0f, true, false, 1 , 200001 },
-    { UIAction::PROJECT_CLOSE,         2007, U'x', 1, 1, 0, 0, 85.0f, true, false, 1 , 200001 },
+    // ACTION GROUP 11: Common
+    // Subgroup : Project Organization
+    { UIAction::PROJECT_OPEN,          11, U'x', 1, 1, 0, 0, 85.0f, true, false, 1 , 200001 },
+    { UIAction::PROJECT_SAVE,          11, U'x', 1, 1, 0, 0, 85.0f, true, false, 1 , 200001 },
+    { UIAction::PROJECT_CLOSE,         11, U'x', 1, 1, 0, 0, 85.0f, true, false, 1 , 200001 },
 
-    // SubGroup: View
-    { UIAction::VIEW_TREE,             4003, U'x', 1, 1, 0, 0, 70.0f, true, false, 1 , 200001 },
-    { UIAction::VIEW_PERSPECTIVE_ISO_DROPDOWN, 4004, U'x', 2, 1, 0, 1, 110.0f, true, false, 1 , 200001 }, // Dropdown
-    { UIAction::VIEW_MAX_ZOOM,         4005, U'x', 1, 1, 0, 0, 70.0f, true, false, 1 , 200001 },
-    { UIAction::VIEW_ROTATE,           4006, U'x', 1, 1, 0, 0, 70.0f, true, false, 1 , 200001 },
-    { UIAction::VIEW_PAN,              4007, U'x', 1, 1, 0, 0, 70.0f, true, false, 1 , 200001 },
+    // Subgroup : View
+    { UIAction::VIEW_TREE,             11, U'x', 1, 1, 0, 0, 70.0f, true, false, 1 , 200001 },
+    { UIAction::VIEW_PERSPECTIVE_ISO_DROPDOWN, 11, U'x', 2, 1, 0, 1, 110.0f, true, false, 1 , 200001 }, // Dropdown
+    { UIAction::VIEW_MAX_ZOOM,         11, U'x', 1, 1, 0, 0, 70.0f, true, false, 1 , 200001 },
+    { UIAction::VIEW_ROTATE,           11, U'x', 1, 1, 0, 0, 70.0f, true, false, 1 , 200001 },
+    { UIAction::VIEW_PAN,              11, U'x', 1, 1, 0, 0, 70.0f, true, false, 1 , 200001 },
 
-    // SubGroup: Select
-    { UIAction::SELECT_GENERAL,        5003, U'x', 1, 1, 0, 0, 80.0f, true, false, 1 , 200001 },
-    { UIAction::SELECT_PIPES,          5004, U'x', 1, 1, 0, 0, 80.0f, true, false, 1 , 200001 },
-    { UIAction::SELECT_FITTINGS,       5005, U'x', 1, 1, 0, 0, 80.0f, true, false, 1 , 200001 },
-    { UIAction::SELECT_REINFORCEMENT,  5006, U'x', 1, 1, 0, 0, 80.0f, true, false, 1 , 200001 },
-    { UIAction::SELECT_2D_ONLY,        5007, U'x', 1, 1, 0, 0, 80.0f, true, false, 1 , 200001 },
-    { UIAction::SELECT_TEXT,           5008, U'x', 1, 1, 0, 0, 80.0f, true, false, 1 , 200001 },
-    { UIAction::SELECT_LINES,          5009, U'x', 1, 1, 0, 0, 80.0f, true, false, 1 , 200001 },
+    // Subgroup : Select
+    { UIAction::SELECT_GENERAL,        11, U'x', 1, 1, 0, 0, 80.0f, true, false, 1 , 200001 },
+    { UIAction::SELECT_PIPES,          11, U'x', 1, 1, 0, 0, 80.0f, true, false, 1 , 200001 },
+    { UIAction::SELECT_FITTINGS,       11, U'x', 1, 1, 0, 0, 80.0f, true, false, 1 , 200001 },
+    { UIAction::SELECT_REINFORCEMENT,  11, U'x', 1, 1, 0, 0, 80.0f, true, false, 1 , 200001 },
+    { UIAction::SELECT_2D_ONLY,        11, U'x', 1, 1, 0, 0, 80.0f, true, false, 1 , 200001 },
+    { UIAction::SELECT_TEXT,           11, U'x', 1, 1, 0, 0, 80.0f, true, false, 1 , 200001 },
+    { UIAction::SELECT_LINES,          11, U'x', 1, 1, 0, 0, 80.0f, true, false, 1 , 200001 },
 
-    // ACTION GROUP 2: (2D) General
-    // SubGroup: Create 2D Shapes
-    { UIAction::CREATE_LINE,           6001, U'x', 1, 1, 0, 0, 75.0f, true, false, 2 , 200001 },
-    { UIAction::CREATE_POLYLINE,       6002, U'x', 1, 1, 0, 0, 75.0f, true, false, 2 , 200001 },
-    { UIAction::CREATE_CIRCLE,         6003, U'x', 1, 1, 0, 0, 75.0f, true, false, 2 , 200001 },
-    { UIAction::CREATE_ARC,            6004, U'x', 1, 1, 0, 0, 75.0f, true, false, 2 , 200001 },
-    { UIAction::CREATE_ELLIPSE,        6005, U'x', 1, 1, 0, 0, 75.0f, true, false, 2 , 200001 },
-    { UIAction::CREATE_TEXT,           6006, U'x', 1, 1, 0, 0, 75.0f, true, false, 2 , 200001 },
-    { UIAction::CREATE_MULTITEXT,      6007, U'x', 1, 1, 0, 0, 75.0f, true, false, 2 , 200001 },
+    // ACTION GROUP 12: (2D) General
+    // Subgroup : Create 2D Shapes
+    { UIAction::CREATE_LINE,           12, U'x', 1, 1, 0, 0, 75.0f, true, false, 2 , 200001 },
+    { UIAction::CREATE_POLYLINE,       12, U'x', 1, 1, 0, 0, 75.0f, true, false, 2 , 200001 },
+    { UIAction::CREATE_CIRCLE,         12, U'x', 1, 1, 0, 0, 75.0f, true, false, 2 , 200001 },
+    { UIAction::CREATE_ARC,            12, U'x', 1, 1, 0, 0, 75.0f, true, false, 2 , 200001 },
+    { UIAction::CREATE_ELLIPSE,        12, U'x', 1, 1, 0, 0, 75.0f, true, false, 2 , 200001 },
+    { UIAction::CREATE_TEXT,           12, U'x', 1, 1, 0, 0, 75.0f, true, false, 2 , 200001 },
+    { UIAction::CREATE_MULTITEXT,      12, U'x', 1, 1, 0, 0, 75.0f, true, false, 2 , 200001 },
 
     // SubGroup: Edit
-    { UIAction::EDIT_COPY,             6008, U'x', 1, 1, 0, 0, 70.0f, true, false, 2 , 200001 },
-    { UIAction::EDIT_OFFSET,           6009, U'x', 1, 1, 0, 0, 70.0f, true, false, 2 , 200001 },
-    { UIAction::EDIT_MOVE,             6010, U'x', 1, 1, 0, 0, 70.0f, true, false, 2 , 200001 },
+    { UIAction::EDIT_COPY,             12, U'x', 1, 1, 0, 0, 70.0f, true, false, 2 , 200001 },
+    { UIAction::EDIT_OFFSET,           12, U'x', 1, 1, 0, 0, 70.0f, true, false, 2 , 200001 },
+    { UIAction::EDIT_MOVE,             12, U'x', 1, 1, 0, 0, 70.0f, true, false, 2 , 200001 },
 
-    // ACTION GROUP 3: (2D) P&ID
-    { UIAction::CREATE_VVESSEL,        7001, U'x', 1, 1, 0, 0, 85.0f, true, false, 3 , 200001 },
-    { UIAction::CREATE_HVESSEL,        7002, U'x', 1, 1, 0, 0, 85.0f, true, false, 3 , 200001 },
-    { UIAction::CREATE_EXCHANGE,       7003, U'x', 1, 1, 0, 0, 85.0f, true, false, 3 , 200001 },
-    { UIAction::CREATE_PIPE,           7004, U'x', 1, 1, 0, 0, 85.0f, true, false, 3 , 200001 },
-    { UIAction::CREATE_INSTRUMENT,     7005, U'x', 1, 1, 0, 0, 85.0f, true, false, 3 , 200001 },
-    { UIAction::EDIT_PARAMETER,        7006, U'x', 1, 1, 0, 0, 90.0f, true, false, 3 , 200001 },
+    // ACTION GROUP 13: (2D) Advanced
+    // Subgroup : Process Equipments
+    { UIAction::CREATE_VVESSEL,        13, U'x', 1, 1, 0, 0, 85.0f, true, false, 3 , 200001 },
+    { UIAction::CREATE_HVESSEL,        13, U'x', 1, 1, 0, 0, 85.0f, true, false, 3 , 200001 },
+    { UIAction::CREATE_EXCHANGE,       13, U'x', 1, 1, 0, 0, 85.0f, true, false, 3 , 200001 },
+    { UIAction::CREATE_PIPE,           13, U'x', 1, 1, 0, 0, 85.0f, true, false, 3 , 200001 },
+    { UIAction::CREATE_INSTRUMENT,     13, U'x', 1, 1, 0, 0, 85.0f, true, false, 3 , 200001 },
+    { UIAction::EDIT_PARAMETER,        13, U'x', 1, 1, 0, 0, 90.0f, true, false, 3 , 200001 },
 
-    // ACTION GROUP 4: (3D) General
-    { UIAction::CREATE_FOLDER,         8001, U'x', 1, 1, 0, 0, 70.0f, true, false, 4 , 200001 },
-    { UIAction::CREATE_GRID,           8002, U'x', 1, 1, 0, 0, 70.0f, true, false, 4 , 200001 },
-    { UIAction::CREATE_STRUCTURE,      8003, U'x', 1, 1, 0, 0, 70.0f, true, false, 4 , 200001 },
-    { UIAction::CREATE_LINES_3D,       8004, U'x', 1, 1, 0, 0, 70.0f, true, false, 4 , 200001 },
+    // ACTION GROUP 14: (3D)
+    // Subgroup : Basic
+    { UIAction::CREATE_FOLDER,         14, U'x', 1, 1, 0, 0, 70.0f, true, false, 4 , 200001 },
+    { UIAction::CREATE_GRID,           14, U'x', 1, 1, 0, 0, 70.0f, true, false, 4 , 200001 },
+    { UIAction::CREATE_STRUCTURE,      14, U'x', 1, 1, 0, 0, 70.0f, true, false, 4 , 200001 },
+    { UIAction::CREATE_LINES_3D,       14, U'x', 1, 1, 0, 0, 70.0f, true, false, 4 , 200001 },
 
-    // Concrete
-    { UIAction::CONCRETE_COLUMN,       8005, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
-    { UIAction::CONCRETE_BEAM,         8006, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
-    { UIAction::CONCRETE_SLAB,         8007, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
-    { UIAction::CONCRETE_CURVED_SLAB,  8008, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
-    { UIAction::CONCRETE_DOME,         8009, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
-    { UIAction::CONCRETE_PILE,         8010, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
+    // ACTION GROUP 15: (3D) Inteligent
+    // Subgroup : Concrete
+    { UIAction::CONCRETE_COLUMN,       15, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
+    { UIAction::CONCRETE_BEAM,         15, 'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
+    { UIAction::CONCRETE_SLAB,         15, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
+    { UIAction::CONCRETE_CURVED_SLAB,  15, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
+    { UIAction::CONCRETE_DOME,         15, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
+    { UIAction::CONCRETE_PILE,         15, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
 
-    // Reinforcement
-    { UIAction::REINFORCEMENT_LINEAR,  8011, U'x', 1, 1, 0, 0, 85.0f, true, false, 4 , 200001 },
-    { UIAction::REINFORCEMENT_SHAPED_DROPDOWN, 8012, U'x', 2, 1, 0, 1, 110.0f, true, false, 4 , 200001 },
+    // Subgroup : Reinforcement
+    { UIAction::REINFORCEMENT_LINEAR,  15, U'x', 1, 1, 0, 0, 85.0f, true, false, 4 , 200001 },
+    { UIAction::REINFORCEMENT_SHAPED_DROPDOWN, 15, U'x', 2, 1, 0, 1, 110.0f, true, false, 4 , 200001 },
 
-    // Steel, FRP, Glass
-    { UIAction::STEEL_COLUMN,          8013, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
-    { UIAction::STEEL_BEAM,            8014, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
-    { UIAction::FRP_COLUMN,            8015, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
-    { UIAction::FRP_BEAM,              8016, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
-    { UIAction::GLASS_PLATE,           8017, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
+    // Subgroup : Steel, FRP, Glass
+    { UIAction::STEEL_COLUMN,          15, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
+    { UIAction::STEEL_BEAM,            15, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
+    { UIAction::FRP_COLUMN,            15, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
+    { UIAction::FRP_BEAM,              15, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
+    { UIAction::GLASS_PLATE,           15, U'x', 1, 1, 0, 0, 80.0f, true, false, 4 , 200001 },
 
-    // ACTION GROUP 5: (3D) Equipment
-    { UIAction::EQUIPMENT_VVESSEL,     9001, U'x', 1, 1, 0, 0, 85.0f, true, false, 5 , 200001 },
-    { UIAction::EQUIPMENT_HVESSEL,     9002, U'x', 1, 1, 0, 0, 85.0f, true, false, 5 , 200001 },
-    { UIAction::EQUIPMENT_EXCHANGER,   9003, U'x', 1, 1, 0, 0, 85.0f, true, false, 5 , 200001 },
-    { UIAction::EQUIPMENT_PUMP,        9004, U'x', 1, 1, 0, 0, 85.0f, true, false, 5 , 200001 },
+    // Subgroup : Equipments
+    { UIAction::EQUIPMENT_VVESSEL,     15, U'x', 1, 1, 0, 0, 85.0f, true, false, 5 , 200001 },
+    { UIAction::EQUIPMENT_HVESSEL,     15, U'x', 1, 1, 0, 0, 85.0f, true, false, 5 , 200001 },
+    { UIAction::EQUIPMENT_EXCHANGER,   15, U'x', 1, 1, 0, 0, 85.0f, true, false, 5 , 200001 },
+    { UIAction::EQUIPMENT_PUMP,        15, U'x', 1, 1, 0, 0, 85.0f, true, false, 5 , 200001 },
 
-    // ACTION GROUP 6: (3D) Piping
-    { UIAction::CREATE_PIPING,         0xA001, U'x', 1, 1, 0, 0, 80.0f, true, false, 6 , 200001 },
-    { UIAction::CREATE_SPOOL,          0xA002, U'x', 1, 1, 0, 0, 80.0f, true, false, 6 , 200001 },
-    { UIAction::CREATE_VALVE,          0xA003, U'x', 1, 1, 0, 0, 80.0f, true, false, 6 , 200001 },
-    { UIAction::CREATE_ELBOW,          0xA004, U'x', 1, 1, 0, 0, 80.0f, true, false, 6 , 200001 },
-    { UIAction::CREATE_T,              0xA005, U'x', 1, 1, 0, 0, 80.0f, true, false, 6 , 200001 },
-    { UIAction::CREATE_Y,              0xA006, U'x', 1, 1, 0, 0, 80.0f, true, false, 6 , 200001 },
-    { UIAction::INSTRUMENT_PG,         0xA007, U'x', 1, 1, 0, 0, 75.0f, true, false, 6 , 200001 },
-    { UIAction::INSTRUMENT_TG,         0xA008, U'x', 1, 1, 0, 0, 75.0f, true, false, 6 , 200001 },
-    { UIAction::EDIT_EXTEND,           0xA009, U'x', 1, 1, 0, 0, 70.0f, true, false, 6 , 200001 },
-    { UIAction::EDIT_STRETCH,          0xA010, U'x', 1, 1, 0, 0, 70.0f, true, false, 6 , 200001 },
+    // Subgroup : Piping
+    { UIAction::CREATE_PIPING,         15, U'x', 1, 1, 0, 0, 80.0f, true, false, 6 , 200001 },
+    { UIAction::CREATE_SPOOL,          15, U'x', 1, 1, 0, 0, 80.0f, true, false, 6 , 200001 },
+    { UIAction::CREATE_VALVE,          15, U'x', 1, 1, 0, 0, 80.0f, true, false, 6 , 200001 },
+    { UIAction::CREATE_ELBOW,          15, U'x', 1, 1, 0, 0, 80.0f, true, false, 6 , 200001 },
+    { UIAction::CREATE_T,              15, U'x', 1, 1, 0, 0, 80.0f, true, false, 6 , 200001 },
+    { UIAction::CREATE_Y,              15, U'x', 1, 1, 0, 0, 80.0f, true, false, 6 , 200001 },
+    { UIAction::INSTRUMENT_PG,         15, U'x', 1, 1, 0, 0, 75.0f, true, false, 6 , 200001 },
+    { UIAction::INSTRUMENT_TG,         15, U'x', 1, 1, 0, 0, 75.0f, true, false, 6 , 200001 },
+    { UIAction::EDIT_EXTEND,           15, U'x', 1, 1, 0, 0, 70.0f, true, false, 6 , 200001 },
+    { UIAction::EDIT_STRETCH,          15, U'x', 1, 1, 0, 0, 70.0f, true, false, 6 , 200001 },
 
-    // ACTION GROUP 7: Analyze
-    { UIAction::LOAD_CASE,             0xB001, U'x', 1, 1, 0, 0, 80.0f, true, false, 7 , 200001 },
-    { UIAction::LOAD_COMBINATIONS,     0xB002, U'x', 1, 1, 0, 0, 80.0f, true, false, 7 , 200001 },
-    { UIAction::LOAD_SELF_WEIGHT,      0xB003, U'x', 1, 1, 0, 0, 80.0f, true, false, 7 , 200001 },
-    { UIAction::LOAD_UNIFORM,          0xB004, U'x', 1, 1, 0, 0, 80.0f, true, false, 7 , 200001 },
-    { UIAction::LOAD_TRAPEZOIDAL,      0xB005, U'x', 1, 1, 0, 0, 80.0f, true, false, 7 , 200001 },
-    { UIAction::LOAD_PRESSURE,         0xB006, U'x', 1, 1, 0, 0, 80.0f, true, false, 7 , 200001 },
-    { UIAction::LOAD_TEMPERATURE,      0xB007, U'x', 1, 1, 0, 0, 80.0f, true, false, 7 , 200001 },
+	// ACTION GROUP 16: Simulation and Analysis
+    // Subgroup : Loads & Combinations
+    { UIAction::LOAD_CASE,             16, U'x', 1, 1, 0, 0, 80.0f, true, false, 7 , 200001 },
+    { UIAction::LOAD_COMBINATIONS,     16, U'x', 1, 1, 0, 0, 80.0f, true, false, 7 , 200001 },
+    { UIAction::LOAD_SELF_WEIGHT,      16, U'x', 1, 1, 0, 0, 80.0f, true, false, 7 , 200001 },
+    { UIAction::LOAD_UNIFORM,          16, U'x', 1, 1, 0, 0, 80.0f, true, false, 7 , 200001 },
+    { UIAction::LOAD_TRAPEZOIDAL,      16, U'x', 1, 1, 0, 0, 80.0f, true, false, 7 , 200001 },
+    { UIAction::LOAD_PRESSURE,         16, U'x', 1, 1, 0, 0, 80.0f, true, false, 7 , 200001 },
+    { UIAction::LOAD_TEMPERATURE,      16, U'x', 1, 1, 0, 0, 80.0f, true, false, 7 , 200001 },
 
-    { UIAction::SUPPORT_FIXED,         0xB008, U'x', 1, 1, 0, 0, 75.0f, true, false, 7 , 200001 },
-    { UIAction::SUPPORT_PINNED,        0xB009, U'x', 1, 1, 0, 0, 75.0f, true, false, 7 , 200001 },
-    { UIAction::SUPPORT_ROLLER,        0xB010, U'x', 1, 1, 0, 0, 75.0f, true, false, 7 , 200001 },
+    // Subgroup : Supports
+    { UIAction::SUPPORT_FIXED,         16, U'x', 1, 1, 0, 0, 75.0f, true, false, 7 , 200001 },
+    { UIAction::SUPPORT_PINNED,        16, U'x', 1, 1, 0, 0, 75.0f, true, false, 7 , 200001 },
+    { UIAction::SUPPORT_ROLLER,        16, U'x', 1, 1, 0, 0, 75.0f, true, false, 7 , 200001 },
 
-    { UIAction::ANALYSIS_3D_FRAME,     0xB011, U'x', 1, 1, 0, 0, 90.0f, true, false, 7 , 200001 },
-    { UIAction::ANALYSIS_STATIC,       0xB012, U'x', 1, 1, 0, 0, 90.0f, true, false, 7 , 200001 },
-    { UIAction::ANALYSIS_SPECTRUM,     0xB013, U'x', 1, 1, 0, 0, 90.0f, true, false, 7 , 200001 },
-    { UIAction::ANALYSIS_TIME_HISTORY, 0xB014, U'x', 1, 1, 0, 0, 90.0f, true, false, 7 , 200001 },
+	// Subgroup : Analysis Types
+    { UIAction::ANALYSIS_3D_FRAME,     16, U'x', 1, 1, 0, 0, 90.0f, true, false, 7 , 200001 },
+    { UIAction::ANALYSIS_STATIC,       16, U'x', 1, 1, 0, 0, 90.0f, true, false, 7 , 200001 },
+    { UIAction::ANALYSIS_SPECTRUM,     16, U'x', 1, 1, 0, 0, 90.0f, true, false, 7 , 200001 },
+    { UIAction::ANALYSIS_TIME_HISTORY, 16, U'x', 1, 1, 0, 0, 90.0f, true, false, 7 , 200001 },
 
-    // ACTION GROUP 8: Code Checking
-    { UIAction::CODE_CIVIL_IS456,      0xC001, U'x', 1, 1, 0, 0, 85.0f, true, false, 8 , 200001 },
-    { UIAction::CODE_CIVIL_IS13920,    0xC002, U'x', 1, 1, 0, 0, 85.0f, true, false, 8 , 200001 },
-    { UIAction::CODE_CIVIL_IS800,      0xC003, U'x', 1, 1, 0, 0, 85.0f, true, false, 8 , 200001 },
-    { UIAction::CODE_MECH_ASME_VIII,   0xC004, U'x', 1, 1, 0, 0, 95.0f, true, false, 8 , 200001 },
+    // ACTION GROUP 17: Code Checking
+	// Subgroup : Indian (BIS)
+    { UIAction::CODE_CIVIL_IS456,      17, U'x', 1, 1, 0, 0, 85.0f, true, false, 8 , 200001 },
+    { UIAction::CODE_CIVIL_IS13920,    17, U'x', 1, 1, 0, 0, 85.0f, true, false, 8 , 200001 },
+    { UIAction::CODE_CIVIL_IS800,      17, U'x', 1, 1, 0, 0, 85.0f, true, false, 8 , 200001 },
 
-    // ACTION GROUP 9: 3D->2D
-    { UIAction::GENERAL_DRAWING,       0xD001, U'x', 1, 1, 0, 0, 85.0f, true, false, 9 , 200001 },
-    { UIAction::GENERAL_SHEET,         0xD002, U'x', 1, 1, 0, 0, 85.0f, true, false, 9 , 200001 },
-    { UIAction::GENERAL_3D2DGA,        0xD001, U'x', 1, 1, 0, 0, 85.0f, true, false, 9 , 200001 },
-    { UIAction::GENERAL_ASSEMBLY,      0xD002, U'x', 1, 1, 0, 0, 85.0f, true, false, 9 , 200001 },
-    { UIAction::GENERAL_ISOMETRIC,     0xD003, U'x', 1, 1, 0, 0, 85.0f, true, false, 9 , 200001 },
-    { UIAction::GENERAL_TABLES,        0xD004, U'x', 1, 1, 0, 0, 85.0f, true, false, 9 , 200001 },
+    // Subgroup : ASME
+    { UIAction::CODE_MECH_ASME_VIII,   17, U'x', 1, 1, 0, 0, 95.0f, true, false, 8 , 200001 },
 
-    // ACTION GROUP 10: Time
-    // ACTION GROUP 11: Cost
+    // ACTION GROUP 18: Documentation
+        
+    // ACTION GROUP 19: 3D->2D
+    // Subgroup : Drawing Extraction
+    { UIAction::GENERAL_DRAWING,       19, U'x', 1, 1, 0, 0, 85.0f, true, false, 9 , 200001 },
+    { UIAction::GENERAL_SHEET,         19, U'x', 1, 1, 0, 0, 85.0f, true, false, 9 , 200001 },
+    { UIAction::GENERAL_3D2DGA,        19, U'x', 1, 1, 0, 0, 85.0f, true, false, 9 , 200001 },
+    { UIAction::GENERAL_ASSEMBLY,      19, U'x', 1, 1, 0, 0, 85.0f, true, false, 9 , 200001 },
+    { UIAction::GENERAL_ISOMETRIC,     19, U'x', 1, 1, 0, 0, 85.0f, true, false, 9 , 200001 },
+    { UIAction::GENERAL_TABLES,        19, U'x', 1, 1, 0, 0, 85.0f, true, false, 9 , 200001 },
 
-    // ACTION GROUP 12: Interoperability & Miscellaneous.
-    { UIAction::IMPORT_STD,            0xE001, U'x', 1, 1, 0, 0, 70.0f, true, false, 12 , 200001 },
-    { UIAction::IMPORT_CII,            0xE002, U'x', 1, 1, 0, 0, 70.0f, true, false, 12 , 200001 },
-    { UIAction::IMPORT_DXF,            0xE003, U'x', 1, 1, 0, 0, 70.0f, true, false, 12 , 200001 },
-    { UIAction::IMPORT_DWG,            0xE004, U'x', 1, 1, 0, 0, 70.0f, true, false, 12 , 200001 },
-    { UIAction::EXPORT_STD,            0xE005, U'x', 1, 1, 0, 0, 70.0f, true, false, 12 , 200001 },
-    { UIAction::EXPORT_DWG,            0xE006, U'x', 1, 1, 0, 0, 70.0f, true, false, 12 , 200001 },
+    // ACTION GROUP 20: Time
+    // ACTION GROUP 21: Cost
 
-    // ACTION GROUP 13: Extensions
-    { UIAction::CODE_CIVIL_IS456,      0xC001, U'x', 1, 1, 0, 0, 85.0f }
+    // ACTION GROUP 22: Interoperability & Miscellaneous.
+	// Subgroup : Import & Export
+    { UIAction::IMPORT_STD,            22, U'x', 1, 1, 0, 0, 70.0f, true, false, 12 , 200001 },
+    { UIAction::IMPORT_CII,            22, U'x', 1, 1, 0, 0, 70.0f, true, false, 12 , 200001 },
+    { UIAction::IMPORT_DXF,            22, U'x', 1, 1, 0, 0, 70.0f, true, false, 12 , 200001 },
+    { UIAction::IMPORT_DWG,            22, U'x', 1, 1, 0, 0, 70.0f, true, false, 12 , 200001 },
+    { UIAction::EXPORT_STD,            22, U'x', 1, 1, 0, 0, 70.0f, true, false, 12 , 200001 },
+    { UIAction::EXPORT_DWG,            22, U'x', 1, 1, 0, 0, 70.0f, true, false, 12 , 200001 },
+
+    // ACTION GROUP 23: Extensions
+	// Subgroup : All Active Extensions (This will be dynamic in future, but we can hardcode few for now)
+    { UIAction::CODE_CIVIL_IS456,      23, U'x', 1, 1, 0, 0, 85.0f }
 };
 
 constexpr size_t TotalUIControls = std::size(AllUIControls);

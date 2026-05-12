@@ -226,6 +226,7 @@ FT_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     <ClCompile Include="MemoryManagerGPU-DirectX12.cpp" />
     <ClCompile Include="preCompiledHeadersWindows.cpp" />
     <ClCompile Include="UserInterface-DirectX12.cpp" />
+    <ClCompile Include="UserInterfaceTranslationCompiled.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\code-core\ID.h" />
@@ -255,6 +256,7 @@ FT_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     <ClInclude Include="UserInputProcessing.h" />
     <ClInclude Include="UserInterface-DirectX12.h" />
     <ClInclude Include="UserInterface-TextTranslations.h" />
+    <ClInclude Include="UserInterfaceTranslationCompiled.h" />
     <ClInclude Include="UserInterface.h" />
   </ItemGroup>
   <ItemGroup>
