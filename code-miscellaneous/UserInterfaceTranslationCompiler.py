@@ -49,6 +49,8 @@ def to_cpp_u32_literal(text: str) -> str:
     return f'U"{escaped}"'
 
 
+WORLD_ID_COLUMNS = ("WorldID", "WordID")
+
 def read_csv_by_world_id(path: Path) -> Dict[int, dict]:
     if not path.exists():
         return {}
@@ -60,7 +62,12 @@ def read_csv_by_world_id(path: Path) -> Dict[int, dict]:
             return rows
 
         for row in reader:
-            world_id_text = (row.get("WorldID") or "").strip()
+            world_id_text = ""
+            for column_name in WORLD_ID_COLUMNS:
+                world_id_text = (row.get(column_name) or "").strip()
+                if world_id_text:
+                    break
+
             if not world_id_text:
                 continue
 

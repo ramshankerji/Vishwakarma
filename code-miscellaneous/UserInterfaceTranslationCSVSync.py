@@ -9,7 +9,7 @@ This script creates or updates one CSV per non-English UILanguage value:
     ...
     UserInterfaceTranslation_45_Hungarian.csv
 
-Existing translator text is preserved by WorldID. Missing WorldID rows are added
+Existing translator text is preserved by WordID. Missing WordID rows are added
 with English text as the initial Human translation so the application has a
 complete fallback set from day one.
 """
@@ -21,9 +21,10 @@ from typing import Dict, Iterable, List
 
 from UserInterfaceTranslationCompiler import LANGUAGES
 
-TARGET_FIELDS = [ "WorldID", "ShortWordName", 
+TARGET_FIELDS = [ "WordID", "ShortWordName", 
     "English", "Human", "Comments", "Grok", "ChatGPT", "Gemini", "Claude",
 ]
+ID_FIELDS = ("WordID", "WorldID")
 
 def read_rows(path: Path) -> List[dict]:
     with path.open(newline="", encoding="utf-8") as csv_file:
@@ -35,15 +36,20 @@ def read_rows(path: Path) -> List[dict]:
 
 def write_rows(path: Path, rows: Iterable[dict]) -> None:
     with path.open("w", newline="", encoding="utf-8") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=TARGET_FIELDS, extraction="ignore")
+        writer = csv.DictWriter(csv_file, fieldnames=TARGET_FIELDS, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
 
 def parse_world_id(row: dict, path: Path) -> int:
-    world_id_text = (row.get("WorldID") or "").strip()
+    world_id_text = ""
+    for field_name in ID_FIELDS:
+        world_id_text = (row.get(field_name) or "").strip()
+        if world_id_text:
+            break
+
     if not world_id_text:
-        raise ValueError(f"Missing WorldID in {path.name}")
+        raise ValueError(f"Missing WordID in {path.name}")
     return int(world_id_text, 0)
 
 def english_text(row: dict) -> str:
@@ -89,7 +95,7 @@ def canonical_rows(path: Path) -> List[dict]:
 def synchronized_row(canonical_row: dict, existing_row: dict) -> dict:
     fallback_text = english_text(canonical_row)
     return {
-        "WorldID": (canonical_row.get("WorldID") or "").strip(),
+        "WordID": (canonical_row.get("WordID") or canonical_row.get("WorldID") or "").strip(),
         "ShortWordName": (canonical_row.get("ShortWordName") or "").strip(),
         "English": fallback_text,
         "Human": (existing_row.get("Human") or fallback_text).strip(),
