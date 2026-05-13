@@ -55,7 +55,7 @@ UI Layout:
 ----------------------------------------------
 | TAB BAR    4mm High           MIN-MAX-CLOSE|
 --------------------1px-----------------------
-| RIBBON    20mm High                        |
+| ACTION GROUP    24mm High                  |
 --------------------1px-----------------------
 | VIEW LIST ( Currently only 1)   4mm High   |
 --------------------1px-----------------------
@@ -155,14 +155,15 @@ Runtime: no file loading, no parsing, pure compile-time arrays
 // UI Layout Constants (millimeters)
 constexpr float UI_TEXT_HEIGHT_MM = 2.5f;
 constexpr float UI_TAB_BAR_HEIGHT_MM = 4.0f;
-constexpr float UI_TOP_ACTION_GROUP_HEIGHT_MM = 24.0f; // Divisible by 2/3/4
+constexpr float UI_ACTION_GROUP_LABEL_HEIGHT_MM = 4.0f;
+constexpr float UI_TOP_ACTION_GROUP_HEIGHT_MM = 12.0f; // Divisible by 2/3/4
 constexpr float UI_VIEWLIST_HEIGHT_MM = 4.0f;
-constexpr float UI_DIVIDER_WIDTH_PX = 1.0f;
+constexpr float UI_DIVIDER_GAP_PX = 1.0f;
 constexpr float UI_BUTTON_HEIGHT_MM = 3.0f; // Text is 2.5mm.
 constexpr float UI_BUTTON_WIDTH_MM = 8.0f;
 constexpr float UI_BUTTON_GAP_MM = 1.0f;
 constexpr float UI_ICON_SIZE_MM = 4.0f;
-constexpr float UI_GROUP_GAP_MM = 5.0f;
+constexpr float UI_GROUP_GAP_MM = 5.0f; // We would rather keep it 2 pixel fixed width.
 
 // Colors (ABGR)
 constexpr uint32_t COLOR_UI_BG_DARK = 0xFF1E1E1E;
@@ -504,9 +505,9 @@ constexpr size_t TotalTopUIActionSubGroups = std::size(topUIActionSubGroupNames)
 constexpr UIControlDefinition AllUIControls[] = {
     // ACTION GROUP 11: Common
     // Subgroup : Project Organization
-    { UIAction::PROJECT_OPEN,          1001, U'x', 1, 1, 0, 0, true, false, 0 , 0 },
-    { UIAction::PROJECT_SAVE,          1003, U'x', 1, 1, 0, 0, true, false, 0 , 0 },
-    { UIAction::PROJECT_CLOSE,         1005, U'x', 1, 1, 0, 0, true, false, 0 , 0 },
+    { UIAction::PROJECT_OPEN,          1001, U'x', 1, 3, 0, 0, true, false, 0 , 0 },
+    { UIAction::PROJECT_SAVE,          1003, U'x', 1, 3, 1, 0, true, false, 0 , 0 },
+    { UIAction::PROJECT_CLOSE,         1005, U'x', 1, 3, 2, 0, true, false, 0 , 0 },
 
     // Subgroup : View
     { UIAction::VIEW_TREE,             1007, U'x', 1, 2, 0, 0, true, false, 0 , 1 },

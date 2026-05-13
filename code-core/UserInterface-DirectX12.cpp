@@ -174,12 +174,18 @@ Texture2D atlas : register(t0);
 SamplerState samp : register(s0);
 
 float4 PSMain(PSInput input) : SV_TARGET {
-    float4 tex = atlas.Sample(samp, input.uv);
     float r = ((input.color >> 0) & 0xFF) / 255.0;
     float g = ((input.color >> 8) & 0xFF) / 255.0;
     float b = ((input.color >> 16) & 0xFF) / 255.0;
     float a = ((input.color >> 24) & 0xFF) / 255.0;
-    return float4(r, g, b, a) * tex;
+    float4 baseColor = float4(r, g, b, a);
+
+    if (input.uv.x == 0.0 && input.uv.y == 0.0) {
+        return baseColor;
+    }
+
+    float coverage = atlas.Sample(samp, input.uv).r;
+    return float4(baseColor.rgb, baseColor.a * coverage);
 }
 )";
 
@@ -374,6 +380,11 @@ void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t c
         glyphCount++;
         cursorX += g.advanceX;
     }
+
+    ctx.vertexPtr += glyphCount * 4;
+    ctx.indexPtr += glyphCount * 6;
+    ctx.vertexCount += glyphCount * 4;
+    ctx.indexCount += glyphCount * 6;
 }
 
 // Convenience for tabs (fixed width for now)
@@ -432,11 +443,13 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     ctx.indexCount = 0;
     float pixelsPerMM = monitorDPI / 25.4f;
     float buttonWidthPx = UI_BUTTON_WIDTH_MM * pixelsPerMM;
-    float buttonHeightPx = UI_BUTTON_HEIGHT_MM * pixelsPerMM;
-    float iconReservedWidthPx = (UI_ICON_SIZE_MM + 2) * pixelsPerMM;
     float iconSizePx = UI_ICON_SIZE_MM * pixelsPerMM;
-    float textStartOffsetPx = iconReservedWidthPx + 5.0f * pixelsPerMM;
-    float textEndInsetPx = 10.0f * pixelsPerMM;
+    float textHeightPx = UI_TEXT_HEIGHT_MM * pixelsPerMM;
+    float buttonHeightPx = std::max(UI_BUTTON_HEIGHT_MM * pixelsPerMM,
+        std::max(iconSizePx, textHeightPx) + 4.0f);
+    float iconReservedWidthPx = iconSizePx + 4.0f;
+    float textStartOffsetPx = iconReservedWidthPx + 4.0f;
+    float textEndInsetPx = 6.0f;
     float tabBarHeight = UI_TAB_BAR_HEIGHT_MM * pixelsPerMM;
 
     auto canPushRect = [&]() {
@@ -457,7 +470,39 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         if (pushed) advanceRect();
     };
 
-    auto pushTextClipped = [&](float x, float y, const char32_t* text, float maxWidth, uint32_t color) {
+    auto textScaleForHeight = [&](float targetHeight) {
+        auto glyphIt = glyphLookup.find(U'M');
+        if (glyphIt == glyphLookup.end() || glyphIt->second.height <= 0) return 1.0f;
+
+        return targetHeight / (float)glyphIt->second.height;
+    };
+
+    const float uiTextScale = textScaleForHeight(textHeightPx);
+
+    auto measureTextWidth = [&](const char32_t* text, float scale) {
+        if (!text) return 0.0f;
+
+        float cursorX = 0.0f;
+        float maxRight = 0.0f;
+
+        for (const char32_t* p = text; *p; ++p) {
+            if (*p > 0x7F) continue;
+
+            auto glyphIt = glyphLookup.find(*p);
+            if (glyphIt == glyphLookup.end()) continue;
+
+            const Glyph& g = glyphIt->second;
+            float glyphLeft = cursorX + (float)g.bearingX * scale;
+            float glyphRight = glyphLeft + (float)g.width * scale;
+            if (glyphRight > maxRight) maxRight = glyphRight;
+            cursorX += (float)g.advanceX * scale;
+        }
+
+        return std::max(cursorX, maxRight);
+    };
+
+    auto pushTextClipped = [&](float x, float y, const char32_t* text, float maxWidth, uint32_t color,
+        float scale) {
         if (!text || maxWidth <= 0.0f) return;
 
         float cursorX = x;
@@ -471,13 +516,15 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
 
             const Glyph& g = glyphIt->second;
             if (g.width <= 0 || g.height <= 0) {
-                cursorX += g.advanceX;
+                cursorX += (float)g.advanceX * scale;
                 continue;
             }
 
-            float xpos = cursorX + g.bearingX;
-            float ypos = y - g.bearingY;
-            float glyphRight = xpos + (float)g.width;
+            float xpos = cursorX + (float)g.bearingX * scale;
+            float ypos = y - (float)g.bearingY * scale;
+            float glyphWidth = (float)g.width * scale;
+            float glyphHeight = (float)g.height * scale;
+            float glyphRight = xpos + glyphWidth;
 
             if (glyphRight > textRight) break;
             if (ctx.vertexCount + 4 > uiRes.maxVertices) return;
@@ -485,9 +532,9 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
 
             uint16_t base = ctx.vertexCount;
             ctx.vertexPtr[0] = { xpos,                  ypos,                   g.uvMinX, g.uvMinY, color };
-            ctx.vertexPtr[1] = { xpos + (float)g.width, ypos,                   g.uvMaxX, g.uvMinY, color };
-            ctx.vertexPtr[2] = { xpos + (float)g.width, ypos + (float)g.height, g.uvMaxX, g.uvMaxY, color };
-            ctx.vertexPtr[3] = { xpos,                  ypos + (float)g.height, g.uvMinX, g.uvMaxY, color };
+            ctx.vertexPtr[1] = { xpos + glyphWidth,     ypos,                   g.uvMaxX, g.uvMinY, color };
+            ctx.vertexPtr[2] = { xpos + glyphWidth,     ypos + glyphHeight,     g.uvMaxX, g.uvMaxY, color };
+            ctx.vertexPtr[3] = { xpos,                  ypos + glyphHeight,     g.uvMinX, g.uvMaxY, color };
 
             ctx.indexPtr[0] = base + 0;
             ctx.indexPtr[1] = base + 1;
@@ -500,16 +547,16 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             ctx.indexPtr += 6;
             ctx.vertexCount += 4;
             ctx.indexCount += 6;
-            cursorX += g.advanceX;
+            cursorX += (float)g.advanceX * scale;
         }
     };
 
-    auto textBaselineY = [&](float y, float h) {
+    auto textBaselineY = [&](float y, float h, float scale) {
         auto glyphIt = glyphLookup.find(U'M');
         if (glyphIt == glyphLookup.end()) return y + h * 0.7f;
 
         const Glyph& g = glyphIt->second;
-        return y + h * 0.5f + (float)g.bearingY - (float)g.height * 0.5f;
+        return y + h * 0.5f + (float)g.bearingY * scale - (float)g.height * scale * 0.5f;
     };
 
     auto pushTab = [&](float x, float w, float h, uint16_t tabID, bool isActive) {
@@ -518,13 +565,10 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         if (pushed) advanceRect();
         return clicked;
     };
-    float topActionGroupY = tabBarHeight + UI_DIVIDER_WIDTH_PX;   // ← only one declaration
 
     // ENGINEERING / PROJECT TABs
     float tabWidth = 120.0f;
     float currentX = 0.0f;
-    float currentActionGroupX = 0.0f;
-    float currentActionSubGroupX = 0.0f;
 
     uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
     uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
@@ -539,39 +583,23 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     }
 
     // TOP BUTTONS (ACTION GROUP BAR)
-    currentX = 20.0f; // reset X for action groups
+    currentX = 5.0f; // reset X for action groups
 
     const float buttonBaseHeight = buttonHeightPx;
     const float buttonGap = UI_BUTTON_GAP_MM * pixelsPerMM;
-    const float subGroupGap = 18.0f;
-    const float groupGap = 28.0f;
+    const float groupGap = 96.0f;
 
-    uint32_t currentActionGroupIndex = 0xFFFFFFFF;
-    uint32_t currentSubGroupID = 0xFFFFFFFF;
-
-    float groupLabelY = topActionGroupY;
-    float subGroupLabelY = topActionGroupY + 96.0f;
-    const float groupLabelHeight = 16.0f;
-    float currentActionGroupStartX = currentX;
+    float actionGroupLabelY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX)* pixelsPerMM;
+	float groupLabelHeight = UI_ACTION_GROUP_LABEL_HEIGHT_MM * pixelsPerMM;
+    float topActionGroupY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM) * pixelsPerMM;
+    float actionSubGroupLabelY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_TOP_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMM;
 
     auto localizedString = [](uint32_t stringID) {
         const char32_t* text = UITranslations::GetUILocalizedString(stringID, UILanguage::English);
         return text ? text : U"";
-    };
-
-    auto drawActionGroupLabel = [&](uint32_t groupIndex, float startX, float endX) {
-        if (groupIndex == 0xFFFFFFFF || groupIndex >= TotalTopUIActionGroups) return;
-
-        const UIActionGroupNames& group = topUIActionGroupNames[groupIndex];
-        if (!group.isEnabled) return;
-
-        const char32_t* label = localizedString(group.labelStringID);
-        if (*label == U'\0') return;
-
-        float labelWidth = std::max(32.0f, endX - startX);
-        pushRect(startX, groupLabelY, labelWidth, groupLabelHeight, 0xFF2D2D30);
-        pushTextClipped(startX + 4.0f, textBaselineY(groupLabelY, groupLabelHeight),
-            label, labelWidth - 8.0f, COLOR_UI_TEXT);
     };
 
     auto localizedControlLabel = [&](const UIControlDefinition& ctrl) {
@@ -585,35 +613,39 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         return U"";
     };
 
+    float verticalSlotMaxSize = 0.0f;
+    float currentActionGroupStartX = 0.0f;
+    float actionSubGroupWidth = 0.0f;
+    uint32_t currentActionGroupIndex = 100000; // To large value to trigger change at i=0
+    uint32_t currentSubGroupID = 0;
+    
     for (size_t i = 0; i < TotalUIControls; ++i) {
         const auto& ctrl = AllUIControls[i];
 
         if (ctrl.actionGroupIndex != currentActionGroupIndex) { // Action Group change
-            if (currentActionGroupIndex != 0xFFFFFFFF) {
-                drawActionGroupLabel(currentActionGroupIndex, currentActionGroupStartX,
-                    currentActionGroupX - buttonGap);
-                currentActionGroupX += groupGap;
-            }
+            const UIActionGroupNames& group = topUIActionGroupNames[ctrl.actionGroupIndex];
+            const char32_t* label = localizedString(group.labelStringID);
+
+            pushRect(currentActionGroupStartX, actionGroupLabelY, groupGap, groupLabelHeight, 0xFF2D2D30);
+            pushTextClipped(currentActionGroupStartX + 4.0f, textBaselineY(actionGroupLabelY, groupLabelHeight, uiTextScale),
+                label, groupGap - 8.0f, COLOR_UI_TEXT, uiTextScale);
+
             currentActionGroupIndex = ctrl.actionGroupIndex;
-            currentSubGroupID = 0xFFFFFFFF;
-
-            pushRect(currentActionGroupX, groupLabelY, 6, 48, 0xFF555555); // group separator
-            currentActionGroupX += 96.0f;
-            currentActionGroupStartX = currentActionGroupX;
-        }
-        
-        if (ctrl.actionSubGroupIndex != currentSubGroupID) { // Sub-Group change
-            if (currentSubGroupID != 0xFFFFFFFF) { currentActionSubGroupX += subGroupGap;}
-            currentSubGroupID = ctrl.actionSubGroupIndex;
-
-            pushRect(currentActionSubGroupX, subGroupLabelY, 110, 16, 0xFF2D2D30); // sub-group label bar
-            currentActionSubGroupX += 96.0f; //TODO: To be computed based on actual button heights.
+            currentActionGroupStartX += groupGap;
+            pushRect(currentActionGroupStartX + 3, actionGroupLabelY, 4, 16, 0xFF555555); // group separator
+            currentActionGroupStartX += 10.0f; // +3+4+3
         }
 
-        // Button geometry (fixed physical size)
+        // Button geometry
         float btnWidth = buttonWidthPx;
         float btnHeight = buttonHeightPx;
-        float btnY = topActionGroupY + 38.0f;
+        float btnY = topActionGroupY;
+        const char32_t* label = localizedControlLabel(ctrl);
+        
+        if (ctrl.showText && *label != U'\0') {
+            float contentWidth = textStartOffsetPx + measureTextWidth(label, uiTextScale) + textEndInsetPx;
+            btnWidth = std::max(btnWidth, contentWidth);
+        }
 
         if (ctrl.noOfVerticalSlots > 1) {btnY += ctrl.verticalSlotNo * buttonBaseHeight;}
         uint32_t baseColor = StableRandomUIColour((uint32_t)ctrl.action ^ ((uint32_t)i * 0x9E3779B9u));// Render
@@ -625,9 +657,6 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             uint32_t drawColor = hovered && input.leftButtonDown ? 0xFF333333 : baseColor;
             if (hovered && !input.leftButtonDown) drawColor = 0xFF555555;
             pushRect(currentX, btnY, btnWidth, btnHeight, drawColor);
-            const char32_t* buttonText = localizedString(ctrl.nameStringID);
-            if (*buttonText == U'\0') continue;
-            pushTextClipped(currentX, btnY, buttonText, btnWidth, 0xFF888888);
 
             bool clicked = hovered && input.leftButtonPressedThisFrame;
 
@@ -656,17 +685,35 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         pushRect(iconX, iconY, iconSizePx, iconSizePx, iconColor);
 
         if (ctrl.showText) {
-            const char32_t* label = localizedControlLabel(ctrl);
-
             float textX = currentX + textStartOffsetPx;
             float textWidth = btnWidth - textStartOffsetPx - textEndInsetPx;
-            pushTextClipped(textX, textBaselineY(btnY, btnHeight), label, textWidth, 0xFFFFFFFF);
+            pushTextClipped(textX, textBaselineY(btnY, btnHeight, uiTextScale),
+                label, textWidth, 0xFFFFFFFF, uiTextScale);
         }
 
-        currentX += btnWidth + buttonGap;
-    }
+        if (btnWidth > verticalSlotMaxSize) verticalSlotMaxSize = btnWidth;
+        if (i < (TotalUIControls-1)) { //Except last one.
+            if (AllUIControls[i + 1].verticalSlotNo == 0) {
+                currentX += btnWidth + buttonGap;
+                actionSubGroupWidth += btnWidth + buttonGap;
+                verticalSlotMaxSize = 0;
+            }
+        }
 
-    drawActionGroupLabel(currentActionGroupIndex, currentActionGroupStartX, currentX - buttonGap);
+        if (ctrl.actionSubGroupIndex != currentSubGroupID) { // Sub-Group change
+            //Means current button belongs to different action sub group.
+            //Hence write the action sub group name of previous action sub group.
+            const UIActionGroupNames& group = topUIActionSubGroupNames[currentSubGroupID];
+            const char32_t* label = localizedString(group.labelStringID);
+
+            pushRect(currentX - actionSubGroupWidth, actionSubGroupLabelY, actionSubGroupWidth, groupLabelHeight, 0xFF2D2D30);
+            pushTextClipped(currentX - actionSubGroupWidth + 4.0f, textBaselineY(actionSubGroupLabelY, groupLabelHeight, uiTextScale),
+                label, actionSubGroupWidth - 8.0f, COLOR_UI_TEXT, uiTextScale);
+
+            currentSubGroupID = ctrl.actionSubGroupIndex;
+            actionSubGroupWidth = 0; //Reset
+        }
+    }
 
     currentX += 30.0f;// Final padding
 
