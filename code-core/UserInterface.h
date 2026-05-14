@@ -153,7 +153,9 @@ Runtime: no file loading, no parsing, pure compile-time arrays
 */
 
 // UI Layout Constants (millimeters)
-constexpr float UI_TEXT_HEIGHT_MM = 2.5f;
+constexpr float UI_TEXT_HEIGHT_MM = 2.5f; // EIL's recommended text hight for printed drawing is 2.5mm.
+// Perhaps this is also good for UI text to maintain consistency between printed and on-screen drawings.
+// TODO: Latter, we will allow user to customize text height from settings.
 constexpr float UI_TAB_BAR_HEIGHT_MM = 4.0f;
 constexpr float UI_ACTION_GROUP_LABEL_HEIGHT_MM = 4.0f;
 constexpr float UI_TOP_ACTION_GROUP_HEIGHT_MM = 12.0f; // Divisible by 2/3/4

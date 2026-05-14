@@ -55,4 +55,4 @@ void CleanupUIResources( DX12ResourcesUI& uiRes);
 void PushRect(UIDrawContext& ctx, float x, float y, float w, float h, uint32_t color, DX12ResourcesUI& uiRes);
 void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t color, DX12ResourcesUI& uiRes);
 void RenderUIOverlay( SingleUIWindow& window, ID3D12GraphicsCommandList* cmdList,
-    DX12ResourcesUI& uiRes, float monitorDPI, const UIInput& input);
+    DX12ResourcesUI& uiRes, float monitorDPIX, float monitorDPIY, const UIInput& input);

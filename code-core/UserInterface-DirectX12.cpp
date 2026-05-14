@@ -409,7 +409,7 @@ bool PushTab(UIDrawContext& ctx, float x, float w, float h, uint16_t tabID, bool
 // side favorite / frequent buttons bars, right side property window, bottom status bar.
 // This is also responsible for all relevant DirectX12 configurations required for rendering User Interface.
 void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX12ResourcesUI& uiRes,
-    float monitorDPI, const UIInput& input) {
+    float monitorDPIX, float monitorDPIY, const UIInput& input) {
     
     if (!cmd) return; //Defensive check.
 
@@ -444,16 +444,17 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     ctx.indexPtr = reinterpret_cast<uint16_t*>(uiRes.pIndexDataBegin);
     ctx.vertexCount = 0;
     ctx.indexCount = 0;
-    float pixelsPerMM = monitorDPI / 25.4f;
-    float buttonWidthPx = std::round(UI_BUTTON_WIDTH_MM * pixelsPerMM);
-    float iconSizePx = std::round(UI_ICON_SIZE_MM * pixelsPerMM);
-    float textHeightPx = std::round(UI_TEXT_HEIGHT_MM * pixelsPerMM);
-    float buttonHeightPx = std::max(std::round(UI_BUTTON_HEIGHT_MM * pixelsPerMM),
+    float pixelsPerMMx = monitorDPIX / 25.4f;
+    float pixelsPerMMy = monitorDPIY / 25.4f;
+    float buttonWidthPx = std::round(UI_BUTTON_WIDTH_MM * pixelsPerMMx);
+    float iconSizePx = std::round(UI_ICON_SIZE_MM * pixelsPerMMy);
+    float textHeightPx = std::round(UI_TEXT_HEIGHT_MM * pixelsPerMMy);
+    float buttonHeightPx = std::max(std::round(UI_BUTTON_HEIGHT_MM * pixelsPerMMy),
         std::max(iconSizePx, textHeightPx) + 4.0f);
 	float iconReservedWidthPx = iconSizePx + 4.0f; // 2 pixels padding on each side of the icon.
     float textStartOffsetPx = iconReservedWidthPx + 4.0f;
     float textEndInsetPx = 6.0f;
-    float tabBarHeightPx = std::round(UI_TAB_BAR_HEIGHT_MM * pixelsPerMM);
+    float tabBarHeightPx = std::round(UI_TAB_BAR_HEIGHT_MM * pixelsPerMMy);
 
     auto canPushRect = [&]() {
         return ctx.vertexCount + 4 <= uiRes.maxVertices &&
@@ -589,16 +590,16 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     currentX = 5.0f; // reset X for action groups
 
     const float buttonBaseHeight = buttonHeightPx;
-    const float buttonGap = UI_BUTTON_GAP_MM * pixelsPerMM;
+    const float buttonGap = UI_BUTTON_GAP_MM * pixelsPerMMx;
     const float groupGap = 96.0f;
 
-    float actionGroupLabelY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX)* pixelsPerMM;
-	float groupLabelHeight = UI_ACTION_GROUP_LABEL_HEIGHT_MM * pixelsPerMM;
+    float actionGroupLabelY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX)* pixelsPerMMy;
+	float groupLabelHeight = UI_ACTION_GROUP_LABEL_HEIGHT_MM * pixelsPerMMy;
     float topActionGroupY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-        UI_ACTION_GROUP_LABEL_HEIGHT_MM) * pixelsPerMM;
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM) * pixelsPerMMy;
     float actionSubGroupLabelY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
         UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-        UI_TOP_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMM;
+        UI_TOP_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy;
 
     auto localizedString = [](uint32_t stringID) {
         const char32_t* text = UITranslations::GetUILocalizedString(stringID, UILanguage::English);
@@ -720,7 +721,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
                 // Place it exactly in the middle of the 'buttonGap' between the two columns
                 float lineX = std::floor(currentX - (buttonGap / 2.0f));
                 // Span the height of the action group buttons (assumes 3 rows max per your UI_TOP_ACTION_GROUP_HEIGHT_MM)
-                float lineHeight = UI_TOP_ACTION_GROUP_HEIGHT_MM * pixelsPerMM;
+                float lineHeight = UI_TOP_ACTION_GROUP_HEIGHT_MM * pixelsPerMMy;
                 // Draw 1px wide line. Using 0xFF555555 to match your Action Group separator color
                 pushRect(lineX, topActionGroupY, 1.0f, lineHeight, 0xFF555555);
             }

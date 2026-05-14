@@ -1684,7 +1684,9 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                     ; // atlas not ready → skip UI
                 } else {
                     RenderUIOverlay(window, threadRes.commandList.Get(), gpu.uiResources,
-                        static_cast<float>(gpu.screens[monitorId].dpiX), inputSnapshot);
+                        static_cast<float>(gpu.screens[monitorId].physicalDpiX),
+                        static_cast<float>(gpu.screens[monitorId].physicalDpiY),
+                        inputSnapshot);
                 }
             }
 

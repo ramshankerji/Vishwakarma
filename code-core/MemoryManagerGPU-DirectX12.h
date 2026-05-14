@@ -301,8 +301,12 @@ struct OneMonitorController { // Variables stored per monitor.
     std::wstring friendlyName;           // Human readable name (e.g., "Dell U2720Q")
     RECT monitorRect;                    // Full monitor rectangle
     RECT workAreaRect;                   // Work area (excluding task bar)
-    int dpiX = 96;                       // DPI X
-    int dpiY = 96;                       // DPI Y
+    int dpiX = 96;                       // Effective DPI used by Windows scaling
+    int dpiY = 96;                       // Effective DPI used by Windows scaling
+    int rawDpiX = 96;                    // Native monitor DPI (raw hardware DPI)
+    int rawDpiY = 96;                    // Native monitor DPI (raw hardware DPI)
+    int physicalDpiX = 96;               // Calculated physical DPI from pixel size and physical size
+    int physicalDpiY = 96;               // Calculated physical DPI from pixel size and physical size
     double scaleFactor = 1.0;            // Scale factor (100% = 1.0, 125% = 1.25, etc.)
     bool isPrimary = false;              // Is this the primary monitor?
     DWORD orientation = DMDO_DEFAULT;    // Monitor orientation

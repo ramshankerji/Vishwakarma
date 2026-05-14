@@ -129,6 +129,10 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
     currentScreen->isVirtualMonitor = false;
     currentScreen->dpiX = 96;// Default DPI to 96 to prevent divide-by-zero later if GetDpiForMonitor fails
     currentScreen->dpiY = 96;
+    currentScreen->rawDpiX = 96;
+    currentScreen->rawDpiY = 96;
+    currentScreen->physicalDpiX = 96;
+    currentScreen->physicalDpiY = 96;
 
     MONITORINFOEXW monitorInfo = {};// Get monitor info
     monitorInfo.cbSize = sizeof(MONITORINFOEXW);
@@ -154,6 +158,13 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
         currentScreen->dpiX = static_cast<int>(dpiX);
         currentScreen->dpiY = static_cast<int>(dpiY);
         currentScreen->scaleFactor = static_cast<double>(dpiX) / 96.0; // 96 DPI = 100% scale
+    }
+    if (SUCCEEDED(GetDpiForMonitor(hMonitor, MDT_RAW_DPI, &dpiX, &dpiY))) {
+        currentScreen->rawDpiX = static_cast<int>(dpiX);
+        currentScreen->rawDpiY = static_cast<int>(dpiY);
+    } else {
+        currentScreen->rawDpiX = currentScreen->dpiX;
+        currentScreen->rawDpiY = currentScreen->dpiY;
     }
     DISPLAY_DEVICEW displayDevice = {};// Get physical dimensions and additional display properties
     displayDevice.cb = sizeof(DISPLAY_DEVICEW);
@@ -184,17 +195,29 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
 
     // If physical dimensions not available from device mode, try to calculate from DPI
     if (currentScreen->screenPhysicalWidth == 0 || currentScreen->screenPhysicalHeight == 0) {
-        // Calculate physical size from DPI (approximate), 1 inch = 25.4 mm
-        double inchesWidth = static_cast<double>(currentScreen->screenPixelWidth) / currentScreen->dpiX;
-        double inchesHeight = static_cast<double>(currentScreen->screenPixelHeight) / currentScreen->dpiY;
-        currentScreen->screenPhysicalWidth = static_cast<int>(inchesWidth * 25.4);
-        currentScreen->screenPhysicalHeight = static_cast<int>(inchesHeight * 25.4);
+        // Prefer raw monitor DPI for the physical size estimate.
+        if (currentScreen->rawDpiX > 0 && currentScreen->rawDpiY > 0) {
+            currentScreen->screenPhysicalWidth = static_cast<int>((static_cast<double>(currentScreen->screenPixelWidth) / currentScreen->rawDpiX) * 25.4);
+            currentScreen->screenPhysicalHeight = static_cast<int>((static_cast<double>(currentScreen->screenPixelHeight) / currentScreen->rawDpiY) * 25.4);
+        } else {
+            double inchesWidth = static_cast<double>(currentScreen->screenPixelWidth) / currentScreen->dpiX;
+            double inchesHeight = static_cast<double>(currentScreen->screenPixelHeight) / currentScreen->dpiY;
+            currentScreen->screenPhysicalWidth = static_cast<int>(inchesWidth * 25.4);
+            currentScreen->screenPhysicalHeight = static_cast<int>(inchesHeight * 25.4);
+        }
     }
 
     // Default initialization if physical calc fails. Fallback: 1 inch = 25.4 mm
     if (currentScreen->screenPhysicalWidth == 0) {
-        currentScreen->screenPhysicalWidth = static_cast<int>((currentScreen->screenPixelWidth / (float)currentScreen->dpiX) * 25.4f);
-        currentScreen->screenPhysicalHeight = static_cast<int>((currentScreen->screenPixelHeight / (float)currentScreen->dpiY) * 25.4f);
+        currentScreen->screenPhysicalWidth = static_cast<int>((currentScreen->screenPixelWidth / (float)currentScreen->rawDpiX) * 25.4f);
+        currentScreen->screenPhysicalHeight = static_cast<int>((currentScreen->screenPixelHeight / (float)currentScreen->rawDpiY) * 25.4f);
+    }
+
+    if (currentScreen->screenPhysicalWidth > 0) {
+        currentScreen->physicalDpiX = static_cast<int>((static_cast<double>(currentScreen->screenPixelWidth) * 25.4) / currentScreen->screenPhysicalWidth + 0.5);
+    }
+    if (currentScreen->screenPhysicalHeight > 0) {
+        currentScreen->physicalDpiY = static_cast<int>((static_cast<double>(currentScreen->screenPixelHeight) * 25.4) / currentScreen->screenPhysicalHeight + 0.5);
     }
 
     // Calculate drawable area dimensions (work area)
@@ -208,7 +231,9 @@ BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMoni
     std::wcout << L"Name: " << currentScreen->friendlyName << std::endl;
     std::wcout << L"Resolution: " << currentScreen->screenPixelWidth << L"x" << currentScreen->screenPixelHeight << std::endl;
     std::wcout << L"Physical: " << currentScreen->screenPhysicalWidth << L"x" << currentScreen->screenPhysicalHeight << L" mm" << std::endl;
-    std::wcout << L"DPI: " << currentScreen->dpiX << L"x" << currentScreen->dpiY << std::endl;
+    std::wcout << L"DPI: effective " << currentScreen->dpiX << L"x" << currentScreen->dpiY
+        << L", raw " << currentScreen->rawDpiX << L"x" << currentScreen->rawDpiY
+        << L", physical " << currentScreen->physicalDpiX << L"x" << currentScreen->physicalDpiY << std::endl;
     std::wcout << L"Scale: " << static_cast<int>(currentScreen->scaleFactor * 100) << L"%" << std::endl;
     std::wcout << L"Work Area: " << currentScreen->WindowWidth << L"x" << currentScreen->WindowHeight << std::endl;
     std::wcout << L"Primary: " << (currentScreen->isPrimary ? L"Yes" : L"No") << std::endl;
@@ -283,6 +308,10 @@ void FetchAllMonitorDetails() // Main function to fetch all monitor details
         s->isPrimary = true;
         s->dpiX = 96;
         s->dpiY = 96;
+        s->rawDpiX = 96;
+        s->rawDpiY = 96;
+        s->physicalDpiX = 96;
+        s->physicalDpiY = 96;
         s->scaleFactor = 1.0;
         s->refreshRate = 60; // Virtual 60Hz
         s->isVirtualMonitor = true;
