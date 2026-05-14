@@ -996,7 +996,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
 
     case WM_ENTERSIZEMOVE:
-		// TODO: Set a boolean flag isMoving = true. 
+        if (currentWindow) currentWindow->isInSizeMove = true;
         // The actual handling of monitor affinity will be done in WM_EXITSIZEMOVE to avoid excessive handling 
         // during active movement.
 		break;
@@ -1015,15 +1015,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         UINT newWidth = LOWORD(lParam);
         UINT newHeight = HIWORD(lParam);
 
-        uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
-        uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+        if (currentWindow) { // Simply keep storing latest value. Render thread will pick it up when it has time.
+            currentWindow->nextRequestedWidth.store(newWidth, std::memory_order_relaxed);
+            currentWindow->nextRequestedHeight.store(newHeight, std::memory_order_relaxed);
 
-        for (uint16_t i = 0; i < windowCount; ++i) {
-            SingleUIWindow& window = allWindows[windowList[i]];
-            if (window.hWnd == hWnd) { // Simply keep storing latest value. Render thead will pick it up when it has time.
-                window.nextRequestedWidth.store(newWidth, std::memory_order_relaxed);
-                window.nextRequestedHeight.store(newHeight, std::memory_order_relaxed);
-                break;
+            // Border dragging is committed in WM_EXITSIZEMOVE. Maximize/restore does not necessarily
+            // enter that modal sizing loop, so signal the render thread directly for those paths.
+            if (!currentWindow->isInSizeMove &&
+                (newWidth != currentWindow->currentWidth || newHeight != currentWindow->currentHeight)) {
+                currentWindow->resizeState.store(1, std::memory_order_release);
             }
         }
         return 0;
@@ -1039,6 +1039,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             if (w.hWnd == hWnd) { pWin = &w; break; }
         }
         if (pWin) {
+            pWin->isInSizeMove = false;
+
             // Determine which monitor the window is now on
             HMONITOR hMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
             int newMonitorIdx = -1;

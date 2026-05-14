@@ -165,8 +165,9 @@ struct SingleUIWindow {
     RECT viewBandRect{};
     RECT contentRect{};
 
-	std::atomic<bool> isMigrating{ false };;// The "Switch" to turn rendering ON/OFF during migration.
+    std::atomic<bool> isMigrating{ false };;// The "Switch" to turn rendering ON/OFF during migration.
     std::atomic<bool> isResizing{ false };
+    bool isInSizeMove = false;
 	uint16_t currentWidth = 800, currentHeight = 600;
 
     UIInput uiInput; // per-window input snapshot
@@ -190,6 +191,7 @@ struct SingleUIWindow {
         isMigrating.store(other.isMigrating.load());
         migrationState.store(other.migrationState.load());
         isResizing.store(other.isResizing.load());
+        isInSizeMove = other.isInSizeMove;
     }
 
     // Move Constructor (Critical for std::vector performance)
@@ -207,6 +209,7 @@ struct SingleUIWindow {
         migrationState.store(other.migrationState.load());
         isMigrating.store(other.isMigrating.load());
         isResizing.store(other.isResizing.load());
+        isInSizeMove = other.isInSizeMove;
     }
 
     // Assignment Operator
@@ -224,6 +227,7 @@ struct SingleUIWindow {
             migrationState.store(other.migrationState.load());
             isMigrating.store(other.isMigrating.load());
             isResizing.store(other.isResizing.load());
+            isInSizeMove = other.isInSizeMove;
         }
         return *this;
     }

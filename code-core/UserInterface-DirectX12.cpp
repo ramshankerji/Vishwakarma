@@ -118,6 +118,9 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
     // Create the actual sampler (Point sampling is perfect for UI atlas)
     D3D12_SAMPLER_DESC samplerDesc = {};
     samplerDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;   // sharp UI text
+    // TODO: Above works best only if there is NO scaling. Right now we are doing scaling.
+	// Hence text is slightly blurry. 
+    // Latter we generate separate font for different monitors based on their DPI and do 1:1 sampling.
     samplerDesc.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     samplerDesc.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     samplerDesc.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -442,15 +445,15 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     ctx.vertexCount = 0;
     ctx.indexCount = 0;
     float pixelsPerMM = monitorDPI / 25.4f;
-    float buttonWidthPx = UI_BUTTON_WIDTH_MM * pixelsPerMM;
-    float iconSizePx = UI_ICON_SIZE_MM * pixelsPerMM;
-    float textHeightPx = UI_TEXT_HEIGHT_MM * pixelsPerMM;
-    float buttonHeightPx = std::max(UI_BUTTON_HEIGHT_MM * pixelsPerMM,
+    float buttonWidthPx = std::round(UI_BUTTON_WIDTH_MM * pixelsPerMM);
+    float iconSizePx = std::round(UI_ICON_SIZE_MM * pixelsPerMM);
+    float textHeightPx = std::round(UI_TEXT_HEIGHT_MM * pixelsPerMM);
+    float buttonHeightPx = std::max(std::round(UI_BUTTON_HEIGHT_MM * pixelsPerMM),
         std::max(iconSizePx, textHeightPx) + 4.0f);
-    float iconReservedWidthPx = iconSizePx + 4.0f;
+	float iconReservedWidthPx = iconSizePx + 4.0f; // 2 pixels padding on each side of the icon.
     float textStartOffsetPx = iconReservedWidthPx + 4.0f;
     float textEndInsetPx = 6.0f;
-    float tabBarHeight = UI_TAB_BAR_HEIGHT_MM * pixelsPerMM;
+    float tabBarHeightPx = std::round(UI_TAB_BAR_HEIGHT_MM * pixelsPerMM);
 
     auto canPushRect = [&]() {
         return ctx.vertexCount + 4 <= uiRes.maxVertices &&
@@ -479,14 +482,13 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
 
     const float uiTextScale = textScaleForHeight(textHeightPx);
 
-    auto measureTextWidth = [&](const char32_t* text, float scale) {
+    auto measureTextWidth = [&](const char32_t* text, float scale) { //Must support all Unicode latter.
         if (!text) return 0.0f;
 
         float cursorX = 0.0f;
         float maxRight = 0.0f;
 
         for (const char32_t* p = text; *p; ++p) {
-            if (*p > 0x7F) continue;
 
             auto glyphIt = glyphLookup.find(*p);
             if (glyphIt == glyphLookup.end()) continue;
@@ -520,8 +522,9 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
                 continue;
             }
 
-            float xpos = cursorX + (float)g.bearingX * scale;
-            float ypos = y - (float)g.bearingY * scale;
+            // It is always better to be aligned to pixels for better text clarity.
+            float xpos = std::floor(cursorX + (float)g.bearingX * scale + 0.5f);
+            float ypos = std::floor(y - (float)g.bearingY * scale + 0.5f);
             float glyphWidth = (float)g.width * scale;
             float glyphHeight = (float)g.height * scale;
             float glyphRight = xpos + glyphWidth;
@@ -576,7 +579,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     for (uint16_t i = 0; i < tabCount; i++) {
         uint16_t tabID = tabList[i];
         bool active = (window.activeTabIndex == tabID);
-        if (pushTab(currentX, tabWidth, tabBarHeight, tabID, active)) {
+        if (pushTab(currentX, tabWidth, tabBarHeightPx, tabID, active)) {
             window.activeTabIndex = tabID; // instant visual feedback
         }
         currentX += tabWidth;
@@ -694,8 +697,8 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         if (btnWidth > verticalSlotMaxSize) verticalSlotMaxSize = btnWidth;
         if (i < (TotalUIControls-1)) { //Except last one.
             if (AllUIControls[i + 1].verticalSlotNo == 0) {
-                currentX += btnWidth + buttonGap;
-                actionSubGroupWidth += btnWidth + buttonGap;
+                currentX += verticalSlotMaxSize + buttonGap;
+                actionSubGroupWidth += verticalSlotMaxSize + buttonGap;
                 verticalSlotMaxSize = 0;
             }
         }
@@ -706,9 +709,21 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             const UIActionGroupNames& group = topUIActionSubGroupNames[currentSubGroupID];
             const char32_t* label = localizedString(group.labelStringID);
 
-            pushRect(currentX - actionSubGroupWidth, actionSubGroupLabelY, actionSubGroupWidth, groupLabelHeight, 0xFF2D2D30);
-            pushTextClipped(currentX - actionSubGroupWidth + 4.0f, textBaselineY(actionSubGroupLabelY, groupLabelHeight, uiTextScale),
+            pushRect(currentX - actionSubGroupWidth + 1.0f,
+                actionSubGroupLabelY, actionSubGroupWidth - 4.0f, groupLabelHeight, 0xFF2D2D30);
+            pushTextClipped(currentX - actionSubGroupWidth / 2 - measureTextWidth(label, uiTextScale),
+                textBaselineY(actionSubGroupLabelY, groupLabelHeight, uiTextScale),
                 label, actionSubGroupWidth - 8.0f, COLOR_UI_TEXT, uiTextScale);
+
+            // Draw thin 1px vertical separator line between sub-groups
+            if (actionSubGroupWidth > 0.0f) {  // Don't draw before first group
+                // Place it exactly in the middle of the 'buttonGap' between the two columns
+                float lineX = std::floor(currentX - (buttonGap / 2.0f));
+                // Span the height of the action group buttons (assumes 3 rows max per your UI_TOP_ACTION_GROUP_HEIGHT_MM)
+                float lineHeight = UI_TOP_ACTION_GROUP_HEIGHT_MM * pixelsPerMM;
+                // Draw 1px wide line. Using 0xFF555555 to match your Action Group separator color
+                pushRect(lineX, topActionGroupY, 1.0f, lineHeight, 0xFF555555);
+            }
 
             currentSubGroupID = ctrl.actionSubGroupIndex;
             actionSubGroupWidth = 0; //Reset
