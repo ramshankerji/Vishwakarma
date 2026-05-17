@@ -12,7 +12,7 @@ These requirements are already met be all the Pre-Configured Desktop / Server sy
 
 **Processors**  
 64 Bit Processor.  
-Architecture: x64, ARMv8, RISCV(RV23 Profile).  
+Architecture: x64, ARMv8, RISCV(RV23 Profile). Apple hardware not supported as on May 2026. 
 Minimum System RAM : 4 GB  
 Maximum System RAM supported: 64 TB  
 Graphics Card with Either DirectX12 or Vulkan 1.2 or Metal x.y capability.
@@ -25,9 +25,10 @@ No Minimum Size for Mobile.
 
 **Graphics Card**  
 Integrated Graphics Card on Intel / AMD processors are sufficient.  
-All Apple Processors have integrated Graphics card.  
+All Apple Processors have integrated Graphics card only. Apple hardware not supported as on May 2026.  
 Discrete Graphics Card (From NVIDIA/AMD/Intel) recommended for Desktop.  
-Must have either DirectX12 or Vulkan 1.2 or Metal Support.
+Must have either DirectX12 or Vulkan 1.2 or Metal Support.  
+Must support at least Shader Model 6.0. Available on Intel Gen11 onwards (2019+), Nvidia GTX 10xx onwards (2016+), RX 4xx/5xx onwards (2016+) already support this.  
 
 **Operating System**  
 Windows 10 (On x64) with DirectX12 Capability  

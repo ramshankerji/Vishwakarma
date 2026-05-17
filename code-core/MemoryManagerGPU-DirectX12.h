@@ -18,6 +18,7 @@
 #include <dxgidebug.h>
 #include <wrl.h>
 #include <d3dcompiler.h>
+#include <dxcapi.h>
 #include <DirectXMath.h> //Where from? https://github.com/Microsoft/DirectXMath ?
 #include <vector>
 #include <string>
@@ -41,6 +42,7 @@ using namespace Microsoft::WRL;
 #pragma comment(lib, "d3d12.lib") //%WindowsSdkDir\Lib%WindowsSDKVersion%\\um\arch
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
+#pragma comment(lib, "dxcompiler.lib")
 #pragma comment(lib, "dxguid.lib")
 
 /* Double buffering is preferred for CAD application due to low input lag.Caveat: If rendering time

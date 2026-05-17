@@ -217,13 +217,13 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
     changing the root signature. */
 
     // Create the shader
-    ComPtr<ID3DBlob> vertexShader;
-    ComPtr<ID3DBlob> pixelShader;
+    ComPtr<IDxcBlob> vertexShader;
+    ComPtr<IDxcBlob> pixelShader;
 
 #if defined(_DEBUG)
-    UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+    bool compileDebugShaders = true;
 #else
-    UINT compileFlags = 0;
+    bool compileDebugShaders = false;
 #endif
 
     /* 3D shader code with matrix transformations.
@@ -293,29 +293,46 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
     )";
 
     // Helper: compile a shader and throw with the error message if it fails.
-    auto CompileShader = []( const char* code, const char* entryPoint, const char* target,
-        UINT flags, ComPtr<ID3DBlob>& outBlob) {
-        ComPtr<ID3DBlob> errorBlob;
-        HRESULT hr = D3DCompile( code, strlen(code),
-            nullptr,    // source name (optional, used in error messages)
-            nullptr,    // defines
-            nullptr,    // includes
-            entryPoint, target, flags, 0, &outBlob, &errorBlob);
+    auto CompileShader = []( const char* code, LPCWSTR entryPoint, LPCWSTR target,
+        bool debugShaders, ComPtr<IDxcBlob>& outBlob) {
+        ComPtr<IDxcUtils> utils;
+        ComPtr<IDxcCompiler3> compiler;
+        ThrowIfFailed(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils)));
+        ThrowIfFailed(DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler)));
 
+        DxcBuffer sourceBuffer = {};
+        sourceBuffer.Ptr = code;
+        sourceBuffer.Size = strlen(code);
+        sourceBuffer.Encoding = DXC_CP_UTF8;
+
+        std::vector<LPCWSTR> arguments = { L"-E", entryPoint, L"-T", target };
+        if (debugShaders) {
+            arguments.push_back(DXC_ARG_DEBUG);
+            arguments.push_back(DXC_ARG_SKIP_OPTIMIZATIONS);
+        }
+
+        ComPtr<IDxcResult> result;
+        ThrowIfFailed(compiler->Compile(&sourceBuffer, arguments.data(),
+            static_cast<UINT32>(arguments.size()), nullptr, IID_PPV_ARGS(&result)));
+
+        HRESULT hr = S_OK;
+        ThrowIfFailed(result->GetStatus(&hr));
         if (FAILED(hr)) {
-            if (errorBlob) {
+            ComPtr<IDxcBlobUtf8> errorBlob;
+            result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errorBlob), nullptr);
+            if (errorBlob && errorBlob->GetStringLength() > 0) {
                 // errorBlob contains the HLSL compiler's human-readable error text.
-                std::string msg(static_cast<const char*>(errorBlob->GetBufferPointer()),
-                    errorBlob->GetBufferSize());
+                std::string msg(errorBlob->GetStringPointer(), errorBlob->GetStringLength());
                 OutputDebugStringA(("[Shader Compile Error] " + msg).c_str());
                 std::cerr << "[Shader Compile Error] " << msg << std::endl;
             }
             ThrowIfFailed(hr);  // Will throw HrException, unwinding the stack cleanly.
         }
+        ThrowIfFailed(result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&outBlob), nullptr));
     };
 
-    CompileShader(vertexShaderCode, "VSMain", "vs_5_0", compileFlags, vertexShader);
-    CompileShader(pixelShaderCode, "PSMain", "ps_5_0", compileFlags, pixelShader);
+    CompileShader(vertexShaderCode, L"VSMain", L"vs_6_0", compileDebugShaders, vertexShader);
+    CompileShader(pixelShaderCode, L"PSMain", L"ps_6_0", compileDebugShaders, pixelShader);
     /*
     D3DCompile(vertexShaderCode, strlen(vertexShaderCode), nullptr, nullptr, nullptr,
         "VSMain", "vs_5_0", compileFlags, 0, &vertexShader, nullptr);
@@ -340,8 +357,8 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
     psoDesc.pRootSignature = tabRes.rootSignature.Get();
-    psoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader.Get());
-    psoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader.Get());
+    psoDesc.VS = CD3DX12_SHADER_BYTECODE(vertexShader->GetBufferPointer(), vertexShader->GetBufferSize());
+    psoDesc.PS = CD3DX12_SHADER_BYTECODE(pixelShader->GetBufferPointer(), pixelShader->GetBufferSize());
     psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT); //(default = replace)
     psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT); // Enable depth testing

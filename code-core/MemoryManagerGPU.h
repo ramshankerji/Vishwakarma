@@ -15,7 +15,7 @@ Anyway go with 24 Bytes format ONLY. Tone mapping (HDR -> SDR) should happen in 
 Initial Development will be on R8G8B8A8, latter when we implement HDR, will will upgrade this.
 Some hardware may not support HDR, so keep both version of shaders.
 Further, wether to load HDR or SDR shaders is decided at the application startup times.
-If graphics card support HDR and there is at least 1 monitor present with HDR capability, sitch to HDR.
+If graphics card support HDR and there is at least 1 monitor present with HDR capability, switch to HDR.
 Once HDR ON, the application maintains HDR shaders even if HDR monitors disconnects. Till app closes.
 
 Initially Hemispheric Ambient Lighting
@@ -67,7 +67,7 @@ Keeping memory scarcity on iGPU systems!
 They are generated on demand by engineering thread and simply handed over to copy queue. 
 However to be able to defragment, copy queue stores the Byte/Index ranges of all objects loaded into a Page.
 
-Copy queue prepares newPage ( VertexBuffer, IndexBuffer, ExecuteIndirec Buffers) and uploads it to VRAM.
+Copy queue prepares newPage ( VertexBuffer, IndexBuffer, ExecuteIndirect Buffers) and uploads it to VRAM.
 This (PCIe transfer) happens in parallel while the other render threads are already running.
 So, iteration over all objects has been removed altogether from the engine. 
 Further, there are 2 level of batching. Engineering thread will batch the changes together to some extent, 
@@ -248,7 +248,7 @@ our "VRAM Pages" step will stall waiting on CreateCommittedResource for uploads.
 [ ] Basic Ribbon UI.
 
 Phase 5: Advanced Features & Polish
-[ ] Migrated to Shader Model 6.
+[Done] Migrated to Shader Model 6. Supported by hardware 2016 onwards.
 [ ] VRAM Defragmentation. (Now safe to implement because RTT exists).
 [ ] Click Selection / Window Selection. (Requires Raycasting against your CPU Free List/Data structures).
 [ ] Instanced optimization for Pipes.

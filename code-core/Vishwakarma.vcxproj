@@ -74,6 +74,8 @@ FT_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </Link>
     <PostBuildEvent>
       <Command>
+        copy /Y "$(WindowsSdkDir)Redist\D3D\x64\dxcompiler.dll" "$(OutDir)"
+        copy /Y "$(WindowsSdkDir)Redist\D3D\x64\dxil.dll" "$(OutDir)"
       </Command>
     </PostBuildEvent>
     <ResourceCompile>
@@ -106,6 +108,8 @@ FT_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </Link>
     <PostBuildEvent>
       <Command>
+        copy /Y "$(WindowsSdkDir)Redist\D3D\x64\dxcompiler.dll" "$(OutDir)"
+        copy /Y "$(WindowsSdkDir)Redist\D3D\x64\dxil.dll" "$(OutDir)"
       </Command>
     </PostBuildEvent>
     <ResourceCompile>
@@ -269,9 +273,9 @@ FT_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
   <ItemGroup>
     <FxCompile Include="PixelShader.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">5.0</ShaderModel>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">5.0</ShaderModel>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.0</ShaderModel>
     </FxCompile>
     <FxCompile Include="VertexShader.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Vertex</ShaderType>

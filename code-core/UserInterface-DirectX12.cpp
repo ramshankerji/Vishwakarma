@@ -3,6 +3,7 @@
 #include "UserInterface-DirectX12.h"
 #include <algorithm>
 #include <d3dcompiler.h>
+#include <dxcapi.h>
 #include "FontManager.h"
 #include <MemoryManagerGPU-DirectX12.h>
 #include "विश्वकर्मा.h"
@@ -161,16 +162,41 @@ static uint32_t StableRandomUIColour(uint32_t seed) {
 }
 
 // Shader compilation helper
-static void CompileShader( const char* code, const char* entry, const char* target, UINT flags,
-    ComPtr<ID3DBlob>& outBlob) {
+static void CompileShader( const char* code, LPCWSTR entry, LPCWSTR target, bool debugShaders,
+    ComPtr<IDxcBlob>& outBlob) {
 
-    ComPtr<ID3DBlob> errorBlob;
-    HRESULT hr = D3DCompile( code, strlen(code), nullptr, nullptr, nullptr, entry, target, flags, 0,
-        &outBlob, &errorBlob);
+    ComPtr<IDxcUtils> utils;
+    ComPtr<IDxcCompiler3> compiler;
+    ThrowIfFailed(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils)));
+    ThrowIfFailed(DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler)));
+
+    DxcBuffer sourceBuffer = {};
+    sourceBuffer.Ptr = code;
+    sourceBuffer.Size = strlen(code);
+    sourceBuffer.Encoding = DXC_CP_UTF8;
+
+    std::vector<LPCWSTR> arguments = { L"-E", entry, L"-T", target };
+    if (debugShaders) {
+        arguments.push_back(DXC_ARG_DEBUG);
+        arguments.push_back(DXC_ARG_SKIP_OPTIMIZATIONS);
+    }
+
+    ComPtr<IDxcResult> result;
+    ThrowIfFailed(compiler->Compile(&sourceBuffer, arguments.data(),
+        static_cast<UINT32>(arguments.size()), nullptr, IID_PPV_ARGS(&result)));
+
+    HRESULT hr = S_OK;
+    ThrowIfFailed(result->GetStatus(&hr));
     if (FAILED(hr)) {
-        if (errorBlob) { std::cerr << (char*)errorBlob->GetBufferPointer() << std::endl; }
+        ComPtr<IDxcBlobUtf8> errorBlob;
+        result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errorBlob), nullptr);
+        if (errorBlob && errorBlob->GetStringLength() > 0) {
+            std::cerr << errorBlob->GetStringPointer() << std::endl;
+        }
         ThrowIfFailed(hr);
     }
+
+    ThrowIfFailed(result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&outBlob), nullptr));
 }
 
 bool SubmitTextureUpload(const TextureUploadDesc& desc,
@@ -304,9 +330,9 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
     // Shaders
 
 #if defined(_DEBUG)
-    UINT compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+    bool compileDebugShaders = true;
 #else
-    UINT compileFlags = 0;
+    bool compileDebugShaders = false;
 #endif
 
     static const char* vsCode = R"(
@@ -384,10 +410,10 @@ float4 PSMain(PSInput input) : SV_TARGET {
 }
 )";
 
-    ComPtr<ID3DBlob> vsBlob;
-    ComPtr<ID3DBlob> psBlob;
-    CompileShader(vsCode, "VSMain", "vs_5_0", compileFlags, vsBlob);
-    CompileShader(psCode, "PSMain", "ps_5_0", compileFlags, psBlob);
+    ComPtr<IDxcBlob> vsBlob;
+    ComPtr<IDxcBlob> psBlob;
+    CompileShader(vsCode, L"VSMain", L"vs_6_0", compileDebugShaders, vsBlob);
+    CompileShader(psCode, L"PSMain", L"ps_6_0", compileDebugShaders, psBlob);
     // Input layout
 
     D3D12_INPUT_ELEMENT_DESC layout[] = {
@@ -401,8 +427,8 @@ float4 PSMain(PSInput input) : SV_TARGET {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = { layout,_countof(layout) };
     psoDesc.pRootSignature = uiRes.uiRootSignature.Get();
-    psoDesc.VS = CD3DX12_SHADER_BYTECODE(vsBlob.Get());
-    psoDesc.PS = CD3DX12_SHADER_BYTECODE(psBlob.Get());
+    psoDesc.VS = CD3DX12_SHADER_BYTECODE(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize());
+    psoDesc.PS = CD3DX12_SHADER_BYTECODE(psBlob->GetBufferPointer(), psBlob->GetBufferSize());
     psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
