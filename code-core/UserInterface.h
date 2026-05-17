@@ -166,6 +166,12 @@ constexpr float UI_BUTTON_WIDTH_MM = 8.0f;
 constexpr float UI_BUTTON_GAP_MM = 1.0f;
 constexpr float UI_ICON_SIZE_MM = 4.0f;
 constexpr float UI_GROUP_GAP_MM = 5.0f; // We would rather keep it 2 pixel fixed width.
+constexpr float UI_BUTTON_CORNER_RADIUS_MM = 2.0f;
+
+constexpr uint32_t UI_MAX_ATLAS_TEXTURES = 10;
+constexpr uint32_t UI_ENGLISH_ATLAS_SLOT = 0;
+constexpr uint32_t UI_ICON_ATLAS_SLOT = 1;
+constexpr uint32_t UI_FIRST_DYNAMIC_SCRIPT_ATLAS_SLOT = 2;
 
 // Colors (ABGR)
 constexpr uint32_t COLOR_UI_BG_DARK = 0xFF1E1E1E;
@@ -177,6 +183,7 @@ constexpr uint32_t COLOR_UI_TEXT = 0xFFFFFFFF;
 struct UIVertex {// Vertex format
     float x, y, u, v;
     uint32_t color; // ABGR format for DX12 standard
+    uint32_t atlasIndex; // Index into the UI SRV atlas array. 0 = English, 1 = icons/shape coverage.
 };
 
 struct Glyph { // Store glyph info: Glyph metadata (Phase 4B)
@@ -188,6 +195,7 @@ struct Glyph { // Store glyph info: Glyph metadata (Phase 4B)
 
 // Use char32_t for full UTF-32 Unicode support (necessary for all languages)
 inline std::unordered_map<char32_t, Glyph> glyphLookup; // Lookup table.
+inline std::unordered_map<char32_t, Glyph> iconGlyphLookup; // Private-use codepoints for monochrome UI icons.
 extern std::string charset;
 
 struct AtlasBitmap {
@@ -556,7 +564,7 @@ constexpr UIControlDefinition AllUIControls[] = {
     { UIAction::CREATE_STRUCTURE,      1035, U'x', 1, 2, 0, 0, true, false, 3 , 6 },
     { UIAction::CREATE_LINES_3D,       1037, U'x', 1, 2, 1, 0, true, false, 3 , 6 },
 
-    // ACTION GROUP 15: (3D) Inteligent
+    // ACTION GROUP 15: (3D) Intelligent
     // Subgroup : Concrete
     { UIAction::CONCRETE_COLUMN,       99, U'x', 1, 3, 0, 0, true, false, 4 , 7 },
     { UIAction::CONCRETE_BEAM,         99, U'x', 1, 3, 1, 0, true, false, 4 , 7 },

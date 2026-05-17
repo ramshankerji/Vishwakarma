@@ -8,6 +8,8 @@
 #include "विश्वकर्मा.h"
 #include "TextureSaver.h"
 #include "UserInterfaceTranslationCompiled.h"
+#include <array>
+#include <cmath>
 extern शंकर gpu;
 extern std::atomic<uint16_t*> publishedTabIndexes;
 extern std::atomic<uint16_t>  publishedTabCount;
@@ -15,6 +17,135 @@ extern void PrintHResult(int);
 std::atomic<uint32_t> actionWriteIndex;
 std::string charset = " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789&(),./-";
 std::atomic<uint64_t> atlasFence = 0;
+
+struct UIAtlasRegion {
+    float uvMinX = 0.0f;
+    float uvMinY = 0.0f;
+    float uvMaxX = 0.0f;
+    float uvMaxY = 0.0f;
+};
+
+struct UIRoundedRectangleNineSlice {
+    std::array<std::array<UIAtlasRegion, 3>, 3> regions{};
+};
+
+struct UIIconAtlasMetadata {
+    UIRoundedRectangleNineSlice roundedRectangle{};
+    std::array<char32_t, 4> dummyIconCodepoints{ U'\uE000', U'\uE001', U'\uE002', U'\uE003' };
+};
+
+static UIIconAtlasMetadata gIconAtlasMetadata{};
+
+static UIAtlasRegion MakeAtlasRegion(int x, int y, int w, int h, int atlasW, int atlasH) {
+    UIAtlasRegion region{};
+    region.uvMinX = (float)x / (float)atlasW;
+    region.uvMinY = (float)y / (float)atlasH;
+    region.uvMaxX = (float)(x + w) / (float)atlasW;
+    region.uvMaxY = (float)(y + h) / (float)atlasH;
+    return region;
+}
+
+static void GenerateRoundedRectangleNineSlice(AtlasBitmap& atlas, int originX, int originY,
+    int sourceSizePx, int sourceRadiusPx, UIRoundedRectangleNineSlice& outSlice) {
+    const int atlasW = atlas.width;
+    const int atlasH = atlas.height;
+
+    for (int y = 0; y < sourceSizePx; ++y) {
+        for (int x = 0; x < sourceSizePx; ++x) {
+            const float px = (float)x + 0.5f;
+            const float py = (float)y + 0.5f;
+            const float nearestX = std::clamp(px, (float)sourceRadiusPx,
+                (float)(sourceSizePx - sourceRadiusPx));
+            const float nearestY = std::clamp(py, (float)sourceRadiusPx,
+                (float)(sourceSizePx - sourceRadiusPx));
+            const float dx = px - nearestX;
+            const float dy = py - nearestY;
+            const float distance = std::sqrt(dx * dx + dy * dy);
+            const float coverage = std::clamp((float)sourceRadiusPx + 0.5f - distance, 0.0f, 1.0f);
+
+            atlas.pixels[(originY + y) * atlasW + (originX + x)] = (uint8_t)std::round(coverage * 255.0f);
+        }
+    }
+
+    const int middle = sourceSizePx - 2 * sourceRadiusPx;
+    const int widths[3] = { sourceRadiusPx, middle, sourceRadiusPx };
+    const int heights[3] = { sourceRadiusPx, middle, sourceRadiusPx };
+    int yCursor = originY;
+    for (int row = 0; row < 3; ++row) {
+        int xCursor = originX;
+        for (int col = 0; col < 3; ++col) {
+            outSlice.regions[row][col] =
+                MakeAtlasRegion(xCursor, yCursor, widths[col], heights[row], atlasW, atlasH);
+            xCursor += widths[col];
+        }
+        yCursor += heights[row];
+    }
+}
+
+static void FillRect(AtlasBitmap& atlas, int x, int y, int w, int h, uint8_t coverage) {
+    for (int yy = y; yy < y + h; ++yy) {
+        for (int xx = x; xx < x + w; ++xx) {
+            atlas.pixels[yy * atlas.width + xx] = coverage;
+        }
+    }
+}
+
+static AtlasBitmap BuildIconAtlas() {
+    constexpr int atlasW = 128;
+    constexpr int atlasH = 128;
+    AtlasBitmap atlas{};
+    atlas.width = atlasW;
+    atlas.height = atlasH;
+    atlas.pixels.resize(atlasW * atlasH, 0);
+
+    // The source rounded rectangle is split into 9 texture regions at draw time.
+    // Destination corners are resized to ~2 mm in screen space by PushRoundedRectangle.
+    GenerateRoundedRectangleNineSlice(atlas, 0, 0, 32, 8, gIconAtlasMetadata.roundedRectangle);
+
+    constexpr int iconSize = 20;
+    constexpr int iconY = 48;
+    constexpr int iconXs[4] = { 0, 24, 48, 72 };
+    iconGlyphLookup.clear();
+    for (int i = 0; i < 4; ++i) {
+        Glyph glyph{};
+        glyph.uvMinX = (float)iconXs[i] / atlasW;
+        glyph.uvMinY = (float)iconY / atlasH;
+        glyph.uvMaxX = (float)(iconXs[i] + iconSize) / atlasW;
+        glyph.uvMaxY = (float)(iconY + iconSize) / atlasH;
+        glyph.width = iconSize;
+        glyph.height = iconSize;
+        glyph.advanceX = iconSize;
+        iconGlyphLookup[gIconAtlasMetadata.dummyIconCodepoints[i]] = glyph;
+    }
+
+    // Dummy icon 0: plus
+    FillRect(atlas, iconXs[0] + 8, iconY + 2, 4, 16, 255);
+    FillRect(atlas, iconXs[0] + 2, iconY + 8, 16, 4, 255);
+
+    // Dummy icon 1: folder-like block
+    FillRect(atlas, iconXs[1] + 2, iconY + 6, 16, 11, 255);
+    FillRect(atlas, iconXs[1] + 4, iconY + 3, 7, 4, 255);
+
+    // Dummy icon 2: ring
+    for (int y = 0; y < iconSize; ++y) {
+        for (int x = 0; x < iconSize; ++x) {
+            const float dx = (float)x + 0.5f - 10.0f;
+            const float dy = (float)y + 0.5f - 10.0f;
+            const float d = std::sqrt(dx * dx + dy * dy);
+            if (d >= 5.0f && d <= 8.0f) {
+                atlas.pixels[(iconY + y) * atlasW + (iconXs[2] + x)] = 255;
+            }
+        }
+    }
+
+    // Dummy icon 3: 2x2 grid
+    FillRect(atlas, iconXs[3] + 2, iconY + 2, 7, 7, 255);
+    FillRect(atlas, iconXs[3] + 11, iconY + 2, 7, 7, 255);
+    FillRect(atlas, iconXs[3] + 2, iconY + 11, 7, 7, 255);
+    FillRect(atlas, iconXs[3] + 11, iconY + 11, 7, 7, 255);
+
+    return atlas;
+}
 
 static uint32_t StableRandomUIColour(uint32_t seed) {
     seed ^= seed >> 16;
@@ -56,6 +187,44 @@ bool SubmitTextureUpload(const TextureUploadDesc& desc,
     return true;
 }
 
+bool UploadUIAtlasTexture(DX12ResourcesUI& uiRes, ID3D12Device* device, uint32_t atlasSlot,
+    const AtlasBitmap& atlas) {
+    if (!device || atlasSlot >= UI_MAX_ATLAS_TEXTURES || atlas.width <= 0 || atlas.height <= 0 ||
+        atlas.pixels.empty()) {
+        return false;
+    }
+
+    TextureUploadDesc desc = {};
+    desc.width = atlas.width;
+    desc.height = atlas.height;
+    desc.format = DXGI_FORMAT_R8_UNORM;
+    desc.pixels = atlas.pixels.data();
+    desc.rowPitch = atlas.width;
+
+    std::atomic<uint64_t> uploadFence = 0;
+    SubmitTextureUpload(desc, &uiRes.uiAtlasTextures[atlasSlot], &uploadFence);
+
+    uint64_t atlasReadyFence = gpu.copyFenceValue.fetch_add(1, std::memory_order_relaxed);
+    uploadFence.store(atlasReadyFence, std::memory_order_release);
+    toCopyThreadCV.notify_one();
+
+    if (gpu.copyFence->GetCompletedValue() < atlasReadyFence) {
+        ThrowIfFailed(gpu.copyFence->SetEventOnCompletion(atlasReadyFence, gpu.copyFenceEvent));
+        WaitForSingleObject(gpu.copyFenceEvent, INFINITE);
+    }
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R8_UNORM;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = 1;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(uiRes.srvHeap->GetCPUDescriptorHandleForHeapStart(),
+        atlasSlot, device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV));
+    device->CreateShaderResourceView(uiRes.uiAtlasTextures[atlasSlot].Get(), &srvDesc, srvHandle);
+    return true;
+}
+
 void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
     if (!InitFontSystem()) { // FONT system initialization (CPU-side)
         std::cerr << "Font system initialization failed failed\n";
@@ -66,7 +235,8 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
     CD3DX12_DESCRIPTOR_RANGE1 ranges[2]; // Descriptor ranges
 
     // Range 0: SRV (t0)  → from srvHeap // 1: 1 Texture, 0: register t0 = atlas
-    ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_NONE);
+    ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, UI_MAX_ATLAS_TEXTURES, 0, 0,
+        D3D12_DESCRIPTOR_RANGE_FLAG_NONE);
     // Range 1: SAMPLER (s0) → from samplerHeap // 1: 1 Sampler, 0: register s0 = sampler
     ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_NONE);
 
@@ -102,7 +272,7 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
     
     // Create SRV descriptor heap (1 texture)
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-    heapDesc.NumDescriptors = 1;
+    heapDesc.NumDescriptors = UI_MAX_ATLAS_TEXTURES;
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ThrowIfFailed(device->CreateDescriptorHeap( &heapDesc, IID_PPV_ARGS(&uiRes.srvHeap) ));
@@ -148,12 +318,14 @@ struct VSInput {
     float2 position : POSITION;
     float2 uv       : TEXCOORD0;
     uint   color    : COLOR0;
+    uint   atlasIndex : TEXCOORD1;
 };
 
 struct PSInput {
     float4 position : SV_POSITION;
     float2 uv       : TEXCOORD0;
     uint   color    : COLOR0;
+    nointerpolation uint atlasIndex : TEXCOORD1;
 };
 
 PSInput VSMain(VSInput input) {
@@ -162,6 +334,7 @@ PSInput VSMain(VSInput input) {
     output.position = mul(pos,ortho);
     output.uv = input.uv;
     output.color = input.color;
+    output.atlasIndex = input.atlasIndex;
     return output;
 }
 )";
@@ -171,10 +344,29 @@ struct PSInput {
     float4 position : SV_POSITION;
     float2 uv       : TEXCOORD0;
     uint   color    : COLOR0;
+    nointerpolation uint atlasIndex : TEXCOORD1;
 };
 
-Texture2D atlas : register(t0);
+Texture2D atlases[10] : register(t0);
 SamplerState samp : register(s0);
+
+float SampleCoverage(uint atlasIndex, float2 uv) {
+    // Shader Model 5.0 does not permit dynamic resource-array indexing.
+    // Keep the descriptor array future-ready while sampling through static cases.
+    switch (atlasIndex) {
+    case 0: return atlases[0].Sample(samp, uv).r;
+    case 1: return atlases[1].Sample(samp, uv).r;
+    case 2: return atlases[2].Sample(samp, uv).r;
+    case 3: return atlases[3].Sample(samp, uv).r;
+    case 4: return atlases[4].Sample(samp, uv).r;
+    case 5: return atlases[5].Sample(samp, uv).r;
+    case 6: return atlases[6].Sample(samp, uv).r;
+    case 7: return atlases[7].Sample(samp, uv).r;
+    case 8: return atlases[8].Sample(samp, uv).r;
+    case 9: return atlases[9].Sample(samp, uv).r;
+    default: return atlases[0].Sample(samp, uv).r;
+    }
+}
 
 float4 PSMain(PSInput input) : SV_TARGET {
     float r = ((input.color >> 0) & 0xFF) / 255.0;
@@ -187,7 +379,7 @@ float4 PSMain(PSInput input) : SV_TARGET {
         return baseColor;
     }
 
-    float coverage = atlas.Sample(samp, input.uv).r;
+    float coverage = SampleCoverage(input.atlasIndex, input.uv);
     return float4(baseColor.rgb, baseColor.a * coverage);
 }
 )";
@@ -201,7 +393,8 @@ float4 PSMain(PSInput input) : SV_TARGET {
     D3D12_INPUT_ELEMENT_DESC layout[] = {
         { "POSITION",0,DXGI_FORMAT_R32G32_FLOAT,0,0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0 },
         { "TEXCOORD",0,DXGI_FORMAT_R32G32_FLOAT,0,8, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0 },
-        { "COLOR",0,DXGI_FORMAT_R32_UINT,0,16, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0 }
+        { "COLOR",0,DXGI_FORMAT_R32_UINT,0,16, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0 },
+        { "TEXCOORD",1,DXGI_FORMAT_R32_UINT,0,20, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA,0 }
     };
 
     // PSO
@@ -246,22 +439,23 @@ float4 PSMain(PSInput input) : SV_TARGET {
     uiRes.uiOrthoConstantBuffer->Map( 0, &readRange, reinterpret_cast<void**>(&uiRes.pOrthoDataBegin));
     std::wcout << L"UI Resources Initialized (Phase 4A)\n";
     
-    AtlasBitmap atlas = BuildFontAtlas();// BUILD ATLAS ON CPU
+    AtlasBitmap englishAtlas = BuildFontAtlas();
+    AtlasBitmap iconAtlas = BuildIconAtlas();
     
     TextureUploadDesc desc = {};
-    desc.width = atlas.width;
-    desc.height = atlas.height;
+    desc.width = englishAtlas.width;
+    desc.height = englishAtlas.height;
     desc.format = DXGI_FORMAT_R8_UNORM;
-    desc.pixels = atlas.pixels.data();
-    desc.rowPitch = atlas.width;
+    desc.pixels = englishAtlas.pixels.data();
+    desc.rowPitch = englishAtlas.width;
 
     int bytesPerPixel = 1; // Use 4 if DXGI_FORMAT_R8G8B8A8_UNORM, use 1 if DXGI_FORMAT_R8_UNORM
-    bool isSaved = SaveToBmp("font_atlas_debug.bmp", atlas.pixels.data(),
-        atlas.width, atlas.height, bytesPerPixel);
+    bool isSaved = SaveToBmp("font_atlas_debug.bmp", englishAtlas.pixels.data(),
+        englishAtlas.width, englishAtlas.height, bytesPerPixel);
     if (isSaved) std::cout << "SUCCESS: Debug atlas saved to working directory." << std::endl;
     else std::cerr << "FAIL: Could not save debug atlas. Pointer might be invalid!" << std::endl;
 
-    SubmitTextureUpload(desc, &uiRes.uiAtlasTexture, &atlasFence);// Enqueue the upload through upload queue
+    SubmitTextureUpload(desc, &uiRes.uiAtlasTextures[UI_ENGLISH_ATLAS_SLOT], &atlasFence);// Enqueue the upload through upload queue
     // RESERVED FENCE VALUE FOR THIS UPLOAD (this is the key change)
     // The copy thread MUST eventually signal exactly this value.
     uint64_t atlasReadyFence = gpu.copyFenceValue.fetch_add(1, std::memory_order_relaxed);
@@ -281,10 +475,15 @@ float4 PSMain(PSInput input) : SV_TARGET {
     srvDesc.Texture2D.MipLevels = 1;
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     
-    device->CreateShaderResourceView(uiRes.uiAtlasTexture.Get(), &srvDesc,
+    device->CreateShaderResourceView(uiRes.uiAtlasTextures[UI_ENGLISH_ATLAS_SLOT].Get(), &srvDesc,
         uiRes.srvHeap->GetCPUDescriptorHandleForHeapStart());
-    
-    std::wcout << L"UI Atlas uploaded and SRV created (fence = " << atlasReadyFence << L")\n";
+
+    SaveToBmp("icon_atlas_debug.bmp", iconAtlas.pixels.data(),
+        iconAtlas.width, iconAtlas.height, bytesPerPixel);
+    UploadUIAtlasTexture(uiRes, device, UI_ICON_ATLAS_SLOT, iconAtlas);
+
+    std::wcout << L"Mandatory UI atlases uploaded: English slot " << UI_ENGLISH_ATLAS_SLOT
+        << L", icon slot " << UI_ICON_ATLAS_SLOT << L"\n";
 }
 
 // Cleanup
@@ -304,10 +503,10 @@ void PushRect( UIDrawContext& ctx, float x, float y, float w, float h,
 
     uint16_t base = ctx.vertexCount;
 
-    ctx.vertexPtr[0] = { x,y,0,0,color };
-    ctx.vertexPtr[1] = { x + w,y,0,0,color };
-    ctx.vertexPtr[2] = { x + w,y + h,0,0,color };
-    ctx.vertexPtr[3] = { x,y + h,0,0,color };
+    ctx.vertexPtr[0] = { x,y,0,0,color, UI_ENGLISH_ATLAS_SLOT };
+    ctx.vertexPtr[1] = { x + w,y,0,0,color, UI_ENGLISH_ATLAS_SLOT };
+    ctx.vertexPtr[2] = { x + w,y + h,0,0,color, UI_ENGLISH_ATLAS_SLOT };
+    ctx.vertexPtr[3] = { x,y + h,0,0,color, UI_ENGLISH_ATLAS_SLOT };
 
     ctx.indexPtr[0] = base + 0;
     ctx.indexPtr[1] = base + 1;
@@ -315,6 +514,59 @@ void PushRect( UIDrawContext& ctx, float x, float y, float w, float h,
     ctx.indexPtr[3] = base + 0;
     ctx.indexPtr[4] = base + 2;
     ctx.indexPtr[5] = base + 3;
+}
+
+static void PushTexturedQuad(UIDrawContext& ctx, float x, float y, float w, float h,
+    const UIAtlasRegion& region, uint32_t atlasIndex, uint32_t color, DX12ResourcesUI& uiRes) {
+    if (ctx.vertexCount + 4 > uiRes.maxVertices) return;
+    if (ctx.indexCount + 6 > uiRes.maxIndices) return;
+
+    uint16_t base = ctx.vertexCount;
+    ctx.vertexPtr[0] = { x,     y,     region.uvMinX, region.uvMinY, color, atlasIndex };
+    ctx.vertexPtr[1] = { x + w, y,     region.uvMaxX, region.uvMinY, color, atlasIndex };
+    ctx.vertexPtr[2] = { x + w, y + h, region.uvMaxX, region.uvMaxY, color, atlasIndex };
+    ctx.vertexPtr[3] = { x,     y + h, region.uvMinX, region.uvMaxY, color, atlasIndex };
+
+    ctx.indexPtr[0] = base + 0;
+    ctx.indexPtr[1] = base + 1;
+    ctx.indexPtr[2] = base + 2;
+    ctx.indexPtr[3] = base + 0;
+    ctx.indexPtr[4] = base + 2;
+    ctx.indexPtr[5] = base + 3;
+
+    ctx.vertexPtr += 4;
+    ctx.indexPtr += 6;
+    ctx.vertexCount += 4;
+    ctx.indexCount += 6;
+}
+
+void PushRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h, float radiusPx,
+    uint32_t color, DX12ResourcesUI& uiRes) {
+    if (w <= 0.0f || h <= 0.0f) return;
+    if (ctx.vertexCount + 36 > uiRes.maxVertices) return;
+    if (ctx.indexCount + 54 > uiRes.maxIndices) return;
+
+    const float clampedRadius = std::max(1.0f, std::min(radiusPx, 0.5f * std::min(w, h)));
+    const float xCuts[4] = { x, x + clampedRadius, x + w - clampedRadius, x + w };
+    const float yCuts[4] = { y, y + clampedRadius, y + h - clampedRadius, y + h };
+
+    for (int row = 0; row < 3; ++row) {
+        for (int col = 0; col < 3; ++col) {
+            PushTexturedQuad(ctx, xCuts[col], yCuts[row],
+                xCuts[col + 1] - xCuts[col], yCuts[row + 1] - yCuts[row],
+                gIconAtlasMetadata.roundedRectangle.regions[row][col],
+                UI_ICON_ATLAS_SLOT, color, uiRes);
+        }
+    }
+}
+
+static void PushIcon(UIDrawContext& ctx, float x, float y, float w, float h, char32_t iconCodepoint,
+    uint32_t color, DX12ResourcesUI& uiRes) {
+    auto iconIt = iconGlyphLookup.find(iconCodepoint);
+    if (iconIt == iconGlyphLookup.end()) return;
+    const Glyph& glyph = iconIt->second;
+    UIAtlasRegion icon{ glyph.uvMinX, glyph.uvMinY, glyph.uvMaxX, glyph.uvMaxY };
+    PushTexturedQuad(ctx, x, y, w, h, icon, UI_ICON_ATLAS_SLOT, color, uiRes);
 }
 
 // Returns true if clicked this frame
@@ -367,10 +619,10 @@ void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t c
         
         // Add 4 vertices. Write relative to the current pointer (0, 1, 2, 3)
         uint32_t vidx = ctx.vertexCount + vertexOffset;
-        ctx.vertexPtr[vertexOffset + 0] = { xpos,     ypos,     g.uvMinX, g.uvMinY, color };
-        ctx.vertexPtr[vertexOffset + 1] = { xpos + w, ypos,     g.uvMaxX, g.uvMinY, color };
-        ctx.vertexPtr[vertexOffset + 2] = { xpos + w, ypos + h, g.uvMaxX, g.uvMaxY, color };
-        ctx.vertexPtr[vertexOffset + 3] = { xpos,     ypos + h, g.uvMinX, g.uvMaxY, color };
+        ctx.vertexPtr[vertexOffset + 0] = { xpos,     ypos,     g.uvMinX, g.uvMinY, color, UI_ENGLISH_ATLAS_SLOT };
+        ctx.vertexPtr[vertexOffset + 1] = { xpos + w, ypos,     g.uvMaxX, g.uvMinY, color, UI_ENGLISH_ATLAS_SLOT };
+        ctx.vertexPtr[vertexOffset + 2] = { xpos + w, ypos + h, g.uvMaxX, g.uvMaxY, color, UI_ENGLISH_ATLAS_SLOT };
+        ctx.vertexPtr[vertexOffset + 3] = { xpos,     ypos + h, g.uvMinX, g.uvMaxY, color, UI_ENGLISH_ATLAS_SLOT };
 
         // Add 6 indices. Write indices relative to the current index pointer
         ctx.indexPtr[indexOffset + 0] = vidx + 0;
@@ -455,6 +707,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     float textStartOffsetPx = iconReservedWidthPx + 4.0f;
     float textEndInsetPx = 6.0f;
     float tabBarHeightPx = std::round(UI_TAB_BAR_HEIGHT_MM * pixelsPerMMy);
+    float roundedCornerRadiusPx = std::max(1.0f, std::round(UI_BUTTON_CORNER_RADIUS_MM * pixelsPerMMy));
 
     auto canPushRect = [&]() {
         return ctx.vertexCount + 4 <= uiRes.maxVertices &&
@@ -472,6 +725,10 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         bool pushed = canPushRect();
         PushRect(ctx, x, y, w, h, color, uiRes);
         if (pushed) advanceRect();
+    };
+
+    auto pushRoundedRect = [&](float x, float y, float w, float h, uint32_t color) {
+        PushRoundedRectangle(ctx, x, y, w, h, roundedCornerRadiusPx, color, uiRes);
     };
 
     auto textScaleForHeight = [&](float targetHeight) {
@@ -535,10 +792,10 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             if (ctx.indexCount + 6 > uiRes.maxIndices) return;
 
             uint16_t base = ctx.vertexCount;
-            ctx.vertexPtr[0] = { xpos,                  ypos,                   g.uvMinX, g.uvMinY, color };
-            ctx.vertexPtr[1] = { xpos + glyphWidth,     ypos,                   g.uvMaxX, g.uvMinY, color };
-            ctx.vertexPtr[2] = { xpos + glyphWidth,     ypos + glyphHeight,     g.uvMaxX, g.uvMaxY, color };
-            ctx.vertexPtr[3] = { xpos,                  ypos + glyphHeight,     g.uvMinX, g.uvMaxY, color };
+            ctx.vertexPtr[0] = { xpos,                  ypos,                   g.uvMinX, g.uvMinY, color, UI_ENGLISH_ATLAS_SLOT };
+            ctx.vertexPtr[1] = { xpos + glyphWidth,     ypos,                   g.uvMaxX, g.uvMinY, color, UI_ENGLISH_ATLAS_SLOT };
+            ctx.vertexPtr[2] = { xpos + glyphWidth,     ypos + glyphHeight,     g.uvMaxX, g.uvMaxY, color, UI_ENGLISH_ATLAS_SLOT };
+            ctx.vertexPtr[3] = { xpos,                  ypos + glyphHeight,     g.uvMinX, g.uvMaxY, color, UI_ENGLISH_ATLAS_SLOT };
 
             ctx.indexPtr[0] = base + 0;
             ctx.indexPtr[1] = base + 1;
@@ -660,7 +917,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
                 input.mouseY >= btnY && input.mouseY < btnY + btnHeight);
             uint32_t drawColor = hovered && input.leftButtonDown ? 0xFF333333 : baseColor;
             if (hovered && !input.leftButtonDown) drawColor = 0xFF555555;
-            pushRect(currentX, btnY, btnWidth, btnHeight, drawColor);
+            pushRoundedRect(currentX, btnY, btnWidth, btnHeight, drawColor);
 
             bool clicked = hovered && input.leftButtonPressedThisFrame;
 
@@ -672,21 +929,24 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             }
 
             if (!ctrl.isEnabled) { // Gray-out overlay for disabled controls
-                pushRect(currentX, btnY, btnWidth, btnHeight, 0xAA333333);
+                pushRoundedRect(currentX, btnY, btnWidth, btnHeight, 0xAA333333);
             }
         }
         else if (ctrl.type == 3) {
             // Future textbox
-            pushRect(currentX, btnY, btnWidth, btnHeight, 0xFF1E1E1E);
+            pushRoundedRect(currentX, btnY, btnWidth, btnHeight, 0xFF1E1E1E);
         }
         else {
             // Plain label
-            pushRect(currentX, btnY, btnWidth, btnHeight, 0xFF2D2D30);
+            pushRoundedRect(currentX, btnY, btnWidth, btnHeight, 0xFF2D2D30);
         }
 
         float iconX = currentX + (iconReservedWidthPx - iconSizePx) * 0.5f;
         float iconY = btnY + (btnHeight - iconSizePx) * 0.5f;
-        pushRect(iconX, iconY, iconSizePx, iconSizePx, iconColor);
+        const uint32_t randomIconIndex =
+            ((uint32_t)ctrl.action ^ (uint32_t)i) % (uint32_t)gIconAtlasMetadata.dummyIconCodepoints.size();
+        PushIcon(ctx, iconX, iconY, iconSizePx, iconSizePx,
+            gIconAtlasMetadata.dummyIconCodepoints[randomIconIndex], iconColor, uiRes);
 
         if (ctrl.showText) {
             float textX = currentX + textStartOffsetPx;

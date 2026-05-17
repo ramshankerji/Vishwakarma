@@ -9,6 +9,7 @@
 #include <dxgi1_6.h>
 #include <wrl.h>
 #include <vector>
+#include <array>
 #include <unordered_map>
 #include <iostream>
 #include <atomic>
@@ -22,7 +23,7 @@ struct SingleUIWindow; // Add this forward declaration:
 using Microsoft::WRL::ComPtr;
 
 struct DX12ResourcesUI { // GPU resources
-    ComPtr<ID3D12Resource> uiAtlasTexture; // 1024×1024 or 2048×2048 RGBA (or R8 for alpha-only)
+    std::array<ComPtr<ID3D12Resource>, UI_MAX_ATLAS_TEXTURES> uiAtlasTextures; // 1024×1024 or 2048×2048 RGBA (or R8 for alpha-only)
     ComPtr<ID3D12Resource> uiVertexBuffer; // Dynamic upload buffer for vertices
     ComPtr<ID3D12Resource> uiIndexBuffer;  // Dynamic upload buffer for indices
 
@@ -30,7 +31,6 @@ struct DX12ResourcesUI { // GPU resources
     UINT8* pIndexDataBegin = nullptr;
     UINT8* pOrthoDataBegin = nullptr;
 
-    ID3D12Resource* iconAtlas; // Required ?
     ComPtr<ID3D12PipelineState> uiPSO;
     ComPtr<ID3D12RootSignature> uiRootSignature;
     ComPtr<ID3D12Resource> uiOrthoConstantBuffer;
@@ -49,10 +49,18 @@ struct UIDrawContext { // Draw context
 
 // DirectX12 Immediate Mode UI System (Phase 4A). Tab Bar Rendering Only
 // External interfaces of User Interface sub module of the code.
-void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device);
-void CleanupUIResources( DX12ResourcesUI& uiRes);
+void InitUIResources(DX12ResourcesUI& uiRes, ID3D12Device* device);
+void CleanupUIResources(DX12ResourcesUI& uiRes);
 
 void PushRect(UIDrawContext& ctx, float x, float y, float w, float h, uint32_t color, DX12ResourcesUI& uiRes);
+void PushRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h, float radiusPx,
+    uint32_t color, DX12ResourcesUI& uiRes);
 void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t color, DX12ResourcesUI& uiRes);
-void RenderUIOverlay( SingleUIWindow& window, ID3D12GraphicsCommandList* cmdList,
+
+// Slots 0 and 1 are currently reserved for the mandatory English and Icon atlases.
+// Future script atlases can use slots [UI_FIRST_DYNAMIC_SCRIPT_ATLAS_SLOT, UI_MAX_ATLAS_TEXTURES).
+bool UploadUIAtlasTexture(DX12ResourcesUI& uiRes, ID3D12Device* device, uint32_t atlasSlot,
+    const AtlasBitmap& atlas);
+
+void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmdList,
     DX12ResourcesUI& uiRes, float monitorDPIX, float monitorDPIY, const UIInput& input);
