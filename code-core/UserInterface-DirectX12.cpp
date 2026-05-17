@@ -16,7 +16,8 @@ extern std::atomic<uint16_t*> publishedTabIndexes;
 extern std::atomic<uint16_t>  publishedTabCount;
 extern void PrintHResult(int);
 std::atomic<uint32_t> actionWriteIndex;
-std::string charset = " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789&(),./-";
+// ASCII Character set.
+std::string charset = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
 std::atomic<uint64_t> atlasFence = 0;
 
 struct UIAtlasRegion {
