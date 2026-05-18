@@ -622,15 +622,20 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     publishedWindowIndexes.store(activeWindowIndexesA, std::memory_order_release);
     publishedWindowCount.store(0, std::memory_order_release);
 
+    const wchar_t* initialTabNames[] = {
+        L"Tech-Structure 1",
+        L"Lab Building",
+        L"Sub Station"
+    };
+
     for (int i = 0; i < 3; ++i)
     {
         DATASETTAB& tab = allTabs[i];
         tab.tabID = i;
         tab.tabNo = i;
+        tab.fileName = initialTabNames[i];
         gpu.InitD3DPerTab(tab.dx);
-        // Optional: Give them names
-        // allTabs[i].fileName = L"Untitled-" + std::to_wstring(i);
-        // We can set random colors or names here to distinguish them
+        // We can set random colors here later to distinguish them further.
         // allTabs[i].color = ...
     }
 

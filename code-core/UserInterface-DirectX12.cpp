@@ -675,13 +675,7 @@ bool PushTab(UIDrawContext& ctx, float x, float w, float h, uint16_t tabID, bool
     
     uint32_t color = isActive ? COLOR_UI_TAB_ACTIVE : COLOR_UI_TAB_INACTIVE;
     uint32_t actionID = 0x10000000u | tabID;   // high bit = tab family
-
-    if (PushInteractiveRect(ctx, x, 0, w, h, color, actionID, input, uiRes)) {
-        // Optional immediate feedback (UI thread)
-        // window.activeTabIndex = tabID;   // you can still do it here if you want instant visual
-        return true;
-    }
-    return false;
+    return PushInteractiveRect(ctx, x, 0, w, h, color, actionID, input, uiRes);
 }
 
 // This function renders the list of tabs, all top menu buttons (with dropdowns if required),
@@ -855,7 +849,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     };
 
     // ENGINEERING / PROJECT TABs
-    float tabWidth = 120.0f;
+    float tabWidth = 160.0f;
     float currentX = 0.0f;
 
     uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
@@ -865,8 +859,19 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         uint16_t tabID = tabList[i];
         bool active = (window.activeTabIndex == tabID);
         if (pushTab(currentX, tabWidth, tabBarHeightPx, tabID, active)) {
-            window.activeTabIndex = tabID; // instant visual feedback
+            window.activeTabIndex = tabID; // Render thread will draw this tab's geometry on the next frame.
         }
+
+        std::u32string tabLabel;
+        tabLabel.reserve(allTabs[tabID].fileName.size());
+        for (wchar_t ch : allTabs[tabID].fileName) {
+            if (ch <= 0x7F) tabLabel.push_back(static_cast<char32_t>(ch));
+        }
+
+        pushTextClipped(currentX + 8.0f,
+            textBaselineY(0.0f, tabBarHeightPx, uiTextScale),
+            tabLabel.c_str(), tabWidth - 16.0f, COLOR_UI_TEXT, uiTextScale);
+
         currentX += tabWidth;
     }
 
