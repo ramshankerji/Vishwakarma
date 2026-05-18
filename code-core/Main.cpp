@@ -773,6 +773,12 @@ static void SyncModifiersForWindow(SingleUIWindow* window) {
     window->uiInput.altDown = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
 }
 
+static void UpdateUIMousePosition(SingleUIWindow* window, LPARAM lParam) {
+    if (!window) return;
+    window->uiInput.mouseX = static_cast<float>(GET_X_LPARAM(lParam));
+    window->uiInput.mouseY = static_cast<float>(GET_Y_LPARAM(lParam));
+}
+
 // PURPOSE:  Processes messages for the main window.
 // This is the function which runs whenever something changes from Operating System and we are expected to update ourselves.
 // Even the user input such as keyboard presses, mouse clicks, open/close are notified to this function.
@@ -879,6 +885,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
 
     case WM_MOUSEMOVE:
+        UpdateUIMousePosition(currentWindow, lParam);
         if (tab) {
             ad.actionType = ACTION_TYPE::MOUSEMOVE;
             ad.source = INPUT_SOURCE::MOUSE;
@@ -892,6 +899,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
 
     case WM_LBUTTONDOWN:
+        if (currentWindow) {
+            UpdateUIMousePosition(currentWindow, lParam);
+            currentWindow->uiInput.leftButtonDown = true;
+            currentWindow->uiInput.leftButtonPressedThisFrame = true;
+        }
         if (tab) {
             ad.actionType = ACTION_TYPE::LBUTTONDOWN;
             ad.source = INPUT_SOURCE::MOUSE;
@@ -905,6 +917,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     
     case WM_LBUTTONUP:
+        if (currentWindow) {
+            UpdateUIMousePosition(currentWindow, lParam);
+            currentWindow->uiInput.leftButtonDown = false;
+            currentWindow->uiInput.leftButtonReleasedThisFrame = true;
+        }
         if (tab) {
             ad.actionType = ACTION_TYPE::LBUTTONUP;
             ad.source = INPUT_SOURCE::MOUSE;
@@ -918,6 +935,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     
     case WM_RBUTTONDOWN:
+        if (currentWindow) {
+            UpdateUIMousePosition(currentWindow, lParam);
+            currentWindow->uiInput.rightButtonDown = true;
+            currentWindow->uiInput.rightButtonPressedThisFrame = true;
+        }
         if (tab) {
             ad.actionType = ACTION_TYPE::RBUTTONDOWN;
             ad.source = INPUT_SOURCE::MOUSE;
@@ -931,6 +953,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     
     case WM_RBUTTONUP:
+        if (currentWindow) {
+            UpdateUIMousePosition(currentWindow, lParam);
+            currentWindow->uiInput.rightButtonDown = false;
+        }
         if (tab) {
             ad.actionType = ACTION_TYPE::RBUTTONUP;
             ad.source = INPUT_SOURCE::MOUSE;
@@ -944,6 +970,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     
     case WM_MBUTTONDOWN:
+        if (currentWindow) {
+            UpdateUIMousePosition(currentWindow, lParam);
+            currentWindow->uiInput.middleButtonDown = true;
+            currentWindow->uiInput.middleButtonPressedThisFrame = true;
+        }
         if (tab) {
             ad.actionType = ACTION_TYPE::MBUTTONDOWN;
             ad.source = INPUT_SOURCE::MOUSE;
@@ -957,6 +988,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     
     case WM_MBUTTONUP:
+        if (currentWindow) {
+            UpdateUIMousePosition(currentWindow, lParam);
+            currentWindow->uiInput.middleButtonDown = false;
+        }
         if (tab) {
             ad.actionType = ACTION_TYPE::MBUTTONUP;
             ad.source = INPUT_SOURCE::MOUSE;
@@ -970,6 +1005,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     
     case WM_MOUSEWHEEL:
+        if (currentWindow) {
+            POINT uiPoint = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            ScreenToClient(hWnd, &uiPoint);
+            currentWindow->uiInput.mouseX = static_cast<float>(uiPoint.x);
+            currentWindow->uiInput.mouseY = static_cast<float>(uiPoint.y);
+            currentWindow->uiInput.mouseWheelDelta += GET_WHEEL_DELTA_WPARAM(wParam);
+        }
         if (tab) {
             ad.actionType = ACTION_TYPE::MOUSEWHEEL;
             ad.source = INPUT_SOURCE::MOUSE;
