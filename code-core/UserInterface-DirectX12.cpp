@@ -34,7 +34,8 @@ struct UIRoundedRectangleNineSlice {
 
 struct UIIconAtlasMetadata {
     UIRoundedRectangleNineSlice roundedRectangle{};
-    std::array<char32_t, 4> dummyIconCodepoints{ U'\uE000', U'\uE001', U'\uE002', U'\uE003' };
+    std::array<char32_t, 4> dummyIconCodepoints{ U'\uE100', U'\uE101', U'\uE102', U'\uE103' };
+    std::vector<char32_t> mixedIconCodepoints{};
 };
 
 static UIIconAtlasMetadata gIconAtlasMetadata{};
@@ -93,9 +94,43 @@ static void FillRect(AtlasBitmap& atlas, int x, int y, int w, int h, uint8_t cov
     }
 }
 
+static bool IsPrivateUseCodepoint(char32_t codepoint) {
+    return (codepoint >= 0xE000 && codepoint <= 0xF8FF) ||
+        (codepoint >= 0xF0000 && codepoint <= 0xFFFFD) ||
+        (codepoint >= 0x100000 && codepoint <= 0x10FFFD);
+}
+
+static bool TryReserveIconCell(int iconIndex, int atlasW, int atlasH, int& outX, int& outY) {
+    constexpr int iconCellSize = 24;
+    constexpr int iconCellGap = 4;
+    constexpr int iconStartY = 48;
+    const int cellsPerRow = (atlasW + iconCellGap) / (iconCellSize + iconCellGap);
+    if (cellsPerRow <= 0) return false;
+
+    outX = (iconIndex % cellsPerRow) * (iconCellSize + iconCellGap);
+    outY = iconStartY + (iconIndex / cellsPerRow) * (iconCellSize + iconCellGap);
+    return outX + iconCellSize <= atlasW && outY + iconCellSize <= atlasH;
+}
+
+static void StoreIconCellGlyph(char32_t codepoint, int x, int y, int atlasW, int atlasH) {
+    constexpr int iconCellSize = 24;
+    Glyph glyph{};
+    glyph.uvMinX = (float)x / atlasW;
+    glyph.uvMinY = (float)y / atlasH;
+    glyph.uvMaxX = (float)(x + iconCellSize) / atlasW;
+    glyph.uvMaxY = (float)(y + iconCellSize) / atlasH;
+    glyph.width = iconCellSize;
+    glyph.height = iconCellSize;
+    glyph.advanceX = iconCellSize;
+    iconGlyphLookup[codepoint] = glyph;
+    gIconAtlasMetadata.mixedIconCodepoints.push_back(codepoint);
+}
+
 static AtlasBitmap BuildIconAtlas() {
-    constexpr int atlasW = 128;
-    constexpr int atlasH = 128;
+    constexpr int atlasW = 256;
+    constexpr int atlasH = 256;
+    constexpr int iconCellSize = 24;
+    constexpr int proceduralIconDrawSize = 20;
     AtlasBitmap atlas{};
     atlas.width = atlasW;
     atlas.height = atlasH;
@@ -105,47 +140,78 @@ static AtlasBitmap BuildIconAtlas() {
     // Destination corners are resized to ~2 mm in screen space by PushRoundedRectangle.
     GenerateRoundedRectangleNineSlice(atlas, 0, 0, 32, 8, gIconAtlasMetadata.roundedRectangle);
 
-    constexpr int iconSize = 20;
-    constexpr int iconY = 48;
-    constexpr int iconXs[4] = { 0, 24, 48, 72 };
     iconGlyphLookup.clear();
+    gIconAtlasMetadata.mixedIconCodepoints.clear();
+
+    std::array<int, 4> iconXs{};
+    std::array<int, 4> iconYs{};
     for (int i = 0; i < 4; ++i) {
-        Glyph glyph{};
-        glyph.uvMinX = (float)iconXs[i] / atlasW;
-        glyph.uvMinY = (float)iconY / atlasH;
-        glyph.uvMaxX = (float)(iconXs[i] + iconSize) / atlasW;
-        glyph.uvMaxY = (float)(iconY + iconSize) / atlasH;
-        glyph.width = iconSize;
-        glyph.height = iconSize;
-        glyph.advanceX = iconSize;
-        iconGlyphLookup[gIconAtlasMetadata.dummyIconCodepoints[i]] = glyph;
+        if (!TryReserveIconCell(i, atlasW, atlasH, iconXs[i], iconYs[i])) continue;
+        StoreIconCellGlyph(gIconAtlasMetadata.dummyIconCodepoints[i], iconXs[i], iconYs[i], atlasW, atlasH);
     }
 
     // Dummy icon 0: plus
-    FillRect(atlas, iconXs[0] + 8, iconY + 2, 4, 16, 255);
-    FillRect(atlas, iconXs[0] + 2, iconY + 8, 16, 4, 255);
+    FillRect(atlas, iconXs[0] + 10, iconYs[0] + 4, 4, 16, 255);
+    FillRect(atlas, iconXs[0] + 4, iconYs[0] + 10, 16, 4, 255);
 
     // Dummy icon 1: folder-like block
-    FillRect(atlas, iconXs[1] + 2, iconY + 6, 16, 11, 255);
-    FillRect(atlas, iconXs[1] + 4, iconY + 3, 7, 4, 255);
+    FillRect(atlas, iconXs[1] + 4, iconYs[1] + 8, 16, 11, 255);
+    FillRect(atlas, iconXs[1] + 6, iconYs[1] + 5, 7, 4, 255);
 
     // Dummy icon 2: ring
-    for (int y = 0; y < iconSize; ++y) {
-        for (int x = 0; x < iconSize; ++x) {
+    for (int y = 0; y < proceduralIconDrawSize; ++y) {
+        for (int x = 0; x < proceduralIconDrawSize; ++x) {
             const float dx = (float)x + 0.5f - 10.0f;
             const float dy = (float)y + 0.5f - 10.0f;
             const float d = std::sqrt(dx * dx + dy * dy);
             if (d >= 5.0f && d <= 8.0f) {
-                atlas.pixels[(iconY + y) * atlasW + (iconXs[2] + x)] = 255;
+                atlas.pixels[(iconYs[2] + 2 + y) * atlasW + (iconXs[2] + 2 + x)] = 255;
             }
         }
     }
 
     // Dummy icon 3: 2x2 grid
-    FillRect(atlas, iconXs[3] + 2, iconY + 2, 7, 7, 255);
-    FillRect(atlas, iconXs[3] + 11, iconY + 2, 7, 7, 255);
-    FillRect(atlas, iconXs[3] + 2, iconY + 11, 7, 7, 255);
-    FillRect(atlas, iconXs[3] + 11, iconY + 11, 7, 7, 255);
+    FillRect(atlas, iconXs[3] + 4, iconYs[3] + 4, 7, 7, 255);
+    FillRect(atlas, iconXs[3] + 13, iconYs[3] + 4, 7, 7, 255);
+    FillRect(atlas, iconXs[3] + 4, iconYs[3] + 13, 7, 7, 255);
+    FillRect(atlas, iconXs[3] + 13, iconYs[3] + 13, 7, 7, 255);
+
+    if (ftIconFace) {
+        FT_Set_Pixel_Sizes(ftIconFace, 0, proceduralIconDrawSize);
+
+        FT_UInt glyphIndex = 0;
+        FT_ULong charCode = FT_Get_First_Char(ftIconFace, &glyphIndex);
+        int iconIndex = (int)gIconAtlasMetadata.mixedIconCodepoints.size();
+        while (glyphIndex != 0) {
+            const char32_t codepoint = (char32_t)charCode;
+            if (IsPrivateUseCodepoint(codepoint) &&
+                std::find(gIconAtlasMetadata.dummyIconCodepoints.begin(),
+                    gIconAtlasMetadata.dummyIconCodepoints.end(), codepoint) ==
+                gIconAtlasMetadata.dummyIconCodepoints.end() &&
+                FT_Load_Char(ftIconFace, charCode, FT_LOAD_RENDER) == 0) {
+                int cellX = 0;
+                int cellY = 0;
+                if (!TryReserveIconCell(iconIndex, atlasW, atlasH, cellX, cellY)) break;
+
+                FT_GlyphSlot g = ftIconFace->glyph;
+                const int bitmapX = cellX + std::max(0, (iconCellSize - (int)g->bitmap.width) / 2);
+                const int bitmapY = cellY + std::max(0, (iconCellSize - (int)g->bitmap.rows) / 2);
+                const int copyW = std::min((int)g->bitmap.width, iconCellSize);
+                const int copyH = std::min((int)g->bitmap.rows, iconCellSize);
+                for (int y = 0; y < copyH; ++y) {
+                    for (int x = 0; x < copyW; ++x) {
+                        atlas.pixels[(bitmapY + y) * atlasW + (bitmapX + x)] =
+                            g->bitmap.buffer[y * g->bitmap.pitch + x];
+                    }
+                }
+
+                StoreIconCellGlyph(codepoint, cellX, cellY, atlasW, atlasH);
+                ++iconIndex;
+            }
+
+            charCode = FT_Get_Next_Char(ftIconFace, charCode, &glyphIndex);
+        }
+    }
 
     return atlas;
 }
@@ -853,9 +919,9 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         float iconX = currentX + (iconReservedWidthPx - iconSizePx) * 0.5f;
         float iconY = btnY + (btnHeight - iconSizePx) * 0.5f;
         const uint32_t randomIconIndex =
-            ((uint32_t)ctrl.action ^ (uint32_t)i) % (uint32_t)gIconAtlasMetadata.dummyIconCodepoints.size();
+            ((uint32_t)ctrl.action ^ (uint32_t)i) % (uint32_t)gIconAtlasMetadata.mixedIconCodepoints.size();
         PushIcon(ctx, iconX, iconY, iconSizePx, iconSizePx,
-            gIconAtlasMetadata.dummyIconCodepoints[randomIconIndex], iconColor, uiRes);
+            gIconAtlasMetadata.mixedIconCodepoints[randomIconIndex], iconColor, uiRes);
 
         if (ctrl.showText) {
             float textX = currentX + textStartOffsetPx;

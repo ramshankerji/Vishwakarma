@@ -5,6 +5,7 @@
 #include FT_FREETYPE_H
 extern FT_Library ft;
 extern FT_Face    ftFace;
+extern FT_Face    ftIconFace;
 extern bool       fontInitialized;
 
 bool InitFontSystem();
