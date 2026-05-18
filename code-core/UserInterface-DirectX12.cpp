@@ -3,7 +3,8 @@
 #include "UserInterface-DirectX12.h"
 #include <algorithm>
 #include <d3dcompiler.h>
-#include <dxcapi.h>
+#include "ShaderUIVertex.h"
+#include "ShaderUIPixel.h"
 #include "FontManager.h"
 #include <MemoryManagerGPU-DirectX12.h>
 #include "विश्वकर्मा.h"
@@ -162,44 +163,6 @@ static uint32_t StableRandomUIColour(uint32_t seed) {
     return 0xFF000000u | (b << 16) | (g << 8) | r;
 }
 
-// Shader compilation helper
-static void CompileShader( const char* code, LPCWSTR entry, LPCWSTR target, bool debugShaders,
-    ComPtr<IDxcBlob>& outBlob) {
-
-    ComPtr<IDxcUtils> utils;
-    ComPtr<IDxcCompiler3> compiler;
-    ThrowIfFailed(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&utils)));
-    ThrowIfFailed(DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler)));
-
-    DxcBuffer sourceBuffer = {};
-    sourceBuffer.Ptr = code;
-    sourceBuffer.Size = strlen(code);
-    sourceBuffer.Encoding = DXC_CP_UTF8;
-
-    std::vector<LPCWSTR> arguments = { L"-E", entry, L"-T", target };
-    if (debugShaders) {
-        arguments.push_back(DXC_ARG_DEBUG);
-        arguments.push_back(DXC_ARG_SKIP_OPTIMIZATIONS);
-    }
-
-    ComPtr<IDxcResult> result;
-    ThrowIfFailed(compiler->Compile(&sourceBuffer, arguments.data(),
-        static_cast<UINT32>(arguments.size()), nullptr, IID_PPV_ARGS(&result)));
-
-    HRESULT hr = S_OK;
-    ThrowIfFailed(result->GetStatus(&hr));
-    if (FAILED(hr)) {
-        ComPtr<IDxcBlobUtf8> errorBlob;
-        result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errorBlob), nullptr);
-        if (errorBlob && errorBlob->GetStringLength() > 0) {
-            std::cerr << errorBlob->GetStringPointer() << std::endl;
-        }
-        ThrowIfFailed(hr);
-    }
-
-    ThrowIfFailed(result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&outBlob), nullptr));
-}
-
 bool SubmitTextureUpload(const TextureUploadDesc& desc,
     ComPtr<ID3D12Resource>* outTex,  std::atomic<uint64_t>* fenceOut) {
 
@@ -328,93 +291,7 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
     device->CreateSampler(&samplerDesc,
         uiRes.samplerHeap->GetCPUDescriptorHandleForHeapStart());
 
-    // Shaders
-
-#if defined(_DEBUG)
-    bool compileDebugShaders = true;
-#else
-    bool compileDebugShaders = false;
-#endif
-
-    static const char* vsCode = R"(
-cbuffer OrthoConstantBuffer : register(b0) {
-    float4x4 ortho;
-};
-
-struct VSInput {
-    float2 position : POSITION;
-    float2 uv       : TEXCOORD0;
-    uint   color    : COLOR0;
-    uint   atlasIndex : TEXCOORD1;
-};
-
-struct PSInput {
-    float4 position : SV_POSITION;
-    float2 uv       : TEXCOORD0;
-    uint   color    : COLOR0;
-    nointerpolation uint atlasIndex : TEXCOORD1;
-};
-
-PSInput VSMain(VSInput input) {
-    PSInput output;
-    float4 pos = float4(input.position,0,1);
-    output.position = mul(pos,ortho);
-    output.uv = input.uv;
-    output.color = input.color;
-    output.atlasIndex = input.atlasIndex;
-    return output;
-}
-)";
-
-    static const char* psCode = R"(
-struct PSInput {
-    float4 position : SV_POSITION;
-    float2 uv       : TEXCOORD0;
-    uint   color    : COLOR0;
-    nointerpolation uint atlasIndex : TEXCOORD1;
-};
-
-Texture2D atlases[10] : register(t0);
-SamplerState samp : register(s0);
-
-float SampleCoverage(uint atlasIndex, float2 uv) {
-    // Shader Model 5.0 does not permit dynamic resource-array indexing.
-    // Keep the descriptor array future-ready while sampling through static cases.
-    switch (atlasIndex) {
-    case 0: return atlases[0].Sample(samp, uv).r;
-    case 1: return atlases[1].Sample(samp, uv).r;
-    case 2: return atlases[2].Sample(samp, uv).r;
-    case 3: return atlases[3].Sample(samp, uv).r;
-    case 4: return atlases[4].Sample(samp, uv).r;
-    case 5: return atlases[5].Sample(samp, uv).r;
-    case 6: return atlases[6].Sample(samp, uv).r;
-    case 7: return atlases[7].Sample(samp, uv).r;
-    case 8: return atlases[8].Sample(samp, uv).r;
-    case 9: return atlases[9].Sample(samp, uv).r;
-    default: return atlases[0].Sample(samp, uv).r;
-    }
-}
-
-float4 PSMain(PSInput input) : SV_TARGET {
-    float r = ((input.color >> 0) & 0xFF) / 255.0;
-    float g = ((input.color >> 8) & 0xFF) / 255.0;
-    float b = ((input.color >> 16) & 0xFF) / 255.0;
-    float a = ((input.color >> 24) & 0xFF) / 255.0;
-    float4 baseColor = float4(r, g, b, a);
-
-    if (input.uv.x == 0.0 && input.uv.y == 0.0) {
-        return baseColor;
-    }
-
-    float coverage = SampleCoverage(input.atlasIndex, input.uv);
-    return float4(baseColor.rgb, baseColor.a * coverage);
-}
-)";
-
-    ComPtr<IDxcBlob> vsBlob;
-    ComPtr<IDxcBlob> psBlob;
-    CompileShader(vsCode, L"VSMain", L"vs_6_0", compileDebugShaders, vsBlob);
-    CompileShader(psCode, L"PSMain", L"ps_6_0", compileDebugShaders, psBlob);
+    // Shaders are compiled to DXIL during the build and embedded into the executable.
     // Input layout
 
     D3D12_INPUT_ELEMENT_DESC layout[] = {
@@ -428,8 +305,8 @@ float4 PSMain(PSInput input) : SV_TARGET {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = { layout,_countof(layout) };
     psoDesc.pRootSignature = uiRes.uiRootSignature.Get();
-    psoDesc.VS = CD3DX12_SHADER_BYTECODE(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize());
-    psoDesc.PS = CD3DX12_SHADER_BYTECODE(psBlob->GetBufferPointer(), psBlob->GetBufferSize());
+    psoDesc.VS = CD3DX12_SHADER_BYTECODE(g_uiVertexShader, sizeof(g_uiVertexShader));
+    psoDesc.PS = CD3DX12_SHADER_BYTECODE(g_uiPixelShader, sizeof(g_uiPixelShader));
     psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
