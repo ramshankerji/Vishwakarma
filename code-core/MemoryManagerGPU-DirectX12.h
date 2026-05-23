@@ -494,8 +494,9 @@ public:
     void InitD3DDeviceOnly();
     void InitD3DPerTab(DX12ResourcesPerTab& tabRes); // Call this when a new Tab is created
     void InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D12CommandQueue* commandQueue);
+    // monitorId: index into gpu.screens[] for DPI/physical info used by UI layout calculations
     void PopulateCommandList(ID3D12GraphicsCommandList* cmdList, //Called by per monitor render thread.
-        DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage);
+        DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage, int monitorId);
     void WaitForPreviousFrame(const DX12ResourcesPerRenderThread& dx);
     void ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UINT newHeight);
 

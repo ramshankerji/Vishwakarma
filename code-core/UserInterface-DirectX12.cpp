@@ -825,7 +825,10 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     };
 
     // ENGINEERING / PROJECT TABs
-    float tabWidth = 160.0f;
+    // Action ids for engineering thread control (UI -> engineering)
+    constexpr uint32_t ACTION_ENGINEERING_CLOSE = 0xE0000001u;
+    constexpr uint32_t ACTION_ENGINEERING_CREATE = 0xE0000002u;
+
     float currentX = 0.0f;
 
     uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
@@ -840,37 +843,131 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         PushRect(ctx, 0.0f, 0.0f, 5000.0f, tabBarHeightPx, uiActiveColors.tabBackground, uiRes);//
         incrementVertexIndexCounters();
     }
-    for (uint16_t i = 0; i < tabCount; i++) {
+    // We will allow tabs to shrink progressively when too many tabs exist.
+    // Compute sizing constraints
+    const float defaultTabWidth = 160.0f; // legacy fixed width in pixels
+    const float plusButtonWidth = buttonHeightPx; // reserve square area for '+'
+    const float minTabWidth = std::max(4.0f * pixelsPerMMx, 8.0f); // 4mm minimum as requested, but at least 8px
+
+    // Determine how many slots we need to fit: tabs + one slot for '+' button
+    uint16_t slotsNeeded = tabCount + 1;
+    float availableForTabs = std::max(0.0f, W - plusButtonWidth);
+
+    float tentativeWidth = availableForTabs / (float)slotsNeeded;
+    float tabWidthPx = defaultTabWidth;
+    uint16_t visibleTabs = tabCount;
+
+    if (tentativeWidth >= defaultTabWidth) {
+        tabWidthPx = defaultTabWidth;
+    } else if (tentativeWidth >= minTabWidth) {
+        tabWidthPx = tentativeWidth;
+    } else {
+        // If tentative width is below minimum, we must hide some tabs.
+        visibleTabs = (uint16_t)std::floor(availableForTabs / minTabWidth);
+        if (visibleTabs > tabCount) visibleTabs = tabCount;
+        tabWidthPx = minTabWidth;
+    }
+
+    // Render visible tabs only; hidden tabs are not drawn (will be handled by horizontal scroll in future)
+    // Gap between tabs: 0.5 mm on either side
+    float gapPx = 0.5f * pixelsPerMMx;
+    for (uint16_t i = 0; i < visibleTabs; i++) {
         uint16_t tabID = tabList[i];
         bool isActive = (window.activeTabIndex == tabID);
-        uint32_t actionID = 0x10000000u | tabID;   // high bit = tab family
 
-        bool hovered = input.mouseX >= currentX && input.mouseX < currentX + tabWidth &&
-            input.mouseY >= 0 && input.mouseY < 0 + tabBarHeightPx;
+        // area for this tab (slot)
+        float tabX = currentX;
+        float tabW = tabWidthPx;
 
+        // content area inset by half-mm gaps on either side
+        float contentX = tabX + gapPx;
+        float contentW = std::max(0.0f, tabW - 2.0f * gapPx);
+
+        // X (close) button sizing — square inside tab on the right
+        float xBtnSize = std::round(std::min(tabW * 0.5f, std::max( (float)std::round(UI_ICON_SIZE_MM * pixelsPerMMx), 10.0f)));
+        if (xBtnSize + 4.0f > tabW) xBtnSize = std::max(4.0f, tabW - 4.0f);
+        float xBtnX = tabX + tabW - xBtnSize - 4.0f;
+        float xBtnY = std::floor((tabBarHeightPx - xBtnSize) * 0.5f);
+
+        // Entire tab background — draw only inside content area leaving gaps between tabs
         if (isActive) {
-            PushTopRoundedRectangle(ctx, currentX, 0.0f, tabWidth, tabBarHeightPx, roundedCornerRadiusPx, uiActiveColors.actionGroupBackground, uiRes);
+            PushTopRoundedRectangle(ctx, contentX, 0.0f, contentW, tabBarHeightPx, roundedCornerRadiusPx, uiActiveColors.actionGroupBackground, uiRes);
         } else {
             bool pushed = canPushRect();
-            PushRect(ctx, currentX, 0.0f, tabWidth, tabBarHeightPx, uiActiveColors.tabBackground, uiRes);
+            PushRect(ctx, contentX, 0.0f, contentW, tabBarHeightPx, uiActiveColors.tabBackground, uiRes);
             if (pushed) incrementVertexIndexCounters();
         }
 
-        if (hovered && input.leftButtonPressedThisFrame) {
+        // Check clicks on the X button first to avoid activating the tab when user intends to close
+        bool xHovered = input.mouseX >= xBtnX && input.mouseX < xBtnX + xBtnSize &&
+            input.mouseY >= xBtnY && input.mouseY < xBtnY + xBtnSize;
+        if (xHovered && input.leftButtonPressedThisFrame) {
+            // Signal close intent to engineering thread. Pass tabID in parameter p1.
+            PushUIAction(ACTION_ENGINEERING_CLOSE, (uint32_t)tabID, 0);
+        }
+
+        // If user clicked on non-X area of tab, activate it
+        bool tabHovered = input.mouseX >= tabX && input.mouseX < tabX + tabW &&
+            input.mouseY >= 0 && input.mouseY < tabBarHeightPx;
+        if (!xHovered && tabHovered && input.leftButtonPressedThisFrame) {
             window.activeTabIndex = tabID; // Render thread will draw this tab's geometry on the next frame.
         }
 
+        // Draw the X button: only draw rounded background when hovered, otherwise render as plain text
+        char32_t xChar[2] = { U'x', U'\0' };
+        if (xHovered) {
+            PushRoundedRectangle(ctx, xBtnX, xBtnY, xBtnSize, xBtnSize, std::max(1.0f, roundedCornerRadiusPx * 0.6f),
+                0xFF444444, uiRes);
+            pushTextClipped(xBtnX + 2.0f, textBaselineY(xBtnY, xBtnSize, uiTextScale), xChar, xBtnSize - 4.0f, 0xFFFFFFFF, uiTextScale);
+        } else {
+            // Render as plain small text matching tab text color
+            pushTextClipped(xBtnX + 2.0f, textBaselineY(xBtnY, xBtnSize, uiTextScale), xChar, xBtnSize - 4.0f, uiActiveColors.tabBackgroundText, uiTextScale);
+        }
+
+        // Draw label clipped to remaining area (avoid overlapping with X)
         std::u32string tabLabel;
         tabLabel.reserve(allTabs[tabID].fileName.size());
         for (wchar_t ch : allTabs[tabID].fileName) {
             if (ch <= 0x7F) tabLabel.push_back(static_cast<char32_t>(ch));
         }
 
-        pushTextClipped(currentX + 8.0f,
-            textBaselineY(0.0f, tabBarHeightPx, uiTextScale),
-            tabLabel.c_str(), tabWidth - 16.0f, uiActiveColors.tabBackgroundText, uiTextScale);
+        float labelMaxWidth = contentW - (8.0f + xBtnSize + 4.0f);
+        pushTextClipped(contentX + 8.0f, textBaselineY(0.0f, tabBarHeightPx, uiTextScale), tabLabel.c_str(), labelMaxWidth, uiActiveColors.tabBackgroundText, uiTextScale);
 
-        currentX += tabWidth;
+        currentX += tabW;
+
+        // Draw 1px vertical separator centered in the gap between tabs (only between tabs)
+        if (i + 1 < visibleTabs) {
+            float sepX = tabX + tabW; // center of gap between this tab and next
+            // align to pixel for crispness
+            float sepXi = std::floor(sepX + 0.5f);
+            pushRect(sepXi, 2.0f, 1.0f, tabBarHeightPx - 4.0f, uiActiveColors.actionGroupSeperator);
+        }
+    }
+
+    // If some tabs are hidden, we may draw a subtle indicator (ellipsis) — skip for now
+
+    // Render '+' create new thread button at the end of tab bar
+    float plusX = currentX + 6.0f; // small padding before plus
+    float plusSize = std::max(plusButtonWidth, std::round(UI_ICON_SIZE_MM * pixelsPerMMy) + 8.0f);
+    bool plusHovered = input.mouseX >= plusX && input.mouseX < plusX + plusSize &&
+        input.mouseY >= (tabBarHeightPx - plusSize) * 0.5f && input.mouseY < (tabBarHeightPx - plusSize) * 0.5f + plusSize;
+    // '+' button: show rounded background only on hover; otherwise render as plain icon/text
+    if (plusHovered) {
+        PushRoundedRectangle(ctx, plusX, (tabBarHeightPx - plusSize) * 0.5f, plusSize, plusSize, roundedCornerRadiusPx,
+            0xFF444444, uiRes);
+        if (!gIconAtlasMetadata.mixedIconCodepoints.empty()) {
+            PushIcon(ctx, plusX + (plusSize - iconSizePx) * 0.5f, (tabBarHeightPx - iconSizePx) * 0.5f,
+                iconSizePx, iconSizePx, gIconAtlasMetadata.mixedIconCodepoints[0], 0xFFFFFFFF, uiRes);
+        }
+    } else {
+        if (!gIconAtlasMetadata.mixedIconCodepoints.empty()) {
+            PushIcon(ctx, plusX + (plusSize - iconSizePx) * 0.5f, (tabBarHeightPx - iconSizePx) * 0.5f,
+                iconSizePx, iconSizePx, gIconAtlasMetadata.mixedIconCodepoints[0], uiActiveColors.tabBackgroundText, uiRes);
+        }
+    }
+    if (plusHovered && input.leftButtonPressedThisFrame) {
+        PushUIAction(ACTION_ENGINEERING_CREATE, 0, 0);
     }
 
     // TOP BUTTONS (ACTION GROUP BAR)

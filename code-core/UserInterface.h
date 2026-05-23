@@ -10,6 +10,8 @@
 
 #include "FontManager.h" // FreeType font atlas generation
 #include "UserInterface-TextTranslations.h" // localization
+#include <deque>
+#include <mutex>
 
 /*
 This file is our User Inteface Design document.
@@ -312,10 +314,21 @@ struct UIColors { // Standard UI Colours (ABGR format for DX12)
 // Thread-safe push (lock-free ring buffer style – reuse your MemoryManagerGPU ring buffer idea)
 extern std::atomic<uint32_t> actionWriteIndex;
 constexpr uint32_t ACTION_RING_SIZE = 4096;
+// Simpler thread-safe queue for UI -> Engine actions (protected by mutex)
+struct UIActionEntry {
+    uint32_t id;
+    uint32_t p1;
+    uint32_t p2;
+};
 
-// Call from UI thread:
+//TODO: WARNING: Get rid of mutex and use lock-free multi producer single consumer ring buffer for this.
+extern std::mutex g_actionQueueMutex;
+extern std::deque<UIActionEntry> g_actionQueue;
+
+// Call from UI thread: push an action into the global action queue
 inline void PushUIAction(uint32_t id, uint32_t p1 = 0, uint32_t p2 = 0) {
-    uint32_t idx = actionWriteIndex.fetch_add(1, std::memory_order_relaxed) % ACTION_RING_SIZE;
+    std::lock_guard<std::mutex> lk(g_actionQueueMutex);
+    g_actionQueue.push_back({ id, p1, p2 });
     // actionRing[idx] = { id, p1, p2, /*timestamp*/ };
     // Engineering thread reads with its own readIndex (standard ring-buffer)
 }

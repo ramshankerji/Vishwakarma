@@ -702,7 +702,8 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     // LAUNCH 3 ENGINEERING THREADS (One per Tab). Main logic thread. The ringmaster of the application.
 	// TODO: 3 Initial threads is during development. Final application will have dynamic thread management.
     for (int i = 0; i < 3; ++i) {
-        threads.emplace_back(विश्वकर्मा, (uint64_t)i);// Pass the index 'i' to the thread function
+        std::thread t(विश्वकर्मा, (uint64_t)i);// Pass the index 'i' to the thread function
+        AddEngineeringThread(std::move(t));
     }
 
     //threads.emplace_back(GpuRenderThread, 0, 60);  // Monitor 1 at 60Hz
@@ -741,6 +742,8 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
             t.join();
         }
     }
+    // Join engineering threads created dynamically
+    JoinAllEngineeringThreads();
     // Clean up resources before exiting the application.
     // Cleanup Windows
     uint16_t* winList = publishedWindowIndexes.load(std::memory_order_acquire);
@@ -818,6 +821,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     switch (message)
     {
+    /*
+    case WM_NCCALCSIZE: //Override the WM_NCCALCSIZE message to extend the client area into the title bar space.
+        if (wParam == TRUE) {
+            // Extend the client area to cover the title bar
+            NCCALCSIZE_PARAMS* pncsp = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
+            pncsp->rgrc[0].top -= GetSystemMetrics(SM_CYCAPTION);
+            return 0;
+        },,,,
+        break;
+    */
     /*
     case WM_NCCALCSIZE: //Override the WM_NCCALCSIZE message to extend the client area into the title bar space.
         if (wParam == TRUE) {

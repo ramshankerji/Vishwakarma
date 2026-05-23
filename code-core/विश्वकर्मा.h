@@ -235,6 +235,10 @@ struct SingleUIWindow {
 
 void विश्वकर्मा(uint64_t tabID);
 
+// Register a newly created engineering std::thread into the global registry (takes ownership)
+void AddEngineeringThread(std::thread&& t);
+void JoinAllEngineeringThreads();
+
 //Atomic ID generator for unique IDs across the application.
 static std::atomic<uint64_t> global_id{1}; // start at 1 to reserve 0 .
 inline uint64_t GetNewTempID(){ //fetch_add returns the old value before increment,

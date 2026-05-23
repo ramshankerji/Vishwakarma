@@ -424,7 +424,7 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
 }
 
 void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
-    DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage) {
+    DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage, int monitorId) {
     //int i = 0; // Latter to be iterated over number of screens.
     // Update constant buffer with transformation matrices
     
@@ -436,7 +436,24 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
 
     // Create projection matrix
     if (winRes.WindowHeight == 0) return; //Prevent divide by 0. If minimized window: WindowHeight = 0.
-    float aspectRatio = static_cast<float>(winRes.WindowWidth) / static_cast<float>(winRes.WindowHeight);
+
+    // Compute top UI height in pixels based on monitor physical DPI (DPI -> pixels per mm)
+    int topUITotalHeightPx = 0;
+    if (monitorId >= 0 && monitorId < gpu.currentMonitorCount) {
+        float pixelsPerMMy = static_cast<float>(gpu.screens[monitorId].physicalDpiY) / 25.4f;
+        topUITotalHeightPx = static_cast<int>(std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+            UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+            UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+            UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy));
+        // clamp
+        if (topUITotalHeightPx < 0) topUITotalHeightPx = 0;
+        if (topUITotalHeightPx > winRes.WindowHeight) topUITotalHeightPx = winRes.WindowHeight;
+    }
+
+    // Adjust viewport/scissor to exclude the top UI area so 3D scene starts below it.
+    int sceneHeight = winRes.WindowHeight - topUITotalHeightPx;
+    if (sceneHeight <= 0) return;
+    float aspectRatio = static_cast<float>(winRes.WindowWidth) / static_cast<float>(sceneHeight);
 
     XMMATRIX projectionMatrix =  XMMatrixPerspectiveFovLH(
         tabRes.camera.fov, aspectRatio, tabRes.camera.nearZ,  tabRes.camera.farZ );
@@ -459,12 +476,13 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
     commandList->SetGraphicsRootShaderResourceView(1, tabRes.worldMatrixBuffer->GetGPUVirtualAddress());
 
     // Create named variables (l‑values)
-    CD3DX12_VIEWPORT viewport(0.0f, 0.0f,
+    // Viewport starts at y = topUITotalHeightPx and has reduced height
+    CD3DX12_VIEWPORT viewport(0.0f, static_cast<float>(topUITotalHeightPx),
         static_cast<float>(winRes.WindowWidth),
-        static_cast<float>(winRes.WindowHeight)
+        static_cast<float>(sceneHeight)
     );
 
-    CD3DX12_RECT scissorRect(0, 0, winRes.WindowWidth, winRes.WindowHeight);
+    CD3DX12_RECT scissorRect(0, topUITotalHeightPx, winRes.WindowWidth, winRes.WindowHeight);
 
     // Now you can take their addresses and call the methods
     commandList->RSSetViewports(1, &viewport);
@@ -1571,13 +1589,16 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 //if (fenceToWaitFor > 0) { threadRes.commandQueue->Wait(gpu.copyFence.Get(), fenceToWaitFor); }
                 //Above is commented out because render thread now no longer need to wait for copyFence,
                 //because, now render thread operate over READ ONLY page list.
-                gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes, tab.geometry);// Renders geometry.
+                gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes, tab.geometry, monitorId);// Renders geometry.
                 // Render User Interface using safe snapshot copy of current Input.
 
                 if (atlasFence.load(std::memory_order_acquire) == 0 ||
                     gpu.copyFence->GetCompletedValue() < atlasFence.load()) {
                     ; // atlas not ready → skip UI
                 } else {
+                    // Restore full window viewport & scissor before rendering UI overlay so UI is not clipped
+                    threadRes.commandList->RSSetViewports(1, &winRes.viewport);
+                    threadRes.commandList->RSSetScissorRects(1, &winRes.scissorRect);
                     RenderUIOverlay(window, threadRes.commandList.Get(), gpu.uiResources,
                         static_cast<float>(gpu.screens[monitorId].physicalDpiX),
                         static_cast<float>(gpu.screens[monitorId].physicalDpiY),

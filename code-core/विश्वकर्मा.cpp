@@ -23,6 +23,38 @@ This thread is also responsible for engineering calculations, consistency of Dat
 extern std::atomic<bool> shutdownSignal; // Externs for communication
 std::atomic<uint64_t> g_nextPyramidId = 1;
 
+// UI action queue (produced by UI thread, consumed by engineering threads)
+// TODO: WARNING: We must not have mutex contention on this queue. Get rid of this soon.
+// If the UI thread is producing actions at a very high rate, it can cause performance issues.
+std::mutex g_actionQueueMutex;
+std::deque<UIActionEntry> g_actionQueue;
+
+// Helper for engineering thread to pop all pending actions (thread-safe)
+static void PopAllUIActions(std::vector<UIActionEntry>& out) {
+    std::lock_guard<std::mutex> lk(g_actionQueueMutex);
+    while (!g_actionQueue.empty()) {
+        out.push_back(g_actionQueue.front());
+        g_actionQueue.pop_front();
+    }
+}
+// Engineering thread registry (threads created dynamically)
+static std::mutex g_engineThreadsMutex;
+static std::vector<std::thread> g_engineeringThreads;
+
+void AddEngineeringThread(std::thread&& t) {
+    std::lock_guard<std::mutex> lk(g_engineThreadsMutex);
+    g_engineeringThreads.emplace_back(std::move(t));
+}
+
+void JoinAllEngineeringThreads() {
+    std::lock_guard<std::mutex> lk(g_engineThreadsMutex);
+    for (auto & et : g_engineeringThreads) {
+        if (et.joinable()) et.join();
+    }
+    g_engineeringThreads.clear();
+}
+
+
 /* Different tabs represent different files opened in the software.
 Just like different website links open in different Internet browser tab. Tab No. 0 Show the opening screen.
 i.e.Not associated with any particular opened file. 1 DATASET = 1 TAB visible to user / to website. */
