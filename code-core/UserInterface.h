@@ -158,7 +158,7 @@ constexpr float UI_TEXT_HEIGHT_MM = 2.5f; // EIL's recommended text hight for pr
 // TODO: Latter, we will allow user to customize text height from settings.
 constexpr float UI_TAB_BAR_HEIGHT_MM = 4.0f;
 constexpr float UI_ACTION_GROUP_LABEL_HEIGHT_MM = 4.0f;
-constexpr float UI_TOP_ACTION_GROUP_HEIGHT_MM = 12.0f; // Divisible by 2/3/4
+constexpr float UI_ACTION_GROUP_HEIGHT_MM = 12.0f; // Divisible by 2/3/4
 constexpr float UI_VIEWLIST_HEIGHT_MM = 4.0f;
 constexpr float UI_DIVIDER_GAP_PX = 1.0f;
 constexpr float UI_BUTTON_HEIGHT_MM = 3.0f; // Text is 2.5mm.
@@ -174,11 +174,8 @@ constexpr uint32_t UI_ICON_ATLAS_SLOT = 1;
 constexpr uint32_t UI_FIRST_DYNAMIC_SCRIPT_ATLAS_SLOT = 2;
 
 // Colors (ABGR)
-constexpr uint32_t COLOR_UI_BG_DARK = 0xFF1E1E1E;
 constexpr uint32_t COLOR_UI_TAB_ACTIVE = 0xFF2D2D30;
 constexpr uint32_t COLOR_UI_TAB_INACTIVE = 0xFF3E3E42;
-constexpr uint32_t COLOR_UI_TAB_HOVER = 0xFF3F3F46;
-constexpr uint32_t COLOR_UI_TEXT = 0xFFFFFFFF;
 
 struct UIVertex {// Vertex format
     float x, y, u, v;
@@ -291,6 +288,24 @@ struct UIInput {
     uint8_t  textInputCount = 0; // 0–31 chars this frame. We discard key inputs if we are unable to process.
 
     // Optional hotkey raw keys this frame (can be added later as a small bitset)
+};
+
+struct UIColors { // Standard UI Colours (ABGR format for DX12)
+    // The default values specified here are for theme "Light". 
+    // These can be overridden by other themes (e.g. Dark) or by user customizations.
+    uint32_t tabBackground = 0xFFD4E5DD; //rgba(221, 229, 212)
+    uint32_t tabBackgroundText = 0xFF4E6254; //rgba(84, 98, 78) + Corner smoothening color?
+    //tabActive is also the background color of action group surrounding.
+    uint32_t tabActive = 0xFFF1FBF8; //rgba(248, 251, 241)
+    uint32_t tabActiveText = 0xFF171D19; //rgba(25, 29, 23)
+    uint32_t tabBackgroundHover = 0xFFC4D5CD; // 1 Shade darker than tabBackground.
+
+    uint32_t actionGroupBackground = 0xFFFFFFFF;
+    uint32_t actionGroupSeperator = 0xFFD1D1D1; //rgba(209, 209, 209)
+    uint32_t actionGroupHoverBackground = 0xFFFF9933; // Orange in Indian Flag
+    uint32_t actionText = 0xFF242424; //rgba(36, 36, 36) + Corner smoothening color?
+    //Action icon color is stored inside the button itself. Different icons = different colors.
+    uint32_t actionIconDisabled = 0xFF888888; //rgba(136, 136, 136)	
 };
 
 

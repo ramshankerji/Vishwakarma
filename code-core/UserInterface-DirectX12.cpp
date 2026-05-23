@@ -49,6 +49,8 @@ static UIAtlasRegion MakeAtlasRegion(int x, int y, int w, int h, int atlasW, int
     return region;
 }
 
+UIColors uiLightDefaultColors, uiActiveColors; // Initialized to default light theme colors.
+
 static void GenerateRoundedRectangleNineSlice(AtlasBitmap& atlas, int originX, int originY,
     int sourceSizePx, int sourceRadiusPx, UIRoundedRectangleNineSlice& outSlice) {
     const int atlasW = atlas.width;
@@ -520,6 +522,7 @@ void PushRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h
     const float xCuts[4] = { x, x + clampedRadius, x + w - clampedRadius, x + w };
     const float yCuts[4] = { y, y + clampedRadius, y + h - clampedRadius, y + h };
 
+    /*
     for (int row = 0; row < 3; ++row) {
         for (int col = 0; col < 3; ++col) {
             PushTexturedQuad(ctx, xCuts[col], yCuts[row],
@@ -527,7 +530,26 @@ void PushRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h
                 gIconAtlasMetadata.roundedRectangle.regions[row][col],
                 UI_ICON_ATLAS_SLOT, color, uiRes);
         }
-    }
+    }*/
+	// Unrolled the above loops for better performance (fewer function calls, better instruction-level parallelism)
+    PushTexturedQuad(ctx, xCuts[0], yCuts[0], xCuts[1] - xCuts[0], yCuts[1] - yCuts[0],
+        gIconAtlasMetadata.roundedRectangle.regions[0][0], UI_ICON_ATLAS_SLOT, color, uiRes);
+    PushTexturedQuad(ctx, xCuts[1], yCuts[0], xCuts[2] - xCuts[1], yCuts[1] - yCuts[0],
+        gIconAtlasMetadata.roundedRectangle.regions[0][1], UI_ICON_ATLAS_SLOT, color, uiRes);
+    PushTexturedQuad(ctx, xCuts[2], yCuts[0], xCuts[3] - xCuts[2], yCuts[1] - yCuts[0],
+        gIconAtlasMetadata.roundedRectangle.regions[0][2], UI_ICON_ATLAS_SLOT, color, uiRes);
+    PushTexturedQuad(ctx, xCuts[0], yCuts[1], xCuts[1] - xCuts[0], yCuts[2] - yCuts[1],
+        gIconAtlasMetadata.roundedRectangle.regions[1][0], UI_ICON_ATLAS_SLOT, color, uiRes);
+    PushTexturedQuad(ctx, xCuts[1], yCuts[1], xCuts[2] - xCuts[1], yCuts[2] - yCuts[1],
+        gIconAtlasMetadata.roundedRectangle.regions[1][1], UI_ICON_ATLAS_SLOT, color, uiRes);
+    PushTexturedQuad(ctx, xCuts[2], yCuts[1], xCuts[3] - xCuts[2], yCuts[2] - yCuts[1],
+        gIconAtlasMetadata.roundedRectangle.regions[1][2], UI_ICON_ATLAS_SLOT, color, uiRes);
+    PushTexturedQuad(ctx, xCuts[0], yCuts[2], xCuts[1] - xCuts[0], yCuts[3] - yCuts[2],
+        gIconAtlasMetadata.roundedRectangle.regions[2][0], UI_ICON_ATLAS_SLOT, color, uiRes);
+    PushTexturedQuad(ctx, xCuts[1], yCuts[2], xCuts[2] - xCuts[1], yCuts[3] - yCuts[2],
+        gIconAtlasMetadata.roundedRectangle.regions[2][1], UI_ICON_ATLAS_SLOT, color, uiRes);
+    PushTexturedQuad(ctx, xCuts[2], yCuts[2], xCuts[3] - xCuts[2], yCuts[3] - yCuts[2],
+        gIconAtlasMetadata.roundedRectangle.regions[2][2], UI_ICON_ATLAS_SLOT, color, uiRes);
 }
 
 static void PushIcon(UIDrawContext& ctx, float x, float y, float w, float h, char32_t iconCodepoint,
@@ -612,15 +634,6 @@ void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t c
     ctx.indexCount += glyphCount * 6;
 }
 
-// Convenience for tabs (fixed width for now)
-bool PushTab(UIDrawContext& ctx, float x, float w, float h, uint16_t tabID, bool isActive,
-    const UIInput& input, DX12ResourcesUI& uiRes) {
-    
-    uint32_t color = isActive ? COLOR_UI_TAB_ACTIVE : COLOR_UI_TAB_INACTIVE;
-    uint32_t actionID = 0x10000000u | tabID;   // high bit = tab family
-    return PushInteractiveRect(ctx, x, 0, w, h, color, actionID, input, uiRes);
-}
-
 // This function renders the list of tabs, all top menu buttons (with dropdowns if required),
 // side favorite / frequent buttons bars, right side property window, bottom status bar.
 // This is also responsible for all relevant DirectX12 configurations required for rendering User Interface.
@@ -671,6 +684,10 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     float textStartOffsetPx = iconReservedWidthPx + 4.0f;
     float textEndInsetPx = 6.0f;
     float tabBarHeightPx = std::round(UI_TAB_BAR_HEIGHT_MM * pixelsPerMMy);
+    float topUITotalHeightPx = std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX + 
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX + 
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy); //Excluding view tab if present.
     float roundedCornerRadiusPx = std::max(1.0f, std::round(UI_BUTTON_CORNER_RADIUS_MM * pixelsPerMMy));
 
     auto canPushRect = [&]() {
@@ -678,7 +695,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             ctx.indexCount + 6 <= uiRes.maxIndices;
     };
 
-    auto advanceRect = [&]() {
+    auto incrementVertexIndexCounters = [&]() {
         ctx.vertexPtr += 4;
         ctx.indexPtr += 6;
         ctx.vertexCount += 4;
@@ -688,11 +705,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     auto pushRect = [&](float x, float y, float w, float h, uint32_t color) {
         bool pushed = canPushRect();
         PushRect(ctx, x, y, w, h, color, uiRes);
-        if (pushed) advanceRect();
-    };
-
-    auto pushRoundedRect = [&](float x, float y, float w, float h, uint32_t color) {
-        PushRoundedRectangle(ctx, x, y, w, h, roundedCornerRadiusPx, color, uiRes);
+        if (pushed) incrementVertexIndexCounters();
     };
 
     auto textScaleForHeight = [&](float targetHeight) {
@@ -784,26 +797,39 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         return y + h * 0.5f + (float)g.bearingY * scale - (float)g.height * scale * 0.5f;
     };
 
-    auto pushTab = [&](float x, float w, float h, uint16_t tabID, bool isActive) {
-        bool pushed = canPushRect();
-        bool clicked = PushTab(ctx, x, w, h, tabID, isActive, input, uiRes);
-        if (pushed) advanceRect();
-        return clicked;
-    };
-
     // ENGINEERING / PROJECT TABs
     float tabWidth = 160.0f;
     float currentX = 0.0f;
 
     uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
     uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
+    
+    if (canPushRect()) {
+        PushRect(ctx, 0.0f, 0.0f, 5000.0f, topUITotalHeightPx, uiActiveColors.actionGroupBackground, uiRes);//
+        incrementVertexIndexCounters();
+    }
 
+    if (canPushRect()) {
+        PushRect(ctx, 0.0f, 0.0f, 5000.0f, tabBarHeightPx, uiActiveColors.tabBackground, uiRes);//
+        incrementVertexIndexCounters();
+    }
     for (uint16_t i = 0; i < tabCount; i++) {
         uint16_t tabID = tabList[i];
-        bool active = (window.activeTabIndex == tabID);
-        if (pushTab(currentX, tabWidth, tabBarHeightPx, tabID, active)) {
+        bool isActive = (window.activeTabIndex == tabID);
+        bool pushed = canPushRect();
+        uint32_t actionID = 0x10000000u | tabID;   // high bit = tab family
+
+        bool hovered = input.mouseX >= currentX && input.mouseX < currentX + tabWidth &&
+            input.mouseY >= 0 && input.mouseY < 0 + tabBarHeightPx;
+
+        if (isActive) PushRect(ctx, currentX, 0, tabWidth, tabBarHeightPx, uiActiveColors.actionGroupBackground, uiRes);
+        else PushRect(ctx, currentX, 0, tabWidth, tabBarHeightPx, uiActiveColors.tabBackground, uiRes);
+
+        if (hovered && input.leftButtonPressedThisFrame) {
             window.activeTabIndex = tabID; // Render thread will draw this tab's geometry on the next frame.
         }
+        
+        if (pushed) incrementVertexIndexCounters();
 
         std::u32string tabLabel;
         tabLabel.reserve(allTabs[tabID].fileName.size());
@@ -813,7 +839,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
 
         pushTextClipped(currentX + 8.0f,
             textBaselineY(0.0f, tabBarHeightPx, uiTextScale),
-            tabLabel.c_str(), tabWidth - 16.0f, COLOR_UI_TEXT, uiTextScale);
+            tabLabel.c_str(), tabWidth - 16.0f, uiActiveColors.tabBackgroundText, uiTextScale);
 
         currentX += tabWidth;
     }
@@ -831,7 +857,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         UI_ACTION_GROUP_LABEL_HEIGHT_MM) * pixelsPerMMy;
     float actionSubGroupLabelY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
         UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-        UI_TOP_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy;
+        UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy;
 
     auto localizedString = [](uint32_t stringID) {
         const char32_t* text = UITranslations::GetUILocalizedString(stringID, UILanguage::English);
@@ -862,13 +888,11 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             const UIActionGroupNames& group = topUIActionGroupNames[ctrl.actionGroupIndex];
             const char32_t* label = localizedString(group.labelStringID);
 
-            pushRect(currentActionGroupStartX, actionGroupLabelY, groupGap, groupLabelHeight, 0xFF2D2D30);
             pushTextClipped(currentActionGroupStartX + 4.0f, textBaselineY(actionGroupLabelY, groupLabelHeight, uiTextScale),
-                label, groupGap - 8.0f, COLOR_UI_TEXT, uiTextScale);
+                label, groupGap - 8.0f, uiActiveColors.actionText, uiTextScale);
 
             currentActionGroupIndex = ctrl.actionGroupIndex;
             currentActionGroupStartX += groupGap;
-            pushRect(currentActionGroupStartX + 3, actionGroupLabelY, 4, 16, 0xFF555555); // group separator
             currentActionGroupStartX += 10.0f; // +3+4+3
         }
 
@@ -892,7 +916,8 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
                 input.mouseY >= btnY && input.mouseY < btnY + btnHeight);
             uint32_t drawColor = hovered && input.leftButtonDown ? 0xFF333333 : baseColor;
             if (hovered && !input.leftButtonDown) drawColor = 0xFF555555;
-            pushRoundedRect(currentX, btnY, btnWidth, btnHeight, drawColor);
+            PushRoundedRectangle(ctx, currentX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
+                drawColor, uiRes);
 
             bool clicked = hovered && input.leftButtonPressedThisFrame;
 
@@ -904,16 +929,19 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             }
 
             if (!ctrl.isEnabled) { // Gray-out overlay for disabled controls
-                pushRoundedRect(currentX, btnY, btnWidth, btnHeight, 0xAA333333);
+                PushRoundedRectangle(ctx, currentX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
+                    0xAA333333, uiRes);
             }
         }
         else if (ctrl.type == 3) {
             // Future textbox
-            pushRoundedRect(currentX, btnY, btnWidth, btnHeight, 0xFF1E1E1E);
+            PushRoundedRectangle(ctx, currentX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
+                0xFF1E1E1E, uiRes);
         }
         else {
             // Plain label
-            pushRoundedRect(currentX, btnY, btnWidth, btnHeight, 0xFF2D2D30);
+            PushRoundedRectangle(ctx, currentX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
+                0xFF2D2D30, uiRes);
         }
 
         float iconX = currentX + (iconReservedWidthPx - iconSizePx) * 0.5f;
@@ -945,18 +973,16 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             const UIActionGroupNames& group = topUIActionSubGroupNames[currentSubGroupID];
             const char32_t* label = localizedString(group.labelStringID);
 
-            pushRect(currentX - actionSubGroupWidth + 1.0f,
-                actionSubGroupLabelY, actionSubGroupWidth - 4.0f, groupLabelHeight, 0xFF2D2D30);
             pushTextClipped(currentX - actionSubGroupWidth / 2 - measureTextWidth(label, uiTextScale),
                 textBaselineY(actionSubGroupLabelY, groupLabelHeight, uiTextScale),
-                label, actionSubGroupWidth - 8.0f, COLOR_UI_TEXT, uiTextScale);
+                label, actionSubGroupWidth - 8.0f, uiActiveColors.actionText, uiTextScale);
 
             // Draw thin 1px vertical separator line between sub-groups
             if (actionSubGroupWidth > 0.0f) {  // Don't draw before first group
                 // Place it exactly in the middle of the 'buttonGap' between the two columns
                 float lineX = std::floor(currentX - (buttonGap / 2.0f));
                 // Span the height of the action group buttons (assumes 3 rows max per your UI_TOP_ACTION_GROUP_HEIGHT_MM)
-                float lineHeight = UI_TOP_ACTION_GROUP_HEIGHT_MM * pixelsPerMMy;
+                float lineHeight = UI_ACTION_GROUP_HEIGHT_MM * pixelsPerMMy;
                 // Draw 1px wide line. Using 0xFF555555 to match your Action Group separator color
                 pushRect(lineX, topActionGroupY, 1.0f, lineHeight, 0xFF555555);
             }
