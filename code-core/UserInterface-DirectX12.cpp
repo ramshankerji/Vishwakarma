@@ -552,6 +552,33 @@ void PushRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h
         gIconAtlasMetadata.roundedRectangle.regions[2][2], UI_ICON_ATLAS_SLOT, color, uiRes);
 }
 
+void PushTopRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h, float radiusPx,
+    uint32_t color, DX12ResourcesUI& uiRes) {
+    if (w <= 0.0f || h <= 0.0f) return;
+    if (ctx.vertexCount + 24 > uiRes.maxVertices) return;
+    if (ctx.indexCount + 36 > uiRes.maxIndices) return;
+
+    const float clampedRadius = std::max(1.0f, std::min(radiusPx, 0.5f * std::min(w, h)));
+    const float xCuts[4] = { x, x + clampedRadius, x + w - clampedRadius, x + w };
+    const float yCuts[3] = { y, y + clampedRadius, y + h };
+
+    // Row 0 (Top part with rounded corners)
+    PushTexturedQuad(ctx, xCuts[0], yCuts[0], xCuts[1] - xCuts[0], yCuts[1] - yCuts[0],
+        gIconAtlasMetadata.roundedRectangle.regions[0][0], UI_ICON_ATLAS_SLOT, color, uiRes);
+    PushTexturedQuad(ctx, xCuts[1], yCuts[0], xCuts[2] - xCuts[1], yCuts[1] - yCuts[0],
+        gIconAtlasMetadata.roundedRectangle.regions[0][1], UI_ICON_ATLAS_SLOT, color, uiRes);
+    PushTexturedQuad(ctx, xCuts[2], yCuts[0], xCuts[3] - xCuts[2], yCuts[1] - yCuts[0],
+        gIconAtlasMetadata.roundedRectangle.regions[0][2], UI_ICON_ATLAS_SLOT, color, uiRes);
+
+    // Row 1 (Bottom part with sharp corners utilizing the flat middle row)
+    PushTexturedQuad(ctx, xCuts[0], yCuts[1], xCuts[1] - xCuts[0], yCuts[2] - yCuts[1],
+        gIconAtlasMetadata.roundedRectangle.regions[1][0], UI_ICON_ATLAS_SLOT, color, uiRes);
+    PushTexturedQuad(ctx, xCuts[1], yCuts[1], xCuts[2] - xCuts[1], yCuts[2] - yCuts[1],
+        gIconAtlasMetadata.roundedRectangle.regions[1][1], UI_ICON_ATLAS_SLOT, color, uiRes);
+    PushTexturedQuad(ctx, xCuts[2], yCuts[1], xCuts[3] - xCuts[2], yCuts[2] - yCuts[1],
+        gIconAtlasMetadata.roundedRectangle.regions[1][2], UI_ICON_ATLAS_SLOT, color, uiRes);
+}
+
 static void PushIcon(UIDrawContext& ctx, float x, float y, float w, float h, char32_t iconCodepoint,
     uint32_t color, DX12ResourcesUI& uiRes) {
     auto iconIt = iconGlyphLookup.find(iconCodepoint);
@@ -816,20 +843,22 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     for (uint16_t i = 0; i < tabCount; i++) {
         uint16_t tabID = tabList[i];
         bool isActive = (window.activeTabIndex == tabID);
-        bool pushed = canPushRect();
         uint32_t actionID = 0x10000000u | tabID;   // high bit = tab family
 
         bool hovered = input.mouseX >= currentX && input.mouseX < currentX + tabWidth &&
             input.mouseY >= 0 && input.mouseY < 0 + tabBarHeightPx;
 
-        if (isActive) PushRect(ctx, currentX, 0, tabWidth, tabBarHeightPx, uiActiveColors.actionGroupBackground, uiRes);
-        else PushRect(ctx, currentX, 0, tabWidth, tabBarHeightPx, uiActiveColors.tabBackground, uiRes);
+        if (isActive) {
+            PushTopRoundedRectangle(ctx, currentX, 0.0f, tabWidth, tabBarHeightPx, roundedCornerRadiusPx, uiActiveColors.actionGroupBackground, uiRes);
+        } else {
+            bool pushed = canPushRect();
+            PushRect(ctx, currentX, 0.0f, tabWidth, tabBarHeightPx, uiActiveColors.tabBackground, uiRes);
+            if (pushed) incrementVertexIndexCounters();
+        }
 
         if (hovered && input.leftButtonPressedThisFrame) {
             window.activeTabIndex = tabID; // Render thread will draw this tab's geometry on the next frame.
         }
-        
-        if (pushed) incrementVertexIndexCounters();
 
         std::u32string tabLabel;
         tabLabel.reserve(allTabs[tabID].fileName.size());

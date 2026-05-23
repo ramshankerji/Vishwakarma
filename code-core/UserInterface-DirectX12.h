@@ -55,6 +55,8 @@ void CleanupUIResources(DX12ResourcesUI& uiRes);
 void PushRect(UIDrawContext& ctx, float x, float y, float w, float h, uint32_t color, DX12ResourcesUI& uiRes);
 void PushRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h, float radiusPx,
     uint32_t color, DX12ResourcesUI& uiRes);
+void PushTopRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h, float radiusPx,
+    uint32_t color, DX12ResourcesUI& uiRes);
 void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t color, DX12ResourcesUI& uiRes);
 
 // Slots 0 and 1 are currently reserved for the mandatory English and Icon atlases.
