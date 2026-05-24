@@ -236,19 +236,19 @@ def main():# MAIN
                 "FontForge executable not found in PATH.\n"
                 "Install FontForge and ensure 'fontforge' command works."
             )
-            input("\nPress Enter to exit...")
+            #input("\nPress Enter to exit...") #Disabled for GitHub runners.
             sys.exit(1)
 
         except subprocess.CalledProcessError as e:
             error("FontForge build failed.")
             print(e.stdout)
             print(e.stderr)
-            input("\nPress Enter to exit...")
+            #input("\nPress Enter to exit...") #Disabled for GitHub runners.
             sys.exit(1)
 
     info(f"TTF output written to:")
     info(str(OUTPUT_TTF))
-    input("\nPress Enter to exit...")
+    #input("\nPress Enter to exit...") #Disabled for GitHub runners.
 
 if __name__ == "__main__":
     main()

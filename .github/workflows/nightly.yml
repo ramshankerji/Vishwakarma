@@ -21,6 +21,27 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
 
+    - name: Install FontForge
+      shell: pwsh
+      run: |
+        choco install fontforge -y --no-progress
+        $ffPath = "C:\Program Files (x86)\FontForgeBuilds\bin"
+        echo "$ffPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        $env:PATH += ";$ffPath"
+        fontforge -version
+
+    - name: Install Python dependencies
+      run: |
+        pip install fonttools svgpathtools cu2qu
+    - name: Build icon font
+      run: |
+        python code-miscellaneous/build_icon_font.py
+    - name: Upload generated font
+      uses: actions/upload-artifact@v4
+      with:
+        name: generated-font
+        path: Fonts/*.ttf
+
     - name: Prepare libpng config header
       shell: pwsh
       run: |
@@ -72,7 +93,7 @@ jobs:
           '  <path fill="#007ec6" d="M80 0h4v20h-4z"/>',
           '  <rect rx="3" width="160" height="20" fill="url(#a)"/>',
           '  <g fill="#fff" text-anchor="middle"',
-          '     font-family="Verdana,Geneva,DejaVu Sans,sans-serif"',
+          '     font-family="Geneva,DejaVu Sans,sans-serif"',
           '     font-size="11">',
           '    <text x="40" y="14">LOC</text>',
           "    <text x=""120"" y=""14"">$loc</text>",
