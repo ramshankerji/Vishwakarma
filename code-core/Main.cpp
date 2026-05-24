@@ -69,6 +69,127 @@ void FileInputThread();
 void विश्वकर्मा(uint64_t); //Main Logic Thread. The ringmaster ! :-)
 void GpuCopyThread();
 void GpuRenderThread(int monitorId, int refreshRate);
+void AddEngineeringThread(uint64_t tabID, std::thread&& t);
+void JoinReleasedEngineeringThreads();
+void JoinAllEngineeringThreads();
+
+namespace {
+constexpr uint32_t ACTION_ENGINEERING_CLOSE = 0xE0000001u;
+constexpr uint32_t ACTION_ENGINEERING_CREATE = 0xE0000002u;
+uint16_t nextTabSlot = 3;
+bool closeQueuedTabs[MV_MAX_TABS] = {};
+
+void PublishTabList(uint16_t* nextList, uint16_t nextCount) {
+    publishedTabIndexes.store(nextList, std::memory_order_release);
+    publishedTabCount.store(nextCount, std::memory_order_release);
+}
+
+void CreateEngineeringTab() {
+    uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+    if (tabCount >= MV_MAX_TABS || nextTabSlot >= MV_MAX_TABS) return;
+
+    uint16_t* currentList = publishedTabIndexes.load(std::memory_order_acquire);
+    uint16_t* nextList = (currentList == activeTabIndexesA) ? activeTabIndexesB : activeTabIndexesA;
+    for (uint16_t i = 0; i < tabCount; ++i) nextList[i] = currentList[i];
+
+    uint16_t tabID = nextTabSlot++;
+    DATASETTAB& tab = allTabs[tabID];
+    tab.tabID = tabID;
+    tab.tabNo = tabID;
+    tab.fileName = L"Untitled " + std::to_wstring(tabID + 1);
+    tab.closeRequested.store(false, std::memory_order_release);
+    tab.engineeringReleased.store(false, std::memory_order_release);
+    closeQueuedTabs[tabID] = false;
+    gpu.InitD3DPerTab(tab.dx);
+
+    nextList[tabCount] = tabID;
+    PublishTabList(nextList, tabCount + 1);
+
+    uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
+    uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+    for (uint16_t i = 0; i < windowCount; ++i) {
+        allWindows[windowList[i]].activeTabIndex = tabID;
+    }
+
+    std::thread t(विश्वकर्मा, (uint64_t)tabID);
+    AddEngineeringThread(tabID, std::move(t));
+}
+
+void RequestCloseEngineeringTab(uint16_t tabID) {
+    uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+    if (tabCount <= 1) return;
+    if (tabID >= MV_MAX_TABS) return;
+    if (closeQueuedTabs[tabID]) return;
+
+    uint16_t* currentList = publishedTabIndexes.load(std::memory_order_acquire);
+    uint16_t* nextList = (currentList == activeTabIndexesA) ? activeTabIndexesB : activeTabIndexesA;
+    uint16_t nextCount = 0;
+    int closedPosition = -1;
+
+    for (uint16_t i = 0; i < tabCount; ++i) {
+        if (currentList[i] == tabID) {
+            closedPosition = i;
+            continue;
+        }
+        nextList[nextCount++] = currentList[i];
+    }
+    if (closedPosition < 0 || nextCount == tabCount) return;
+    closeQueuedTabs[tabID] = true;
+
+    uint16_t replacementTab = nextList[(std::min)(static_cast<uint16_t>(closedPosition), static_cast<uint16_t>(nextCount - 1))];
+    uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
+    uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+    for (uint16_t i = 0; i < windowCount; ++i) {
+        SingleUIWindow& window = allWindows[windowList[i]];
+        if (window.activeTabIndex == tabID) window.activeTabIndex = replacementTab;
+    }
+
+    PublishTabList(nextList, nextCount);
+
+    ACTION_DETAILS closeRequest{};
+    closeRequest.actionType = ACTION_TYPE::CLOSE_TAB;
+    closeRequest.source = INPUT_SOURCE::SYSTEM;
+    closeRequest.x = tabID;
+    closeRequest.timestamp = GetTickCount64();
+    allTabs[tabID].todoCPUQueue->push(closeRequest);
+}
+
+void CleanupReleasedTabs() {
+    JoinReleasedEngineeringThreads();
+
+    for (uint16_t tabID = 0; tabID < nextTabSlot; ++tabID) {
+        DATASETTAB& tab = allTabs[tabID];
+        if (tab.closeRequested.load(std::memory_order_acquire) &&
+            tab.engineeringReleased.load(std::memory_order_acquire)) {
+            gpu.CleanupTabResources(tab.dx);
+            tab.closeRequested.store(false, std::memory_order_release);
+            tab.engineeringReleased.store(false, std::memory_order_release);
+            closeQueuedTabs[tabID] = false;
+        }
+    }
+}
+
+void ProcessPendingUIActions() {
+    std::vector<UIActionEntry> actions;
+    {
+        std::lock_guard<std::mutex> lk(g_actionQueueMutex);
+        while (!g_actionQueue.empty()) {
+            actions.push_back(g_actionQueue.front());
+            g_actionQueue.pop_front();
+        }
+    }
+
+    for (const UIActionEntry& action : actions) {
+        if (action.id == ACTION_ENGINEERING_CREATE) {
+            CreateEngineeringTab();
+        } else if (action.id == ACTION_ENGINEERING_CLOSE) {
+            RequestCloseEngineeringTab(static_cast<uint16_t>(action.p1));
+        }
+    }
+
+    CleanupReleasedTabs();
+}
+}
 
 std::wstring GetExecutablePath() {
     wchar_t buffer[MAX_PATH];
@@ -703,7 +824,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
 	// TODO: 3 Initial threads is during development. Final application will have dynamic thread management.
     for (int i = 0; i < 3; ++i) {
         std::thread t(विश्वकर्मा, (uint64_t)i);// Pass the index 'i' to the thread function
-        AddEngineeringThread(std::move(t));
+        AddEngineeringThread((uint64_t)i, std::move(t));
     }
 
     //threads.emplace_back(GpuRenderThread, 0, 60);  // Monitor 1 at 60Hz
@@ -717,7 +838,9 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
             //We can not use alternate GetMessage() since that one block waiting for windows.
             TranslateMessage(&msg);
             DispatchMessage(&msg);
+            ProcessPendingUIActions();
         } else {
+            ProcessPendingUIActions();
             //WaitMessage(); // blocks until new Windows message arrives
             // Just sleep briefly to avoid burning CPU if no messages.
             // The Render Threads are responsible for the heartbeat of the app.

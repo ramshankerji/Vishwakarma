@@ -131,6 +131,8 @@ struct DATASETTAB {
     
     CameraState camera; //Currently it is per tab. Latter we may move it to per view.
     bool autoCameraRotation = true;
+    std::atomic<bool> closeRequested{ false };
+    std::atomic<bool> engineeringReleased{ false };
     
     DATASETTAB() {
         userInputQueue = std::make_unique<ThreadSafeQueueCPU>();

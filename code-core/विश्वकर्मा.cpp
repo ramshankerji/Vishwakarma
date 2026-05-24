@@ -38,18 +38,44 @@ static void PopAllUIActions(std::vector<UIActionEntry>& out) {
     }
 }
 // Engineering thread registry (threads created dynamically)
-static std::mutex g_engineThreadsMutex;
-static std::vector<std::thread> g_engineeringThreads;
+struct EngineeringThreadRecord {
+    uint64_t tabID;
+    std::thread thread;
+};
 
-void AddEngineeringThread(std::thread&& t) {
+static std::mutex g_engineThreadsMutex;
+static std::vector<EngineeringThreadRecord> g_engineeringThreads;
+
+void AddEngineeringThread(uint64_t tabID, std::thread&& t) {
     std::lock_guard<std::mutex> lk(g_engineThreadsMutex);
-    g_engineeringThreads.emplace_back(std::move(t));
+    g_engineeringThreads.push_back({ tabID, std::move(t) });
+}
+
+void JoinReleasedEngineeringThreads() {
+    std::vector<std::thread> threadsToJoin;
+    {
+        std::lock_guard<std::mutex> lk(g_engineThreadsMutex);
+        auto it = g_engineeringThreads.begin();
+        while (it != g_engineeringThreads.end()) {
+            if (it->tabID < MV_MAX_TABS &&
+                allTabs[it->tabID].engineeringReleased.load(std::memory_order_acquire)) {
+                threadsToJoin.emplace_back(std::move(it->thread));
+                it = g_engineeringThreads.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    for (auto& t : threadsToJoin) {
+        if (t.joinable()) t.join();
+    }
 }
 
 void JoinAllEngineeringThreads() {
     std::lock_guard<std::mutex> lk(g_engineThreadsMutex);
     for (auto & et : g_engineeringThreads) {
-        if (et.joinable()) et.join();
+        if (et.thread.joinable()) et.thread.join();
     }
     g_engineeringThreads.clear();
 }
@@ -192,45 +218,22 @@ inline void addRandomGeometryElement(DATASETTAB* targetTab) {
 
 void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering thread. The ringmaster of the application.
     std::cout << "Main Logic Thread विश्वकर्मा started." << std::endl;
+    if (tabID >= MV_MAX_TABS) return;
+
+    DATASETTAB* myTab = &allTabs[tabID];
+    myTab->engineeringReleased.store(false, std::memory_order_release);
     std::chrono::steady_clock::time_point lastPyramidAddTime;
     lastPyramidAddTime = std::chrono::steady_clock::now();// Initialize the timer
 
-    // Initial Population: We need to find the tab first.
-    // In a real scenario, we might wait here if the tab isn't created yet, but Main ensures creation before thread launch.
-    {
-        DATASETTAB* myTab = nullptr;
-        uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
-        uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
-        for (uint16_t i = 0; i < tabCount; ++i) {
-            DATASETTAB & t = allTabs[tabList[i]];
-            if (t.tabID == tabID) { myTab = &t; break; }
-        }
-        
-        if (myTab) { // Generate the initial 10 pyramids
-            for (int k = 0; k < 10; ++k) addRandomGeometryElement(myTab);
-        }
-    }
+    // Generate the initial 10 pyramids for testing. We will later replace this with actual file loading logic.
+    for (int k = 0; k < 10; ++k) addRandomGeometryElement(myTab);
 
     uint64_t frameCounter = 0;
 
     while (!shutdownSignal) { // This is our primary application loop.
         auto frameStart = std::chrono::high_resolution_clock::now();
         
-        // Dynamic Lookup: Find the tab pointer based on ID
-        // This handles the case where vector reallocates or tabs shift.
-        DATASETTAB* myTab = nullptr;
-        uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
-        uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
-        
-        for (uint16_t i = 0; i < tabCount; ++i) {
-            DATASETTAB & t = allTabs[tabList[i]];
-            if (t.tabID == tabID){ myTab = &t; break; }
-        }
-        
-        if (myTab == nullptr) { // Handle Tab Closure
-            std::cout << "Tab ID " << tabID << " not found (Closed?). Engineering thread exiting." << std::endl;
-            break; // Exit the thread gracefully
-        }
+        if (myTab->closeRequested.load(std::memory_order_acquire)) break;
 
 		// Automatic camera rotation for troubleshooting. Toggle using "r". To be removed later or made optional in UI.
         if(myTab->autoCameraRotation) UpdateCameraOrbit(myTab->camera); 
@@ -452,6 +455,9 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
             std::cout << "Input received. Action Type = " << static_cast<int>(nextWorkTODO.actionType) <<"\n";
             if (nextWorkTODO.actionType == ACTION_TYPE::CREATEPYRAMID) {
                 //addRandomGeometryElement();
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::CLOSE_TAB) {
+                myTab->closeRequested.store(true, std::memory_order_release);
+                break;
             }
         }
         
@@ -460,5 +466,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
     } // End of while (!shutdownSignal), i.e. our primary application loop for this particular tab.
 
     //g_logicFenceCV.notify_all(); // Wake up threads for shutdown
+    myTab->allIDsInThisTab.clear();
+    myTab->engineeringReleased.store(true, std::memory_order_release);
     std::cout << "Main Logic Thread shutting down.\n" << std::endl;
 }

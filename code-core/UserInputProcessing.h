@@ -99,7 +99,8 @@ enum class ACTION_TYPE : uint16_t { // Specifying uint16_t ensures that it is of
     // Reserving from 1024 to 10000 for Inter-Process communications.
     // 30000 to 32767 we are reserving for experiments.
 
-    CREATEPYRAMID = 30001
+    CREATEPYRAMID = 30001,
+    CLOSE_TAB = 30002
 };
 
 struct ACTION_DETAILS_OLD {
