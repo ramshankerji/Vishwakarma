@@ -8,8 +8,10 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
+#include "ListOfCommands.h"
 #include "FontManager.h" // FreeType font atlas generation
 #include "UserInterface-TextTranslations.h" // localization
+#include "UserInterfaceTranslationCompiled.h"
 #include <deque>
 #include <mutex>
 
@@ -128,17 +130,8 @@ Initial translation shall be performed by AI translator file named UserInterface
 
 -- Phased Rollout ( Phase 4 checklist) --
 
-Phase 4A – Tab Bar only (1–2 days)
-Hard-coded tab names from publishedTabIndexes.
-Colored rects + simple text (even without atlas yet — use dummy color quads).
-Clicking changes activeTabIndex and triggers re-render.
-
-Phase 4B – Font Atlas + Text (next)
-Add stb_truetype or FreeType atlas.
-Render real tab labels + button text.
 
 Phase 4C – Ribbon Bar
-8–10 buttons with rect + text (icons later).
 Click handlers queue actions to the active tab’s engineering thread.
 
 Phase 4D – Icons & Polish
@@ -333,144 +326,11 @@ inline void PushUIAction(uint32_t id, uint32_t p1 = 0, uint32_t p2 = 0) {
     // Engineering thread reads with its own readIndex (standard ring-buffer)
 }
 
-// These are exhausting list of identified action user can perform in our application.
-// These actions can be triggered either by clicking buttons, or thorough automation scripts etc.
-enum class UIAction : uint32_t {
-
-    //Action Group 1: Common
-    PROJECT_OPEN = 0x00002005,
-    PROJECT_SAVE = 0x00002006,
-    PROJECT_CLOSE = 0x00002007,
-
-    VIEW_TREE = 0x00004003,
-    VIEW_PERSPECTIVE_ISO_DROPDOWN = 0x00004004,   // Dropdown trigger
-    VIEW_MAX_ZOOM = 0x00004005,
-    VIEW_ROTATE = 0x00004006,
-    VIEW_PAN = 0x00004007,
-
-    SELECT_GENERAL = 0x00005003,
-    SELECT_PIPES = 0x00005004,
-    SELECT_FITTINGS = 0x00005005,
-    SELECT_REINFORCEMENT = 0x00005006,
-    SELECT_2D_ONLY = 0x00005007,
-    SELECT_TEXT = 0x00005008,
-    SELECT_LINES = 0x00005009,
-
-    //Action Group 2: (2D) General
-    CREATE_LINE = 0x00006001,
-    CREATE_POLYLINE = 0x00006002,
-    CREATE_CIRCLE = 0x00006003,
-    CREATE_ARC = 0x00006004,
-    CREATE_ELLIPSE = 0x00006005,
-    CREATE_TEXT = 0x00006006,
-    CREATE_MULTITEXT = 0x00006007,
-
-    EDIT_COPY = 0x00006008,
-    EDIT_OFFSET = 0x00006009,
-    EDIT_MOVE = 0x00006010,
-
-    //Action Group 3: "(2D) P&ID"
-    CREATE_VVESSEL = 0x00007001,
-    CREATE_HVESSEL = 0x00007002,
-    CREATE_EXCHANGE = 0x00007003,
-    CREATE_PIPE = 0x00007004,
-    CREATE_INSTRUMENT = 0x00007005,
-    EDIT_PARAMETER = 0x00007006,
-
-    //Action Group 4: (3D) General
-    CREATE_FOLDER = 0x00008001,
-    CREATE_GRID = 0x00008002,
-    CREATE_STRUCTURE = 0x00008003,
-    CREATE_LINES_3D = 0x00008004,
-    CONCRETE_COLUMN = 0x00008005,
-    CONCRETE_BEAM = 0x00008006,
-    CONCRETE_SLAB = 0x00008007,
-    CONCRETE_CURVED_SLAB = 0x00008008,
-    CONCRETE_DOME = 0x00008009,
-    CONCRETE_PILE = 0x00008010,
-    REINFORCEMENT_LINEAR = 0x00008011,
-    REINFORCEMENT_SHAPED_DROPDOWN = 0x00008012,   // Dropdown trigger
-    STEEL_COLUMN = 0x00008013,
-    STEEL_BEAM = 0x00008014,
-    FRP_COLUMN = 0x00008015,
-    FRP_BEAM = 0x00008016,
-    GLASS_PLATE = 0x00008017,
-
-    //Action Group 5: (3D) Equipment
-    EQUIPMENT_VVESSEL = 0x00009001,
-    EQUIPMENT_HVESSEL = 0x00009002,
-    EQUIPMENT_EXCHANGER = 0x00009003,
-    EQUIPMENT_PUMP = 0x00009004,
-
-    //Action Group 6: (3D) Piping
-    CREATE_PIPING = 0x0000A001,
-    CREATE_SPOOL = 0x0000A002,
-    CREATE_VALVE = 0x0000A003,
-    CREATE_ELBOW = 0x0000A004,
-    CREATE_T = 0x0000A005,
-    CREATE_Y = 0x0000A006,
-    INSTRUMENT_PG = 0x0000A007,
-    INSTRUMENT_TG = 0x0000A008,
-    EDIT_EXTEND = 0x0000A009,
-    EDIT_STRETCH = 0x0000A010,
-
-    //Action Group 7: Analysis and Simulation
-    LOAD_CASE = 0x0000B001,
-    LOAD_COMBINATIONS = 0x0000B002,
-    LOAD_SELF_WEIGHT = 0x0000B003,
-    LOAD_UNIFORM = 0x0000B004,
-    LOAD_TRAPEZOIDAL = 0x0000B005,
-    LOAD_PRESSURE = 0x0000B006,
-    LOAD_TEMPERATURE = 0x0000B007,
-
-    SUPPORT_FIXED = 0x0000B008,
-    SUPPORT_PINNED = 0x0000B009,
-    SUPPORT_ROLLER = 0x0000B010,
-
-    ANALYSIS_3D_FRAME = 0x0000B011,
-    ANALYSIS_STATIC = 0x0000B012,
-    ANALYSIS_SPECTRUM = 0x0000B013,
-    ANALYSIS_TIME_HISTORY = 0x0000B014,
-
-    //Action Group 8: Code Checking
-    CODE_CIVIL_IS456 = 0x0000C001,
-    CODE_CIVIL_IS13920 = 0x0000C002,
-    CODE_CIVIL_IS800 = 0x0000C003,
-    CODE_MECH_ASME_VIII = 0x0000C004,
-
-    //Action Group 9: 3D to 2D
-    GENERAL_DRAWING = 0x0000D001,
-    GENERAL_SHEET = 0x0000D002,
-    GENERAL_3D2DGA = 0x0000D003,
-    GENERAL_ASSEMBLY = 0x0000D004,
-    GENERAL_ISOMETRIC = 0x0000D005,
-    GENERAL_TABLES = 0x0000D006,
-
-    //Action Group 10: (4D) Time
-    // 0x0000E000 series reserved for this.
-    
-    //Action Group 11: (5D) Cost
-    // 0x0000F000 series reserved for this.
-    
-    //Action Group 12: Interoperability
-    IMPORT_STD = 0x00010001,
-    IMPORT_CII = 0x00010002,
-    IMPORT_DXF = 0x00010003,
-    IMPORT_DWG = 0x00010004,
-    EXPORT_STD = 0x00010005,
-    EXPORT_DWG = 0x00010006,
-
-    //Action Group 13: Extensions
-    
-    // Add more future actions here with gaps if needed (e.g. 0x0000E000+)
-
-    INVALID = 0xFFFFFFFF
-};
 
 struct UIControlDefinition {
-	UIAction     action;           // Action ID sent to engineering thread, upon clicking this control. 
+	Commands     action;           // Action ID sent to engineering thread, upon clicking this control. 
     // This is the single source of truth for all buttons, dropdowns, text fields etc.
-    uint32_t     nameStringID;     // Localization ID (hardcoded for now) of the TEXT.
+    UITextID     nameStringID;     // Localization ID (hardcoded for now) of the TEXT.
     char32_t     iconChar;         // Future icon font codepoint (use 'x' for now)
     uint8_t      type;             // 0=PlainText, 1=Button, 2=Dropdown trigger, 3=Textbox
     uint8_t      noOfVerticalSlots;// 1 = full height, 2/3/4 = vertical stack height
@@ -485,7 +345,7 @@ struct UIControlDefinition {
 // Action Groups are basically a set of User Control Buttons.
 // This struct will be used to group buttons by top Menus, and specialized property panes in the right side.
 struct UIActionGroupNames {
-    uint32_t labelStringID;     // e.g. 11 = "Common"
+    UITextID labelStringID;     // e.g. 11 = "Common"
     bool isEnabled;             // User may switch off any action groups.
     bool isMinimized;           // Used in right side property panes.
 };
@@ -493,19 +353,19 @@ struct UIActionGroupNames {
 
 constexpr UIActionGroupNames topUIActionGroupNames[] = {
 	// Initially marking all action group enabled, and non-minimized. User can change this at runtime.
-    { 11 , true , false }, // ACTION GROUP  1: Common
-    { 12 , true , false }, // ACTION GROUP  2: (2D) General
-    { 13 , true , false }, // ACTION GROUP  3: (2D) Intelligent
-    { 14 , true , false }, // ACTION GROUP  4: (3D) General
-    { 15 , true , false }, // ACTION GROUP  5: (3D) Intelligent
-    { 16 , true , false }, // ACTION GROUP  6: (3D) Simulation
-    { 17 , true , false }, // ACTION GROUP  7: Design Codes
-    { 18 , true , false }, // ACTION GROUP  8: Documentation
-    { 19 , true , false }, // ACTION GROUP  9: 3D to 2D
-    { 20 , true , false }, // ACTION GROUP 10: (4D) Time
-    { 21 , true , false }, // ACTION GROUP 11: (5D) Cost
-    { 22 , true , false }, // ACTION GROUP 12: Interoperability & Miscellaneous
-    { 23 , true , false }, // ACTION GROUP 13: Extensions
+    { UITextID::Common, true, false },          // ACTION GROUP  0: Common
+    { UITextID::General2D, true, false },       // ACTION GROUP  1: (2D) General
+    { UITextID::Intelligent2D, true, false },   // ACTION GROUP  2: (2D) Intelligent
+    { UITextID::General3D, true, false },       // ACTION GROUP  3: (3D) General
+    { UITextID::Intelligent3D, true, false },   // ACTION GROUP  4: (3D) Intelligent
+    { UITextID::Simulation, true, false },      // ACTION GROUP  5: Simulation
+    { UITextID::CodeChecking, true, false },    // ACTION GROUP  6: Code Checking
+    { UITextID::Documentation, true, false },   // ACTION GROUP  7: Documentation
+    { UITextID::ThreeDtoTwoD, true, false },    // ACTION GROUP  8: 3D to 2D
+    { UITextID::Time4D, true, false },          // ACTION GROUP  9: (4D) Time
+    { UITextID::Cost5D, true, false },          // ACTION GROUP 10: (5D) Cost
+    { UITextID::Utility, true, false },         // ACTION GROUP 11: Utility
+    { UITextID::Extension, true, false },       // ACTION GROUP 12: Extensions
 };
 constexpr size_t TotalTopUIActionGroups = std::size(topUIActionGroupNames);
 
@@ -515,25 +375,30 @@ constexpr size_t TotalTopUIActionGroups = std::size(topUIActionGroupNames);
 
 constexpr UIActionGroupNames topUIActionSubGroupNames[] = {
     // Initially marking all action sub group enabled, and non-minimized. User can change this at runtime.
-    { 51 , true , false }, 
-    { 52 , true , false }, 
-    { 53 , true , false }, 
-    { 54 , true , false }, 
-    { 55 , true , false }, 
-    { 56 , true , false }, 
-    { 57 , true , false }, 
-    { 58 , true , false }, 
-    { 59 , true , false }, 
-    { 60 , true , false }, 
-    { 61 , true , false }, 
-    { 62 , true , false }, 
-    { 63 , true , false }, 
-    { 65 , true , false }, 
-    { 66 , true , false },
-    { 67 , true , false },
-    { 68 , true , false },
-    { 69 , true , false },
-    { 70 , true , false },
+    { UITextID::Organize, true, false },
+    { UITextID::View, true, false },
+    { UITextID::Select, true, false },
+    { UITextID::Modify, true, false },
+    { UITextID::Basic, true, false },
+    { UITextID::Create, true, false },
+    { UITextID::Search, true, false },
+    { UITextID::ProcessEquipment, true, false },
+    { UITextID::Premitives, true, false },
+    { UITextID::Reinforcement, true, false },
+    { UITextID::Equipments, true, false },
+    { UITextID::Piping, true, false },
+    { UITextID::Supports, true, false },
+    { UITextID::Analysis, true, false },
+    { UITextID::Structural, true, false },
+    { UITextID::Mechanical, true, false },
+    { UITextID::Extraction, true, false },
+    { UITextID::FreeForm, true, false },
+    { UITextID::Helpers, true, false },
+    { UITextID::LoadGenerators, true, false },
+    { UITextID::ImportExport, true, false },
+    { UITextID::ActiveExtensions, true, false },
+    { UITextID::Civil, true, false },
+    { UITextID::General, true, false },
 };
 constexpr size_t TotalTopUIActionSubGroups = std::size(topUIActionSubGroupNames);
 
@@ -541,148 +406,288 @@ constexpr size_t TotalTopUIActionSubGroups = std::size(topUIActionSubGroupNames)
 // This is the single source of truth. ~80+ controls shown here. we can extend to 500+ easily.
 
 constexpr UIControlDefinition AllUIControls[] = {
-    // ACTION GROUP 11: Common
-    // Subgroup : Project Organization
-    { UIAction::PROJECT_OPEN,          1001, U'x', 1, 3, 0, 0, true, false, 0 , 0 },
-    { UIAction::PROJECT_SAVE,          1003, U'x', 1, 3, 1, 0, true, false, 0 , 0 },
-    { UIAction::PROJECT_CLOSE,         1005, U'x', 1, 3, 2, 0, true, false, 0 , 0 },
+    // ACTION GROUP 0: Common
+    // Subgroup : Organize
+    { Commands::PROJECT_OPEN,          UITextID::PROJECT_OPEN, U'x', 1, 3, 0, 0, true, false, 0 , 0 },
+    { Commands::PROJECT_SAVE,          UITextID::PROJECT_SAVE, U'x', 1, 3, 1, 0, true, false, 0 , 0 },
+    { Commands::PROJECT_CLOSE,         UITextID::PROJECT_CLOSE, U'x', 1, 3, 2, 0, true, false, 0 , 0 },
+    { Commands::CREATE_FOLDER,         UITextID::CREATE_FOLDER, U'x', 1, 3, 0, 0, true, false, 0 , 0 }, //Dropdown: Copy/Delete/Duplicate Folder
+    { Commands::CREATE_PAGE2D,         UITextID::CREATE_PAGE2D, U'x', 1, 3, 1, 0, true, false, 0 , 0 }, //Represents a 2D sheet.
+    { Commands::CREATE_SCENE3D,        UITextID::CREATE_SCENE3D, U'x', 1, 3, 2, 0, true, false, 0 , 0 }, //Represents a 3D world.
+    { Commands::FOLDER_VISIBILITY,     UITextID::FOLDER_VISIBILITY, U'x', 1, 1, 0, 0, true, false, 0 , 0 }, //Toggle Heirarchy ON/OFF
 
-    // Subgroup : View
-    { UIAction::VIEW_TREE,             1007, U'x', 1, 2, 0, 0, true, false, 0 , 1 },
-    { UIAction::VIEW_PERSPECTIVE_ISO_DROPDOWN, 1009, U'x', 2, 2, 1, 1, true, false, 0 , 1 }, // Dropdown
-    { UIAction::VIEW_MAX_ZOOM,         1011, U'x', 1, 3, 0, 0, true, false, 0 , 1 },
-    { UIAction::VIEW_ROTATE,           1013, U'x', 1, 3, 1, 0, true, false, 0 , 1 },
-    { UIAction::VIEW_PAN,              1015, U'x', 1, 3, 2, 0, true, false, 0 , 1 },
+    // Subgroup : Search
+    // Text box to search for objects in current view. Search happens in current view only to keep it simple.
+    { Commands::SEARCH_BOX,            UITextID::SEARCH_BOX, U'x', 2, 3, 0, 1, true, false, 0 , 6 },
+    { Commands::SEARCH_NORMAL,         UITextID::SEARCH_NORMAL, U'x', 2, 3, 1, 1, true, false, 0 , 6 },
+    { Commands::SEARCH_ADVANCED,       UITextID::SEARCH_ADVANCED, U'x', 2, 3, 2, 1, true, false, 0 , 6 }, // Dedicated sidebar in future.
+    { Commands::SEARCH_PREVIOUS,       UITextID::SEARCH_PREVIOUS, U'x', 2, 2, 0, 1, true, false, 0 , 6 },
+    { Commands::SEARCH_NEXT,           UITextID::SEARCH_NEXT, U'x', 2, 2, 1, 1, true, false, 0 , 6 },
+
     // Subgroup : Select
-    { UIAction::SELECT_GENERAL,        1017, U'x', 1, 1, 0, 0, true, false, 0 , 2 },
-    { UIAction::SELECT_PIPES,          1019, U'x', 1, 3, 0, 0, true, false, 0 , 2 },
-    { UIAction::SELECT_FITTINGS,       1021, U'x', 1, 3, 1, 0, true, false, 0 , 2 },
-    { UIAction::SELECT_REINFORCEMENT,  99, U'x', 1, 3, 2, 0, true, false, 0 , 2 },
-    { UIAction::SELECT_2D_ONLY,        99, U'x', 1, 3, 0, 0, true, false, 0 , 2 },
-    { UIAction::SELECT_TEXT,           99, U'x', 1, 3, 1, 0, true, false, 0 , 2 },
-    { UIAction::SELECT_LINES,          99, U'x', 1, 3, 2, 0, true, false, 0 , 2 }, 
-    // ACTION GROUP 12: (2D) General
+    { Commands::SELECT_ANYTHING,       UITextID::SELECT_ANYTHING, U'x', 1, 3, 0, 0, true, false, 0 , 2 },
+    { Commands::SELECT_PIPING,         UITextID::SELECT_PIPING, U'x', 1, 3, 1, 0, true, false, 0 , 2 },
+    { Commands::SELECT_BEAMCOLUMNS,    UITextID::SELECT_BEAMCOLUMNS, U'x', 1, 3, 2, 0, true, false, 0 , 2 },
+    { Commands::SELECT_REINFORCEMENT,  UITextID::SELECT_REINFORCEMENT, U'x', 1, 3, 0, 0, true, false, 0 , 2 },
+    { Commands::SELECT_TEMPLATES,      UITextID::SELECT_TEMPLATES, U'x', 1, 3, 1, 0, true, false, 0 , 2 }, // 3D templates and 2D blocks.
+    { Commands::SELECT_TEXT,           UITextID::SELECT_TEXT, U'x', 1, 3, 2, 0, true, false, 0 , 2 }, // Text in 3D scene and 2D sheets.
+    { Commands::SELECT_LINES,          UITextID::SELECT_LINES, U'x', 1, 3, 0, 0, true, false, 0 , 2 }, // Anything othe than text and templates.
+
+    // ACTION GROUP 1: (2D) General
     // Subgroup : Create 2D Shapes
-    { UIAction::CREATE_LINE,           1023, U'x', 1, 2, 0, 0, true, false, 1 , 4 },
-    { UIAction::CREATE_POLYLINE,       1025, U'x', 1, 2, 1, 0, true, false, 1 , 4 },
-    { UIAction::CREATE_CIRCLE,         1027, U'x', 1, 3, 0, 0, true, false, 1 , 4 },
-    { UIAction::CREATE_ARC,            1029, U'x', 1, 3, 1, 0, true, false, 1 , 4 },
-    { UIAction::CREATE_ELLIPSE,        99, U'x', 1, 3, 2, 0, true, false, 1 , 4 },
-    { UIAction::CREATE_TEXT,           99, U'x', 1, 2, 0, 0, true, false, 1 , 4 },
-    { UIAction::CREATE_MULTITEXT,      99, U'x', 1, 2, 1, 0, true, false, 1 , 4 },
+    { Commands::CREATE_LINE,           UITextID::CREATE_LINE, U'x', 1, 3, 0, 0, true, false, 1 , 23 },
+    { Commands::CREATE_POLYLINE,       UITextID::CREATE_POLYLINE, U'x', 1, 3, 1, 0, true, false, 1 , 23 },
+    //Polygon Dropdown: Triangle, Rectangle, Pentagon, Hexagon, Heptagon, Octagon.
+    { Commands::CREATE_POLYGON,        UITextID::CREATE_POLYGON, U'x', 1, 3, 2, 0, true, false, 1 , 23 },
+    { Commands::CREATE_CIRCLE,         UITextID::CREATE_CIRCLE, U'x', 1, 3, 0, 0, true, false, 1 , 23 },
+    { Commands::CREATE_ARC,            UITextID::CREATE_ARC, U'x', 1, 3, 1, 0, true, false, 1 , 23 },
+    { Commands::CREATE_ELLIPSE,        UITextID::CREATE_ELLIPSE, U'x', 1, 3, 2, 0, true, false, 1 , 23 },
+    // Nurbs are very powerfull!
+    // They genralize Bezier Curves, B-Splines, Conic Sections (Circle/ellipses/parabola/hyperbola)
+    { Commands::CREATE_NURBS,           UITextID::CREATE_NURBS, U'x', 1, 3, 0, 0, true, false, 1 , 23 },
+    { Commands::CREATE_TEXT,            UITextID::CREATE_TEXT, U'x', 1, 3, 1, 0, true, false, 1 , 23 },
+    { Commands::CREATE_SPECIALTEXT,     UITextID::CREATE_SPECIALTEXT, U'x', 1, 3, 2, 0, true, false, 1 , 23 },
+    { Commands::CREATE_DIMENSION,       UITextID::CREATE_DIMENSION, U'x', 1, 3, 0, 0, true, false, 1 , 23 },
+    { Commands::CREATE_LEADER,          UITextID::CREATE_LEADER, U'x', 1, 3, 1, 0, true, false, 1 , 23 },
+    { Commands::CREATE_RADIUS,          UITextID::CREATE_RADIUS, U'x', 1, 3, 2, 0, true, false, 1 , 23 },
+    { Commands::CREATE_BLOCK,           UITextID::CREATE_BLOCK, U'x', 1, 3, 0, 0, true, false, 1 , 23 },
+    { Commands::CREATE_CLOUD,           UITextID::CREATE_CLOUD, U'x', 1, 3, 1, 0, true, false, 1 , 23 },
 
-    // SubGroup: Edit
-    { UIAction::EDIT_COPY,             12, U'x', 1, 3, 0, 0, true, false, 1 , 5 },
-    { UIAction::EDIT_OFFSET,           12, U'x', 1, 3, 1, 0, true, false, 1 , 5 },
-    { UIAction::EDIT_MOVE,             12, U'x', 1, 3, 2, 0, true, false, 1 , 5 },
+    { Commands::CREATE_HATCH,           UITextID::CREATE_HATCH, U'x', 1, 3, 2, 0, true, false, 1 , 23 },
+    { Commands::CREATE_POINT,           UITextID::CREATE_POINT, U'x', 1, 3, 0, 0, true, false, 1 , 23 },
+    { Commands::CREATE_ARRAY,           UITextID::CREATE_ARRAY, U'x', 1, 3, 1, 0, true, false, 1 , 23 },
+    { Commands::CREATE_GRID2D,          UITextID::CREATE_GRID2D, U'x', 1, 3, 2, 0, true, false, 1 , 23 },
+    { Commands::CREATE_BLOCK2D,         UITextID::CREATE_BLOCK2D, U'x', 1, 3, 0, 0, true, false, 1 , 23 },
 
-    // ACTION GROUP 13: (2D) Advanced
+    // SubGroup: Modify
+    { Commands::EDIT_COPY,              UITextID::EDIT_COPY, U'x', 1, 3, 0, 0, true, false, 1 , 3 },
+    { Commands::EDIT_MIRROR,            UITextID::EDIT_MIRROR, U'x', 1, 3, 1, 0, true, false, 1 , 3 },
+    { Commands::EDIT_OFFSET,            UITextID::EDIT_OFFSET, U'x', 1, 3, 2, 0, true, false, 1 , 3 },
+    { Commands::EDIT_MOVE,              UITextID::EDIT_MOVE, U'x', 1, 3, 0, 0, true, false, 1 , 3 },
+    { Commands::EDIT_ROTATE,            UITextID::EDIT_ROTATE, U'x', 1, 3, 1, 0, true, false, 1 , 3 },
+    { Commands::EDIT_STRETCH,           UITextID::EDIT_STRETCH, U'x', 1, 3, 2, 0, true, false, 1 , 3 },
+    { Commands::EDIT_SCALE,             UITextID::EDIT_SCALE, U'x', 1, 3, 0, 0, true, false, 1 , 3 },
+    { Commands::EDIT_EXTEND,            UITextID::EDIT_EXTEND, U'x', 1, 3, 1, 0, true, false, 1 , 3 },
+    { Commands::EDIT_TRIM,              UITextID::EDIT_TRIM, U'x', 1, 3, 2, 0, true, false, 1 , 3 },
+    { Commands::EDIT_FILLET,            UITextID::EDIT_FILLET, U'x', 1, 3, 0, 0, true, false, 1 , 3 },
+    { Commands::EDIT_CHAMFER,           UITextID::EDIT_CHAMFER, U'x', 1, 3, 1, 0, true, false, 1 , 3 },
+    { Commands::EDIT_EXPLODE,           UITextID::EDIT_EXPLODE, U'x', 1, 3, 2, 0, true, false, 1 , 3 },
+
+    // ACTION GROUP 2: (2D) Advanced
     // Subgroup : Process Equipments
-    { UIAction::CREATE_VVESSEL,        13, U'x', 1, 3, 0, 0, true, false, 2 , 5 },
-    { UIAction::CREATE_HVESSEL,        13, U'x', 1, 3, 1, 0, true, false, 2 , 5 },
-    { UIAction::CREATE_EXCHANGE,       13, U'x', 1, 3, 2, 0, true, false, 2 , 5 },
-    { UIAction::CREATE_PIPE,           13, U'x', 1, 3, 0, 0, true, false, 2 , 5 },
-    { UIAction::CREATE_INSTRUMENT,     13, U'x', 1, 3, 1, 0, true, false, 2 , 5 },
-    { UIAction::EDIT_PARAMETER,        13, U'x', 1, 3, 2, 0, true, false, 2 , 5 },
+    // These are intelligent 2D symbols with embedded parameters. User can place them in 2D view.
+    { Commands::CREATE_VVESSEL2D,       UITextID::CREATE_VVESSEL2D, U'x', 1, 3, 0, 0, true, false, 2 , 7 },
+    { Commands::CREATE_HVESSEL2D,       UITextID::CREATE_HVESSEL2D, U'x', 1, 3, 1, 0, true, false, 2 , 7 },
+    { Commands::CREATE_EXCHANGER2D,     UITextID::CREATE_EXCHANGER2D, U'x', 1, 3, 2, 0, true, false, 2 , 7 },
+    { Commands::CREATE_FILTER2D,        UITextID::CREATE_FILTER2D, U'x', 1, 3, 0, 0, true, false, 2 , 7 },
+    { Commands::CREATE_PUMP2D,          UITextID::CREATE_PUMP2D, U'x', 1, 3, 1, 0, true, false, 2 , 7 },
+    { Commands::CREATE_AIRCOOLER2D,     UITextID::CREATE_AIRCOOLER2D, U'x', 1, 3, 2, 0, true, false, 2 , 7 },
+    { Commands::CREATE_COMPRESSOR2D,    UITextID::CREATE_COMPRESSOR2D, U'x', 1, 3, 0, 0, true, false, 2 , 7 },
+    { Commands::CREATE_PIPE2D,          UITextID::CREATE_PIPE2D, U'x', 1, 3, 1, 0, true, false, 2 , 7 },
+    { Commands::CREATE_INSTRUMENT2D,    UITextID::CREATE_INSTRUMENT2D, U'x', 1, 3, 2, 0, true, false, 2 , 7 },
+    { Commands::EDIT_PARAMETER,         UITextID::EDIT_PARAMETER, U'x', 1, 3, 0, 0, true, false, 2 , 7 },
 
-    // ACTION GROUP 14: (3D)
-    // Subgroup : Basic
-    { UIAction::CREATE_FOLDER,         1031, U'x', 1, 2, 0, 0, true, false, 3 , 6 },
-    { UIAction::CREATE_GRID,           1033, U'x', 1, 2, 1, 0, true, false, 3 , 6 },
-    { UIAction::CREATE_STRUCTURE,      1035, U'x', 1, 2, 0, 0, true, false, 3 , 6 },
-    { UIAction::CREATE_LINES_3D,       1037, U'x', 1, 2, 1, 0, true, false, 3 , 6 },
+    // ACTION GROUP 3: (3D)
+    // These are our basic surface modeling capabilities.
+    // We can use these to create complex 3D shapes using boolean operations, or direct face/edge/vertex editing.
+    // Subgroup : Primitives
+    { Commands::CREATE_CUBOID,          UITextID::CREATE_CUBOID, U'x', 1, 3, 0, 0, true, false, 3 , 8 },
+    { Commands::CREATE_CYLINDER,        UITextID::CREATE_CYLINDER, U'x', 1, 3, 1, 0, true, false, 3 , 8 },
+    { Commands::CREATE_SPHERE,          UITextID::CREATE_SPHERE, U'x', 1, 3, 0, 0, true, false, 3 , 8 },
+    { Commands::CREATE_DISC,            UITextID::CREATE_DISC, U'x', 1, 3, 1, 0, true, false, 3 , 8 },
+    { Commands::CREATE_PYRAMID,         UITextID::CREATE_PYRAMID, U'x', 1, 3, 2, 0, true, false, 3 , 8 }, //3/4/5/6/7/8 sided pyramid dropdown.
+    { Commands::CREATE_CONE,            UITextID::CREATE_CONE, U'x', 1, 3, 0, 0, true, false, 3 , 8 },
+    { Commands::CREATE_TORUS,           UITextID::CREATE_TORUS, U'x', 1, 3, 1, 0, true, false, 3 , 8 },
+    { Commands::CREATE_ELLIPSOID,       UITextID::CREATE_ELLIPSOID, U'x', 1, 3, 2, 0, true, false, 3 , 8 },
 
-    // ACTION GROUP 15: (3D) Intelligent
-    // Subgroup : Concrete
-    { UIAction::CONCRETE_COLUMN,       99, U'x', 1, 3, 0, 0, true, false, 4 , 7 },
-    { UIAction::CONCRETE_BEAM,         99, U'x', 1, 3, 1, 0, true, false, 4 , 7 },
-    { UIAction::CONCRETE_SLAB,         99, U'x', 1, 3, 2, 0, true, false, 4 , 7 },
-    { UIAction::CONCRETE_CURVED_SLAB,  99, U'x', 1, 3, 0, 0, true, false, 4 , 7 },
-    { UIAction::CONCRETE_DOME,         99, U'x', 1, 3, 1, 0, true, false, 4 , 7 },
-    { UIAction::CONCRETE_PILE,         99, U'x', 1, 3, 2, 0, true, false, 4 , 7 },
+    // Subgroup : Freeform. These are extreme levels ! We need them to model the turbine blades, or ship hulls etc.
+    { Commands::CREATE_NURBS,           UITextID::CREATE_NURBS, U'x', 1, 2, 0, 0, true, false, 3 , 17 },
+    { Commands::CREATE_SWIPE2D,         UITextID::CREATE_SWIPE2D, U'x', 1, 2, 0, 0, true, false, 3 , 17 },
+
+    // Subgroup : Modify
+    { Commands::CUTBY_PLANE,            UITextID::CUTBY_PLANE, U'x', 1, 3, 0, 0, true, false, 3 , 3 },
+    { Commands::CUTBY_POLYGON,          UITextID::CUTBY_POLYGON, U'x', 1, 3, 1, 0, true, false, 3 , 3 },
+    { Commands::CUTBY_PRIMITIVE,        UITextID::CUTBY_PRIMITIVE, U'x', 1, 3, 2, 0, true, false, 3 , 3 }, // Dropdown: All basic shapes.
+    { Commands::CUTBY_PART,             UITextID::CUTBY_PART, U'x', 1, 3, 0, 0, true, false, 3 , 3 }, // One shape by other on screen.
+    { Commands::SPLIT,                  UITextID::SPLIT, U'x', 1, 3, 1, 0, true, false, 3 , 3 }, // Dropdown: Plane/N-point On Line
+    { Commands::EDGE_FILLET,            UITextID::EDGE_FILLET, U'x', 1, 3, 2, 0, true, false, 3 , 3 },
+    { Commands::EDGE_CHAMFER,           UITextID::EDGE_CHAMFER, U'x', 1, 3, 0, 0, true, false, 3 , 3 },
+    { Commands::HOLE_CIRCULAR,          UITextID::HOLE_CIRCULAR, U'x', 1, 3, 1, 0, true, false, 3 , 3 },
+    { Commands::HOLE_RECTANGULAR,       UITextID::HOLE_RECTANGULAR, U'x', 3, 2, 0, 0, true, false, 3 , 3 },
+    { Commands::HOLE_POLYGONAL,         UITextID::HOLE_POLYGONAL, U'x', 1, 3, 0, 0, true, false, 3 , 3 },
+
+    // Subgroup : Helper
+    { Commands::CREATE_GRID3D,          UITextID::CREATE_GRID3D, U'x', 1, 2, 0, 0, true, false, 3 , 18 },
+
+    // Subgroup : Views
+    { Commands::CREATE_VIEW_3D,         UITextID::CREATE_VIEW_3D, U'x', 1, 0, 0, 0, true, false, 3 , 1 }, //A plane with a inclusion offset distance.
+    // Offset distance in above setting will determine object visibility into the view. Intersecting objects are also visible.
+    { Commands::CREATE_TEMP_CLIP,       UITextID::CREATE_TEMP_CLIP, U'x', 2, 3, 0, 1, true, false, 3 , 1 }, // Toggle Orthographic/Isometric/Perspective
+    { Commands::DELETE_TEMP_CLIP,       UITextID::DELETE_TEMP_CLIP, U'x', 1, 3, 1, 0, true, false, 3 , 1 },
+    { Commands::VIEW3D_TYPE,            UITextID::VIEW3D_TYPE, U'x', 1, 3, 2, 0, true, false, 3 , 1 }, //Dropdown: Solid/Transparent/Nodal Connectivity
+    { Commands::HIDE_SELECTED,          UITextID::HIDE_SELECTED, U'x', 2, 3, 0, 1, true, false, 3 , 1 },
+    { Commands::HIDE_UNSELECTED,        UITextID::HIDE_UNSELECTED, U'x', 2, 3, 1, 1, true, false, 3 , 1 },
+    { Commands::HIDE_RESET,             UITextID::HIDE_RESET, U'x', 2, 3, 2, 1, true, false, 3 , 1 },
+    // Following 3 buttons change the behaviour of Left mouse button + drag on empty space in the view.
+    { Commands::VIEW_ROTATE,            UITextID::VIEW_ROTATE, U'x', 1, 3, 0, 0, true, false, 3 , 1 }, //Dropdown: X/Y/Z Axis Rotate.
+    { Commands::VIEW_PAN,               UITextID::VIEW_PAN, U'x', 1, 3, 1, 0, true, false, 3 , 1 }, //Dropdown: Pan / Tilt / Orbit
+    { Commands::MAX_ZOOM_WINDOW,        UITextID::MAX_ZOOM_WINDOW, U'x', 1, 3, 2, 0, true, false, 3 , 1 }, //Zoom on all visible object.
+    { Commands::MAX_ZOOM_HEIRARCHY,     UITextID::MAX_ZOOM_HEIRARCHY, U'x', 1, 3, 0, 0, true, false, 3 , 1 }, //Zoom on current heirarchy.
+    { Commands::MOUSE_WINDOW_ZOOM,      UITextID::MOUSE_WINDOW_ZOOM, U'x', 1, 3, 1, 0, true, false, 3 , 1 }, // Allows user to focus on an area.
+    { Commands::VIEW_PROJECTION,        UITextID::VIEW_PROJECTION, U'x', 2, 3, 2, 1, true, false, 3 , 1 }, // Toggle Orthographic/Perspective
+    //Setting a view to ISOMETRIC will automatically set the view ISO angle and switch to orthographic projection.
+    { Commands::VIEW_ISOMETRIC,         UITextID::VIEW_ISOMETRIC, U'x', 1, 3, 0, 0, true, false, 3 , 1 }, // Dropdown: ISO-1/2/3/4/5/6/7/8.
+    // Following views are parallel to X/Y/Z axis. They are basically a 2D view of the 3D model from different sides.
+    { Commands::VIEW_LEFT,              UITextID::VIEW_LEFT, U'x', 1, 3, 0, 0, true, false, 3 , 1 },
+    { Commands::VIEW_RIGHT,             UITextID::VIEW_RIGHT, U'x', 1, 3, 1, 0, true, false, 3 , 1 },
+    { Commands::VIEW_FRONT,             UITextID::VIEW_FRONT, U'x', 1, 3, 2, 0, true, false, 3 , 1 },
+    { Commands::VIEW_BACK,              UITextID::VIEW_BACK, U'x', 1, 3, 0, 0, true, false, 3 , 1 },
+    { Commands::VIEW_BOTTOM,            UITextID::VIEW_BOTTOM, U'x', 1, 3, 1, 0, true, false, 3 , 1 },
+    { Commands::VIEW_TOP,               UITextID::VIEW_TOP, U'x', 1, 3, 2, 0, true, false, 3 , 1 },
+
+    // ACTION GROUP 4: (3D) Intelligent
+    // Subgroup : Organize.
+    // These are essentially 3D containers to organize the model. They have some special capabilities.
+    { Commands::CREATE_STRUCTURE,       UITextID::CREATE_STRUCTURE, U'x', 1, 0, 0, 0, true, false, 4 , 6 },
+    // These can inherit the properties from corresponding 2D symbols. Or can have their own parameters.
+    { Commands::CREATE_VVESSEL3D,       UITextID::CREATE_VVESSEL3D, U'x', 1, 3, 0, 0, true, false, 4 , 5 },
+    { Commands::CREATE_HVESSEL3D,       UITextID::CREATE_HVESSEL3D, U'x', 1, 3, 1, 0, true, false, 4 , 5 },
+    { Commands::CREATE_EXCHANGER3D,     UITextID::CREATE_EXCHANGER3D, U'x', 1, 3, 2, 0, true, false, 4 , 5 },
+    { Commands::CREATE_FILTER3D,        UITextID::CREATE_FILTER3D, U'x', 1, 3, 0, 0, true, false, 4 , 5 },
+    { Commands::CREATE_PUMP3D,          UITextID::CREATE_PUMP3D, U'x', 1, 3, 1, 0, true, false, 4 , 5 },
+    { Commands::CREATE_AIRCOOLER3D,     UITextID::CREATE_AIRCOOLER3D, U'x', 1, 3, 2, 0, true, false, 4 , 5 },
+    { Commands::CREATE_COMPRESSOR3D,    UITextID::CREATE_COMPRESSOR3D, U'x', 1, 3, 0, 0, true, false, 4 , 5 },
+    { Commands::CREATE_PIPING3D,        UITextID::CREATE_PIPING3D, U'x', 1, 3, 1, 0, true, false, 4 , 5 },
+    { Commands::EDIT_PARAMETER,         UITextID::EDIT_PARAMETER, U'x', 1, 3, 2, 0, true, false, 4 , 5 },
+
+    // Subgroup : Structural
+    // Linear Structural Elements. These are basically 3D beams and columns.
+    // They can have different cross sections, and material (Concrete / Steel / Timber / FRP etc.) properties.
+    { Commands::LINE_ELEMENT_COLUMN,    UITextID::LINE_ELEMENT_COLUMN, U'x', 1, 3, 0, 0, true, false, 4 , 14 },
+    { Commands::LINE_ELEMENT_BEAM,      UITextID::LINE_ELEMENT_BEAM, U'x', 1, 3, 1, 0, true, false, 4 , 14 },
+    { Commands::CONCRETE_SLAB_POLY,     UITextID::CONCRETE_SLAB_POLY, U'x', 1, 3, 2, 0, true, false, 4 , 14 }, //Slabs are planer polygons.
+    { Commands::CONCRETE_SLAB_RECT,     UITextID::CONCRETE_SLAB_RECT, U'x', 1, 3, 0, 0, true, false, 4 , 14 }, //Rectangular only.
+    { Commands::LINE_ELEMENT_WALL,      UITextID::LINE_ELEMENT_WALL, U'x', 1, 3, 1, 0, true, false, 4 , 14 }, //Dropdown: Polygonal/Ring/Arc.
+    { Commands::CONCRETE_DOME,          UITextID::CONCRETE_DOME, U'x', 1, 3, 2, 0, true, false, 4 , 14 }, //Ellipsoidal dome for Nuclear!
+    // Piles can essentially can be any shape assigned. Can even have buttress!
+    { Commands::CREATE_PILE,            UITextID::CREATE_PILE, U'x', 1, 3, 0, 0, true, false, 4 , 14 },
+    { Commands::PLATE_RECTANGULAR,      UITextID::PLATE_RECTANGULAR, U'x', 1, 3, 1, 0, true, false, 4 , 14 },
+    { Commands::PLATE_POLYGONAL,        UITextID::PLATE_POLYGONAL, U'x', 1, 3, 2, 0, true, false, 4 , 14 },
+    { Commands::GRATING_POLY,           UITextID::GRATING_POLY, U'x', 1, 3, 0, 0, true, false, 4 , 14 },
+    { Commands::BOLT_GROUP_RECT,        UITextID::BOLT_GROUP_RECT, U'x', 1, 3, 1, 0, true, false, 4 , 14 },
+    { Commands::BOLT_GROUP_CIRCULAR,    UITextID::BOLT_GROUP_CIRCULAR, U'x', 1, 3, 2, 0, true, false, 4 , 14 },
+
     // Subgroup : Reinforcement
-    { UIAction::REINFORCEMENT_LINEAR,  99, U'x', 1, 2, 0, 0, true, false, 4 , 8 },
-    { UIAction::REINFORCEMENT_SHAPED_DROPDOWN, 99, U'x', 2, 2, 1, 1, true, false, 4 , 8 },
-
-    // Subgroup : Steel, FRP, Glass
-    { UIAction::STEEL_COLUMN,          99, U'x', 1, 2, 0, 0, true, false, 4 , 5 },
-    { UIAction::STEEL_BEAM,            99, U'x', 1, 2, 0, 0, true, false, 4 , 5 },
-    { UIAction::FRP_COLUMN,            99, U'x', 1, 3, 0, 0, true, false, 4 , 5 },
-    { UIAction::FRP_BEAM,              99, U'x', 1, 3, 1, 0, true, false, 4 , 5 },
-    { UIAction::GLASS_PLATE,           99, U'x', 1, 3, 2, 0, true, false, 4 , 5 },
-
-    // Subgroup : Equipments
-    { UIAction::EQUIPMENT_VVESSEL,     99, U'x', 1, 3, 0, 0, true, false, 4 , 6 },
-    { UIAction::EQUIPMENT_HVESSEL,     99, U'x', 1, 3, 1, 0, true, false, 4 , 6 },
-    { UIAction::EQUIPMENT_EXCHANGER,   99, U'x', 1, 3, 2, 0, true, false, 4 , 6 },
-    { UIAction::EQUIPMENT_PUMP,        99, U'x', 1, 3, 0, 0, true, false, 4 , 6 },
+    { Commands::RF_SINGLE,              UITextID::RF_SINGLE, U'x', 1, 3, 0, 0, true, false, 4 , 9 }, // Can be either single or in a set.
+    { Commands::RF_REBAR_SET,           UITextID::RF_REBAR_SET, U'x', 1, 3, 1, 0, true, false, 4 , 9 }, // 3D rebar for complex geometry. Single/Set.
+    { Commands::RF_COUPLER,             UITextID::RF_COUPLER, U'x', 1, 3, 2, 0, true, false, 4 , 9 },
+    { Commands::RF_LAP,                 UITextID::RF_LAP, U'x', 2, 3, 0, 1, true, false, 4 , 9 },
+    { Commands::RF_SURFACE_LINK,        UITextID::RF_SURFACE_LINK, U'x', 2, 3, 1, 1, true, false, 4 , 9 },
+    { Commands::RF_SURFACE_UNLINK,      UITextID::RF_SURFACE_UNLINK, U'x', 2, 3, 2, 1, true, false, 4 , 9 },
 
     // Subgroup : Piping
-    { UIAction::CREATE_PIPING,         99, U'x', 1, 3, 0, 0, true, false, 4 , 7 },
-    { UIAction::CREATE_SPOOL,          99, U'x', 1, 3, 1, 0, true, false, 4 , 7 },
-    { UIAction::CREATE_VALVE,          99, U'x', 1, 3, 2, 0, true, false, 4 , 7 },
-    { UIAction::CREATE_ELBOW,          99, U'x', 1, 3, 0, 0, true, false, 4 , 7 },
-    { UIAction::CREATE_T,              99, U'x', 1, 3, 1, 0, true, false, 4 , 7 },
-    { UIAction::CREATE_Y,              99, U'x', 1, 3, 2, 0, true, false, 4 , 7 },
-    { UIAction::INSTRUMENT_PG,         99, U'x', 1, 3, 0, 0, true, false, 4 , 7 },
-    { UIAction::INSTRUMENT_TG,         99, U'x', 1, 3, 1, 0, true, false, 4 , 7 },
-    { UIAction::EDIT_EXTEND,           99, U'x', 1, 3, 2, 0, true, false, 4 , 7 },
-    { UIAction::EDIT_STRETCH,          99, U'x', 1, 3, 0, 0, true, false, 4 , 7 },
+    { Commands::CREATE_PIPING,          UITextID::CREATE_PIPING, U'x', 1, 3, 0, 0, true, false, 4 , 11 },
+    { Commands::CREATE_SPOOL,           UITextID::CREATE_SPOOL, U'x', 1, 3, 1, 0, true, false, 4 , 11 },
+    { Commands::CREATE_VALVE,           UITextID::CREATE_VALVE, U'x', 1, 3, 2, 0, true, false, 4 , 11 },
+    { Commands::CREATE_ELBOW,           UITextID::CREATE_ELBOW, U'x', 1, 3, 0, 0, true, false, 4 , 11 },
+    { Commands::CREATE_T,               UITextID::CREATE_T, U'x', 1, 3, 1, 0, true, false, 4 , 11 },
+    { Commands::CREATE_Y,               UITextID::CREATE_Y, U'x', 1, 3, 2, 0, true, false, 4 , 11 },
+    { Commands::INSTRUMENT_PG,          UITextID::INSTRUMENT_PG, U'x', 1, 3, 0, 0, true, false, 4 , 11 },
+    { Commands::INSTRUMENT_TG,          UITextID::INSTRUMENT_TG, U'x', 1, 3, 1, 0, true, false, 4 , 11 },
 
-	// ACTION GROUP 16: Simulation and Analysis
+    // Subgroup : Modify
+    // This workson structural and piping elements both. Dropdown: Pipe Only / Structural Only / Both.
+    { Commands::EDIT_EXTEND,            UITextID::EDIT_EXTEND, U'x', 1, 2, 0, 0, true, false, 4 , 3 },
+    { Commands::EDIT_STRETCH,           UITextID::EDIT_STRETCH, U'x', 1, 2, 1, 0, true, false, 4 , 3 },
+
+    // ACTION GROUP 5: Simulation and Analysis
     // Subgroup : Loads & Combinations
-    { UIAction::LOAD_CASE,             99, U'x', 1, 3, 0, 0, true, false, 5 , 8 },
-    { UIAction::LOAD_COMBINATIONS,     99, U'x', 1, 3, 1, 0, true, false, 5 , 8 },
-    { UIAction::LOAD_SELF_WEIGHT,      99, U'x', 1, 3, 2, 0, true, false, 5 , 8 },
-    { UIAction::LOAD_UNIFORM,          99, U'x', 1, 3, 0, 0, true, false, 5 , 8 },
-    { UIAction::LOAD_TRAPEZOIDAL,      99, U'x', 1, 3, 1, 0, true, false, 5 , 8 },
-    { UIAction::LOAD_PRESSURE,         99, U'x', 1, 3, 2, 0, true, false, 5 , 8 },
-    { UIAction::LOAD_TEMPERATURE,      99, U'x', 1, 3, 0, 0, true, false, 5 , 8 },
+    { Commands::LOAD_CASE,              UITextID::LOAD_CASE, U'x', 1, 3, 0, 0, true, false, 5 , 23 },
+    { Commands::LOAD_COMBINATIONS,      UITextID::LOAD_COMBINATIONS, U'x', 1, 3, 1, 0, true, false, 5 , 23 },
+    { Commands::LOAD_SELF_WEIGHT,       UITextID::LOAD_SELF_WEIGHT, U'x', 1, 3, 2, 0, true, false, 5 , 23 },
+    { Commands::LOAD_POINT,             UITextID::LOAD_POINT, U'x', 1, 3, 0, 0, true, false, 5 , 23 },
+    { Commands::LOAD_UNIFORM,           UITextID::LOAD_UNIFORM, U'x', 1, 3, 1, 0, true, false, 5 , 23 },
+    { Commands::LOAD_TRAPEZOIDAL,       UITextID::LOAD_TRAPEZOIDAL, U'x', 1, 3, 2, 0, true, false, 5 , 23 },
+    { Commands::LOAD_PRESSURE,          UITextID::LOAD_PRESSURE, U'x', 1, 3, 0, 0, true, false, 5 , 23 }, // Either on Area or on a face.
+    { Commands::LOAD_TEMPERATURE,       UITextID::LOAD_TEMPERATURE, U'x', 1, 3, 1, 0, true, false, 5 , 23 },
+    { Commands::LOAD_TIMESERIES,        UITextID::LOAD_TIMESERIES, U'x', 1, 3, 2, 0, true, false, 5 , 23 },
+
+    // Subgroup : Load Generators
+    { Commands::LOAD_WIND_IS875,        UITextID::LOAD_WIND_IS875, U'x', 1, 3, 0, 0, true, false, 5 , 19 }, //Dropdown of all other wind codes.
+    { Commands::LOAD_SEISMIC_IS1893,    UITextID::LOAD_SEISMIC_IS1893, U'x', 1, 3, 1, 0, true, false, 5 , 19 },//Dropdown of all other seismic codes.
+    { Commands::LOAD_SNOW_IS875,        UITextID::LOAD_SNOW_IS875, U'x', 1, 3, 2, 0, true, false, 5 , 19 }, //Dropdown of all other snow codes.
+
     // Subgroup : Supports
-    { UIAction::SUPPORT_FIXED,         99, U'x', 1, 3, 0, 0, true, false, 5 , 9 },
-    { UIAction::SUPPORT_PINNED,        99, U'x', 1, 3, 1, 0, true, false, 5 , 9 },
-    { UIAction::SUPPORT_ROLLER,        99, U'x', 1, 3, 2, 0, true, false, 5 , 9 },
+    { Commands::SUPPORT_FIXED,          UITextID::SUPPORT_FIXED, U'x', 1, 3, 0, 0, true, false, 5 , 12 },
+    { Commands::SUPPORT_PINNED,         UITextID::SUPPORT_PINNED, U'x', 1, 3, 1, 0, true, false, 5 , 12 },
+    { Commands::SUPPORT_ROLLER,         UITextID::SUPPORT_ROLLER, U'x', 1, 3, 2, 0, true, false, 5 , 12 },
+    { Commands::SUPPORT_PARTIAL,        UITextID::SUPPORT_PARTIAL, U'x', 1, 3, 0, 0, true, false, 5 , 12 },
+    { Commands::SUPPORT_FUNCTIONAL,     UITextID::SUPPORT_FUNCTIONAL, U'x', 1, 3, 1, 0, true, false, 5 , 12 },
 
-	// Subgroup : Analysis Types
-    { UIAction::ANALYSIS_3D_FRAME,     99, U'x', 1, 3, 0, 0, true, false, 5 , 10 },
-    { UIAction::ANALYSIS_STATIC,       99, U'x', 1, 3, 1, 0, true, false, 5 , 10 },
-    { UIAction::ANALYSIS_SPECTRUM,     99, U'x', 1, 3, 2, 0, true, false, 5 , 10 },
-    { UIAction::ANALYSIS_TIME_HISTORY, 99, U'x', 1, 3, 0, 0, true, false, 5 , 10 },
+    // Subgroup : Analysis Types
+    { Commands::ANALYSIS_3D_FRAME,      UITextID::ANALYSIS_3D_FRAME, U'x', 1, 3, 0, 0, true, false, 5 , 13 },
+    { Commands::ANALYSIS_STATIC,        UITextID::ANALYSIS_STATIC, U'x', 1, 3, 1, 0, true, false, 5 , 13 },
+    { Commands::ANALYSIS_SPECTRUM,      UITextID::ANALYSIS_SPECTRUM, U'x', 1, 3, 2, 0, true, false, 5 , 13 },
+    { Commands::ANALYSIS_TIME_HISTORY,  UITextID::ANALYSIS_TIME_HISTORY, U'x', 1, 3, 0, 0, true, false, 5 , 13 },
+    { Commands::ANALYSIS_THERMAL,       UITextID::ANALYSIS_THERMAL, U'x', 1, 3, 1, 0, true, false, 5 , 13 },
 
-    // ACTION GROUP 17: Code Checking
-	// Subgroup : Indian (BIS)
-    { UIAction::CODE_CIVIL_IS456,      99, U'x', 1, 3, 0, 0, true, false, 6 , 11 },
-    { UIAction::CODE_CIVIL_IS13920,    99, U'x', 1, 3, 1, 0, true, false, 6 , 11 },
-    { UIAction::CODE_CIVIL_IS800,      99, U'x', 1, 3, 2, 0, true, false, 6 , 11 },
+    // ACTION GROUP 6: Code Checking
+    // Subgroup : Civil
+    { Commands::CODE_CIVIL_IS456_LSD,   UITextID::CODE_CIVIL_IS456_LSD, U'x', 1, 3, 0, 0, true, false, 6 , 22 },
+    { Commands::CODE_CIVIL_IS456_WSD,   UITextID::CODE_CIVIL_IS456_WSD, U'x', 1, 3, 1, 0, true, false, 6 , 22 },
+    { Commands::CODE_CIVIL_IS13920,     UITextID::CODE_CIVIL_IS13920, U'x', 1, 3, 2, 0, true, false, 6 , 22 },
+    { Commands::CODE_CIVIL_IS3370,      UITextID::CODE_CIVIL_IS3370, U'x', 1, 3, 0, 0, true, false, 6 , 22 },
+    { Commands::CODE_CIVIL_ACI318,      UITextID::CODE_CIVIL_ACI318, U'x', 1, 3, 1, 0, true, false, 6 , 22 },
+    { Commands::CODE_CIVIL_EUROCODE2,   UITextID::CODE_CIVIL_EUROCODE2, U'x', 1, 3, 2, 0, true, false, 6 , 22 },
+    { Commands::CODE_CIVIL_GB50010,     UITextID::CODE_CIVIL_GB50010, U'x', 1, 3, 0, 0, true, false, 6 , 22 },
 
-    // Subgroup : ASME
-    { UIAction::CODE_MECH_ASME_VIII,   99, U'x', 1, 3, 0, 0, true, false, 6 , 12 },
+    { Commands::CODE_CIVIL_IS800_LSD,   UITextID::CODE_CIVIL_IS800_LSD, U'x', 1, 3, 1, 0, true, false, 6 , 22 },
+    { Commands::CODE_CIVIL_IS800_WSD,   UITextID::CODE_CIVIL_IS800_WSD, U'x', 1, 3, 2, 0, true, false, 6 , 22 },
+    { Commands::CODE_CIVIL_AISC360,     UITextID::CODE_CIVIL_AISC360, U'x', 1, 3, 0, 0, true, false, 6 , 22 },
+    { Commands::CODE_CIVIL_EUROCODE3,   UITextID::CODE_CIVIL_EUROCODE3, U'x', 1, 3, 1, 0, true, false, 6 , 22 },
+    { Commands::CODE_CIVIL_GB50017,     UITextID::CODE_CIVIL_GB50017, U'x', 1, 3, 2, 0, true, false, 6 , 22 },
 
-    // ACTION GROUP 18: Documentation
-        
-    // ACTION GROUP 19: 3D->2D
-    // Subgroup : Drawing Extraction
-    { UIAction::GENERAL_DRAWING,       19, U'x', 1, 3, 0, 0, true, false, 8 , 13 },
-    { UIAction::GENERAL_SHEET,         19, U'x', 1, 3, 1, 0, true, false, 8 , 13 },
-    { UIAction::GENERAL_3D2DGA,        19, U'x', 1, 3, 2, 0, true, false, 8 , 13 },
-    { UIAction::GENERAL_ASSEMBLY,      19, U'x', 1, 3, 0, 0, true, false, 8 , 13 },
-    { UIAction::GENERAL_ISOMETRIC,     19, U'x', 1, 3, 1, 0, true, false, 8 , 13 },
-    { UIAction::GENERAL_TABLES,        19, U'x', 1, 3, 2, 0, true, false, 8 , 13 },
+    // Subgroup : Mechanical
+    { Commands::CODE_MECH_ASME_VIII,    UITextID::CODE_MECH_ASME_VIII, U'x', 1, 3, 0, 0, true, false, 6 , 15 },
 
-    // ACTION GROUP 20: Time
-    // ACTION GROUP 21: Cost
+    // ACTION GROUP 7: Documentation
+    // Subgroup : Genral
+    { Commands::CREATE_PAGE,              UITextID::GENERAL_DRAWING, U'x', 1, 3, 0, 0, true, false, 7 , 23 },
 
-    // ACTION GROUP 22: Interoperability & Miscellaneous.
-	// Subgroup : Import & Export
-    { UIAction::IMPORT_STD,            1045, U'x', 1, 3, 0, 0, true, false, 11 , 14 },
-    { UIAction::IMPORT_CII,            1047, U'x', 1, 3, 1, 0, true, false, 11 , 14 },
-    { UIAction::IMPORT_DXF,            1049, U'x', 1, 3, 2, 0, true, false, 11 , 14 },
-    { UIAction::IMPORT_DWG,            1051, U'x', 1, 3, 0, 0, true, false, 11 , 14 },
-    { UIAction::EXPORT_STD,            1053, U'x', 1, 3, 1, 0, true, false, 11 , 14 },
-    { UIAction::EXPORT_DWG,            1055, U'x', 1, 3, 2, 0, true, false, 11 , 14 },
-    // ACTION GROUP 23: Extensions
-	// Subgroup : All Active Extensions (This will be dynamic in future, but we can hardcode few for now)
-    { UIAction::CODE_CIVIL_IS456,      99, U'x', 1, 1, 0, 0, true, false, 12 , 15 }
+    // ACTION GROUP 8: 3D->2D
+    // Subgroup : Extraction
+    { Commands::GENERAL_DRAWING,        UITextID::GENERAL_DRAWING, U'x', 1, 3, 0, 0, true, false, 8 , 16 },
+    { Commands::GENERAL_SHEET,          UITextID::GENERAL_SHEET, U'x', 1, 3, 1, 0, true, false, 8 , 16 },
+    { Commands::GENERAL_3D2DGA,         UITextID::GENERAL_3D2DGA, U'x', 1, 3, 2, 0, true, false, 8 , 16 },
+    { Commands::GENERAL_ASSEMBLY,       UITextID::GENERAL_ASSEMBLY, U'x', 1, 3, 0, 0, true, false, 8 , 16 },
+    { Commands::GENERAL_ISOMETRIC,      UITextID::GENERAL_ISOMETRIC, U'x', 1, 3, 1, 0, true, false, 8 , 16 },
+    { Commands::GENERAL_TABLES,         UITextID::GENERAL_TABLES, U'x', 1, 3, 2, 0, true, false, 8 , 16 },
+
+    // ACTION GROUP 9: Time
+    // Subgroup : General
+    { Commands::SEQUENCE_PLAY,          UITextID::SEQUENCE_PLAY, U'x', 1, 3, 0, 0, true, false, 9 , 23 }, //Dropdown: Play / Pause / Reset to beginning.
+    { Commands::STATUS_VISUALIZE,       UITextID::STATUS_VISUALIZE, U'x', 1, 3, 1, 0, true, false, 9 , 23 },
+
+    // ACTION GROUP 10: Cost
+	// Subgroup : General
+    { Commands::CREATE_BOM,             UITextID::CREATE_BOM, U'x', 1, 3, 0, 0, true, false, 10 , 23 },
+    { Commands::REFRESH_BOM,            UITextID::REFRESH_BOM, U'x', 1, 3, 1, 0, true, false, 10 , 23 },
+    { Commands::CREATE_REPORTS,         UITextID::CREATE_REPORTS, U'x', 1, 3, 2, 0, true, false, 10 , 23 },
+    { Commands::BOM_RATES,              UITextID::BOM_RATES, U'x', 1, 3, 0, 0, true, false, 10 , 23 },
+
+    // ACTION GROUP 11: Utility.
+    // Subgroup : Import & Export
+    { Commands::IMPORT_STD,             UITextID::IMPORT_STD, U'x', 1, 3, 0, 0, true, false, 11 , 20 },
+    { Commands::IMPORT_CII,             UITextID::IMPORT_CII, U'x', 1, 3, 1, 0, true, false, 11 , 20 },
+    { Commands::IMPORT_DXF,             UITextID::IMPORT_DXF, U'x', 1, 3, 2, 0, true, false, 11 , 20 },
+    { Commands::IMPORT_DWG,             UITextID::IMPORT_DWG, U'x', 1, 3, 0, 0, true, false, 11 , 20 },
+    { Commands::EXPORT_STD,             UITextID::EXPORT_STD, U'x', 1, 3, 1, 0, true, false, 11 , 20 },
+    { Commands::EXPORT_DWG,             UITextID::EXPORT_DWG, U'x', 1, 3, 2, 0, true, false, 11 , 20 },
+
+    // ACTION GROUP 12: Extensions
+    // Subgroup : General
+    // All Active Extensions (This will be dynamic in future, but we can hardcode few for now)
+    { Commands::SCRIPT_PANNEL,          UITextID::SCRIPT_PANNEL, U'x', 1, 1, 0, 0, true, false, 12 , 23 }
 };
 
 constexpr size_t TotalUIControls = std::size(AllUIControls);

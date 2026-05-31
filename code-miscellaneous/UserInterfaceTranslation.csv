@@ -1,63 +1,288 @@
-WordID,ShortWordName,English,Human,Comments,Grok,ChatGPT,Gemini
-11,Common,Common,Common,Basic tools common to all activities.,,,
-12,2DGeneral,2D Basic,2D Basic,Simple 2D Dumb Drawings.,,,
-13,2DIntelligent,2D Intelligent,2D Intelligent,"P&ID, PFD, SLD, Circuit Diagraom, Interlocs etc.",,,
-14,3DGeneral,3D Basic,3D Basic,"Primitives, Groupings, Templating etc.",,,
-15,3DIntelligent,3D Inteligent,3D Inteligent,"Pipes, Beam/Column, R/f, Wires etc.",,,
-16,Simulation,Simulation,Simulation,"Stress Analsys, Thermal Analysis, CFD etc.",,,
-17,CodeChecking,Design Codes,Design Codes,Checking compliance with Design Codes.,,,
-18,Documentation,Documentation,Documentation,"Specifications, Writeups, Calculation Sheets, PPT !!! Etc.",,,
-19,3Dto2D,3D to 2D,3D to 2D,Drawing Extraction,,,
-20,4DTime,4D Time,4D Time,"Timeline Management, Visulization etc.",,,
-21,5DCost,5D Cost,5D Cost,"Cost Estimate, BOM etc.",,,
-22,Interop,Interop,Interop,File Format Interoperability,,,
-23,Extension,Extension,Extension,Software Extensions / Addons,,,
-51,ProjectOrganization,Project Organization,Project Organization,,,,
-52,View,View,View,,,,
-53,Select,Select,Select,,,,
-54,Create2DShapes,Create 2D Shapes,Create 2D Shapes,,,,
-55,Edit,Edit,Edit,,,,
-56,ProcessEquipment,Process Equipments,Process Equipments,,,,
-57,Basic,Basic,Basic,,,,
-58,Concrete,Concrete,Concrete,,,,
-59,Reinforcement,Reinforcement,Reinforcement,,,,
-60,SteelFRP Glass,"Steel, FRP, Glass","Steel, FRP, Glass",,,,
-61,Equipments,Equipments,Equipments,,,,
-62,Piping,Piping,Piping,,,,
-63,LC,Loads & Combinations,Loads & Combinations,,,,
-64,Supports,Supports,Supports,,,,
-65,AnalysisTypes,Analysis Types,Analysis Types,,,,
-66,IndianBIS,Indian ( BIS ),Indian ( BIS ),,,,
-67,ASME,ASME,ASME,,,,
-68,DrawingExtraction,Drawing Extraction,Drawing Extraction,,,,
-69,ImportExport,Import & Export,Import & Export,,,,
-70,ActiveExtensions,All Active Extensions,All Active Extensions,,,,
-99,Unknown,Unknown,Unknown,,,,
-1001,ProjectOpen,Project Open,Project Open,Open an existing project,,,
-1003,ProjectSave,Project Save,Project Save,Save current project,,,
-1005,ProjectClose,Project Close,Project Close,Close current project,,,
-1007,ViewTree,View Tree,View Tree,Toggle tree view,,,
-1009,View Perspective Iso Dropdown,Perspective View,Perspective View,Dropdown for perspective/isometric views,,,
-1011,ViewMaxZoom,Max Zoom,Max Zoom,Zoom to maximum,,,
-1013,ViewRotate,Rotate,Rotate,Rotate view,,,
-1015,ViewPan,Pan,Pan,Pan view,,,
-1017,SelectGeneral,Select,Select,General selection tool,,,
-1019,SelectPipes,Select Pipes,Select Pipes,Select pipe elements,,,
-1021,SelectFittings,Select Fittings,Select Fittings,Select pipe fittings,,,
-1023,CreateLine,Line,Line,Create a line,,,
-1025,CreatePolyline,Polyline,Polyline,Create a polyline,,,
-1027,CreateCircle,Circle,Circle,,,,
-1029,CreateArc,Arc,Arc,Create an arc,,,
-1031,CreateFolder,Folder,Folder,Create a folder,,,
-1033,CreateGrid,Grid,Grid,Create grid system,,,
-1035,VerticalVessel,Vertical Vessel,Vertical Vessel,Create vertical vessel equipment,,,
-1037,CreatePiping,Piping,Piping,Create piping system,,,
-1039,LoadCase,Load Case,Load Case,Define load case,,,
-1041,CodeIS456,IS456,IS456,Indian concrete design code,,,
-1043,GeneralDrawing,Drawing,Drawing,Create general drawing,,,
-1045,ImportSTD,Import STD,Import STD,Import standard file,,,
-1047,ImportCII,Import CII,Import CII,Import CII format,,,
-1049,ImportDXF,Import DXF,Import DXF,Import DXF file,,,
-1051,ImportDWG,Import DWG,Import DWG,Import DWG file,,,
-1053,ExportSTD,Export STD,Export STD,Export standard file,,,
-1055,ExportDWG,Export DWG,Export DWG,Export DWG file,,,
+WordID,ShortWordName,English,Comments
+11,Common,Common,Basic tools common to all activities.
+12,General2D,2D Basic,Simple 2D Dumb Drawings.
+13,Intelligent2D,2D Intelligent,"P&ID, PFD, SLD, Circuit Diagraom, Interlocs etc."
+14,General3D,3D Basic,"Primitives, Groupings, Templating etc."
+15,Intelligent3D,3D Inteligent,"Pipes, Beam/Column, R/f, Wires etc."
+16,Simulation,Simulation,"Stress Analsys, Thermal Analysis, CFD etc."
+17,CodeChecking,Design Codes,Checking compliance with Design Codes.
+18,Documentation,Documentation,"Specifications, Writeups, Calculation Sheets, PPT !!! Etc."
+19,ThreeDtoTwoD,3D to 2D,Drawing Extraction
+20,Time4D,4D Time,"Timeline Management, Visulization etc."
+21,Cost5D,5D Cost,"Cost Estimate, BOM etc."
+22,Utility,Utility,Miscellaneous utilities such as interoperability etc.
+23,Extension,Extension,Software Extensions / Addons
+51,Organize,Organize,
+52,View,View,
+53,Select,Select,
+55,Modify,Modify,
+56,ProcessEquipment,Process Equipments,
+57,Basic,Basic,
+59,Reinforcement,Reinforcement,
+60,SteelFRPGlass,"Steel, FRP, Glass",
+61,Equipments,Equipments,
+62,Piping,Piping,
+63,BasicLoads,BasicLoads,
+64,Supports,Supports,
+65,Analysis,Analysis,
+66,Structural,Structural,
+67,Mechanical,Mechanical,
+68,Extraction,Drawing Extraction,
+69,ImportExport,Import & Export,
+70,ActiveExtensions,All Active Extensions,
+71,Create,Create,
+72,Search,Search,
+73,Premitives,Premitives,v
+74,FreeForm,FreeForm,
+75,Helpers,Helpers,
+76,LoadGenerators,LoadGenerators,
+77,Civil,Civil,
+78,General,General,
+99,Unknown,Unknown,
+1001,ProjectOpen,Project Open,Open an existing project
+1003,ProjectSave,Project Save,Save current project
+1005,ProjectClose,Project Close,Close current project
+1007,ViewTree,View Tree,Toggle tree view
+1011,ViewMaxZoom,Max Zoom,Zoom to maximum
+1013,ViewRotate,Rotate,Rotate view
+1015,ViewPan,Pan,Pan view
+1017,SelectGeneral,Select,General selection tool
+1019,SelectPipes,Select Pipes,Select pipe elements
+1021,SelectFittings,Select Fittings,Select pipe fittings
+1200,ActionGroup2D,,
+1201,CreateLine,Line,Create a line
+1203,CreatePolyline,Polyline,Create a polyline
+1205,CreatePolygon,Polygon,"To help draw Triangle, Rectangle, Pentagon, Hexagon, Heptagon, Octagon."
+1207,CreateCircle,Circle,
+1209,CreateArc,Arc,Create an arc
+1211,CreateEllipse,Ellipse,
+1213,CreateNurbs,Nurbs,
+1215,CreateText,Text,
+1217,CreateSpecialText,Sp.Text,
+1219,CreateDimension,Dimension,
+1221,CreateLeader,Leader,
+1223,CreateRadius,Radius,
+1225,CreateBlock,Block,
+1227,CreateCloud,Cloud,
+1229,CreateHatch,Hatch,
+1231,CreatePoint,Point,
+1233,CreateArray,Array,
+1251,EditCopy,Copy,
+1253,EditMirror,Mirror,
+1255,EditOffset,Offset,
+1257,EditMove,Move,
+1259,EditRotate,Rotate,
+1261,EditStretch,Stretch,
+1263,EditScale,Scale,
+1265,EditExtend,Extend,
+1267,EditTrim,Trim,
+1269,EditFillet,Fillet,
+1271,EditExplode,Explode,
+1300,ADVANCED_2D,,
+1031,CreateFolder,Folder,Create a folder
+1033,CreateGrid,Grid,Create grid system
+1035,VerticalVessel,Vertical Vessel,Create vertical vessel equipment
+1037,CreatePiping,Piping,Create piping system
+1039,LoadCase,Load Case,Define load case
+1041,CodeIS456,IS456,Indian concrete design code
+1043,GeneralDrawing,Drawing,Create general drawing
+1045,ImportSTD,Import STD,Import standard file
+1047,ImportCII,Import CII,Import CII format
+1049,ImportDXF,Import DXF,Import DXF file
+1051,ImportDWG,Import DWG,Import DWG file
+1053,ExportSTD,Export STD,Export standard file
+1055,ExportDWG,Export DWG,Export DWG file
+2974120935,PROJECT_OPEN,Project Open,Project Open
+3662721928,PROJECT_SAVE,Project Save,Project Save
+2769288455,PROJECT_CLOSE,Project Close,Project Close
+3583994253,CREATE_FOLDER,Create Folder,Create Folder
+3534410448,CREATE_PAGE2D,Create Page2d,Create Page2d
+2618728952,CREATE_SCENE3D,Create Scene3d,Create Scene3d
+3165697720,FOLDER_VISIBILITY,Folder Visibility,Folder Visibility
+3494793623,SEARCH_BOX,Search Box,Search Box
+2671908760,SEARCH_NORMAL,Search Normal,Search Normal
+2256630789,SEARCH_ADVANCED,Search Advanced,Search Advanced
+2841437047,SEARCH_PREVIOUS,Search Previous,Search Previous
+3707454780,SEARCH_NEXT,Search Next,Search Next
+4139180641,SELECT_ANYTHING,Select Anything,Select Anything
+4219872277,SELECT_PIPING,Select Piping,Select Piping
+3535563669,SELECT_BEAMCOLUMNS,Select Beamcolumns,Select Beamcolumns
+2543903424,SELECT_REINFORCEMENT,Select Reinforcement,Select Reinforcement
+3207100675,SELECT_TEMPLATES,Select Templates,Select Templates
+2517260761,SELECT_TEXT,Select Text,Select Text
+2198107607,SELECT_LINES,Select Lines,Select Lines
+2785135817,CREATE_LINE,Create Line,Create Line
+2752552705,CREATE_POLYLINE,Create Polyline,Create Polyline
+2767081087,CREATE_POLYGON,Create Polygon,Create Polygon
+2296024348,CREATE_CIRCLE,Create Circle,Create Circle
+4138882481,CREATE_ARC,Create Arc,Create Arc
+2722806267,CREATE_ELLIPSE,Create Ellipse,Create Ellipse
+2860235357,CREATE_NURBS,Create Nurbs,Create Nurbs
+4152948280,CREATE_TEXT,Create Text,Create Text
+4154659874,CREATE_SPECIALTEXT,Create Specialtext,Create Specialtext
+2301422498,CREATE_DIMENSION,Create Dimension,Create Dimension
+3591118508,CREATE_LEADER,Create Leader,Create Leader
+4084964772,CREATE_RADIUS,Create Radius,Create Radius
+3804626501,CREATE_BLOCK,Create Block,Create Block
+2717093139,CREATE_CLOUD,Create Cloud,Create Cloud
+3831194862,CREATE_HATCH,Create Hatch,Create Hatch
+3332664091,CREATE_POINT,Create Point,Create Point
+3084147119,CREATE_ARRAY,Create Array,Create Array
+4165978869,CREATE_GRID2D,Create Grid2d,Create Grid2d
+3467346282,CREATE_BLOCK2D,Create Block2d,Create Block2d
+3089016617,EDIT_COPY,Edit Copy,Edit Copy
+3701724585,EDIT_MIRROR,Edit Mirror,Edit Mirror
+2230905462,EDIT_OFFSET,Edit Offset,Edit Offset
+3937232917,EDIT_MOVE,Edit Move,Edit Move
+2494785707,EDIT_ROTATE,Edit Rotate,Edit Rotate
+3661026732,EDIT_STRETCH,Edit Stretch,Edit Stretch
+3478988798,EDIT_SCALE,Edit Scale,Edit Scale
+3902390851,EDIT_EXTEND,Edit Extend,Edit Extend
+3071435908,EDIT_TRIM,Edit Trim,Edit Trim
+3161340767,EDIT_FILLET,Edit Fillet,Edit Fillet
+2918679699,EDIT_CHAMFER,Edit Chamfer,Edit Chamfer
+3265605728,EDIT_EXPLODE,Edit Explode,Edit Explode
+3932640333,CREATE_VVESSEL2D,Create Vvessel2d,Create Vvessel2d
+2801144044,CREATE_HVESSEL2D,Create Hvessel2d,Create Hvessel2d
+2689559792,CREATE_EXCHANGER2D,Create Exchanger2d,Create Exchanger2d
+2434967661,CREATE_FILTER2D,Create Filter2d,Create Filter2d
+3554460308,CREATE_PUMP2D,Create Pump2d,Create Pump2d
+3432407186,CREATE_AIRCOOLER2D,Create Aircooler2d,Create Aircooler2d
+3483474747,CREATE_COMPRESSOR2D,Create Compressor2d,Create Compressor2d
+2840747433,CREATE_PIPE2D,Create Pipe2d,Create Pipe2d
+4085157423,CREATE_INSTRUMENT2D,Create Instrument2d,Create Instrument2d
+3320946139,EDIT_PARAMETER,Edit Parameter,Edit Parameter
+3361645481,CREATE_CUBOID,Create Cuboid,Create Cuboid
+4171461298,CREATE_CYLINDER,Create Cylinder,Create Cylinder
+2655449631,CREATE_SPHERE,Create Sphere,Create Sphere
+4076425420,CREATE_DISC,Create Disc,Create Disc
+2583278476,CREATE_PYRAMID,Create Pyramid,Create Pyramid
+4194619133,CREATE_CONE,Create Cone,Create Cone
+3448217138,CREATE_TORUS,Create Torus,Create Torus
+2585159700,CREATE_ELLIPSOID,Create Ellipsoid,Create Ellipsoid
+2533554672,CREATE_NURBS3D,Create Nurbs3d,Create Nurbs3d
+2725259864,CREATE_SWIPE2D,Create Swipe2d,Create Swipe2d
+2686104240,CUTBY_PLANE,Cutby Plane,Cutby Plane
+3878858330,CUTBY_POLYGON,Cutby Polygon,Cutby Polygon
+3108688488,CUTBY_PRIMITIVE,Cutby Primitive,Cutby Primitive
+2775335100,CUTBY_PART,Cutby Part,Cutby Part
+2877273443,SPLIT,Split,Split
+2900670112,EDGE_FILLET,Edge Fillet,Edge Fillet
+2510286981,EDGE_CHAMFER,Edge Chamfer,Edge Chamfer
+2852057700,HOLE_CIRCULAR,Hole Circular,Hole Circular
+3190847058,HOLE_RECTANGULAR,Hole Rectangular,Hole Rectangular
+4019205572,HOLE_POLYGONAL,Hole Polygonal,Hole Polygonal
+3333840376,CREATE_GRID3D,Create Grid3d,Create Grid3d
+2667784792,CREATE_VIEW_3D,Create View 3d,Create View 3d
+3408573092,CREATE_TEMP_CLIP,Create Temp Clip,Create Temp Clip
+2473419054,DELETE_TEMP_CLIP,Delete Temp Clip,Delete Temp Clip
+3454235754,VIEW3D_TYPE,View3d Type,View3d Type
+2491991578,HIDE_SELECTED,Hide Selected,Hide Selected
+2748113010,HIDE_UNSELECTED,Hide Unselected,Hide Unselected
+2362776882,HIDE_RESET,Hide Reset,Hide Reset
+3379297168,VIEW_ROTATE,View Rotate,View Rotate
+2655962836,VIEW_PAN,View Pan,View Pan
+3588339920,MAX_ZOOM_WINDOW,Max Zoom Window,Max Zoom Window
+3864312238,MAX_ZOOM_HEIRARCHY,Max Zoom Heirarchy,Max Zoom Heirarchy
+3570826612,MOUSE_WINDOW_ZOOM,Mouse Window Zoom,Mouse Window Zoom
+2826420556,VIEW_PROJECTION,View Projection,View Projection
+2633994874,VIEW_ISOMETRIC,View Isometric,View Isometric
+4186429141,VIEW_LEFT,View Left,View Left
+2216987200,VIEW_RIGHT,View Right,View Right
+3636155878,VIEW_FRONT,View Front,View Front
+3882203228,VIEW_BACK,View Back,View Back
+3177379064,VIEW_BOTTOM,View Bottom,View Bottom
+3769120672,VIEW_TOP,View Top,View Top
+4206004955,CREATE_STRUCTURE,Create Structure,Create Structure
+2846452397,CREATE_VVESSEL3D,Create Vvessel3d,Create Vvessel3d
+2779695561,CREATE_HVESSEL3D,Create Hvessel3d,Create Hvessel3d
+3011627523,CREATE_EXCHANGER3D,Create Exchanger3d,Create Exchanger3d
+3673637717,CREATE_FILTER3D,Create Filter3d,Create Filter3d
+3930566817,CREATE_PUMP3D,Create Pump3d,Create Pump3d
+3550911706,CREATE_AIRCOOLER3D,Create Aircooler3d,Create Aircooler3d
+3581600724,CREATE_COMPRESSOR3D,Create Compressor3d,Create Compressor3d
+3656690872,CREATE_PIPING3D,Create Piping3d,Create Piping3d
+2162683985,LINE_ELEMENT_COLUMN,Line Element Column,Line Element Column
+3930718075,LINE_ELEMENT_BEAM,Line Element Beam,Line Element Beam
+3988350268,CONCRETE_SLAB_POLY,Concrete Slab Poly,Concrete Slab Poly
+3864828924,CONCRETE_SLAB_RECT,Concrete Slab Rect,Concrete Slab Rect
+2734326432,LINE_ELEMENT_WALL,Line Element Wall,Line Element Wall
+3704887219,CONCRETE_DOME,Concrete Dome,Concrete Dome
+3039129324,CREATE_PILE,Create Pile,Create Pile
+2359984007,RF_SINGLE,Rf Single,Rf Single
+3553900289,RF_REBAR_SET,Rf Rebar Set,Rf Rebar Set
+3477044202,RF_COUPLER,Rf Coupler,Rf Coupler
+2783888025,RF_LAP,Rf Lap,Rf Lap
+3339406591,RF_SURFACE_LINK,Rf Surface Link,Rf Surface Link
+2294808815,RF_SURFACE_UNLINK,Rf Surface Unlink,Rf Surface Unlink
+3631946541,PLATE_RECTANGULAR,Plate Rectangular,Plate Rectangular
+2778341247,PLATE_POLYGONAL,Plate Polygonal,Plate Polygonal
+2887127434,GRATING_POLY,Grating Poly,Grating Poly
+3063610067,BOLT_GROUP_RECT,Bolt Group Rect,Bolt Group Rect
+3343758252,BOLT_GROUP_CIRCULAR,Bolt Group Circular,Bolt Group Circular
+3483719548,CREATE_PIPING,Create Piping,Create Piping
+2321563062,CREATE_SPOOL,Create Spool,Create Spool
+3680627270,CREATE_VALVE,Create Valve,Create Valve
+3996694081,CREATE_ELBOW,Create Elbow,Create Elbow
+4184007375,CREATE_T,Create T,Create T
+4183995726,CREATE_Y,Create Y,Create Y
+2896880030,INSTRUMENT_PG,Instrument Pg,Instrument Pg
+2851619487,INSTRUMENT_TG,Instrument Tg,Instrument Tg
+2377130800,EDIT_EXTEND3D,Edit Extend3d,Edit Extend3d
+3509948575,EDIT_STRETCH3D,Edit Stretch3d,Edit Stretch3d
+2718248390,LOAD_CASE,Load Case,Load Case
+2313464443,LOAD_COMBINATIONS,Load Combinations,Load Combinations
+3676278939,LOAD_SELF_WEIGHT,Load Self Weight,Load Self Weight
+3719457408,LOAD_POINT,Load Point,Load Point
+2361768401,LOAD_UNIFORM,Load Uniform,Load Uniform
+2574979154,LOAD_TRAPEZOIDAL,Load Trapezoidal,Load Trapezoidal
+2681041270,LOAD_PRESSURE,Load Pressure,Load Pressure
+2694082118,LOAD_TEMPERATURE,Load Temperature,Load Temperature
+2639313125,LOAD_TIMESERIES,Load Timeseries,Load Timeseries
+3600999792,LOAD_WIND_IS875,Load Wind Is875,Load Wind Is875
+4066943494,LOAD_SEISMIC_IS1893,Load Seismic Is1893,Load Seismic Is1893
+3085722453,LOAD_SNOW_IS875,Load Snow Is875,Load Snow Is875
+3276532146,SUPPORT_FIXED,Support Fixed,Support Fixed
+3133001911,SUPPORT_PINNED,Support Pinned,Support Pinned
+2961511288,SUPPORT_ROLLER,Support Roller,Support Roller
+4043003874,SUPPORT_PARTIAL,Support Partial,Support Partial
+2704148806,SUPPORT_FUNCTIONAL,Support Functional,Support Functional
+3714475761,ANALYSIS_3D_FRAME,Analysis 3d Frame,Analysis 3d Frame
+3019869714,ANALYSIS_STATIC,Analysis Static,Analysis Static
+3827302734,ANALYSIS_SPECTRUM,Analysis Spectrum,Analysis Spectrum
+2269955686,ANALYSIS_TIME_HISTORY,Analysis Time History,Analysis Time History
+3899852618,ANALYSIS_THERMAL,Analysis Thermal,Analysis Thermal
+4004139340,CODE_CIVIL_IS456_LSD,Code Civil Is456 Lsd,Code Civil Is456 Lsd
+3404812258,CODE_CIVIL_IS456_WSD,Code Civil Is456 Wsd,Code Civil Is456 Wsd
+3217166961,CODE_CIVIL_IS13920,Code Civil Is13920,Code Civil Is13920
+2808181540,CODE_CIVIL_IS3370,Code Civil Is3370,Code Civil Is3370
+3698545932,CODE_CIVIL_ACI318,Code Civil Aci318,Code Civil Aci318
+2731961674,CODE_CIVIL_EUROCODE2,Code Civil Eurocode2,Code Civil Eurocode2
+2852589774,CODE_CIVIL_GB50010,Code Civil Gb50010,Code Civil Gb50010
+2446377915,CODE_CIVIL_IS800_LSD,Code Civil Is800 Lsd,Code Civil Is800 Lsd
+3482125762,CODE_CIVIL_IS800_WSD,Code Civil Is800 Wsd,Code Civil Is800 Wsd
+3465140658,CODE_CIVIL_AISC360,Code Civil Aisc360,Code Civil Aisc360
+3753813637,CODE_CIVIL_EUROCODE3,Code Civil Eurocode3,Code Civil Eurocode3
+3601170139,CODE_CIVIL_GB50017,Code Civil Gb50017,Code Civil Gb50017
+3811570028,CODE_MECH_ASME_VIII,Code Mech Asme Viii,Code Mech Asme Viii
+3811158475,CREATE_PAGE,Create Page,Create Page
+4290228579,GENERAL_DRAWING,General Drawing,General Drawing
+2901120378,GENERAL_SHEET,General Sheet,General Sheet
+2635018789,GENERAL_3D2DGA,General 3d2dga,General 3d2dga
+2494567870,GENERAL_ASSEMBLY,General Assembly,General Assembly
+3736434677,GENERAL_ISOMETRIC,General Isometric,General Isometric
+2938400871,GENERAL_TABLES,General Tables,General Tables
+2281954899,SEQUENCE_PLAY,Sequence Play,Sequence Play
+2470232457,STATUS_VISUALIZE,Status Visualize,Status Visualize
+2731596223,CREATE_BOM,Create Bom,Create Bom
+2229446048,REFRESH_BOM,Refresh Bom,Refresh Bom
+3234551993,CREATE_REPORTS,Create Reports,Create Reports
+4270694089,BOM_RATES,Bom Rates,Bom Rates
+2209549389,IMPORT_STD,Import Std,Import Std
+2388485190,IMPORT_CII,Import Cii,Import Cii
+3620992973,IMPORT_DXF,Import Dxf,Import Dxf
+3018706313,IMPORT_DWG,Import Dwg,Import Dwg
+2358406449,EXPORT_STD,Export Std,Export Std
+2858667348,EXPORT_DWG,Export Dwg,Export Dwg
+4099564531,SCRIPT_PANNEL,Script Pannel,Script Pannel
+4294967295,INVALID,Invalid,Invalid

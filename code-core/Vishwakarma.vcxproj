@@ -240,6 +240,7 @@ FT_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     <ClInclude Include="ConstantsApplication.h" />
     <ClInclude Include="ConstantsPhysics.h" />
     <ClInclude Include="ConstantsText.h" />
+    <ClInclude Include="ListOfCommands.h" />
     <ClInclude Include="MemoryManagerGPU-DirectX12.h" />
     <ClInclude Include="MemoryManagerGPU-Vulkan1.1.h" />
     <ClInclude Include="preCompiledHeadersWindows.h" />

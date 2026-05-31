@@ -173,7 +173,7 @@ struct SingleUIWindow {
 	uint16_t currentWidth = 800, currentHeight = 600;
 
     UIInput uiInput; // per-window input snapshot
-    UIAction activeDropdownAction = UIAction::INVALID;
+    Commands activeDropdownAction = Commands::INVALID;
 
     DX12ResourcesPerWindow dx;
 

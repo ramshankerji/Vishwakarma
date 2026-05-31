@@ -985,16 +985,16 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
         UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy;
 
-    auto localizedString = [](uint32_t stringID) {
-        const char32_t* text = UITranslations::GetUILocalizedString(stringID, UILanguage::English);
+    auto localizedString = [](UITextID stringID) {
+        const char32_t* text = GetUILocalizedString(stringID, UILanguage::English);
         return text ? text : U"";
     };
 
     auto localizedControlLabel = [&](const UIControlDefinition& ctrl) {
-        const char32_t* label = localizedString((uint32_t)ctrl.action);
+        const char32_t* label = localizedString(ctrl.nameStringID);
         if (*label != U'\0') return label;
 
-        if (ctrl.action == UIAction::INVALID || ctrl.type == 0 || ctrl.type == 3) {
+        if (ctrl.action == Commands::INVALID || ctrl.type == 0 || ctrl.type == 3) {
             return localizedString(ctrl.nameStringID);
         }
 
@@ -1121,11 +1121,11 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     currentX += 30.0f;// Final padding
 
     // ACTIVE DROPDOWN (placeholder)
-    if (window.activeDropdownAction != UIAction::INVALID) {
+    if (window.activeDropdownAction != Commands::INVALID) {
         float dropX = 400.0f;   // TODO: track real button X for proper positioning
         float dropY = topActionGroupY + 80.0f;
         pushRect(dropX, dropY, 160, 220, 0xFF1E1E1E);
-        window.activeDropdownAction = UIAction::INVALID;   // immediate-mode auto-close
+        window.activeDropdownAction = Commands::INVALID;   // immediate-mode auto-close
     }
 
     // DRAW ALL UI GEOMETRY

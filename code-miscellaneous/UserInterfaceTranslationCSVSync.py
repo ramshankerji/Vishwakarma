@@ -53,7 +53,7 @@ def parse_world_id(row: dict, path: Path) -> int:
     return int(world_id_text, 0)
 
 def english_text(row: dict) -> str:
-    return (row.get("English") or row.get("Human") or "").strip()
+    return (row.get("English") or "").strip()
 
 def target_file_name(language_index: int, language_name: str) -> str:
     return f"UserInterfaceTranslation_{language_index:02d}_{language_name}.csv"
@@ -93,6 +93,29 @@ def canonical_rows(path: Path) -> List[dict]:
     return canonical
 
 def synchronized_row(canonical_row: dict, existing_row: dict) -> dict:
+    fallback_text = english_text(canonical_row)
+
+    return {
+        "WordID": (canonical_row.get("WordID") or canonical_row.get("WorldID") or "").strip(),
+        "ShortWordName": (canonical_row.get("ShortWordName") or "").strip(),
+        "English": fallback_text,
+
+        # Preserve existing translations. New rows start with English text.
+        "Human": (existing_row.get("Human") or fallback_text).strip(),
+
+        "Comments": (
+            canonical_row.get("Comments")
+            or existing_row.get("Comments")
+            or ""
+        ).strip(),
+
+        "Grok": (existing_row.get("Grok") or "").strip(),
+        "ChatGPT": (existing_row.get("ChatGPT") or "").strip(),
+        "Gemini": (existing_row.get("Gemini") or "").strip(),
+        "Claude": (existing_row.get("Claude") or "").strip(),
+    }
+
+def synchronized_row_old(canonical_row: dict, existing_row: dict) -> dict:
     fallback_text = english_text(canonical_row)
     return {
         "WordID": (canonical_row.get("WordID") or canonical_row.get("WorldID") or "").strip(),

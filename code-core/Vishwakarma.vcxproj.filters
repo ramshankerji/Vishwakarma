@@ -207,10 +207,17 @@
     <ClInclude Include="UserInterfaceTranslationCompiled.h">
       <Filter>code-core</Filter>
     </ClInclude>
+    <ClInclude Include="ListOfCommands.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="VertexShader.hlsl" />
     <FxCompile Include="PixelShader.hlsl" />
+    <FxCompile Include="ShaderScenePixel.hlsl" />
+    <FxCompile Include="ShaderSceneVertex.hlsl" />
+    <FxCompile Include="ShaderUIPixel.hlsl" />
+    <FxCompile Include="ShaderUIVertex.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="..\code-core\logo.ico">
