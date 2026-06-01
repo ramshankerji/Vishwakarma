@@ -467,6 +467,172 @@ void CleanupUIResources(DX12ResourcesUI& uiRes) {
     uiRes = {};
 }
 
+static float TextScaleForHeight(float targetHeight) {
+    auto glyphIt = glyphLookup.find(U'M');
+    if (glyphIt == glyphLookup.end() || glyphIt->second.height <= 0) return 1.0f;
+
+    return targetHeight / (float)glyphIt->second.height;
+}
+
+static float MeasureUIStringWidth(const char32_t* text, float scale) {
+    if (!text) return 0.0f;
+
+    float cursorX = 0.0f;
+    float maxRight = 0.0f;
+
+    for (const char32_t* p = text; *p; ++p) {
+        auto glyphIt = glyphLookup.find(*p);
+        if (glyphIt == glyphLookup.end()) continue;
+
+        const Glyph& g = glyphIt->second;
+        float glyphLeft = cursorX + (float)g.bearingX * scale;
+        float glyphRight = glyphLeft + (float)g.width * scale;
+        if (glyphRight > maxRight) maxRight = glyphRight;
+        cursorX += (float)g.advanceX * scale;
+    }
+
+    return std::max(cursorX, maxRight);
+}
+
+static const char32_t* LocalizedUIString(UITextID stringID) {
+    const char32_t* text = GetUILocalizedString(stringID, UILanguage::English);
+    return text ? text : U"";
+}
+
+static const char32_t* LocalizedControlLabel(const UIControlDefinition& ctrl) {
+    const char32_t* label = LocalizedUIString(ctrl.nameStringID);
+    if (*label != U'\0') return label;
+
+    if (ctrl.action == Commands::INVALID || ctrl.type == 0 || ctrl.type == 3) {
+        return LocalizedUIString(ctrl.nameStringID);
+    }
+
+    return U"";
+}
+
+static void ClampTopRibbonScroll(UITopRibbonLayout& layout, float viewportWidth) {
+    const float maxScroll = std::max(0.0f, layout.totalContentWidthPx - viewportWidth);
+    layout.scrollOffsetPx = std::clamp(layout.scrollOffsetPx, 0.0f, maxScroll);
+}
+
+void PrecomputeTopRibbonLayout(UITopRibbonLayout& layout, float monitorDPIX, float monitorDPIY) {
+    const float previousScroll = layout.scrollOffsetPx;
+    layout = UITopRibbonLayout{};
+
+    layout.dpiX = monitorDPIX;
+    layout.dpiY = monitorDPIY;
+
+    const float pixelsPerMMx = monitorDPIX / 25.4f;
+    const float pixelsPerMMy = monitorDPIY / 25.4f;
+    layout.buttonWidthPx = std::round(UI_BUTTON_WIDTH_MM * pixelsPerMMx);
+    layout.iconSizePx = std::round(UI_ICON_SIZE_MM * pixelsPerMMy);
+    layout.textHeightPx = std::round(UI_TEXT_HEIGHT_MM * pixelsPerMMy);
+    layout.buttonHeightPx = std::max(std::round(UI_BUTTON_HEIGHT_MM * pixelsPerMMy),
+        std::max(layout.iconSizePx, layout.textHeightPx) + 4.0f);
+    layout.iconReservedWidthPx = layout.iconSizePx + 4.0f;
+    layout.textStartOffsetPx = layout.iconReservedWidthPx + 4.0f;
+    layout.textEndInsetPx = 6.0f;
+    layout.buttonGapPx = UI_BUTTON_GAP_MM * pixelsPerMMx;
+    layout.tabBarHeightPx = std::round(UI_TAB_BAR_HEIGHT_MM * pixelsPerMMy);
+    layout.topUITotalHeightPx = std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy);
+    layout.roundedCornerRadiusPx = std::max(1.0f, std::round(UI_BUTTON_CORNER_RADIUS_MM * pixelsPerMMy));
+    layout.uiTextScale = TextScaleForHeight(layout.textHeightPx);
+    layout.actionGroupLabelY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy;
+    layout.actionGroupLabelHeightPx = UI_ACTION_GROUP_LABEL_HEIGHT_MM * pixelsPerMMy;
+    layout.topActionGroupY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM) * pixelsPerMMy;
+    layout.actionSubGroupLabelY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy;
+
+    constexpr float groupNavWidth = 96.0f;
+    constexpr float groupNavStride = groupNavWidth + 10.0f;
+    for (size_t i = 0; i < TotalTopUIActionGroups; ++i) {
+        layout.actionGroups[i].navX = (float)i * groupNavStride;
+        layout.actionGroups[i].navWidth = groupNavWidth;
+    }
+
+    std::array<bool, TotalTopUIActionGroups> groupSeen{};
+    float currentX = 5.0f;
+    float verticalSlotMaxSize = 0.0f;
+    float contentRight = currentX;
+    int activeSubGroupIndex = -1;
+    size_t activeSubGroupRun = 0;
+
+    for (size_t i = 0; i < TotalUIControls; ++i) {
+        const UIControlDefinition& ctrl = AllUIControls[i];
+        const size_t groupIndex = ctrl.actionGroupIndex;
+        const size_t subGroupIndex = ctrl.actionSubGroupIndex;
+
+        if (groupIndex < TotalTopUIActionGroups && !groupSeen[groupIndex]) {
+            layout.actionGroups[groupIndex].contentStartX = currentX;
+            layout.actionGroups[groupIndex].contentEndX = currentX;
+            groupSeen[groupIndex] = true;
+        }
+
+        if (subGroupIndex < TotalTopUIActionSubGroups &&
+            !layout.actionSubGroups[subGroupIndex].hasControls) {
+            layout.actionSubGroups[subGroupIndex].contentStartX = currentX;
+            layout.actionSubGroups[subGroupIndex].contentEndX = currentX;
+            layout.actionSubGroups[subGroupIndex].hasControls = true;
+        }
+
+        if (activeSubGroupIndex != (int)subGroupIndex &&
+            layout.actionSubGroupRunCount < layout.actionSubGroupRuns.size()) {
+            activeSubGroupIndex = (int)subGroupIndex;
+            activeSubGroupRun = layout.actionSubGroupRunCount++;
+            layout.actionSubGroupRuns[activeSubGroupRun].subGroupIndex = ctrl.actionSubGroupIndex;
+            layout.actionSubGroupRuns[activeSubGroupRun].contentStartX = currentX;
+            layout.actionSubGroupRuns[activeSubGroupRun].contentEndX = currentX;
+        }
+
+        float btnWidth = layout.buttonWidthPx;
+        float btnY = layout.topActionGroupY;
+        const char32_t* label = LocalizedControlLabel(ctrl);
+        if (ctrl.showText && *label != U'\0') {
+            float contentWidth = layout.textStartOffsetPx +
+                MeasureUIStringWidth(label, layout.uiTextScale) + layout.textEndInsetPx;
+            btnWidth = std::max(btnWidth, contentWidth);
+        }
+        if (ctrl.noOfVerticalSlots > 1) {
+            btnY += ctrl.verticalSlotNo * layout.buttonHeightPx;
+        }
+
+        layout.controls[i] = { currentX, btnY, btnWidth, layout.buttonHeightPx };
+        verticalSlotMaxSize = std::max(verticalSlotMaxSize, btnWidth);
+
+        const bool endOfColumn = (i + 1 == TotalUIControls) || (AllUIControls[i + 1].verticalSlotNo == 0);
+        if (endOfColumn) {
+            const float columnRight = currentX + verticalSlotMaxSize;
+            if (groupIndex < TotalTopUIActionGroups) {
+                layout.actionGroups[groupIndex].contentEndX =
+                    std::max(layout.actionGroups[groupIndex].contentEndX, columnRight);
+            }
+            if (subGroupIndex < TotalTopUIActionSubGroups) {
+                layout.actionSubGroups[subGroupIndex].contentEndX =
+                    std::max(layout.actionSubGroups[subGroupIndex].contentEndX, columnRight);
+            }
+            if (layout.actionSubGroupRunCount > 0) {
+                layout.actionSubGroupRuns[activeSubGroupRun].contentEndX =
+                    std::max(layout.actionSubGroupRuns[activeSubGroupRun].contentEndX, columnRight);
+            }
+            contentRight = std::max(contentRight, columnRight);
+
+            if (i + 1 < TotalUIControls) {
+                currentX = columnRight + layout.buttonGapPx;
+            }
+            verticalSlotMaxSize = 0.0f;
+        }
+    }
+
+    layout.totalContentWidthPx = contentRight + 30.0f;
+    layout.scrollOffsetPx = previousScroll;
+    layout.isValid = true;
+}
+
 // PushRect
 void PushRect( UIDrawContext& ctx, float x, float y, float w, float h,
     uint32_t color, DX12ResourcesUI& uiRes) {
@@ -665,7 +831,7 @@ void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t c
 // side favorite / frequent buttons bars, right side property window, bottom status bar.
 // This is also responsible for all relevant DirectX12 configurations required for rendering User Interface.
 void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX12ResourcesUI& uiRes,
-    float monitorDPIX, float monitorDPIY, const UIInput& input) {
+    UITopRibbonLayout& topRibbonLayout, float monitorDPIX, float monitorDPIY, const UIInput& input) {
     
     if (!cmd) return; //Defensive check.
 
@@ -700,22 +866,26 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     ctx.indexPtr = reinterpret_cast<uint16_t*>(uiRes.pIndexDataBegin);
     ctx.vertexCount = 0;
     ctx.indexCount = 0;
+    if (!topRibbonLayout.isValid || topRibbonLayout.dpiX != monitorDPIX || topRibbonLayout.dpiY != monitorDPIY) {
+        PrecomputeTopRibbonLayout(topRibbonLayout, monitorDPIX, monitorDPIY);
+    }
+    if (input.mouseWheelDelta != 0 && input.mouseY >= 0.0f && input.mouseY < topRibbonLayout.topUITotalHeightPx) {
+        const float wheelSteps = input.mouseWheelDelta / (float)WHEEL_DELTA;
+        const float scrollStepPx = std::max(topRibbonLayout.buttonWidthPx * 2.0f, 120.0f);
+        topRibbonLayout.scrollOffsetPx -= wheelSteps * scrollStepPx;
+    }
+    ClampTopRibbonScroll(topRibbonLayout, W);
+
     float pixelsPerMMx = monitorDPIX / 25.4f;
     float pixelsPerMMy = monitorDPIY / 25.4f;
-    float buttonWidthPx = std::round(UI_BUTTON_WIDTH_MM * pixelsPerMMx);
-    float iconSizePx = std::round(UI_ICON_SIZE_MM * pixelsPerMMy);
-    float textHeightPx = std::round(UI_TEXT_HEIGHT_MM * pixelsPerMMy);
-    float buttonHeightPx = std::max(std::round(UI_BUTTON_HEIGHT_MM * pixelsPerMMy),
-        std::max(iconSizePx, textHeightPx) + 4.0f);
-	float iconReservedWidthPx = iconSizePx + 4.0f; // 2 pixels padding on each side of the icon.
-    float textStartOffsetPx = iconReservedWidthPx + 4.0f;
-    float textEndInsetPx = 6.0f;
-    float tabBarHeightPx = std::round(UI_TAB_BAR_HEIGHT_MM * pixelsPerMMy);
-    float topUITotalHeightPx = std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX + 
-        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-        UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX + 
-        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy); //Excluding view tab if present.
-    float roundedCornerRadiusPx = std::max(1.0f, std::round(UI_BUTTON_CORNER_RADIUS_MM * pixelsPerMMy));
+    float iconSizePx = topRibbonLayout.iconSizePx;
+    float buttonHeightPx = topRibbonLayout.buttonHeightPx;
+	float iconReservedWidthPx = topRibbonLayout.iconReservedWidthPx;
+    float textStartOffsetPx = topRibbonLayout.textStartOffsetPx;
+    float textEndInsetPx = topRibbonLayout.textEndInsetPx;
+    float tabBarHeightPx = topRibbonLayout.tabBarHeightPx;
+    float topUITotalHeightPx = topRibbonLayout.topUITotalHeightPx;
+    float roundedCornerRadiusPx = topRibbonLayout.roundedCornerRadiusPx;
 
     auto canPushRect = [&]() {
         return ctx.vertexCount + 4 <= uiRes.maxVertices &&
@@ -735,35 +905,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         if (pushed) incrementVertexIndexCounters();
     };
 
-    auto textScaleForHeight = [&](float targetHeight) {
-        auto glyphIt = glyphLookup.find(U'M');
-        if (glyphIt == glyphLookup.end() || glyphIt->second.height <= 0) return 1.0f;
-
-        return targetHeight / (float)glyphIt->second.height;
-    };
-
-    const float uiTextScale = textScaleForHeight(textHeightPx);
-
-    auto measureTextWidth = [&](const char32_t* text, float scale) { //Must support all Unicode latter.
-        if (!text) return 0.0f;
-
-        float cursorX = 0.0f;
-        float maxRight = 0.0f;
-
-        for (const char32_t* p = text; *p; ++p) {
-
-            auto glyphIt = glyphLookup.find(*p);
-            if (glyphIt == glyphLookup.end()) continue;
-
-            const Glyph& g = glyphIt->second;
-            float glyphLeft = cursorX + (float)g.bearingX * scale;
-            float glyphRight = glyphLeft + (float)g.width * scale;
-            if (glyphRight > maxRight) maxRight = glyphRight;
-            cursorX += (float)g.advanceX * scale;
-        }
-
-        return std::max(cursorX, maxRight);
-    };
+    const float uiTextScale = topRibbonLayout.uiTextScale;
 
     auto pushTextClipped = [&](float x, float y, const char32_t* text, float maxWidth, uint32_t color,
         float scale) {
@@ -971,79 +1113,78 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     }
 
     // TOP BUTTONS (ACTION GROUP BAR)
-    currentX = 5.0f; // reset X for action groups
+    const float buttonGap = topRibbonLayout.buttonGapPx;
+    const float actionGroupLabelY = topRibbonLayout.actionGroupLabelY;
+	const float groupLabelHeight = topRibbonLayout.actionGroupLabelHeightPx;
+    const float topActionGroupY = topRibbonLayout.topActionGroupY;
+    const float actionSubGroupLabelY = topRibbonLayout.actionSubGroupLabelY;
+    const float ribbonScrollX = topRibbonLayout.scrollOffsetPx;
 
-    const float buttonBaseHeight = buttonHeightPx;
-    const float buttonGap = UI_BUTTON_GAP_MM * pixelsPerMMx;
-    const float groupGap = 96.0f;
+    for (size_t groupIndex = 0; groupIndex < TotalTopUIActionGroups; ++groupIndex) {
+        const UIActionGroupNames& group = topUIActionGroupNames[groupIndex];
+        const UITopRibbonActionGroupLayout& groupLayout = topRibbonLayout.actionGroups[groupIndex];
+        const char32_t* label = LocalizedUIString(group.labelStringID);
+        const bool hovered = group.isEnabled &&
+            input.mouseX >= groupLayout.navX && input.mouseX < groupLayout.navX + groupLayout.navWidth &&
+            input.mouseY >= actionGroupLabelY && input.mouseY < actionGroupLabelY + groupLabelHeight;
 
-    float actionGroupLabelY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX)* pixelsPerMMy;
-	float groupLabelHeight = UI_ACTION_GROUP_LABEL_HEIGHT_MM * pixelsPerMMy;
-    float topActionGroupY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-        UI_ACTION_GROUP_LABEL_HEIGHT_MM) * pixelsPerMMy;
-    float actionSubGroupLabelY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-        UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy;
-
-    auto localizedString = [](UITextID stringID) {
-        const char32_t* text = GetUILocalizedString(stringID, UILanguage::English);
-        return text ? text : U"";
-    };
-
-    auto localizedControlLabel = [&](const UIControlDefinition& ctrl) {
-        const char32_t* label = localizedString(ctrl.nameStringID);
-        if (*label != U'\0') return label;
-
-        if (ctrl.action == Commands::INVALID || ctrl.type == 0 || ctrl.type == 3) {
-            return localizedString(ctrl.nameStringID);
+        if (hovered) {
+            pushRect(groupLayout.navX, actionGroupLabelY, groupLayout.navWidth, groupLabelHeight,
+                uiActiveColors.tabBackgroundHover);
+        }
+        if (hovered && input.leftButtonPressedThisFrame) {
+            topRibbonLayout.scrollOffsetPx = groupLayout.contentStartX;
+            ClampTopRibbonScroll(topRibbonLayout, W);
         }
 
-        return U"";
-    };
+        pushTextClipped(groupLayout.navX + 4.0f, textBaselineY(actionGroupLabelY, groupLabelHeight, uiTextScale),
+            label, groupLayout.navWidth - 8.0f, uiActiveColors.actionText, uiTextScale);
+    }
 
-    float verticalSlotMaxSize = 0.0f;
-    float currentActionGroupStartX = 0.0f;
-    float actionSubGroupWidth = 0.0f;
-    uint32_t currentActionGroupIndex = 100000; // To large value to trigger change at i=0
-    uint32_t currentSubGroupID = 0;
-    
+    for (size_t runIndex = 0; runIndex < topRibbonLayout.actionSubGroupRunCount; ++runIndex) {
+        const UITopRibbonSubGroupRunLayout& run = topRibbonLayout.actionSubGroupRuns[runIndex];
+        if (run.subGroupIndex >= TotalTopUIActionSubGroups) continue;
+
+        const UIActionGroupNames& subGroup = topUIActionSubGroupNames[run.subGroupIndex];
+        const char32_t* label = LocalizedUIString(subGroup.labelStringID);
+        const float runX = run.contentStartX - ribbonScrollX;
+        const float runWidth = std::max(0.0f, run.contentEndX - run.contentStartX);
+        const float labelWidth = MeasureUIStringWidth(label, uiTextScale);
+        const float labelX = runX + std::max(4.0f, (runWidth - labelWidth) * 0.5f);
+
+        pushTextClipped(labelX, textBaselineY(actionSubGroupLabelY, groupLabelHeight, uiTextScale),
+            label, std::max(0.0f, runWidth - 8.0f), uiActiveColors.actionText, uiTextScale);
+
+        if (runIndex + 1 < topRibbonLayout.actionSubGroupRunCount) {
+            const float lineX = std::floor(run.contentEndX + buttonGap * 0.5f - ribbonScrollX);
+            const float lineHeight = UI_ACTION_GROUP_HEIGHT_MM * pixelsPerMMy;
+            if (lineX >= -1.0f && lineX <= W + 1.0f) {
+                pushRect(lineX, topActionGroupY, 1.0f, lineHeight, 0xFF555555);
+            }
+        }
+    }
+
     for (size_t i = 0; i < TotalUIControls; ++i) {
         const auto& ctrl = AllUIControls[i];
-
-        if (ctrl.actionGroupIndex != currentActionGroupIndex) { // Action Group change
-            const UIActionGroupNames& group = topUIActionGroupNames[ctrl.actionGroupIndex];
-            const char32_t* label = localizedString(group.labelStringID);
-
-            pushTextClipped(currentActionGroupStartX + 4.0f, textBaselineY(actionGroupLabelY, groupLabelHeight, uiTextScale),
-                label, groupGap - 8.0f, uiActiveColors.actionText, uiTextScale);
-
-            currentActionGroupIndex = ctrl.actionGroupIndex;
-            currentActionGroupStartX += groupGap;
-            currentActionGroupStartX += 10.0f; // +3+4+3
-        }
-
-        // Button geometry
-        float btnWidth = buttonWidthPx;
-        float btnHeight = buttonHeightPx;
-        float btnY = topActionGroupY;
-        const char32_t* label = localizedControlLabel(ctrl);
-        
-        if (ctrl.showText && *label != U'\0') {
-            float contentWidth = textStartOffsetPx + measureTextWidth(label, uiTextScale) + textEndInsetPx;
-            btnWidth = std::max(btnWidth, contentWidth);
-        }
-
-        if (ctrl.noOfVerticalSlots > 1) {btnY += ctrl.verticalSlotNo * buttonBaseHeight;}
+        const UITopRibbonControlLayout& ctrlLayout = topRibbonLayout.controls[i];
+        const float btnX = ctrlLayout.x - ribbonScrollX;
+        const float btnY = ctrlLayout.y;
+        const float btnWidth = ctrlLayout.width;
+        const float btnHeight = ctrlLayout.height;
+        const char32_t* label = LocalizedControlLabel(ctrl);
         uint32_t baseColor = StableRandomUIColour((uint32_t)ctrl.action ^ ((uint32_t)i * 0x9E3779B9u));// Render
         uint32_t iconColor = StableRandomUIColour(((uint32_t)ctrl.action << 1) ^ 0xA511E9B3u ^ (uint32_t)i);
+        const bool controlVisible = btnX + btnWidth >= 0.0f && btnX <= W;
 
         if (ctrl.type == 1 || ctrl.type == 2) {                     // Button or Dropdown trigger
-            bool hovered = ctrl.isEnabled && (input.mouseX >= currentX && input.mouseX < currentX + btnWidth &&
+            bool hovered = controlVisible && ctrl.isEnabled && (input.mouseX >= btnX && input.mouseX < btnX + btnWidth &&
                 input.mouseY >= btnY && input.mouseY < btnY + btnHeight);
             uint32_t drawColor = hovered && input.leftButtonDown ? 0xFF333333 : baseColor;
             if (hovered && !input.leftButtonDown) drawColor = 0xFF555555;
-            PushRoundedRectangle(ctx, currentX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
-                drawColor, uiRes);
+            if (controlVisible) {
+                PushRoundedRectangle(ctx, btnX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
+                    drawColor, uiRes);
+            }
 
             bool clicked = hovered && input.leftButtonPressedThisFrame;
 
@@ -1055,70 +1196,45 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             }
 
             if (!ctrl.isEnabled) { // Gray-out overlay for disabled controls
-                PushRoundedRectangle(ctx, currentX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
-                    0xAA333333, uiRes);
+                if (controlVisible) {
+                    PushRoundedRectangle(ctx, btnX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
+                        0xAA333333, uiRes);
+                }
             }
         }
         else if (ctrl.type == 3) {
             // Future textbox
-            PushRoundedRectangle(ctx, currentX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
-                0xFF1E1E1E, uiRes);
+            if (controlVisible) {
+                PushRoundedRectangle(ctx, btnX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
+                    0xFF1E1E1E, uiRes);
+            }
         }
         else {
             // Plain label
-            PushRoundedRectangle(ctx, currentX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
-                0xFF2D2D30, uiRes);
+            if (controlVisible) {
+                PushRoundedRectangle(ctx, btnX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
+                    0xFF2D2D30, uiRes);
+            }
         }
 
-        float iconX = currentX + (iconReservedWidthPx - iconSizePx) * 0.5f;
+        if (!controlVisible) continue;
+
+        float iconX = btnX + (iconReservedWidthPx - iconSizePx) * 0.5f;
         float iconY = btnY + (btnHeight - iconSizePx) * 0.5f;
-        const uint32_t randomIconIndex =
-            ((uint32_t)ctrl.action ^ (uint32_t)i) % (uint32_t)gIconAtlasMetadata.mixedIconCodepoints.size();
-        PushIcon(ctx, iconX, iconY, iconSizePx, iconSizePx,
-            gIconAtlasMetadata.mixedIconCodepoints[randomIconIndex], iconColor, uiRes);
+        if (!gIconAtlasMetadata.mixedIconCodepoints.empty()) {
+            const uint32_t randomIconIndex =
+                ((uint32_t)ctrl.action ^ (uint32_t)i) % (uint32_t)gIconAtlasMetadata.mixedIconCodepoints.size();
+            PushIcon(ctx, iconX, iconY, iconSizePx, iconSizePx,
+                gIconAtlasMetadata.mixedIconCodepoints[randomIconIndex], iconColor, uiRes);
+        }
 
         if (ctrl.showText) {
-            float textX = currentX + textStartOffsetPx;
+            float textX = btnX + textStartOffsetPx;
             float textWidth = btnWidth - textStartOffsetPx - textEndInsetPx;
             pushTextClipped(textX, textBaselineY(btnY, btnHeight, uiTextScale),
                 label, textWidth, 0xFFFFFFFF, uiTextScale);
         }
-
-        if (btnWidth > verticalSlotMaxSize) verticalSlotMaxSize = btnWidth;
-        if (i < (TotalUIControls-1)) { //Except last one.
-            if (AllUIControls[i + 1].verticalSlotNo == 0) {
-                currentX += verticalSlotMaxSize + buttonGap;
-                actionSubGroupWidth += verticalSlotMaxSize + buttonGap;
-                verticalSlotMaxSize = 0;
-            }
-        }
-
-        if (ctrl.actionSubGroupIndex != currentSubGroupID) { // Sub-Group change
-            //Means current button belongs to different action sub group.
-            //Hence write the action sub group name of previous action sub group.
-            const UIActionGroupNames& group = topUIActionSubGroupNames[currentSubGroupID];
-            const char32_t* label = localizedString(group.labelStringID);
-
-            pushTextClipped(currentX - actionSubGroupWidth / 2 - measureTextWidth(label, uiTextScale),
-                textBaselineY(actionSubGroupLabelY, groupLabelHeight, uiTextScale),
-                label, actionSubGroupWidth - 8.0f, uiActiveColors.actionText, uiTextScale);
-
-            // Draw thin 1px vertical separator line between sub-groups
-            if (actionSubGroupWidth > 0.0f) {  // Don't draw before first group
-                // Place it exactly in the middle of the 'buttonGap' between the two columns
-                float lineX = std::floor(currentX - (buttonGap / 2.0f));
-                // Span the height of the action group buttons (assumes 3 rows max per your UI_TOP_ACTION_GROUP_HEIGHT_MM)
-                float lineHeight = UI_ACTION_GROUP_HEIGHT_MM * pixelsPerMMy;
-                // Draw 1px wide line. Using 0xFF555555 to match your Action Group separator color
-                pushRect(lineX, topActionGroupY, 1.0f, lineHeight, 0xFF555555);
-            }
-
-            currentSubGroupID = ctrl.actionSubGroupIndex;
-            actionSubGroupWidth = 0; //Reset
-        }
     }
-
-    currentX += 30.0f;// Final padding
 
     // ACTIVE DROPDOWN (placeholder)
     if (window.activeDropdownAction != Commands::INVALID) {

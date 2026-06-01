@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include <array>
+#include <vector>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -513,7 +514,7 @@ constexpr UIControlDefinition AllUIControls[] = {
     { Commands::EDGE_FILLET,            UITextID::EDGE_FILLET, U'x', 1, 3, 2, 0, true, false, 3 , 3 },
     { Commands::EDGE_CHAMFER,           UITextID::EDGE_CHAMFER, U'x', 1, 3, 0, 0, true, false, 3 , 3 },
     { Commands::HOLE_CIRCULAR,          UITextID::HOLE_CIRCULAR, U'x', 1, 3, 1, 0, true, false, 3 , 3 },
-    { Commands::HOLE_RECTANGULAR,       UITextID::HOLE_RECTANGULAR, U'x', 3, 2, 0, 0, true, false, 3 , 3 },
+    { Commands::HOLE_RECTANGULAR,       UITextID::HOLE_RECTANGULAR, U'x', 1, 3, 2, 0, true, false, 3 , 3 },
     { Commands::HOLE_POLYGONAL,         UITextID::HOLE_POLYGONAL, U'x', 1, 3, 0, 0, true, false, 3 , 3 },
 
     // Subgroup : Helper
@@ -691,3 +692,59 @@ constexpr UIControlDefinition AllUIControls[] = {
 };
 
 constexpr size_t TotalUIControls = std::size(AllUIControls);
+
+struct UITopRibbonControlLayout {
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+};
+
+struct UITopRibbonActionGroupLayout {
+    float navX = 0.0f;
+    float navWidth = 0.0f;
+    float contentStartX = 0.0f;
+    float contentEndX = 0.0f;
+};
+
+struct UITopRibbonSubGroupLayout {
+    float contentStartX = 0.0f;
+    float contentEndX = 0.0f;
+    bool hasControls = false;
+};
+
+struct UITopRibbonSubGroupRunLayout {
+    uint8_t subGroupIndex = 0;
+    float contentStartX = 0.0f;
+    float contentEndX = 0.0f;
+};
+
+struct UITopRibbonLayout {
+    std::array<UITopRibbonControlLayout, TotalUIControls> controls{};
+    std::array<UITopRibbonActionGroupLayout, TotalTopUIActionGroups> actionGroups{};
+    std::array<UITopRibbonSubGroupLayout, TotalTopUIActionSubGroups> actionSubGroups{};
+    std::array<UITopRibbonSubGroupRunLayout, TotalUIControls> actionSubGroupRuns{};
+    size_t actionSubGroupRunCount = 0;
+
+    float buttonWidthPx = 0.0f;
+    float buttonHeightPx = 0.0f;
+    float iconSizePx = 0.0f;
+    float textHeightPx = 0.0f;
+    float iconReservedWidthPx = 0.0f;
+    float textStartOffsetPx = 0.0f;
+    float textEndInsetPx = 0.0f;
+    float buttonGapPx = 0.0f;
+    float tabBarHeightPx = 0.0f;
+    float actionGroupLabelY = 0.0f;
+    float actionGroupLabelHeightPx = 0.0f;
+    float topActionGroupY = 0.0f;
+    float actionSubGroupLabelY = 0.0f;
+    float topUITotalHeightPx = 0.0f;
+    float roundedCornerRadiusPx = 0.0f;
+    float uiTextScale = 1.0f;
+    float totalContentWidthPx = 0.0f;
+    float scrollOffsetPx = 0.0f;
+    float dpiX = 0.0f;
+    float dpiY = 0.0f;
+    bool isValid = false;
+};

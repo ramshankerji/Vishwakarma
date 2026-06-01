@@ -64,5 +64,8 @@ void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t c
 bool UploadUIAtlasTexture(DX12ResourcesUI& uiRes, ID3D12Device* device, uint32_t atlasSlot,
     const AtlasBitmap& atlas);
 
+void PrecomputeTopRibbonLayout(UITopRibbonLayout& layout, float monitorDPIX, float monitorDPIY);
+
 void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmdList,
-    DX12ResourcesUI& uiRes, float monitorDPIX, float monitorDPIY, const UIInput& input);
+    DX12ResourcesUI& uiRes, UITopRibbonLayout& topRibbonLayout,
+    float monitorDPIX, float monitorDPIY, const UIInput& input);

@@ -9,6 +9,7 @@
 #include <string.h>
 #include <tchar.h>
 #include <chrono>
+#include <cmath>
 #include <iomanip>  // for std::setprecision
 #include <iostream>
 #include <thread>
@@ -592,6 +593,9 @@ void RestartRenderThreads() { // The "Safe" Restart Function. Runs for initial r
             gpu.screens[i].renderFenceValue = 1;
             gpu.screens[i].renderFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
         }
+
+        PrecomputeTopRibbonLayout(gpu.screens[i].topRibbonLayout,
+            static_cast<float>(gpu.screens[i].physicalDpiX), static_cast<float>(gpu.screens[i].physicalDpiY));
     }
 
     uint16_t * windowList = publishedWindowIndexes.load(std::memory_order_acquire);
@@ -905,6 +909,29 @@ static void UpdateUIMousePosition(SingleUIWindow* window, LPARAM lParam) {
     window->uiInput.mouseY = static_cast<float>(GET_Y_LPARAM(lParam));
 }
 
+static float GetTopRibbonHeightPxForWindow(const SingleUIWindow* window) {
+    if (!window || window->currentMonitorIndex < 0 || window->currentMonitorIndex >= gpu.currentMonitorCount) {
+        return 0.0f;
+    }
+
+    const OneMonitorController& monitor = gpu.screens[window->currentMonitorIndex];
+    if (monitor.topRibbonLayout.isValid && monitor.topRibbonLayout.topUITotalHeightPx > 0.0f) {
+        return monitor.topRibbonLayout.topUITotalHeightPx;
+    }
+
+    const float dpiY = (monitor.physicalDpiY > 0) ? (float)monitor.physicalDpiY : (float)monitor.dpiY;
+    const float pixelsPerMMy = dpiY / 25.4f;
+    return std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy);
+}
+
+static bool IsClientPointOverTopRibbon(const SingleUIWindow* window, const POINT& pt) {
+    const float ribbonHeight = GetTopRibbonHeightPxForWindow(window);
+    return ribbonHeight > 0.0f && pt.y >= 0 && (float)pt.y < ribbonHeight;
+}
+
 // PURPOSE:  Processes messages for the main window.
 // This is the function which runs whenever something changes from Operating System and we are expected to update ourselves.
 // Even the user input such as keyboard presses, mouse clicks, open/close are notified to this function.
@@ -1141,26 +1168,33 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     
     case WM_MOUSEWHEEL:
+    {
+        POINT uiPoint = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        ScreenToClient(hWnd, &uiPoint);
+        const bool handledByTopRibbon = currentWindow && IsClientPointOverTopRibbon(currentWindow, uiPoint);
+
         if (currentWindow) {
-            POINT uiPoint = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            ScreenToClient(hWnd, &uiPoint);
             currentWindow->uiInput.mouseX = static_cast<float>(uiPoint.x);
             currentWindow->uiInput.mouseY = static_cast<float>(uiPoint.y);
-            currentWindow->uiInput.mouseWheelDelta += GET_WHEEL_DELTA_WPARAM(wParam);
+            if (handledByTopRibbon) {
+                currentWindow->uiInput.mouseWheelDelta += GET_WHEEL_DELTA_WPARAM(wParam);
+                SyncModifiersForWindow(currentWindow);
+            }
         }
+        if (handledByTopRibbon) return 0;
+
         if (tab) {
             ad.actionType = ACTION_TYPE::MOUSEWHEEL;
             ad.source = INPUT_SOURCE::MOUSE;
-            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            ScreenToClient(hWnd, &pt);
-            ad.x = pt.x;
-            ad.y = pt.y;
+            ad.x = uiPoint.x;
+            ad.y = uiPoint.y;
             ad.delta = GET_WHEEL_DELTA_WPARAM(wParam);
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
             SyncModifiersForWindow(currentWindow);
         }
         return 0;
+    }
 
     //case WM_NCLBUTTONDOWN: return 0; // If needed for title bars / boarders.
     //Currently removed because it was causing WM_CLOSE to not fire up even when clicking close button.

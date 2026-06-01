@@ -1600,6 +1600,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                     threadRes.commandList->RSSetViewports(1, &winRes.viewport);
                     threadRes.commandList->RSSetScissorRects(1, &winRes.scissorRect);
                     RenderUIOverlay(window, threadRes.commandList.Get(), gpu.uiResources,
+                        gpu.screens[monitorId].topRibbonLayout,
                         static_cast<float>(gpu.screens[monitorId].physicalDpiX),
                         static_cast<float>(gpu.screens[monitorId].physicalDpiY),
                         inputSnapshot);

@@ -30,6 +30,7 @@
         "dxcompiler",
         "dxgi",
         "dxguid",
+        "DXIL",
         "ENTERSIZEMOVE",
         "familyname",
         "fontforge",

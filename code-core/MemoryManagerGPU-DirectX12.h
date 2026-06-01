@@ -315,6 +315,8 @@ struct OneMonitorController { // Variables stored per monitor.
 
     bool isVirtualMonitor = false;       // To support headless mode.
 
+    UITopRibbonLayout topRibbonLayout;   // DPI-specific cached geometry for top UI ribbon.
+
     // DirectX12 Resources.
 	// TODO: Move these to per render thread structure.
 	ComPtr<ID3D12CommandQueue> commandQueue;    // Persistent. Survives thread restarts.
