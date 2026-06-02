@@ -534,19 +534,20 @@ void PrecomputeTopRibbonLayout(UITopRibbonLayout& layout, float monitorDPIX, flo
     layout.textEndInsetPx = 6.0f;
     layout.buttonGapPx = UI_BUTTON_GAP_MM * pixelsPerMMx;
     layout.tabBarHeightPx = std::round(UI_TAB_BAR_HEIGHT_MM * pixelsPerMMy);
-    layout.topUITotalHeightPx = std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-        UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy);
     layout.roundedCornerRadiusPx = std::max(1.0f, std::round(UI_BUTTON_CORNER_RADIUS_MM * pixelsPerMMy));
     layout.uiTextScale = TextScaleForHeight(layout.textHeightPx);
     layout.actionGroupLabelY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy;
     layout.actionGroupLabelHeightPx = UI_ACTION_GROUP_LABEL_HEIGHT_MM * pixelsPerMMy;
     layout.topActionGroupY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-        UI_ACTION_GROUP_LABEL_HEIGHT_MM) * pixelsPerMMy;
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM) * pixelsPerMMy + 5.0f;
     layout.actionSubGroupLabelY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
         UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-        UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy;
+        UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy + 5.0f;
+    layout.topUITotalHeightPx = std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy) + 7.0f;
+
 
     constexpr float groupNavWidth = 96.0f;
     constexpr float groupNavStride = groupNavWidth + 10.0f;
@@ -598,7 +599,7 @@ void PrecomputeTopRibbonLayout(UITopRibbonLayout& layout, float monitorDPIX, flo
             btnWidth = std::max(btnWidth, contentWidth);
         }
         if (ctrl.noOfVerticalSlots > 1) {
-            btnY += ctrl.verticalSlotNo * layout.buttonHeightPx;
+            btnY += ctrl.verticalSlotNo * (layout.buttonHeightPx + 1.0f);
         }
 
         layout.controls[i] = { currentX, btnY, btnWidth, layout.buttonHeightPx };
@@ -1120,6 +1121,17 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     const float actionSubGroupLabelY = topRibbonLayout.actionSubGroupLabelY;
     const float ribbonScrollX = topRibbonLayout.scrollOffsetPx;
 
+    // Draw the 5-pixel high extent-of-ribbon-visible visualization bar in the 5px gap below Action Group labels.
+    // The gap starts at topActionGroupY - 5.0f.
+    float extentX = 0.0f;
+    float extentW = W;
+    if (topRibbonLayout.totalContentWidthPx > W) {
+        extentX = (topRibbonLayout.scrollOffsetPx / topRibbonLayout.totalContentWidthPx) * W;
+        extentW = (W / topRibbonLayout.totalContentWidthPx) * W;
+    }
+    // Draw active indicator (orange)
+    pushRect(extentX, topActionGroupY - 5.0f, extentW, 5.0f, 0xFF3399FF);
+
     for (size_t groupIndex = 0; groupIndex < TotalTopUIActionGroups; ++groupIndex) {
         const UIActionGroupNames& group = topUIActionGroupNames[groupIndex];
         const UITopRibbonActionGroupLayout& groupLayout = topRibbonLayout.actionGroups[groupIndex];
@@ -1157,7 +1169,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
 
         if (runIndex + 1 < topRibbonLayout.actionSubGroupRunCount) {
             const float lineX = std::floor(run.contentEndX + buttonGap * 0.5f - ribbonScrollX);
-            const float lineHeight = UI_ACTION_GROUP_HEIGHT_MM * pixelsPerMMy;
+            const float lineHeight = 3.0f * topRibbonLayout.buttonHeightPx + 2.0f;
             if (lineX >= -1.0f && lineX <= W + 1.0f) {
                 pushRect(lineX, topActionGroupY, 1.0f, lineHeight, 0xFF555555);
             }
@@ -1175,15 +1187,22 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         uint32_t baseColor = StableRandomUIColour((uint32_t)ctrl.action ^ ((uint32_t)i * 0x9E3779B9u));// Render
         uint32_t iconColor = StableRandomUIColour(((uint32_t)ctrl.action << 1) ^ 0xA511E9B3u ^ (uint32_t)i);
         const bool controlVisible = btnX + btnWidth >= 0.0f && btnX <= W;
+        bool hovered = false;
 
         if (ctrl.type == 1 || ctrl.type == 2) {                     // Button or Dropdown trigger
-            bool hovered = controlVisible && ctrl.isEnabled && (input.mouseX >= btnX && input.mouseX < btnX + btnWidth &&
+            hovered = controlVisible && ctrl.isEnabled && (input.mouseX >= btnX && input.mouseX < btnX + btnWidth &&
                 input.mouseY >= btnY && input.mouseY < btnY + btnHeight);
             uint32_t drawColor = hovered && input.leftButtonDown ? 0xFF333333 : baseColor;
             if (hovered && !input.leftButtonDown) drawColor = 0xFF555555;
             if (controlVisible) {
-                PushRoundedRectangle(ctx, btnX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
-                    drawColor, uiRes);
+                if (hovered) {
+                    PushRoundedRectangle(ctx, btnX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
+                        drawColor, uiRes);
+                } else {
+                    float highlightWidth = ctrl.showText ? iconReservedWidthPx : btnWidth;
+                    PushRoundedRectangle(ctx, btnX, btnY, highlightWidth, btnHeight, roundedCornerRadiusPx,
+                        baseColor, uiRes);
+                }
             }
 
             bool clicked = hovered && input.leftButtonPressedThisFrame;
@@ -1197,7 +1216,8 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
 
             if (!ctrl.isEnabled) { // Gray-out overlay for disabled controls
                 if (controlVisible) {
-                    PushRoundedRectangle(ctx, btnX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
+                    float highlightWidth = ctrl.showText ? iconReservedWidthPx : btnWidth;
+                    PushRoundedRectangle(ctx, btnX, btnY, highlightWidth, btnHeight, roundedCornerRadiusPx,
                         0xAA333333, uiRes);
                 }
             }
@@ -1231,8 +1251,12 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         if (ctrl.showText) {
             float textX = btnX + textStartOffsetPx;
             float textWidth = btnWidth - textStartOffsetPx - textEndInsetPx;
+            uint32_t textColor = 0xFFFFFFFF; // default hovered/active color (white)
+            if (!hovered) {
+                textColor = ctrl.isEnabled ? uiActiveColors.actionText : 0xAA888888;
+            }
             pushTextClipped(textX, textBaselineY(btnY, btnHeight, uiTextScale),
-                label, textWidth, 0xFFFFFFFF, uiTextScale);
+                label, textWidth, textColor, uiTextScale);
         }
     }
 

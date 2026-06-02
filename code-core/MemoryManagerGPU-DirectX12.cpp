@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
+// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
 
 #include "MemoryManagerGPU-DirectX12.h"
 #include "UserInterface-DirectX12.h"
@@ -444,7 +444,7 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
         topUITotalHeightPx = static_cast<int>(std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
             UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
             UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-            UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy));
+            UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy)) + 7;
         // clamp
         if (topUITotalHeightPx < 0) topUITotalHeightPx = 0;
         if (topUITotalHeightPx > winRes.WindowHeight) topUITotalHeightPx = winRes.WindowHeight;

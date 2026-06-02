@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
+// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
 
 // compile with: /D_UNICODE /DUNICODE /DWIN32 /D_WINDOWS /c
 
@@ -924,7 +924,7 @@ static float GetTopRibbonHeightPxForWindow(const SingleUIWindow* window) {
     return std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
         UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
         UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy);
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy) + 7.0f;
 }
 
 static bool IsClientPointOverTopRibbon(const SingleUIWindow* window, const POINT& pt) {
