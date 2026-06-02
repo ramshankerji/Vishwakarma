@@ -436,29 +436,29 @@ constexpr UIControlDefinition AllUIControls[] = {
 
     // ACTION GROUP 1: (2D) General
     // Subgroup : Create 2D Shapes
-    { Commands::CREATE_LINE,           UITextID::CREATE_LINE, U'x', 1, 3, 0, 0, true, false, 1 , 23 },
-    { Commands::CREATE_POLYLINE,       UITextID::CREATE_POLYLINE, U'x', 1, 3, 1, 0, true, false, 1 , 23 },
+    { Commands::CREATE_LINE,           UITextID::CREATE_LINE, U'x', 1, 3, 0, 0, true, false, 1 , 5 },
+    { Commands::CREATE_POLYLINE,       UITextID::CREATE_POLYLINE, U'x', 1, 3, 1, 0, true, false, 1 , 5 },
     //Polygon Dropdown: Triangle, Rectangle, Pentagon, Hexagon, Heptagon, Octagon.
-    { Commands::CREATE_POLYGON,        UITextID::CREATE_POLYGON, U'x', 1, 3, 2, 0, true, false, 1 , 23 },
-    { Commands::CREATE_CIRCLE,         UITextID::CREATE_CIRCLE, U'x', 1, 3, 0, 0, true, false, 1 , 23 },
-    { Commands::CREATE_ARC,            UITextID::CREATE_ARC, U'x', 1, 3, 1, 0, true, false, 1 , 23 },
-    { Commands::CREATE_ELLIPSE,        UITextID::CREATE_ELLIPSE, U'x', 1, 3, 2, 0, true, false, 1 , 23 },
+    { Commands::CREATE_POLYGON,        UITextID::CREATE_POLYGON, U'x', 1, 3, 2, 0, true, false, 1 , 5 },
+    { Commands::CREATE_CIRCLE,         UITextID::CREATE_CIRCLE, U'x', 1, 3, 0, 0, true, false, 1 , 5 },
+    { Commands::CREATE_ARC,            UITextID::CREATE_ARC, U'x', 1, 3, 1, 0, true, false, 1 , 5 },
+    { Commands::CREATE_ELLIPSE,        UITextID::CREATE_ELLIPSE, U'x', 1, 3, 2, 0, true, false, 1 , 5 },
     // Nurbs are very powerfull!
     // They genralize Bezier Curves, B-Splines, Conic Sections (Circle/ellipses/parabola/hyperbola)
-    { Commands::CREATE_NURBS,           UITextID::CREATE_NURBS, U'x', 1, 3, 0, 0, true, false, 1 , 23 },
-    { Commands::CREATE_TEXT,            UITextID::CREATE_TEXT, U'x', 1, 3, 1, 0, true, false, 1 , 23 },
-    { Commands::CREATE_SPECIALTEXT,     UITextID::CREATE_SPECIALTEXT, U'x', 1, 3, 2, 0, true, false, 1 , 23 },
-    { Commands::CREATE_DIMENSION,       UITextID::CREATE_DIMENSION, U'x', 1, 3, 0, 0, true, false, 1 , 23 },
-    { Commands::CREATE_LEADER,          UITextID::CREATE_LEADER, U'x', 1, 3, 1, 0, true, false, 1 , 23 },
-    { Commands::CREATE_RADIUS,          UITextID::CREATE_RADIUS, U'x', 1, 3, 2, 0, true, false, 1 , 23 },
-    { Commands::CREATE_BLOCK,           UITextID::CREATE_BLOCK, U'x', 1, 3, 0, 0, true, false, 1 , 23 },
-    { Commands::CREATE_CLOUD,           UITextID::CREATE_CLOUD, U'x', 1, 3, 1, 0, true, false, 1 , 23 },
+    { Commands::CREATE_NURBS,           UITextID::CREATE_NURBS, U'x', 1, 3, 0, 0, true, false, 1 , 5 },
+    { Commands::CREATE_TEXT,            UITextID::CREATE_TEXT, U'x', 1, 3, 1, 0, true, false, 1 , 5 },
+    { Commands::CREATE_SPECIALTEXT,     UITextID::CREATE_SPECIALTEXT, U'x', 1, 3, 2, 0, true, false, 1 , 5 },
+    { Commands::CREATE_DIMENSION,       UITextID::CREATE_DIMENSION, U'x', 1, 3, 0, 0, true, false, 1 , 5 },
+    { Commands::CREATE_LEADER,          UITextID::CREATE_LEADER, U'x', 1, 3, 1, 0, true, false, 1 , 5 },
+    { Commands::CREATE_RADIUS,          UITextID::CREATE_RADIUS, U'x', 1, 3, 2, 0, true, false, 1 , 5 },
+    { Commands::CREATE_BLOCK,           UITextID::CREATE_BLOCK, U'x', 1, 3, 0, 0, true, false, 1 , 5 },
+    { Commands::CREATE_CLOUD,           UITextID::CREATE_CLOUD, U'x', 1, 3, 1, 0, true, false, 1 , 5 },
 
-    { Commands::CREATE_HATCH,           UITextID::CREATE_HATCH, U'x', 1, 3, 2, 0, true, false, 1 , 23 },
-    { Commands::CREATE_POINT,           UITextID::CREATE_POINT, U'x', 1, 3, 0, 0, true, false, 1 , 23 },
-    { Commands::CREATE_ARRAY,           UITextID::CREATE_ARRAY, U'x', 1, 3, 1, 0, true, false, 1 , 23 },
-    { Commands::CREATE_GRID2D,          UITextID::CREATE_GRID2D, U'x', 1, 3, 2, 0, true, false, 1 , 23 },
-    { Commands::CREATE_BLOCK2D,         UITextID::CREATE_BLOCK2D, U'x', 1, 3, 0, 0, true, false, 1 , 23 },
+    { Commands::CREATE_HATCH,           UITextID::CREATE_HATCH, U'x', 1, 3, 2, 0, true, false, 1 , 5 },
+    { Commands::CREATE_POINT,           UITextID::CREATE_POINT, U'x', 1, 3, 0, 0, true, false, 1 , 5 },
+    { Commands::CREATE_ARRAY,           UITextID::CREATE_ARRAY, U'x', 1, 3, 1, 0, true, false, 1 , 5 },
+    { Commands::CREATE_GRID2D,          UITextID::CREATE_GRID2D, U'x', 1, 3, 2, 0, true, false, 1 , 5 },
+    { Commands::CREATE_BLOCK2D,         UITextID::CREATE_BLOCK2D, U'x', 1, 3, 0, 0, true, false, 1 , 5 },
 
     // SubGroup: Modify
     { Commands::EDIT_COPY,              UITextID::EDIT_COPY, U'x', 1, 3, 0, 0, true, false, 1 , 3 },
