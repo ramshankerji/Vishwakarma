@@ -10,7 +10,10 @@ ALL ENGINEERING MODELS CREATED USING THIS SOFTWARES REMAIN PROPERTY OF THE RESPE
 
 This software is made possible by the Great Open Source Authors of following libraries.
 
-
-| Library Name | License         | Homepage                              |
-|--------------|-----------------|---------------------------------------|
-| FreeType     | FTL / GPLv2| [https://freetype.org/](https://freetype.org/) |
+| Library Name | License | Homepage | Upstream |
+| :--- | :--- | :--- | :--- |
+| zlib | Zlib | [https://zlib.net/](https://zlib.net/) | [Link](https://github.com/madler/zlib) |
+| libpng | libpng License | [https://www.libpng.org/](http://www.libpng.org/pub/png/libpng.html) | [Link](https://github.com/pnggroup/libpng.git) |
+| FreeType | FTL / GPLv2 | [https://freetype.org/](https://freetype.org/) | [Link](https://gitlab.freedesktop.org/freetype/freetype.git) |
+| msdf-atlas-gen | MIT | [https://github.com/Chlumsky/msdf-atlas-gen](https://github.com/Chlumsky/msdf-atlas-gen) | [Link](https://github.com/Chlumsky/msdf-atlas-gen.git) |
+| DirectX-Headers | MIT | [https://github.com/microsoft/DirectX-Headers](https://github.com/microsoft/DirectX-Headers) | [Link](https://github.com/microsoft/DirectX-Headers) |
