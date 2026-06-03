@@ -75,6 +75,9 @@ FT_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     <ResourceCompile>
       <AdditionalIncludeDirectories>..\code-core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
+    <PreBuildEvent>
+      <Command>call "$(ProjectDir)..\code-miscellaneous\msdf_atlas_generator.bat"</Command>
+    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -103,6 +106,9 @@ FT_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     <ResourceCompile>
       <AdditionalIncludeDirectories>..\code-core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
+    <PreBuildEvent>
+      <Command>call "$(ProjectDir)..\code-miscellaneous\msdf_atlas_generator.bat"</Command>
+    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\code-core\विश्वकर्मा.cpp" />
@@ -254,6 +260,9 @@ FT_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Vishwakarma.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\code-miscellaneous\msdf_charset_exporter.py" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="..\code-core\logo.ico" />

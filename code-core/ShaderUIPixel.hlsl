@@ -10,23 +10,8 @@ struct PSInput {
 Texture2D atlases[10] : register(t0);
 SamplerState samp : register(s0);
 
-float SampleCoverage(uint atlasIndex, float2 uv) {
-    // Shader Model 5.0 does not permit dynamic resource-array indexing.
-    // Keep the descriptor array future-ready while sampling through static cases.
-    // TODO: Shader Model 6.0 can simplify this with dynamic indexing and bounds checking.
-    switch (atlasIndex) {
-    case 0: return atlases[0].Sample(samp, uv).r;
-    case 1: return atlases[1].Sample(samp, uv).r;
-    case 2: return atlases[2].Sample(samp, uv).r;
-    case 3: return atlases[3].Sample(samp, uv).r;
-    case 4: return atlases[4].Sample(samp, uv).r;
-    case 5: return atlases[5].Sample(samp, uv).r;
-    case 6: return atlases[6].Sample(samp, uv).r;
-    case 7: return atlases[7].Sample(samp, uv).r;
-    case 8: return atlases[8].Sample(samp, uv).r;
-    case 9: return atlases[9].Sample(samp, uv).r;
-    default: return atlases[0].Sample(samp, uv).r;
-    }
+float median(float r, float g, float b) {
+    return max(min(r, g), min(max(r, g), b));
 }
 
 float4 main(PSInput input) : SV_TARGET {
@@ -40,6 +25,21 @@ float4 main(PSInput input) : SV_TARGET {
         return baseColor;
     }
 
-    float coverage = SampleCoverage(input.atlasIndex, input.uv);
+    uint atlasIndex = min(input.atlasIndex, 9);
+    float4 sampleColor = atlases[NonUniformResourceIndex(atlasIndex)].Sample(samp, input.uv);
+    float coverage = sampleColor.r;
+
+    if (atlasIndex == 0) {
+        uint atlasWidth;
+        uint atlasHeight;
+        atlases[0].GetDimensions(atlasWidth, atlasHeight);
+
+        float signedDistance = median(sampleColor.r, sampleColor.g, sampleColor.b) - 0.5;
+        float2 unitRange = float2(4.0 / atlasWidth, 4.0 / atlasHeight);
+        float2 screenTexSize = 1.0 / fwidth(input.uv);
+        float screenPxRange = max(0.5 * dot(unitRange, screenTexSize), 1.0);
+        coverage = saturate(signedDistance * screenPxRange + 0.5);
+    }
+
     return float4(baseColor.rgb, baseColor.a * coverage);
 }

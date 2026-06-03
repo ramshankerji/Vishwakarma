@@ -6,6 +6,7 @@
 #include "ShaderUIVertex.h"
 #include "ShaderUIPixel.h"
 #include "FontManager.h"
+#include "..\build\NotoSansMSDF_Compiled.h"
 #include <MemoryManagerGPU-DirectX12.h>
 #include "विश्वकर्मा.h"
 #include "TextureSaver.h"
@@ -218,6 +219,37 @@ static AtlasBitmap BuildIconAtlas() {
     return atlas;
 }
 
+static AtlasBitmap BuildMSDFFontAtlas() {
+    AtlasBitmap atlas{};
+    atlas.width = NotoSansMSDF_Width;
+    atlas.height = NotoSansMSDF_Height;
+    atlas.bytesPerPixel = 4;
+    atlas.pixels.assign(NotoSansMSDF_Pixels,
+        NotoSansMSDF_Pixels + (size_t)atlas.width * (size_t)atlas.height * (size_t)atlas.bytesPerPixel);
+
+    glyphLookup.clear();
+    for (const auto& entry : NotoSansMSDF_Glyphs) {
+        const char32_t codepoint = entry.first;
+        const MSDFGlyph& msdf = entry.second;
+
+        Glyph glyph{};
+        glyph.uvMinX = msdf.atlasLeft / (float)atlas.width;
+        glyph.uvMaxX = msdf.atlasRight / (float)atlas.width;
+        glyph.uvMinY = ((float)atlas.height - msdf.atlasTop) / (float)atlas.height;
+        glyph.uvMaxY = ((float)atlas.height - msdf.atlasBottom) / (float)atlas.height;
+
+        glyph.width = std::max(0, (int)std::ceil((msdf.planeRight - msdf.planeLeft) * NotoSansMSDF_Size));
+        glyph.height = std::max(0, (int)std::ceil((msdf.planeTop - msdf.planeBottom) * NotoSansMSDF_Size));
+        glyph.bearingX = (int)std::floor(msdf.planeLeft * NotoSansMSDF_Size);
+        glyph.bearingY = (int)std::ceil(msdf.planeTop * NotoSansMSDF_Size);
+        glyph.advanceX = std::max(0, (int)std::round(msdf.advance * NotoSansMSDF_Size));
+
+        glyphLookup[codepoint] = glyph;
+    }
+
+    return atlas;
+}
+
 static uint32_t StableRandomUIColour(uint32_t seed) {
     seed ^= seed >> 16;
     seed *= 0x7FEB352Du;
@@ -248,16 +280,16 @@ bool SubmitTextureUpload(const TextureUploadDesc& desc,
 bool UploadUIAtlasTexture(DX12ResourcesUI& uiRes, ID3D12Device* device, uint32_t atlasSlot,
     const AtlasBitmap& atlas) {
     if (!device || atlasSlot >= UI_MAX_ATLAS_TEXTURES || atlas.width <= 0 || atlas.height <= 0 ||
-        atlas.pixels.empty()) {
+        atlas.pixels.empty() || (atlas.bytesPerPixel != 1 && atlas.bytesPerPixel != 4)) {
         return false;
     }
 
     TextureUploadDesc desc = {};
     desc.width = atlas.width;
     desc.height = atlas.height;
-    desc.format = DXGI_FORMAT_R8_UNORM;
+    desc.format = atlas.bytesPerPixel == 4 ? DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_R8_UNORM;
     desc.pixels = atlas.pixels.data();
-    desc.rowPitch = atlas.width;
+    desc.rowPitch = atlas.width * atlas.bytesPerPixel;
 
     std::atomic<uint64_t> uploadFence = 0;
     SubmitTextureUpload(desc, &uiRes.uiAtlasTextures[atlasSlot], &uploadFence);
@@ -272,7 +304,7 @@ bool UploadUIAtlasTexture(DX12ResourcesUI& uiRes, ID3D12Device* device, uint32_t
     }
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.Format = DXGI_FORMAT_R8_UNORM;
+    srvDesc.Format = desc.format;
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels = 1;
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -343,12 +375,9 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
     ThrowIfFailed(device->CreateDescriptorHeap(&samplerHeapDesc,
         IID_PPV_ARGS(&uiRes.samplerHeap)));
 
-    // Create the actual sampler (Point sampling is perfect for UI atlas)
+    // Create the actual sampler.
     D3D12_SAMPLER_DESC samplerDesc = {};
-    samplerDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_POINT;   // sharp UI text
-    // TODO: Above works best only if there is NO scaling. Right now we are doing scaling.
-	// Hence text is slightly blurry. 
-    // Latter we generate separate font for different monitors based on their DPI and do 1:1 sampling.
+    samplerDesc.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
     samplerDesc.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     samplerDesc.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     samplerDesc.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
@@ -411,21 +440,17 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
     uiRes.uiOrthoConstantBuffer->Map( 0, &readRange, reinterpret_cast<void**>(&uiRes.pOrthoDataBegin));
     std::wcout << L"UI Resources Initialized (Phase 4A)\n";
     
-    AtlasBitmap englishAtlas = BuildFontAtlas();
+    AtlasBitmap englishAtlas = BuildMSDFFontAtlas();
     AtlasBitmap iconAtlas = BuildIconAtlas();
     
     TextureUploadDesc desc = {};
     desc.width = englishAtlas.width;
     desc.height = englishAtlas.height;
-    desc.format = DXGI_FORMAT_R8_UNORM;
+    desc.format = DXGI_FORMAT_R8G8B8A8_UNORM;
     desc.pixels = englishAtlas.pixels.data();
-    desc.rowPitch = englishAtlas.width;
+    desc.rowPitch = englishAtlas.width * englishAtlas.bytesPerPixel;
 
-    int bytesPerPixel = 1; // Use 4 if DXGI_FORMAT_R8G8B8A8_UNORM, use 1 if DXGI_FORMAT_R8_UNORM
-    bool isSaved = SaveToBmp("font_atlas_debug.bmp", englishAtlas.pixels.data(),
-        englishAtlas.width, englishAtlas.height, bytesPerPixel);
-    if (isSaved) std::cout << "SUCCESS: Debug atlas saved to working directory." << std::endl;
-    else std::cerr << "FAIL: Could not save debug atlas. Pointer might be invalid!" << std::endl;
+    int bytesPerPixel = 1;
 
     SubmitTextureUpload(desc, &uiRes.uiAtlasTextures[UI_ENGLISH_ATLAS_SLOT], &atlasFence);// Enqueue the upload through upload queue
     // RESERVED FENCE VALUE FOR THIS UPLOAD (this is the key change)
@@ -442,7 +467,7 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
 
     // Now the texture is in DEFAULT heap → safe to create SRV
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.Format = DXGI_FORMAT_R8_UNORM;
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels = 1;
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;

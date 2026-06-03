@@ -194,7 +194,8 @@ extern std::string charset;
 struct AtlasBitmap {
     int width;
     int height;
-    std::vector<uint8_t> pixels; // 1 channel (R8)
+    int bytesPerPixel = 1; // 1 channel (R8) or 4 channels (RGBA8)
+    std::vector<uint8_t> pixels;
 };
 
 inline AtlasBitmap BuildFontAtlas() {

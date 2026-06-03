@@ -81,11 +81,22 @@ if not exist "%EXTERNAL_DIR%\build\bin\Release\msdf-atlas-gen.exe" (
 )
 
 :: 2. Bake MSDF Atlas
-:: NOTE: Updated path to \bin\Release\ and added -allglyphs
+:: Generate a Unicode character-set file from the font cmap so JSON emits "unicode"
+:: values instead of glyph indices.
+echo [Pre-Build] Exporting NotoSans Unicode charset...
+python "%ROOT_DIR%\code-miscellaneous\msdf_charset_exporter.py" ^
+    "%FONT_FILE%" ^
+    "%BUILD_DIR%\NotoSansMSDF.charset.txt"
+
+if errorlevel 1 (
+    echo [ERROR] Python charset export failed.
+    exit /b 1
+)
+
 echo [Pre-Build] Baking MSDF Atlas for NotoSans...
 "%EXTERNAL_DIR%\build\bin\Release\msdf-atlas-gen.exe" ^
     -font "%FONT_FILE%" ^
-    -allglyphs ^
+    -charset "%BUILD_DIR%\NotoSansMSDF.charset.txt" ^
     -type msdf ^
     -format png ^
     -imageout "%BUILD_DIR%\NotoSansMSDF.png" ^
