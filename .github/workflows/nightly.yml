@@ -32,7 +32,8 @@ jobs:
 
     - name: Install Python dependencies
       run: |
-        pip install fonttools svgpathtools cu2qu
+        pip install fonttools svgpathtools cu2qu 
+        pip install pillow
     - name: Build icon font
       run: |
         python code-miscellaneous/build_icon_font.py

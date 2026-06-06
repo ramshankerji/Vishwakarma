@@ -574,12 +574,17 @@ void PrecomputeTopRibbonLayout(UITopRibbonLayout& layout, float monitorDPIX, flo
         UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy) + 7.0f;
 
 
-    constexpr float groupNavWidth = 96.0f;
-    constexpr float groupNavStride = groupNavWidth + 10.0f;
+    const float groupNavPaddingPx = 8.0f;
+    const float groupNavGapPx = 2.0f * pixelsPerMMx;
+    float groupNavX = 0.0f;
     for (size_t i = 0; i < TotalTopUIActionGroups; ++i) {
-        layout.actionGroups[i].navX = (float)i * groupNavStride;
-        layout.actionGroups[i].navWidth = groupNavWidth;
+        const char32_t* label = LocalizedUIString(topUIActionGroupNames[i].labelStringID);
+        layout.actionGroups[i].navX = groupNavX;
+        layout.actionGroups[i].navWidth = std::ceil(MeasureUIStringWidth(label, layout.uiTextScale) +
+            2.0f * groupNavPaddingPx);
+        groupNavX += layout.actionGroups[i].navWidth + groupNavGapPx;
     }
+    layout.actionGroupNavTotalWidthPx = groupNavX > 0.0f ? groupNavX - groupNavGapPx : 0.0f;
 
     std::array<bool, TotalTopUIActionGroups> groupSeen{};
     float currentX = 5.0f;
@@ -1149,10 +1154,14 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     // Draw the 5-pixel high extent-of-ribbon-visible visualization bar in the 5px gap below Action Group labels.
     // The gap starts at topActionGroupY - 5.0f.
     float extentX = 0.0f;
-    float extentW = W;
-    if (topRibbonLayout.totalContentWidthPx > W) {
-        extentX = (topRibbonLayout.scrollOffsetPx / topRibbonLayout.totalContentWidthPx) * W;
-        extentW = (W / topRibbonLayout.totalContentWidthPx) * W;
+    float extentW = topRibbonLayout.actionGroupNavTotalWidthPx;
+    if (topRibbonLayout.totalContentWidthPx > W && topRibbonLayout.actionGroupNavTotalWidthPx > 0.0f) {
+        const float trackW = topRibbonLayout.actionGroupNavTotalWidthPx;
+        const float maxScroll = std::max(0.0f, topRibbonLayout.totalContentWidthPx - W);
+        extentW = std::clamp((W / topRibbonLayout.totalContentWidthPx) * trackW, 1.0f, trackW);
+        extentX = maxScroll > 0.0f
+            ? (topRibbonLayout.scrollOffsetPx / maxScroll) * (trackW - extentW)
+            : 0.0f;
     }
     // Draw active indicator (orange)
     pushRect(extentX, topActionGroupY - 5.0f, extentW, 5.0f, 0xFF3399FF);

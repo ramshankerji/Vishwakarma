@@ -744,6 +744,7 @@ struct UITopRibbonLayout {
     float roundedCornerRadiusPx = 0.0f;
     float uiTextScale = 1.0f;
     float totalContentWidthPx = 0.0f;
+    float actionGroupNavTotalWidthPx = 0.0f;
     float scrollOffsetPx = 0.0f;
     float dpiX = 0.0f;
     float dpiY = 0.0f;
