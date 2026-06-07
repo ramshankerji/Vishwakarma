@@ -706,6 +706,7 @@ struct UITopRibbonActionGroupLayout {
     float navWidth = 0.0f;
     float contentStartX = 0.0f;
     float contentEndX = 0.0f;
+    float contentWidth = 0.0f;
 };
 
 struct UITopRibbonSubGroupLayout {

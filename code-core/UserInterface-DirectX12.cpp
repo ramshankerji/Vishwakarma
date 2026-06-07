@@ -659,9 +659,49 @@ void PrecomputeTopRibbonLayout(UITopRibbonLayout& layout, float monitorDPIX, flo
         }
     }
 
+    for (size_t gIdx = 0; gIdx < TotalTopUIActionGroups; ++gIdx) {
+        layout.actionGroups[gIdx].contentWidth = std::max(0.0f, layout.actionGroups[gIdx].contentEndX - layout.actionGroups[gIdx].contentStartX);
+    }
+
     layout.totalContentWidthPx = contentRight + 30.0f;
     layout.scrollOffsetPx = previousScroll;
     layout.isValid = true;
+}
+
+static float MapRibbonToNav(float x, const UITopRibbonLayout& layout) {
+    if (TotalTopUIActionGroups == 0) return 0.0f;
+
+    const auto& firstGroup = layout.actionGroups[0];
+    if (x <= firstGroup.contentStartX) {
+        return firstGroup.navX;
+    }
+    const auto& lastGroup = layout.actionGroups[TotalTopUIActionGroups - 1];
+    if (x >= lastGroup.contentEndX) {
+        return lastGroup.navX + lastGroup.navWidth;
+    }
+
+    for (size_t i = 0; i < TotalTopUIActionGroups; ++i) {
+        const auto& grp = layout.actionGroups[i];
+        if (x >= grp.contentStartX && x <= grp.contentEndX) {
+            float width = grp.contentWidth;
+            if (width <= 0.0f) return grp.navX;
+            float t = (x - grp.contentStartX) / width;
+            return grp.navX + t * grp.navWidth;
+        }
+        if (i + 1 < TotalTopUIActionGroups) {
+            const auto& nextGrp = layout.actionGroups[i + 1];
+            if (x > grp.contentEndX && x < nextGrp.contentStartX) {
+                float gapWidth = nextGrp.contentStartX - grp.contentEndX;
+                if (gapWidth <= 0.0f) return nextGrp.navX;
+                float t = (x - grp.contentEndX) / gapWidth;
+                float startNav = grp.navX + grp.navWidth;
+                float endNav = nextGrp.navX;
+                return startNav + t * (endNav - startNav);
+            }
+        }
+    }
+
+    return 0.0f;
 }
 
 // PushRect
@@ -1153,16 +1193,9 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
 
     // Draw the 5-pixel high extent-of-ribbon-visible visualization bar in the 5px gap below Action Group labels.
     // The gap starts at topActionGroupY - 5.0f.
-    float extentX = 0.0f;
-    float extentW = topRibbonLayout.actionGroupNavTotalWidthPx;
-    if (topRibbonLayout.totalContentWidthPx > W && topRibbonLayout.actionGroupNavTotalWidthPx > 0.0f) {
-        const float trackW = topRibbonLayout.actionGroupNavTotalWidthPx;
-        const float maxScroll = std::max(0.0f, topRibbonLayout.totalContentWidthPx - W);
-        extentW = std::clamp((W / topRibbonLayout.totalContentWidthPx) * trackW, 1.0f, trackW);
-        extentX = maxScroll > 0.0f
-            ? (topRibbonLayout.scrollOffsetPx / maxScroll) * (trackW - extentW)
-            : 0.0f;
-    }
+    float extentX = MapRibbonToNav(topRibbonLayout.scrollOffsetPx, topRibbonLayout);
+    float extentRight = MapRibbonToNav(topRibbonLayout.scrollOffsetPx + W, topRibbonLayout);
+    float extentW = std::max(1.0f, extentRight - extentX);
     // Draw active indicator (orange)
     pushRect(extentX, topActionGroupY - 5.0f, extentW, 5.0f, 0xFF3399FF);
 
