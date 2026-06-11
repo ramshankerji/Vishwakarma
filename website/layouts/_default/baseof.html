@@ -84,9 +84,38 @@
         }
         main {
             flex: 1;
-            max-width: 210mm; /*A4 paper is 210mm x 297mm */
+            max-width: 252mm; /* A4 paper width (210mm) widened by 20% */
             margin: 10px auto 40px auto; /* 10px top, auto right, 40px bottom, auto left */
             padding: 0 10px;
+        }
+        @media (min-width: 530mm) {
+            main {
+                max-width: 304mm; /* Widen by another 20% (rounded from 302.4mm to multiple of 8) */
+            }
+        }
+        footer {
+            background: #f8f9fa;
+            color: #666;
+            padding: 16px 20px;
+            text-align: center;
+            font-size: 0.85rem;
+            border-top: 1px solid #eaeaea;
+            line-height: 1.8;
+        }
+
+        /* Prevent horizontal overflow of media, code and tables */
+        img, video {
+            max-width: 100%;
+            height: auto;
+        }
+        table, pre, code {
+            max-width: 100%;
+            box-sizing: border-box;
+        }
+        pre {
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
         }
         header {
             display: flex;
@@ -130,15 +159,74 @@
             a { color: #90caf9; }
         }
 
+        /* Responsive Header Custom Styles */
+        .brand-short {
+            display: none;
+        }
+
+        #menu-toggle {
+            display: none;
+            background: transparent;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 4px 8px;
+            color: #1e3a5f;
+            border-radius: 5px;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #menu-toggle:hover {
+            background: rgba(30, 58, 95, 0.08);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            #menu-toggle {
+                color: #90caf9;
+            }
+            #menu-toggle:hover {
+                background: rgba(144, 202, 249, 0.15);
+            }
+        }
+
+        @media (max-width: 280mm) {
+            body {
+                text-align: left;
+            }
+            #menu-toggle { display: flex;  }
+            .brand-long { display: none;    }
+            .brand-short { display: inline;  }
+            .download-link { display: none !important; }
+            header {
+                padding: 8px 12px;
+                gap: 8px;
+                flex-wrap: wrap;
+            }
+            header a {
+                padding: 6px 10px;
+                font-size: 0.9rem;
+            }
+            .content-wrapper {
+                flex-direction: column;
+            }
+            aside#sidebar {
+                width: 100%;
+                flex: 1 1 auto;
+            }
+        }
     </style>
 </head>
 <body>
     <header>
         <button id="menu-toggle">☰</button>
-        <a href = "/"> Mission Vishwakarma </a>
-        <a href = "https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma.exe"  class="btn-primary"> Download </a>
-        <a href = "/start/roadmap"> Roadmap </a>
-        <a href = "/start/pricing"> Pricing </a>
+        <a href="/" class="brand-link">
+            <span class="brand-long">Mission Vishwakarma</span>
+            <span class="brand-short">Vishwakarma</span>
+        </a>
+        <a href="https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma.exe" class="btn-primary download-link">Download</a>
+        <a href="/start/roadmap">Roadmap</a>
+        <a href="/start/pricing">Pricing</a>
     </header>
     <div class="content-wrapper">
         <aside id="sidebar">
@@ -149,11 +237,11 @@
         </main>
     </div>
     <footer>
-        &copy; {{ now.Year }} Ram Shanker | All rights reserved. &nbsp; Follow us on: &nbsp;
-        <a href="https://www.youtube.com/@TheMissionVishwakarma" target="_blank"> YouTube </a>&nbsp;
-        <a href="https://x.com/ramshankerji" target="_blank"> X (Twitter)  </a> &nbsp;
+        &copy; {{ now.Year }} Ram Shanker | All rights reserved. Follow us on:
+        <a href="https://www.youtube.com/@TheMissionVishwakarma" target="_blank"> YouTube </a>
+        <a href="https://x.com/ramshankerji" target="_blank"> X (Twitter) </a>
         <a href="https://whatsapp.com/channel/0029Va7uzYB1iUxQKdWeof3V" target="_blank"> WhatsApp </a>
-        Source Code : 
+        | Source Code:
         <a href="https://github.com/ramshankerji/Vishwakarma" target="_blank"> GitHub </a>
     </footer>
     <script>
