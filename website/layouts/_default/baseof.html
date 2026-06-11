@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ .Site.LanguageCode | default "en" }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -18,7 +18,45 @@
         gtag('js', new Date());
         gtag('config', 'G-4BHXRJ3P18');
     </script>
-    <title>{{ .Title }}</title>
+    
+    <!-- SEO and Meta Tags -->
+    <title>{{ if .IsHome }}{{ .Site.Title }}{{ else }}{{ .Title }} | {{ .Site.Title }}{{ end }}</title>
+    <meta name="description" content="{{ if .Description }}{{ .Description }}{{ else if .Summary }}{{ .Summary }}{{ else }}{{ .Site.Params.description }}{{ end }}">
+    <link rel="canonical" href="{{ .Permalink }}">
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="{{ if .IsPage }}article{{ else }}website{{ end }}">
+    <meta property="og:url" content="{{ .Permalink }}">
+    <meta property="og:title" content="{{ if .IsHome }}{{ .Site.Title }}{{ else }}{{ .Title }} | {{ .Site.Title }}{{ end }}">
+    <meta property="og:description" content="{{ if .Description }}{{ .Description }}{{ else if .Summary }}{{ .Summary }}{{ else }}{{ .Site.Params.description }}{{ end }}">
+    <meta property="og:site_name" content="{{ .Site.Title }}">
+    <meta property="og:locale" content="{{ .Site.LanguageCode | default "en" }}">
+    {{ with .Params.image }}<meta property="og:image" content="{{ . | absURL }}">{{ end }}
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:url" content="{{ .Permalink }}">
+    <meta name="twitter:title" content="{{ if .IsHome }}{{ .Site.Title }}{{ else }}{{ .Title }} | {{ .Site.Title }}{{ end }}">
+    <meta name="twitter:description" content="{{ if .Description }}{{ .Description }}{{ else if .Summary }}{{ .Summary }}{{ else }}{{ .Site.Params.description }}{{ end }}">
+    {{ with .Params.image }}<meta name="twitter:image" content="{{ . | absURL }}">{{ end }}
+
+    <!-- JSON-LD Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "{{ if .IsPage }}TechArticle{{ else }}WebSite{{ end }}",
+      "headline": "{{ if .IsHome }}{{ .Site.Title }}{{ else }}{{ .Title }}{{ end }}",
+      "description": "{{ if .Description }}{{ .Description }}{{ else if .Summary }}{{ .Summary }}{{ else }}{{ .Site.Params.description }}{{ end }}",
+      "url": "{{ .Permalink }}"
+      {{ if and .IsPage (not .Date.IsZero) }},
+      "datePublished": "{{ .Date.Format "2006-01-02T15:04:05-07:00" }}",
+      "author": {
+        "@type": "Person",
+        "name": "Ram Shanker"
+      }
+      {{ end }}
+    }
+    </script>
     <style type="text/css">
         :root {
             color-scheme: light dark;

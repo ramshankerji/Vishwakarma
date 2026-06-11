@@ -1,2 +1,4 @@
 User-agent: *
 Disallow:
+
+Sitemap: https://mv.ramshanker.in/sitemap.xml
