@@ -1,12 +1,22 @@
 <ul>
   {{ range .Site.Sections.ByWeight }}
-      <li>
-          <strong><a href="{{ .RelPermalink }}" style="margin-left: 10px;">{{ .Title }}</a></strong>
-          <ul>
-              {{ range .Pages.ByWeight }}
-                  <li><a href="{{ .RelPermalink }}" style="margin-left: 20px;">{{ .Title }}</a></li>
+      {{ $isCurrentSection := hasPrefix $.RelPermalink .RelPermalink }}
+      <li class="sidebar-section">
+          <div class="sidebar-header">
+              {{ if .Pages }}
+                  <span class="toggle-btn" onclick="toggleSection(this)">{{ if $isCurrentSection }}−{{ else }}+{{ end }}</span>
+              {{ else }}
+                  <span style="width: 1.2em; display: inline-block;"></span>
               {{ end }}
-          </ul>
+              <strong><a href="{{ .RelPermalink }}" class="{{ if eq $.RelPermalink .RelPermalink }}active{{ end }}" style="margin-left: 5px;">{{ .Title }}</a></strong>
+          </div>
+          {{ if .Pages }}
+              <ul class="sidebar-submenu" style="{{ if not $isCurrentSection }}display: none;{{ end }}">
+                  {{ range .Pages.ByWeight }}
+                      <li><a href="{{ .RelPermalink }}" class="{{ if eq $.RelPermalink .RelPermalink }}active{{ end }}" style="margin-left: 20px;">{{ .Title }}</a></li>
+                  {{ end }}
+              </ul>
+          {{ end }}
       </li>
   {{ end }}
 </ul>

@@ -179,6 +179,21 @@
                 background 0.15s ease;
         }
 
+        header a.active, aside#sidebar a.active {
+            color: #FF671F !important; /* Indian flag saffron/orange color */
+            font-weight: 700 !important;
+        }
+
+        header a.brand-link {
+            color: #FF671F !important;
+        }
+        header a.download-link, header a.nav-roadmap {
+            color: #06038D !important;
+        }
+        header a.nav-pricing {
+            color: #128807 !important;
+        }
+
         /* Automatic Dark Mode Overrides */
         @media (prefers-color-scheme: dark) {
             body {
@@ -188,8 +203,13 @@
 
             header { background: #1e1e1e; }
             header a { color: #90caf9;}
+            header a.active { color: #FF671F !important; }
+            header a.brand-link { color: #FF914D !important; }
+            header a.download-link, header a.nav-roadmap { color: #64B5F6 !important; }
+            header a.nav-pricing { color: #81C784 !important; }
             aside#sidebar { background-color: #1a1a1a;}
             aside#sidebar a { color: #cccccc;}
+            aside#sidebar a.active { color: #FF671F !important; }
             footer {
                 background: #1e1e1e;
                 color: #bbbbbb;
@@ -253,6 +273,24 @@
                 flex: 1 1 auto;
             }
         }
+
+        .sidebar-header {
+            display: flex;
+            align-items: center;
+        }
+        .toggle-btn {
+            cursor: pointer;
+            display: inline-block;
+            width: 1.2em;
+            text-align: center;
+            user-select: none;
+            color: inherit;
+            font-size: 1.1rem;
+            transition: font-weight 0.1s ease;
+        }
+        .toggle-btn:hover {
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -263,8 +301,8 @@
             <span class="brand-short">Vishwakarma</span>
         </a>
         <a href="https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma.exe" class="btn-primary download-link">Download</a>
-        <a href="/start/roadmap">Roadmap</a>
-        <a href="/start/pricing">Pricing</a>
+        <a href="/start/roadmap" class="nav-roadmap {{ if eq .RelPermalink "/start/roadmap/" }}active{{ end }}">Roadmap</a>
+        <a href="/start/pricing" class="nav-pricing {{ if eq .RelPermalink "/start/pricing/" }}active{{ end }}">Pricing</a>
     </header>
     <div class="content-wrapper">
         <aside id="sidebar">
@@ -286,6 +324,20 @@
         document.getElementById('menu-toggle').addEventListener('click', function() {
             document.body.classList.toggle('show-sidebar');
         });
+
+        function toggleSection(btn) {
+            const section = btn.closest('.sidebar-section');
+            const submenu = section.querySelector('.sidebar-submenu');
+            if (submenu) {
+                if (submenu.style.display === 'none') {
+                    submenu.style.display = 'block';
+                    btn.textContent = '−';
+                } else {
+                    submenu.style.display = 'none';
+                    btn.textContent = '+';
+                }
+            }
+        }
     </script>
 </body>
 </html>
