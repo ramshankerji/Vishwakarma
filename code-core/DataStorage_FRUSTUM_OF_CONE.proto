@@ -1,0 +1,20 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+import "DataStorage_Common3D.proto";
+
+option optimize_for = LITE_RUNTIME;
+
+message FrustumOfCone {
+  Point3F bottom_center = 1;
+  Point3F top_center = 2;
+  float bottom_radius = 3;
+  float top_radius = 4;
+  Color4F color_base = 5;
+  Color4F color_top = 6;
+  Color4F color_incline = 7;
+}

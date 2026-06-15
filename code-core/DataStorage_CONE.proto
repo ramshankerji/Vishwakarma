@@ -1,0 +1,17 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+import "DataStorage_Common3D.proto";
+
+option optimize_for = LITE_RUNTIME;
+
+message Cone {
+  Point3F apex = 1;
+  Point3F base_center = 2;
+  float radius = 3;
+  Color4F color_base = 4;
+  Color4F color_incline = 5;
+}

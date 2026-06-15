@@ -121,10 +121,33 @@ std::mt19937 gen(rd()); //rd(): Calls the device we made above to get a single r
 //std::mt19937: A specific algorithm famous for being very fast and having high statistical quality.
 // Period of 2^{19937}-1. All subsequent random numbers are generated from this seeded mt19937 object.
 
+static void RegisterGeneratedGeometryElement(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType,
+    META_DATA* object, GeometryData&& geometry) {
+    if (!targetTab || !object) return;
+
+    object->dataType = static_cast<uint16_t>(VishwakarmaStorage::ToNumber(objectType));
+    object->schemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
+
+    {
+        std::lock_guard<std::mutex> lock(toCopyThreadMutex);
+        commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD, geometry, object->memoryID, targetTab->tabID });
+    }
+
+    if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
+    {
+        std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+        targetTab->storageObjects3D.push_back({ objectType, object->memoryID, object });
+    }
+
+    targetTab->allIDsInThisTab.push_back(object->memoryID);
+    toCopyThreadCV.notify_one();
+}
+
 inline void addRandomGeometryElement(DATASETTAB* targetTab) {
 	if (!targetTab) return; //Safety against NULL pointer dereference.
     GeometryData geometry;// These will hold the data of the randomly created shape.
-    uint64_t memoryId = 0;
+    META_DATA* object = nullptr;
+    VishwakarmaStorage::ObjectType objectType = VishwakarmaStorage::ObjectType::Unknown;
 
     // Randomly select a shape type (0-7 for the 8 shapes available).
     // We use the GetRNG() helper function already available in "डेटा-सामान्य-3D.h".
@@ -140,80 +163,79 @@ inline void addRandomGeometryElement(DATASETTAB* targetTab) {
         when the tab is closed or destroyed. This prevents memory leaks in long-running applications. 
         Currently, it seems to be leaking memory, but it is NOT !*/
     case 0: {
-        PYRAMID* shape = new PYRAMID();
+        PYRAMID* shape = new (targetTab->tabNo) PYRAMID();
         shape->Randomize();
         geometry = shape->GetGeometry();
-        memoryId = shape->memoryID;
+        object = shape;
+        objectType = PYRAMID::storageObjectType;
         break;
     }
     case 1: {
-        CUBOID* shape = new CUBOID();
+        CUBOID* shape = new (targetTab->tabNo) CUBOID();
         shape->Randomize();
         geometry = shape->GetGeometry();
-        memoryId = shape->memoryID;
+        object = shape;
+        objectType = CUBOID::storageObjectType;
         break;
     }
     case 2: {
-        CONE* shape = new CONE();
+        CONE* shape = new (targetTab->tabNo) CONE();
         shape->Randomize();
         geometry = shape->GetGeometry();
-        memoryId = shape->memoryID;
+        object = shape;
+        objectType = CONE::storageObjectType;
         break;
     }
     case 3: {
-        CYLINDER* shape = new CYLINDER();
+        CYLINDER* shape = new (targetTab->tabNo) CYLINDER();
         shape->Randomize();
         geometry = shape->GetGeometry();
-        memoryId = shape->memoryID;
+        object = shape;
+        objectType = CYLINDER::storageObjectType;
         break;
     }
     case 4: {
-        PARALLELEPIPED* shape = new PARALLELEPIPED();
+        PARALLELEPIPED* shape = new (targetTab->tabNo) PARALLELEPIPED();
         shape->Randomize();
         geometry = shape->GetGeometry();
-        memoryId = shape->memoryID;
+        object = shape;
+        objectType = PARALLELEPIPED::storageObjectType;
         break;
     }
     case 5: {
-        SPHERE* shape = new SPHERE();
+        SPHERE* shape = new (targetTab->tabNo) SPHERE();
         shape->Randomize();
         geometry = shape->GetGeometry();
-        memoryId = shape->memoryID;
+        object = shape;
+        objectType = SPHERE::storageObjectType;
         break;
     }
     case 6: {
-        FRUSTUM_OF_PYRAMID* shape = new FRUSTUM_OF_PYRAMID();
+        FRUSTUM_OF_PYRAMID* shape = new (targetTab->tabNo) FRUSTUM_OF_PYRAMID();
         shape->Randomize();
         geometry = shape->GetGeometry();
-        memoryId = shape->memoryID;
+        object = shape;
+        objectType = FRUSTUM_OF_PYRAMID::storageObjectType;
         break;
     }
     case 7: {
-        FRUSTUM_OF_CONE* shape = new FRUSTUM_OF_CONE();
+        FRUSTUM_OF_CONE* shape = new (targetTab->tabNo) FRUSTUM_OF_CONE();
         shape->Randomize();
         geometry = shape->GetGeometry();
-        memoryId = shape->memoryID;
+        object = shape;
+        objectType = FRUSTUM_OF_CONE::storageObjectType;
         break;
     }
     case 8: {
-        PIPE* shape = new PIPE();
+        PIPE* shape = new (targetTab->tabNo) PIPE();
         shape->Randomize();
         geometry = shape->GetGeometry();
-        memoryId = shape->memoryID;
+        object = shape;
+        objectType = PIPE::storageObjectType;
         break;
     }
     }
-    //Add the new shape's data to the command queue for the GPU.
-    {
-        std::lock_guard<std::mutex> lock(toCopyThreadMutex);
-        commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD, geometry, memoryId, targetTab->tabID });
-    }
-
-    // Push to the specific tab's ID list, not global currentTab
-    // We need a lock here if the UI thread reads this list while we write to it! TODO
-    // For now, assuming UI reads only on frame update, we might be "okay-ish" but ideally use a mutex.
-    targetTab->allIDsInThisTab.push_back(memoryId);
-    toCopyThreadCV.notify_one();
+    RegisterGeneratedGeometryElement(targetTab, objectType, object, std::move(geometry));
 }
 
 void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering thread. The ringmaster of the application.
@@ -225,8 +247,10 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
     std::chrono::steady_clock::time_point lastPyramidAddTime;
     lastPyramidAddTime = std::chrono::steady_clock::now();// Initialize the timer
 
-    // Generate the initial 10 pyramids for testing. We will later replace this with actual file loading logic.
-    for (int k = 0; k < 10; ++k) addRandomGeometryElement(myTab);
+    // Generate initial random geometry only for unsaved/dev tabs. Loaded .yyy tabs keep their stored contents.
+    if (myTab->autoGenerateRandomGeometry) {
+        for (int k = 0; k < 10; ++k) addRandomGeometryElement(myTab);
+    }
 
     uint64_t frameCounter = 0;
 
@@ -240,7 +264,8 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         
         // Check timer and add a new pyramid every second.
         auto currentTime = std::chrono::steady_clock::now();
-        if (std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastPyramidAddTime).count() >= 1) {
+        if (myTab->autoGenerateRandomGeometry &&
+            std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastPyramidAddTime).count() >= 1) {
             addRandomGeometryElement(myTab);
             lastPyramidAddTime = currentTime; // Reset the timer
             // Optional: Log to prove background work is happening
@@ -467,6 +492,10 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
 
     //g_logicFenceCV.notify_all(); // Wake up threads for shutdown
     myTab->allIDsInThisTab.clear();
+    if (myTab->storageObjectsMutex) {
+        std::lock_guard<std::mutex> lock(*myTab->storageObjectsMutex);
+        myTab->storageObjects3D.clear();
+    }
     myTab->engineeringReleased.store(true, std::memory_order_release);
     std::cout << "Main Logic Thread shutting down.\n" << std::endl;
 }

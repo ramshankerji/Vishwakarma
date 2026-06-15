@@ -1,0 +1,14 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+import "DataStorage_Common3D.proto";
+
+option optimize_for = LITE_RUNTIME;
+
+message Pyramid {
+  repeated Point3F vertices = 1;
+  repeated Color4F colors = 2;
+}

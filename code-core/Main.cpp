@@ -14,10 +14,12 @@
 #include <iostream>
 #include <thread>
 #include <random>
+#include <filesystem>
 #include <png.h>
 #include <shared_mutex>
 #include "resource.h"
 #include <shellscalingapi.h> // For PROCESS_PER_MONITOR_DPI_AWARE.
+#include <commdlg.h>
 
 // External Library we depend upon.
 //#include "ft2build.h"
@@ -37,12 +39,15 @@
 #include "MemoryManagerCPU.h"
 #include "MemoryManagerGPU-DirectX12.h"
 #include "UserInterface-DirectX12.h"
+#include "DataStorage.h"
 
 #include "UserInputProcessing.h"
 #include "Input_UI_Network_File.h"
 
 #include <windows.h>
 #include <windowsx.h> // For some macros like GET_X_LPARAM, GET_Y_LPARAM etc.
+
+#pragma comment(lib, "Comdlg32.lib")
 
 /* We have moved to statically compiling the .h/.c files of dependencies. 
 Hence we don't need to compile them and generate .lib file and link them separately.
@@ -85,9 +90,80 @@ void PublishTabList(uint16_t* nextList, uint16_t nextCount) {
     publishedTabCount.store(nextCount, std::memory_order_release);
 }
 
-void CreateEngineeringTab() {
+HWND FirstActiveWindowHandle() {
+    uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
+    uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+    if (windowCount == 0) return nullptr;
+    return allWindows[windowList[0]].hWnd;
+}
+
+DATASETTAB* GetActiveTabForUIAction() {
+    uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
+    uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+    for (uint16_t i = 0; i < windowCount; ++i) {
+        int tabID = allWindows[windowList[i]].activeTabIndex;
+        if (tabID >= 0 && tabID < MV_MAX_TABS) return &allTabs[tabID];
+    }
+
+    uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
     uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
-    if (tabCount >= MV_MAX_TABS || nextTabSlot >= MV_MAX_TABS) return;
+    if (tabCount > 0) return &allTabs[tabList[0]];
+    return nullptr;
+}
+
+std::wstring FileNameFromPath(const std::wstring& path) {
+    try {
+        std::wstring fileName = std::filesystem::path(path).filename().wstring();
+        return fileName.empty() ? L"Untitled.yyy" : fileName;
+    } catch (...) {
+        return L"Untitled.yyy";
+    }
+}
+
+std::wstring ShowSaveYyyDialog(const DATASETTAB& tab) {
+    wchar_t fileName[MAX_PATH] = {};
+    std::wstring initialName = tab.storageFilePath.empty()
+        ? (tab.fileName.empty() ? L"Untitled.yyy" : tab.fileName)
+        : tab.storageFilePath;
+
+    if (std::filesystem::path(initialName).extension().empty()) {
+        initialName += L".yyy";
+    }
+    wcsncpy_s(fileName, MAX_PATH, initialName.c_str(), _TRUNCATE);
+
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = FirstActiveWindowHandle();
+    ofn.lpstrFilter = L"Vishwakarma files (*.yyy)\0*.yyy\0All files (*.*)\0*.*\0";
+    ofn.lpstrFile = fileName;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrDefExt = L"yyy";
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+
+    if (!GetSaveFileNameW(&ofn)) return {};
+    return fileName;
+}
+
+std::wstring ShowOpenYyyDialog() {
+    wchar_t fileName[MAX_PATH] = {};
+
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = FirstActiveWindowHandle();
+    ofn.lpstrFilter = L"Vishwakarma files (*.yyy)\0*.yyy\0All files (*.*)\0*.*\0";
+    ofn.lpstrFile = fileName;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrDefExt = L"yyy";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+
+    if (!GetOpenFileNameW(&ofn)) return {};
+    return fileName;
+}
+
+DATASETTAB* CreateEngineeringTab(const std::wstring& displayName = L"",
+    const std::wstring& storageFilePath = L"", bool autoGenerateRandomGeometry = true) {
+    uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+    if (tabCount >= MV_MAX_TABS || nextTabSlot >= MV_MAX_TABS) return nullptr;
 
     uint16_t* currentList = publishedTabIndexes.load(std::memory_order_acquire);
     uint16_t* nextList = (currentList == activeTabIndexesA) ? activeTabIndexesB : activeTabIndexesA;
@@ -97,7 +173,16 @@ void CreateEngineeringTab() {
     DATASETTAB& tab = allTabs[tabID];
     tab.tabID = tabID;
     tab.tabNo = tabID;
-    tab.fileName = L"Untitled " + std::to_wstring(tabID + 1);
+    tab.fileName = displayName.empty() ? L"Untitled " + std::to_wstring(tabID + 1) : displayName;
+    tab.storageFilePath = storageFilePath;
+    tab.mode = storageFilePath.empty() ? 0 : 1;
+    tab.autoGenerateRandomGeometry = autoGenerateRandomGeometry;
+    tab.allIDsInThisTab.clear();
+    if (!tab.storageObjectsMutex) tab.storageObjectsMutex = std::make_unique<std::mutex>();
+    {
+        std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
+        tab.storageObjects3D.clear();
+    }
     tab.closeRequested.store(false, std::memory_order_release);
     tab.engineeringReleased.store(false, std::memory_order_release);
     closeQueuedTabs[tabID] = false;
@@ -114,6 +199,7 @@ void CreateEngineeringTab() {
 
     std::thread t(विश्वकर्मा, (uint64_t)tabID);
     AddEngineeringThread(tabID, std::move(t));
+    return &tab;
 }
 
 void RequestCloseEngineeringTab(uint16_t tabID) {
@@ -170,6 +256,38 @@ void CleanupReleasedTabs() {
     }
 }
 
+void SaveActiveTabToStorage() {
+    DATASETTAB* tab = GetActiveTabForUIAction();
+    if (!tab) return;
+
+    std::wstring path = tab->storageFilePath;
+    if (path.empty()) path = ShowSaveYyyDialog(*tab);
+    if (path.empty()) return;
+
+    std::string error;
+    if (!DataStorage::Instance().SaveTabToYyy(*tab, path, &error)) {
+        MessageBoxA(FirstActiveWindowHandle(), error.c_str(), "Save failed", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    tab->storageFilePath = path;
+    tab->fileName = FileNameFromPath(path);
+    tab->mode = 1;
+}
+
+void OpenStorageFileInNewTab() {
+    std::wstring path = ShowOpenYyyDialog();
+    if (path.empty()) return;
+
+    DATASETTAB* tab = CreateEngineeringTab(FileNameFromPath(path), path, false);
+    if (!tab) return;
+
+    std::string error;
+    if (!DataStorage::Instance().LoadYyyIntoTab(*tab, path, &error)) {
+        MessageBoxA(FirstActiveWindowHandle(), error.c_str(), "Open failed", MB_OK | MB_ICONERROR);
+    }
+}
+
 void ProcessPendingUIActions() {
     std::vector<UIActionEntry> actions;
     {
@@ -185,6 +303,10 @@ void ProcessPendingUIActions() {
             CreateEngineeringTab();
         } else if (action.id == ACTION_ENGINEERING_CLOSE) {
             RequestCloseEngineeringTab(static_cast<uint16_t>(action.p1));
+        } else if (action.id == static_cast<uint32_t>(Commands::PROJECT_SAVE)) {
+            SaveActiveTabToStorage();
+        } else if (action.id == static_cast<uint32_t>(Commands::PROJECT_OPEN)) {
+            OpenStorageFileInNewTab();
         }
     }
 

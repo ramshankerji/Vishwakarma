@@ -1,0 +1,20 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+option optimize_for = LITE_RUNTIME;
+
+message Point3F {
+  float x = 1;
+  float y = 2;
+  float z = 3;
+}
+
+message Color4F {
+  float r = 1;
+  float g = 2;
+  float b = 3;
+  float a = 4;
+}

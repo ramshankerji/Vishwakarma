@@ -3,9 +3,11 @@
 
 #include <cstdint>
 #include <vector>
+#include <mutex>
 #include "MemoryManagerCPU.h"
 #include "MemoryManagerGPU-DirectX12.h"
 #include "UserInputProcessing.h"
+#include "CommonNamedNumbers.h"
 
 #pragma once //It prevents multiple inclusions of the same header file.
 
@@ -66,9 +68,16 @@ struct VIEW_INSIDE_DATASETTAB {
 
 };
 
+struct StoredGeometryObject3D {
+    VishwakarmaStorage::ObjectType objectType = VishwakarmaStorage::ObjectType::Unknown;
+    uint64_t memoryId = 0;
+    META_DATA* object = nullptr;
+};
+
 struct DATASETTAB {
     uint64_t tabID;
     std::wstring fileName;
+    std::wstring storageFilePath;
 	std::vector<VIEW_INSIDE_DATASETTAB> views; //All views need not be inside single windows. Some views can be in other windows.
     int activeViewIndex = 0;
     float color[4] = {};
@@ -106,7 +115,9 @@ struct DATASETTAB {
     char* fileNonce[16] = {}; //Internal AES encryption key of the file.
     char* fileID[16] = {}; //SHA256 of Public Key truncated to 1st 128 bits.
 
-	std::vector<uint64_t> allIDsInThisTab; //List of all engineering object IDs in this tab.
+    std::vector<uint64_t> allIDsInThisTab; //List of all engineering object IDs in this tab.
+    std::vector<StoredGeometryObject3D> storageObjects3D; // MVP persisted geometry objects in this tab.
+    std::unique_ptr<std::mutex> storageObjectsMutex;
 
 	DX12ResourcesPerTab dx; // DirectX12 resources specific to this tab.
     //ThreadSafeQueueCPU userInputQueue; // Dedicated Input Queue for this tab's engineering thread.
@@ -131,12 +142,14 @@ struct DATASETTAB {
     
     CameraState camera; //Currently it is per tab. Latter we may move it to per view.
     bool autoCameraRotation = true;
+    bool autoGenerateRandomGeometry = true;
     std::atomic<bool> closeRequested{ false };
     std::atomic<bool> engineeringReleased{ false };
     
     DATASETTAB() {
         userInputQueue = std::make_unique<ThreadSafeQueueCPU>();
         todoCPUQueue = std::make_unique<ThreadSafeQueueCPU>();
+        storageObjectsMutex = std::make_unique<std::mutex>();
     }
     DATASETTAB(const DATASETTAB&) = delete;// Disable copy (mutex cannot copy). Otherwise it can't reside in std::vector.
     DATASETTAB& operator=(const DATASETTAB&) = delete;

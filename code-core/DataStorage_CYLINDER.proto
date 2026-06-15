@@ -1,0 +1,18 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+import "DataStorage_Common3D.proto";
+
+option optimize_for = LITE_RUNTIME;
+
+message Cylinder {
+  Point3F p1 = 1;
+  Point3F p2 = 2;
+  float radius = 3;
+  Color4F color_base = 4;
+  Color4F color_top = 5;
+  Color4F color_incline = 6;
+}

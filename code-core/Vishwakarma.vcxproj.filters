@@ -14,8 +14,44 @@
       <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
       <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
     </Filter>
+    <Filter Include="code-miscellaneous">
+      <UniqueIdentifier>{5F83BE0D-9D0E-49E6-9D5C-6823A487E5B9}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="DataStorage.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_Common3D.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CONE.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CUBOID.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CYLINDER.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FRUSTUM_OF_CONE.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FRUSTUM_OF_PYRAMID.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PARALLELEPIPED.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PIPE.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PYRAMID.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_SPHERE.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
     <ClCompile Include="Main.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
@@ -91,6 +127,9 @@
     <ClCompile Include="..\code-external\zlib\zutil.c">
       <Filter>code-external\zlib</Filter>
     </ClCompile>
+    <ClCompile Include="..\code-external\sqlite\sqlite3.c">
+      <Filter>code-external</Filter>
+    </ClCompile>
     <ClCompile Include="..\code-external\libpng-code\pngread.c">
       <Filter>code-external\libpng</Filter>
     </ClCompile>
@@ -120,6 +159,12 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="DataStorage.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\code-core\CommonNamedNumbers.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
     <ClInclude Include="preCompiledHeadersWindows.h">
       <Filter>code-core</Filter>
     </ClInclude>
@@ -218,6 +263,41 @@
     <FxCompile Include="ShaderSceneVertex.hlsl" />
     <FxCompile Include="ShaderUIPixel.hlsl" />
     <FxCompile Include="ShaderUIVertex.hlsl" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="DataStorage_Common3D.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_CUBOID.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_CONE.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_CYLINDER.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_FRUSTUM_OF_CONE.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_FRUSTUM_OF_PYRAMID.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_PARALLELEPIPED.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_PIPE.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_PYRAMID.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_SPHERE.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="..\code-miscellaneous\GenerateDataStorageProtobuf.ps1">
+      <Filter>code-miscellaneous</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <Image Include="..\code-core\logo.ico">

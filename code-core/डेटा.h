@@ -113,9 +113,17 @@ struct META_DATA {
     void* operator new(uint64_t size, uint32_t memoryGroupNo) {
         return cpu.Allocate(size, memoryGroupNo);
     }
+    void operator delete(void* ptr, uint32_t memoryGroupNo) {
+        (void)memoryGroupNo;
+        cpu.Free(reinterpret_cast<std::byte*>(ptr));
+    }
     // It's good practice to provide overloaded new/delete for arrays as well.
     void* operator new[](uint64_t size, uint32_t memoryGroupNo) {
         return cpu.Allocate(size, memoryGroupNo);
+    }
+    void operator delete[](void* ptr, uint32_t memoryGroupNo) {
+        (void)memoryGroupNo;
+        cpu.Free(reinterpret_cast<std::byte*>(ptr));
     }
     /*No downstream derived class should create an object without specifying memoryGroupNo.
     This way we ensure more strict memory partitioning between isolated tabs.

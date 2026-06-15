@@ -13,3 +13,6 @@
 [submodule "code-external/msdf-atlas-gen"]
 	path = code-external/msdf-atlas-gen
 	url = https://github.com/Chlumsky/msdf-atlas-gen.git
+[submodule "code-external/protobuf"]
+	path = code-external/protobuf
+	url = https://github.com/protocolbuffers/protobuf.git

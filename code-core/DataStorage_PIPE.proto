@@ -1,0 +1,19 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+import "DataStorage_Common3D.proto";
+
+option optimize_for = LITE_RUNTIME;
+
+message Pipe {
+  Point3F center1 = 1;
+  Point3F center2 = 2;
+  float outside_diameter = 3;
+  float inside_diameter = 4;
+  Color4F color_outer = 5;
+  Color4F color_inner = 6;
+  Color4F color_cap = 7;
+}

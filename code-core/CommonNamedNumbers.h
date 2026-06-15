@@ -1,0 +1,42 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+#pragma once
+
+#include <cstdint>
+
+namespace VishwakarmaStorage {
+
+// C++ is the runtime source of truth for these MVP storage numbers.
+// The .proto payloads store the object fields; SQLite object_store.object_type stores these IDs.
+enum class ObjectType : uint32_t {
+    Unknown = 0,
+    Pyramid = 1,
+    Cuboid = 2,
+    Cone = 3,
+    Cylinder = 4,
+    Parallelepiped = 5,
+    Sphere = 6,
+    FrustumOfPyramid = 7,
+    FrustumOfCone = 8,
+    Pipe = 9,
+};
+
+enum class LifecycleState : uint32_t {
+    Live = 0,
+    SoftDeleted = 1,
+    TombstoneRetained = 2,
+    PurgedStubOrArchiveBoundary = 3,
+};
+
+constexpr uint16_t kGeometry3DMvpSchemaVersion = 1;
+constexpr uint64_t kMaxLocalObjectId = (1ULL << 40) - 1ULL;
+
+constexpr uint32_t ToNumber(ObjectType value) {
+    return static_cast<uint32_t>(value);
+}
+
+constexpr uint32_t ToNumber(LifecycleState value) {
+    return static_cast<uint32_t>(value);
+}
+
+} // namespace VishwakarmaStorage

@@ -7,6 +7,7 @@
 #include <iostream>
 #include <d3d12.h>
 #include "डेटा.h"
+#include "CommonNamedNumbers.h"
 #include <random>
 constexpr float M_PI = 3.1415926535f; // TODO: Why it's not coming from cmath library ?
 
@@ -22,6 +23,8 @@ inline std::mt19937& GetRNG() {
 
 // The most basic 3D Shapes.: Pyramid, Cuboid, Cone, Cylinder, Parallelepiped, Sphere
 struct PYRAMID :public META_DATA{
+    static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::Pyramid;
+    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
     //Mandatory Fields
     std::vector<XMFLOAT3> vertices; // Index 0,1,2 for base, 3 for apex
     std::vector<XMHALF4> colors; // RGBA format.
@@ -38,6 +41,8 @@ struct PYRAMID :public META_DATA{
 };
 
 struct CUBOID :public META_DATA {
+    static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::Cuboid;
+    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
     //Mandatory Fields
     std::vector<XMFLOAT3> vertices; // 8 corner vertices
     XMHALF4 colors = {};   // Common color for all faces.
@@ -52,6 +57,8 @@ struct CUBOID :public META_DATA {
 };
 
 struct CONE :public META_DATA {
+    static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::Cone;
+    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
     //Mandatory Fields
     XMFLOAT3 apex = {};
     XMFLOAT3 baseCenter = {};
@@ -68,6 +75,8 @@ struct CONE :public META_DATA {
 };
 
 struct CYLINDER :public META_DATA {
+    static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::Cylinder;
+    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
     //Mandatory Fields
     XMFLOAT3 p1 = {}, p2 = {}; // Center points of the two circular bases
     float radius = 1;
@@ -83,6 +92,8 @@ struct CYLINDER :public META_DATA {
 };
 
 struct PARALLELEPIPED :public META_DATA {
+    static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::Parallelepiped;
+    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
     //Mandatory Fields
     std::vector<XMFLOAT3> vertices; // 8 vertices
     XMHALF4 colors = {};   // common color for entire object. 
@@ -97,6 +108,8 @@ struct PARALLELEPIPED :public META_DATA {
 };
 
 struct SPHERE :public META_DATA {
+    static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::Sphere;
+    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
     //Mandatory Fields
     XMFLOAT3 center;
     float radius;
@@ -112,6 +125,8 @@ struct SPHERE :public META_DATA {
 };
 
 struct FRUSTUM_OF_PYRAMID :public META_DATA {
+    static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::FrustumOfPyramid;
+    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
     //Mandatory Fields
     std::vector<XMFLOAT3> vertices; // 8 vertices: 4 for bottom base, 4 for top base
     XMHALF4 colorBase = {}, colorTop = {}, colorIncline = {}; // There are 3 unique type of surfaces on a pyramid frustum.
@@ -126,6 +141,8 @@ struct FRUSTUM_OF_PYRAMID :public META_DATA {
 };
 
 struct  FRUSTUM_OF_CONE :public META_DATA {
+    static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::FrustumOfCone;
+    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
     //Mandatory Fields
     XMFLOAT3 bottomCenter = {}, topCenter = {};
     float bottomRadius = 1, topRadius = 1;
@@ -141,6 +158,8 @@ struct  FRUSTUM_OF_CONE :public META_DATA {
 };
 
 struct PIPE : public META_DATA {
+    static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::Pipe;
+    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
 
     // Mandatory Fields
     XMFLOAT3 center1 = {};
