@@ -39,6 +39,7 @@
 #include "MemoryManagerCPU.h"
 #include "MemoryManagerGPU-DirectX12.h"
 #include "UserInterface-DirectX12.h"
+#include "DataTreeView.h"
 #include "DataStorage.h"
 
 #include "UserInputProcessing.h"
@@ -109,6 +110,16 @@ DATASETTAB* GetActiveTabForUIAction() {
     uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
     if (tabCount > 0) return &allTabs[tabList[0]];
     return nullptr;
+}
+
+void PushSystemTodoToTab(DATASETTAB* tab, ACTION_TYPE actionType) {
+    if (!tab || !tab->todoCPUQueue) return;
+
+    ACTION_DETAILS request{};
+    request.actionType = actionType;
+    request.source = INPUT_SOURCE::SYSTEM;
+    request.timestamp = GetTickCount64();
+    tab->todoCPUQueue->push(request);
 }
 
 std::wstring FileNameFromPath(const std::wstring& path) {
@@ -303,10 +314,16 @@ void ProcessPendingUIActions() {
             CreateEngineeringTab();
         } else if (action.id == ACTION_ENGINEERING_CLOSE) {
             RequestCloseEngineeringTab(static_cast<uint16_t>(action.p1));
+        } else if (action.id == DataTreeView::kToggleEverythingUIAction) {
+            if (action.p1 < MV_MAX_TABS) {
+                PushSystemTodoToTab(&allTabs[action.p1], ACTION_TYPE::DATA_TREE_TOGGLE_EVERYTHING);
+            }
         } else if (action.id == static_cast<uint32_t>(Commands::PROJECT_SAVE)) {
             SaveActiveTabToStorage();
         } else if (action.id == static_cast<uint32_t>(Commands::PROJECT_OPEN)) {
             OpenStorageFileInNewTab();
+        } else if (action.id == static_cast<uint32_t>(Commands::FOLDER_VISIBILITY)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::DATA_TREE_TOGGLE_VISIBILITY);
         }
     }
 

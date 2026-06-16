@@ -129,6 +129,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscel
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="DataTreeView.cpp" />
     <ClCompile Include="DataStorage.cpp" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_Common3D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CONE.pb.cc" />
@@ -258,6 +259,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscel
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\code-core\CommonNamedNumbers.h" />
+    <ClInclude Include="DataTreeView.h" />
     <ClInclude Include="DataStorage.h" />
     <ClInclude Include="..\code-core\ID.h" />
     <ClInclude Include="..\code-core\MemoryManagerCPU.h" />

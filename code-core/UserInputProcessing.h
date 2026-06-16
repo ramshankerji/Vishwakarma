@@ -100,7 +100,9 @@ enum class ACTION_TYPE : uint16_t { // Specifying uint16_t ensures that it is of
     // 30000 to 32767 we are reserving for experiments.
 
     CREATEPYRAMID = 30001,
-    CLOSE_TAB = 30002
+    CLOSE_TAB = 30002,
+    DATA_TREE_TOGGLE_EVERYTHING = 30003,
+    DATA_TREE_TOGGLE_VISIBILITY = 30004
 };
 
 struct ACTION_DETAILS_OLD {

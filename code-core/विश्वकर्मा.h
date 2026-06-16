@@ -8,6 +8,7 @@
 #include "MemoryManagerGPU-DirectX12.h"
 #include "UserInputProcessing.h"
 #include "CommonNamedNumbers.h"
+#include "DataTreeView.h"
 
 #pragma once //It prevents multiple inclusions of the same header file.
 
@@ -143,6 +144,7 @@ struct DATASETTAB {
     CameraState camera; //Currently it is per tab. Latter we may move it to per view.
     bool autoCameraRotation = true;
     bool autoGenerateRandomGeometry = true;
+    DataTreeView::State dataTreeView;
     std::atomic<bool> closeRequested{ false };
     std::atomic<bool> engineeringReleased{ false };
     

@@ -483,6 +483,10 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
             } else if (nextWorkTODO.actionType == ACTION_TYPE::CLOSE_TAB) {
                 myTab->closeRequested.store(true, std::memory_order_release);
                 break;
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::DATA_TREE_TOGGLE_VISIBILITY) {
+                DataTreeView::ToggleVisibility(myTab->dataTreeView);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::DATA_TREE_TOGGLE_EVERYTHING) {
+                DataTreeView::ToggleEverything(myTab->dataTreeView);
             }
         }
         

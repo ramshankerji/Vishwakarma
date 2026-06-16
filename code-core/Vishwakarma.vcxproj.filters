@@ -19,6 +19,9 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="DataTreeView.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
     <ClCompile Include="DataStorage.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
@@ -159,6 +162,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="DataTreeView.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
     <ClInclude Include="DataStorage.h">
       <Filter>code-core</Filter>
     </ClInclude>

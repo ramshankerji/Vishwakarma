@@ -10,6 +10,7 @@
 #include <MemoryManagerGPU-DirectX12.h>
 #include "विश्वकर्मा.h"
 #include "TextureSaver.h"
+#include "DataTreeView.h"
 #include "UserInterfaceTranslationCompiled.h"
 #include <array>
 #include <cmath>
@@ -1324,6 +1325,53 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             }
             pushTextClipped(textX, textBaselineY(btnY, btnHeight, uiTextScale),
                 label, textWidth, textColor, uiTextScale);
+        }
+    }
+
+    const int activeTabIndex = window.activeTabIndex;
+    if (activeTabIndex >= 0 && activeTabIndex < MV_MAX_TABS) {
+        DATASETTAB& tab = allTabs[activeTabIndex];
+        const DataTreeView::StateSnapshot dataTreeState = DataTreeView::Snapshot(tab.dataTreeView);
+
+        if (dataTreeState.isVisible) {
+            std::vector<uint64_t> objectIds;
+            if (tab.storageObjectsMutex) {
+                std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
+                objectIds.reserve(tab.storageObjects3D.size());
+                for (const StoredGeometryObject3D& object : tab.storageObjects3D) {
+                    objectIds.push_back(object.memoryId);
+                }
+            }
+
+            DataTreeView::BuildRequest treeRequest;
+            treeRequest.tabName = tab.fileName;
+            treeRequest.objectIds = &objectIds;
+            treeRequest.viewportTopPx = topUITotalHeightPx;
+            treeRequest.viewportHeightPx = std::max(0.0f, H - topUITotalHeightPx);
+            treeRequest.pixelsPerMMX = pixelsPerMMx;
+            treeRequest.pixelsPerMMY = pixelsPerMMy;
+
+            const std::vector<DataTreeView::Row> treeRows =
+                DataTreeView::BuildRows(treeRequest, dataTreeState);
+            const bool everythingToggleHovered =
+                DataTreeView::HitTestEverythingToggle(treeRows, input.mouseX, input.mouseY);
+
+            if (everythingToggleHovered && input.leftButtonPressedThisFrame) {
+                PushUIAction(DataTreeView::kToggleEverythingUIAction, static_cast<uint32_t>(activeTabIndex), 0);
+            }
+
+            for (const DataTreeView::Row& row : treeRows) {
+                const uint32_t rowColor = (row.kind == DataTreeView::RowKind::EverythingFolder &&
+                    everythingToggleHovered) ? 0xFF3399FF : 0xFFFFFFFF;
+                const float baselineY = textBaselineY(row.y, row.height, uiTextScale);
+
+                if (row.hasToggle) {
+                    const char32_t toggleText[2] = { row.isExpanded ? U'-' : U'+', U'\0' };
+                    pushTextClipped(row.toggleX, baselineY, toggleText, row.toggleWidth, rowColor, uiTextScale);
+                }
+
+                pushTextClipped(row.textX, baselineY, row.label.c_str(), row.textMaxWidth, rowColor, uiTextScale);
+            }
         }
     }
 
