@@ -17,10 +17,22 @@ $candidateProtocPaths = @()
 if (![string]::IsNullOrWhiteSpace($ProtocPath)) {
     $candidateProtocPaths += $ProtocPath
 }
+
+# Check if protoc is installed globally (like via Chocolatey) and accessible via system PATH
+$globalProtoc = Get-Command "protoc" -CommandType Application -ErrorAction SilentlyContinue
+if ($globalProtoc) {
+    $candidateProtocPaths += $globalProtoc.Source
+}
+
 $candidateProtocPaths += @(
     (Join-Path $repoRoot "build\protobuf-x64-debug\Debug\protoc.exe"),
     (Join-Path $repoRoot "build\protobuf-x64-release\Release\protoc.exe")
 )
+
+$resolvedProtocPath = $candidateProtocPaths |
+    Where-Object { ![string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) } |
+    Select-Object -First 1
+
 
 $resolvedProtocPath = $candidateProtocPaths |
     Where-Object { ![string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) } |

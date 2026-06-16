@@ -5,6 +5,11 @@ on:
   push:
     branches: [ "main" ]
 
+# Automatically cancel any previous runs for this workflow on the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
@@ -17,23 +22,54 @@ jobs:
       with:
         # This ensures that submodules are also checked out.
         submodules: recursive
-    
+
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
 
-    - name: Install FontForge
+    - name: Cache Protobuf Build
+      # Without this caching step, build was taking around 15 minutes. Just for this step!
+      id: cache-protobuf
+      uses: actions/cache@v4
+      with:
+        path: build/protobuf-x64-release
+        # Creates a unique cache key based on the OS and the contents of Protobuf's CMakeLists.txt
+        key: ${{ runner.os }}-protobuf-${{ hashFiles('code-external/protobuf/CMakeLists.txt') }}
+
+    # 2. UPDATE YOUR EXISTING BUILD STEP WITH AN 'if' CONDITION
+    - name: Build Protobuf and Fetch Abseil
+      if: steps.cache-protobuf.outputs.cache-hit != 'true'
+      run: |
+        # Configure Protobuf. The two new flags force CMake and Protobuf to use /MD (MultiThreadedDLL)
+        cmake -S code-external/protobuf -B build/protobuf-x64-release -Dprotobuf_BUILD_TESTS=OFF `
+          -DCMAKE_BUILD_TYPE=Release -Dprotobuf_MSVC_STATIC_RUNTIME=OFF `
+          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL -DCMAKE_CXX_STANDARD=20 `
+          -DCMAKE_CXX_FLAGS="/std:c++20"
+
+        # Build Protobuf so the .lib files are ready for the linker. 
+        # The /verbosity:minimal flag reduces the amount of output in the logs.
+        cmake --build build/protobuf-x64-release --config Release -- /m /v:q /clp:ErrorsOnly
+
+    - name: Install System Dependencies (FontForge & CLOC)
       shell: pwsh
       run: |
-        choco install protoc fontforge -y --no-progress
+        # Install everything at once
+        choco install fontforge cloc -y --no-progress
+
+        # Expose FontForge to subsequent steps
         $ffPath = "C:\Program Files\FontForgeBuilds\bin"
-        echo "$ffPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        Add-Content -Path $env:GITHUB_PATH -Value $ffPath
         $env:PATH += ";$ffPath"
         fontforge -version
+    
+    - name: Setup Python and Install Dependencies
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x' # This will always grab the latest stable minor release of Python 3
+        # We shall freeze version ONLY when we have a specific reason to do so. For now, we want the latest stable version of Python 3.
+        cache: 'pip' 
+    - name: Install Pip Packages
+      run: pip install fonttools svgpathtools cu2qu pillow
 
-    - name: Install Python dependencies
-      run: |
-        pip install fonttools svgpathtools cu2qu 
-        pip install pillow
     - name: Build icon font
       run: |
         python code-miscellaneous/build_icon_font.py
@@ -51,12 +87,14 @@ jobs:
         if (!(Test-Path $dst)) {
           Copy-Item $src $dst
         }
+    
     - name: Build FreeType
-      run: msbuild code-external/freetype/builds/windows/vc2010/freetype.vcxproj /p:Configuration="Release Static" /p:Platform=x64
+      run: msbuild code-external/freetype/builds/windows/vc2010/freetype.vcxproj /p:Configuration="Release Static" /p:Platform=x64 /m
     - name: Build Main Project in Release Mode
       #run: msbuild Vishwakarma.sln /p:Configuration=Release /p:Platform=x64
       # We are forcing to downgrade to v143 since this is what is available on GitHub Actions runners.
-      run: msbuild Vishwakarma.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143
+      # run: msbuild Vishwakarma.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /m
+      run: msbuild Vishwakarma.sln /p:Configuration=Release /p:Platform=x64 /m
 
     # DEBUG STEP: Verify the file actually exists
     - name: Verify Executable Exists
@@ -72,7 +110,6 @@ jobs:
     - name: Count Lines of Code
       shell: pwsh
       run: |
-        choco install cloc -y --no-progress --limit-output | Out-Null
         cloc . --exclude-dir=code-external,build,.git `
           --include-ext=cpp,h,hpp,hlsl,md,css,js,html `
           --json --quiet --out=cloc.json
