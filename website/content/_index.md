@@ -62,4 +62,6 @@ Python API, Web API
 
 
 **Current Status of Mission Vishwakarma**  
-As on 2024, all modules are in planning stage and under preliminary design by Ram Shanker. This road is full of challenges. Technical and Non-Technical both. Once we have Minimum Functionality available in each of the modules, software shall be opened for general public  participation and contribution of their improvement. Till than, all code behind this software may be considered property of my employer.
+June 2026:  Our graphics engine is working. Many optimizations to be implemented. Basic User-Interface is done. Localization is enabled. Work-In-Progress on data storage and retrieval. Once this is ready, we can move to Engineering Development.  
+
+2024 December: All modules are in planning stage and under preliminary design by Ram Shanker. This road is full of challenges. Technical and Non-Technical both. Once we have Minimum Functionality available in each of the modules, software shall be opened for general public  participation and contribution of their improvement. Till than, all code behind this software may be considered property of my employer.

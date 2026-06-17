@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="565" height="531" viewBox="0 0 565 531" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="dialogShadow" x="0" y="0" width="565" height="531" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feOffset dx="6" dy="8"/>
+      <feGaussianBlur stdDeviation="8"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.22 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow" result="shape"/>
+    </filter>
+
+    <clipPath id="dialogClip">
+      <rect x="15" y="17" width="532" height="498" rx="7" ry="7"/>
+    </clipPath>
+  </defs>
+
+  <!-- Screen capture background -->
+  <rect width="565" height="531" fill="#F6F5F3"/>
+
+  <!-- SmartScreen dialog -->
+  <g filter="url(#dialogShadow)">
+    <rect x="15" y="17" width="532" height="498" rx="7" ry="7" fill="#0078D7"/>
+  </g>
+
+  <g clip-path="url(#dialogClip)">
+    <!-- Close button panel -->
+    <rect x="501" y="17" width="46" height="33" fill="#FFFFFF"/>
+    <line x1="520" y1="29" x2="529" y2="38" stroke="#111111" stroke-width="1.25" stroke-linecap="square"/>
+    <line x1="529" y1="29" x2="520" y2="38" stroke="#111111" stroke-width="1.25" stroke-linecap="square"/>
+
+    <!-- Content -->
+    <text x="36" y="66"
+          font-family="Segoe UI, Arial, Helvetica, sans-serif"
+          font-size="28" font-weight="400" fill="#FFFFFF">Windows protected your PC</text>
+
+    <text x="37" y="110"
+          font-family="Segoe UI, Arial, Helvetica, sans-serif"
+          font-size="14" font-weight="400" fill="#FFFFFF">Microsoft Defender SmartScreen prevented an unrecognised app from</text>
+    <text x="37" y="129"
+          font-family="Segoe UI, Arial, Helvetica, sans-serif"
+          font-size="14" font-weight="400" fill="#FFFFFF">starting. Running this app might put your PC at risk.</text>
+
+    <text x="37" y="163"
+          font-family="Segoe UI, Arial, Helvetica, sans-serif"
+          font-size="14" font-weight="400" fill="#FFFFFF">Application:</text>
+    <text x="117" y="163"
+          font-family="Segoe UI, Arial, Helvetica, sans-serif"
+          font-size="14" font-weight="400" fill="#FFFFFF">Vishwakarma.exe</text>
+
+    <text x="37" y="186"
+          font-family="Segoe UI, Arial, Helvetica, sans-serif"
+          font-size="14" font-weight="400" fill="#FFFFFF">Publisher:</text>
+    <text x="117" y="186"
+          font-family="Segoe UI, Arial, Helvetica, sans-serif"
+          font-size="14" font-weight="400" fill="#FFFFFF">Unknown publisher</text>
+
+    <!-- Action buttons -->
+    <rect x="296" y="455" width="110" height="35" rx="0" fill="#F2F2F2"/>
+    <rect x="426" y="455" width="93" height="35" rx="0" fill="#F2F2F2"/>
+
+    <text x="351" y="478"
+          text-anchor="middle"
+          font-family="Segoe UI, Arial, Helvetica, sans-serif"
+          font-size="13" font-weight="600" fill="#000000">Run anyway</text>
+    <text x="472.5" y="478"
+          text-anchor="middle"
+          font-family="Segoe UI, Arial, Helvetica, sans-serif"
+          font-size="13" font-weight="600" fill="#000000">Don't run</text>
+  </g>
+</svg>

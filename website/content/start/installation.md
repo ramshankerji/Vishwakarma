@@ -2,10 +2,19 @@
 title: "Installation / System Requirement"
 weight: 11101
 ---
+![Windows SmartScreen warning for Vishwakarma.exe](/windows_smartscreen_vishwakarma.svg)
+
+# Windows SmartScreen Notice
+Windows may show this SmartScreen prompt when you run `Vishwakarma.exe`. This happens because Mission Vishwakarma is free and open source software and our executable is not yet code signed.
+
+We are waiting for about INR 50k in funding so we can purchase a code signing certificate and remove this annoying warning for users. Until then, please download the executable only from our official release link:
+
+[Download Vishwakarma.exe directly](https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma.exe)
+
 # Basics
 Just build anything meeting the minimum System Requirement.  
 Keyboard & Mouse (Left+Middle+Right button) is common to all Desktops (PCs).  
-Any of the Apple Computers with M series processors are also supported.  
+Apple Computers with M series processors will also be supported in future. Not supported as of July 2026.  
 
 # Minimum System Requirement
 These requirements are already met be all the Pre-Configured Desktop / Server systems listed further below.

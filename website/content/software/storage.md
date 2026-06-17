@@ -1,6 +1,6 @@
 ---
 title: "Storage of Data"
-weight: 100111
+weight: 100102
 ---
 0. Design goal
 
