@@ -19,6 +19,9 @@ enum class ObjectType : uint32_t {
     FrustumOfPyramid = 7,
     FrustumOfCone = 8,
     Pipe = 9,
+    Folder = 10,
+    Page2D = 11,
+    Scene3D = 12,
 };
 
 enum class LifecycleState : uint32_t {
@@ -29,6 +32,7 @@ enum class LifecycleState : uint32_t {
 };
 
 constexpr uint16_t kGeometry3DMvpSchemaVersion = 1;
+constexpr uint16_t kLogicalElementSchemaVersion = 1;
 constexpr uint64_t kMaxLocalObjectId = (1ULL << 40) - 1ULL;
 
 constexpr uint32_t ToNumber(ObjectType value) {
@@ -37,6 +41,34 @@ constexpr uint32_t ToNumber(ObjectType value) {
 
 constexpr uint32_t ToNumber(LifecycleState value) {
     return static_cast<uint32_t>(value);
+}
+
+constexpr bool IsGeometry3DObjectType(ObjectType value) {
+    return value >= ObjectType::Pyramid && value <= ObjectType::Pipe;
+}
+
+constexpr bool IsLogicalObjectType(ObjectType value) {
+    return value == ObjectType::Folder ||
+        value == ObjectType::Page2D ||
+        value == ObjectType::Scene3D;
+}
+
+inline const char* ObjectTypeDisplayName(ObjectType value) {
+    switch (value) {
+    case ObjectType::Pyramid: return "Pyramid";
+    case ObjectType::Cuboid: return "Cuboid";
+    case ObjectType::Cone: return "Cone";
+    case ObjectType::Cylinder: return "Cylinder";
+    case ObjectType::Parallelepiped: return "Parallelepiped";
+    case ObjectType::Sphere: return "Sphere";
+    case ObjectType::FrustumOfPyramid: return "Frustum of Pyramid";
+    case ObjectType::FrustumOfCone: return "Frustum of Cone";
+    case ObjectType::Pipe: return "Pipe";
+    case ObjectType::Folder: return "Folder";
+    case ObjectType::Page2D: return "Page2D";
+    case ObjectType::Scene3D: return "Scene3D";
+    default: return "Unknown";
+    }
 }
 
 } // namespace VishwakarmaStorage

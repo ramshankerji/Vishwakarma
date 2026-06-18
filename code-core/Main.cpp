@@ -112,12 +112,17 @@ DATASETTAB* GetActiveTabForUIAction() {
     return nullptr;
 }
 
-void PushSystemTodoToTab(DATASETTAB* tab, ACTION_TYPE actionType) {
+void PushSystemTodoToTab(DATASETTAB* tab, ACTION_TYPE actionType, int x = 0,
+    int y = 0, int delta = 0, uint64_t objectId = 0) {
     if (!tab || !tab->todoCPUQueue) return;
 
     ACTION_DETAILS request{};
     request.actionType = actionType;
     request.source = INPUT_SOURCE::SYSTEM;
+    request.x = x;
+    request.y = y;
+    request.delta = delta;
+    request.objectId = objectId;
     request.timestamp = GetTickCount64();
     tab->todoCPUQueue->push(request);
 }
@@ -189,10 +194,15 @@ DATASETTAB* CreateEngineeringTab(const std::wstring& displayName = L"",
     tab.mode = storageFilePath.empty() ? 0 : 1;
     tab.autoGenerateRandomGeometry = autoGenerateRandomGeometry;
     tab.allIDsInThisTab.clear();
+    tab.dataTreeView.isVisible.store(false, std::memory_order_release);
+    tab.dataTreeView.everythingExpanded.store(true, std::memory_order_release);
     if (!tab.storageObjectsMutex) tab.storageObjectsMutex = std::make_unique<std::mutex>();
     {
         std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
+        tab.storageLogicalObjects.clear();
         tab.storageObjects3D.clear();
+        tab.expandedDataTreeNodeIds.clear();
+        tab.defaultScene3DMemoryId = 0;
     }
     tab.closeRequested.store(false, std::memory_order_release);
     tab.engineeringReleased.store(false, std::memory_order_release);
@@ -316,7 +326,12 @@ void ProcessPendingUIActions() {
             RequestCloseEngineeringTab(static_cast<uint16_t>(action.p1));
         } else if (action.id == DataTreeView::kToggleEverythingUIAction) {
             if (action.p1 < MV_MAX_TABS) {
-                PushSystemTodoToTab(&allTabs[action.p1], ACTION_TYPE::DATA_TREE_TOGGLE_EVERYTHING);
+                PushSystemTodoToTab(&allTabs[static_cast<uint16_t>(action.p1)], ACTION_TYPE::DATA_TREE_TOGGLE_EVERYTHING);
+            }
+        } else if (action.id == DataTreeView::kToggleNodeUIAction) {
+            if (action.p1 < MV_MAX_TABS) {
+                PushSystemTodoToTab(&allTabs[static_cast<uint16_t>(action.p1)],
+                    ACTION_TYPE::DATA_TREE_TOGGLE_NODE, 0, 0, 0, action.p2);
             }
         } else if (action.id == static_cast<uint32_t>(Commands::PROJECT_SAVE)) {
             SaveActiveTabToStorage();
@@ -324,6 +339,15 @@ void ProcessPendingUIActions() {
             OpenStorageFileInNewTab();
         } else if (action.id == static_cast<uint32_t>(Commands::FOLDER_VISIBILITY)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::DATA_TREE_TOGGLE_VISIBILITY);
+        } else if (action.id == static_cast<uint32_t>(Commands::CREATE_FOLDER)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::CREATE_LOGICAL_OBJECT,
+                static_cast<int>(VishwakarmaStorage::ToNumber(VishwakarmaStorage::ObjectType::Folder)));
+        } else if (action.id == static_cast<uint32_t>(Commands::CREATE_PAGE2D)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::CREATE_LOGICAL_OBJECT,
+                static_cast<int>(VishwakarmaStorage::ToNumber(VishwakarmaStorage::ObjectType::Page2D)));
+        } else if (action.id == static_cast<uint32_t>(Commands::CREATE_SCENE3D)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::CREATE_LOGICAL_OBJECT,
+                static_cast<int>(VishwakarmaStorage::ToNumber(VishwakarmaStorage::ObjectType::Scene3D)));
         }
     }
 

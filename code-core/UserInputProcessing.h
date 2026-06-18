@@ -102,7 +102,9 @@ enum class ACTION_TYPE : uint16_t { // Specifying uint16_t ensures that it is of
     CREATEPYRAMID = 30001,
     CLOSE_TAB = 30002,
     DATA_TREE_TOGGLE_EVERYTHING = 30003,
-    DATA_TREE_TOGGLE_VISIBILITY = 30004
+    DATA_TREE_TOGGLE_VISIBILITY = 30004,
+    CREATE_LOGICAL_OBJECT = 30005,
+    DATA_TREE_TOGGLE_NODE = 30006
 };
 
 struct ACTION_DETAILS_OLD {
@@ -127,6 +129,7 @@ struct ACTION_DETAILS {
     int x;       // Mouse X or Key Code
     int y;       // Mouse Y or Modifier Flags
     int delta;   // Scroll wheel delta
+    uint64_t objectId = 0; // Optional engineering object ID for system actions.
     uint64_t timestamp; // Time of event (crucial for accurate physics/throttling)
     
     // Window/View context (if needed by logic)

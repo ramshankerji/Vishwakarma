@@ -312,8 +312,8 @@ constexpr uint32_t ACTION_RING_SIZE = 4096;
 // Simpler thread-safe queue for UI -> Engine actions (protected by mutex)
 struct UIActionEntry {
     uint32_t id;
-    uint32_t p1;
-    uint32_t p2;
+    uint64_t p1;
+    uint64_t p2;
 };
 
 //TODO: WARNING: Get rid of mutex and use lock-free multi producer single consumer ring buffer for this.
@@ -321,7 +321,7 @@ extern std::mutex g_actionQueueMutex;
 extern std::deque<UIActionEntry> g_actionQueue;
 
 // Call from UI thread: push an action into the global action queue
-inline void PushUIAction(uint32_t id, uint32_t p1 = 0, uint32_t p2 = 0) {
+inline void PushUIAction(uint32_t id, uint64_t p1 = 0, uint64_t p2 = 0) {
     std::lock_guard<std::mutex> lk(g_actionQueueMutex);
     g_actionQueue.push_back({ id, p1, p2 });
     // actionRing[idx] = { id, p1, p2, /*timestamp*/ };
@@ -445,7 +445,7 @@ constexpr UIControlDefinition AllUIControls[] = {
     { Commands::CREATE_ARC,            UITextID::CREATE_ARC, U'x', 1, 3, 1, 0, true, true, 1 , 5 },
     { Commands::CREATE_ELLIPSE,        UITextID::CREATE_ELLIPSE, U'x', 1, 3, 2, 0, true, true, 1 , 5 },
     // Nurbs are very powerfull!
-    // They genralize Bezier Curves, B-Splines, Conic Sections (Circle/ellipses/parabola/hyperbola)
+    // They generalize Bezier Curves, B-Splines, Conic Sections (Circle/ellipses/parabola/hyperbola)
     { Commands::CREATE_NURBS,           UITextID::CREATE_NURBS, U'x', 1, 3, 0, 0, true, true, 1 , 5 },
     { Commands::CREATE_TEXT,            UITextID::CREATE_TEXT, U'x', 1, 3, 1, 0, true, true, 1 , 5 },
     { Commands::CREATE_SPECIALTEXT,     UITextID::CREATE_SPECIALTEXT, U'x', 1, 3, 2, 0, true, true, 1 , 5 },

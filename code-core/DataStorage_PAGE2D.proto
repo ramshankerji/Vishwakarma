@@ -1,0 +1,15 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+option optimize_for = LITE_RUNTIME;
+
+message Page2D {
+  string name = 1;
+  float width_mm = 2;
+  float height_mm = 3;
+  uint64 previous_sequence_no = 4;
+  uint64 next_sequence_no = 5;
+}

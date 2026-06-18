@@ -14,6 +14,7 @@
 #include <optional>
 #include <new> // Required for std::align_val_t
 #include <d3d12.h>
+#include "CommonNamedNumbers.h"
 #include "ID.h"
 #include "MemoryManagerCPU.h"
 //#include "MemoryManagerGPU.h" // This file must not depend on GPU manager.
@@ -152,6 +153,7 @@ class CustomString {// System Limit: 4 GB for individual dynamically allocated p
     //i.e. store the byte directly in "bytes" variable. It's called Small String Optimization.
     std::byte* str; //utf8 encoded.
 
+public:
     CustomString() {
         allocatedBytes = 0;
         usedBytes = 0;
@@ -173,17 +175,41 @@ This is our administrative element used for selection tree organization.
 This will also provide the short-codes used for naming of various equipments & instruments
 buildings, or any way people may want to organize their information.*/
 struct FOLDER : META_DATA {
+    static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::Folder;
+    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kLogicalElementSchemaVersion;
     
     //Mandatory Properties
-    char name[128];     //Null terminated utf-8 encoded string.
-    char shortCode[16]; //Short Prefix for naming use. utf-8 encoded.
-    uint64_t previousSequenceNo, nextSequenceNo; //For display in selection tree.
+    char name[128] = {};     //Null terminated utf-8 encoded string.
+    char shortCode[16] = {}; //Short Prefix for naming use. utf-8 encoded.
+    uint64_t previousSequenceNo = 0, nextSequenceNo = 0; //For display in selection tree.
     //TODO: Design an approach such that we can do sequencing using just 8 bytes instead of 16.
 
-    uint16_t optionalFieldsFlags;  // Bit-mask for up to 16 Optional Fields - 8 Bytes.
-    uint16_t systemFlags;          // 32 booleans for internal use only. Not persisted.
+    uint16_t optionalFieldsFlags = 0;  // Bit-mask for up to 16 Optional Fields - 8 Bytes.
+    uint16_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
 
     //Variable Length Properties
     CustomString displayName; // Optionally 
+};
+
+struct PAGE2D : META_DATA {
+    static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::Page2D;
+    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kLogicalElementSchemaVersion;
+
+    char name[128] = {};
+    float widthMM = 841.0f;
+    float heightMM = 594.0f;
+    uint64_t previousSequenceNo = 0, nextSequenceNo = 0;
+    uint16_t optionalFieldsFlags = 0;
+    uint16_t systemFlags = 0;
+};
+
+struct SCENE3D : META_DATA {
+    static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::Scene3D;
+    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kLogicalElementSchemaVersion;
+
+    char name[128] = {};
+    uint64_t previousSequenceNo = 0, nextSequenceNo = 0;
+    uint16_t optionalFieldsFlags = 0;
+    uint16_t systemFlags = 0;
 };
 

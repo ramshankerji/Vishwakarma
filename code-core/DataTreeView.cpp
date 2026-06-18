@@ -6,7 +6,10 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <functional>
 #include <system_error>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace DataTreeView {
@@ -39,6 +42,23 @@ void ToggleVisibility(State& state) {
 void ToggleEverything(State& state) {
     const bool isExpanded = state.everythingExpanded.load(std::memory_order_acquire);
     state.everythingExpanded.store(!isExpanded, std::memory_order_release);
+}
+
+std::u32string AsciiToDisplayText(const char* text) {
+    std::u32string result;
+    if (!text) return result;
+
+    for (const char* p = text; *p; ++p) {
+        const unsigned char ch = static_cast<unsigned char>(*p);
+        if (ch >= 0x20 && ch <= 0x7E) {
+            result.push_back(static_cast<char32_t>(ch));
+        } else {
+            result.push_back(U'?');
+        }
+    }
+
+    if (result.empty()) result = Literal("Untitled");
+    return result;
 }
 
 std::u32string WideToDisplayText(std::wstring_view text) {
@@ -88,7 +108,9 @@ std::vector<Row> BuildRows(const BuildRequest& request, const StateSnapshot& sta
     const size_t maxRows = static_cast<size_t>(std::floor(availableHeight / rowHeight));
     if (maxRows == 0) return rows;
 
-    rows.reserve((std::min)(maxRows, static_cast<size_t>(2 + (request.objectIds ? request.objectIds->size() : 0))));
+    const size_t nodeCount = request.nodes ? request.nodes->size() : 0;
+    const size_t reserveRows = (std::min)(maxRows, static_cast<size_t>(1 + nodeCount));
+    rows.reserve(reserveRows);
 
     auto pushRow = [&](RowKind kind, std::u32string label, uint32_t depth,
         bool hasToggle, bool isExpanded, uint64_t objectId) {
@@ -115,28 +137,78 @@ std::vector<Row> BuildRows(const BuildRequest& request, const StateSnapshot& sta
         return true;
     };
 
-    pushRow(RowKind::TabName, WideToDisplayText(request.tabName), 0, false, false, 0);
-    pushRow(RowKind::EverythingFolder, Literal("Everything"), 1, true, state.everythingExpanded, 0);
-
-    if (state.everythingExpanded && request.objectIds) {
-        for (uint64_t objectId : *request.objectIds) {
-            if (!pushRow(RowKind::ObjectId, UInt64ToDecimalText(objectId), 2, false, false, objectId)) {
-                break;
-            }
+    std::unordered_set<uint64_t> expandedNodeIds;
+    if (request.expandedNodeIds) {
+        expandedNodeIds.reserve(request.expandedNodeIds->size());
+        for (uint64_t objectId : *request.expandedNodeIds) {
+            expandedNodeIds.insert(objectId);
         }
     }
 
+    std::unordered_map<uint64_t, std::vector<size_t>> childrenByParent;
+    if (request.nodes) {
+        childrenByParent.reserve(request.nodes->size() + 1);
+        for (size_t i = 0; i < request.nodes->size(); ++i) {
+            childrenByParent[(*request.nodes)[i].parentObjectId].push_back(i);
+        }
+    }
+
+    const bool rootHasChildren = childrenByParent.find(0) != childrenByParent.end();
+    pushRow(RowKind::TabName, WideToDisplayText(request.tabName), 0,
+        rootHasChildren, state.everythingExpanded, 0);
+
+    if (!state.everythingExpanded || !request.nodes) return rows;
+
+    std::unordered_set<uint64_t> visited;
+    visited.reserve(request.nodes->size());
+
+    std::function<bool(uint64_t, uint32_t)> pushChildren = [&](uint64_t parentId, uint32_t depth) {
+        auto childrenIt = childrenByParent.find(parentId);
+        if (childrenIt == childrenByParent.end()) return true;
+
+        for (size_t childIndex : childrenIt->second) {
+            const Node& node = (*request.nodes)[childIndex];
+            if (node.objectId == 0 || !visited.insert(node.objectId).second) continue;
+
+            auto grandchildrenIt = childrenByParent.find(node.objectId);
+            const bool hasChildren = grandchildrenIt != childrenByParent.end() && !grandchildrenIt->second.empty();
+            const bool isExpanded = expandedNodeIds.find(node.objectId) != expandedNodeIds.end();
+            if (!pushRow(RowKind::ObjectNode, node.label, depth, hasChildren, isExpanded, node.objectId)) {
+                return false;
+            }
+
+            if (hasChildren && isExpanded) {
+                if (!pushChildren(node.objectId, depth + 1)) return false;
+            }
+        }
+        return true;
+    };
+
+    pushChildren(0, 1);
     return rows;
 }
 
 bool HitTestEverythingToggle(const std::vector<Row>& rows, float mouseX, float mouseY) {
     for (const Row& row : rows) {
-        if (row.kind != RowKind::EverythingFolder || !row.hasToggle) continue;
+        if (row.kind != RowKind::TabName || !row.hasToggle) continue;
         if (mouseX >= row.toggleX && mouseX < row.toggleX + row.toggleWidth &&
             mouseY >= row.toggleY && mouseY < row.toggleY + row.toggleHeight) {
             return true;
         }
     }
+    return false;
+}
+
+bool HitTestToggle(const std::vector<Row>& rows, float mouseX, float mouseY, uint64_t& objectId) {
+    for (const Row& row : rows) {
+        if (!row.hasToggle) continue;
+        if (mouseX >= row.toggleX && mouseX < row.toggleX + row.toggleWidth &&
+            mouseY >= row.toggleY && mouseY < row.toggleY + row.toggleHeight) {
+            objectId = row.objectId;
+            return true;
+        }
+    }
+    objectId = 0;
     return false;
 }
 

@@ -14,6 +14,7 @@
 #include "UserInterfaceTranslationCompiled.h"
 #include <array>
 #include <cmath>
+#include <utility>
 extern शंकर gpu;
 extern std::atomic<uint16_t*> publishedTabIndexes;
 extern std::atomic<uint16_t>  publishedTabCount;
@@ -41,6 +42,37 @@ struct UIIconAtlasMetadata {
 };
 
 static UIIconAtlasMetadata gIconAtlasMetadata{};
+
+static const char* LogicalObjectName(VishwakarmaStorage::ObjectType objectType, const META_DATA* object) {
+    if (!object) return "";
+
+    switch (objectType) {
+    case VishwakarmaStorage::ObjectType::Folder:
+        return static_cast<const FOLDER*>(object)->name;
+    case VishwakarmaStorage::ObjectType::Page2D:
+        return static_cast<const PAGE2D*>(object)->name;
+    case VishwakarmaStorage::ObjectType::Scene3D:
+        return static_cast<const SCENE3D*>(object)->name;
+    default:
+        return "";
+    }
+}
+
+static std::u32string BuildTreeNodeLabel(VishwakarmaStorage::ObjectType objectType,
+    const META_DATA* object, uint64_t memoryId) {
+    if (VishwakarmaStorage::IsLogicalObjectType(objectType)) {
+        const char* name = LogicalObjectName(objectType, object);
+        if (name && name[0] != '\0') return DataTreeView::AsciiToDisplayText(name);
+        return DataTreeView::AsciiToDisplayText(VishwakarmaStorage::ObjectTypeDisplayName(objectType));
+    }
+
+    std::u32string label = DataTreeView::AsciiToDisplayText(
+        VishwakarmaStorage::ObjectTypeDisplayName(objectType));
+    label.push_back(U' ');
+    std::u32string idText = DataTreeView::UInt64ToDecimalText(memoryId);
+    label.append(idText);
+    return label;
+}
 
 static UIAtlasRegion MakeAtlasRegion(int x, int y, int w, int h, int atlasW, int atlasH) {
     UIAtlasRegion region{};
@@ -1334,18 +1366,36 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         const DataTreeView::StateSnapshot dataTreeState = DataTreeView::Snapshot(tab.dataTreeView);
 
         if (dataTreeState.isVisible) {
-            std::vector<uint64_t> objectIds;
+            std::vector<DataTreeView::Node> treeNodes;
+            std::vector<uint64_t> expandedNodeIds;
             if (tab.storageObjectsMutex) {
                 std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
-                objectIds.reserve(tab.storageObjects3D.size());
+                treeNodes.reserve(tab.storageLogicalObjects.size() + tab.storageObjects3D.size());
+                expandedNodeIds = tab.expandedDataTreeNodeIds;
+
+                for (const StoredLogicalObject& object : tab.storageLogicalObjects) {
+                    if (!object.object) continue;
+                    DataTreeView::Node node;
+                    node.objectId = object.object->memoryID;
+                    node.parentObjectId = object.object->memoryIDParent;
+                    node.label = BuildTreeNodeLabel(object.objectType, object.object, object.memoryId);
+                    treeNodes.push_back(std::move(node));
+                }
+
                 for (const StoredGeometryObject3D& object : tab.storageObjects3D) {
-                    objectIds.push_back(object.memoryId);
+                    if (!object.object) continue;
+                    DataTreeView::Node node;
+                    node.objectId = object.object->memoryID;
+                    node.parentObjectId = object.object->memoryIDParent;
+                    node.label = BuildTreeNodeLabel(object.objectType, object.object, object.memoryId);
+                    treeNodes.push_back(std::move(node));
                 }
             }
 
             DataTreeView::BuildRequest treeRequest;
             treeRequest.tabName = tab.fileName;
-            treeRequest.objectIds = &objectIds;
+            treeRequest.nodes = &treeNodes;
+            treeRequest.expandedNodeIds = &expandedNodeIds;
             treeRequest.viewportTopPx = topUITotalHeightPx;
             treeRequest.viewportHeightPx = std::max(0.0f, H - topUITotalHeightPx);
             treeRequest.pixelsPerMMX = pixelsPerMMx;
@@ -1353,16 +1403,22 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
 
             const std::vector<DataTreeView::Row> treeRows =
                 DataTreeView::BuildRows(treeRequest, dataTreeState);
-            const bool everythingToggleHovered =
-                DataTreeView::HitTestEverythingToggle(treeRows, input.mouseX, input.mouseY);
+            uint64_t hoveredToggleObjectId = 0;
+            const bool toggleHovered =
+                DataTreeView::HitTestToggle(treeRows, input.mouseX, input.mouseY, hoveredToggleObjectId);
 
-            if (everythingToggleHovered && input.leftButtonPressedThisFrame) {
-                PushUIAction(DataTreeView::kToggleEverythingUIAction, static_cast<uint32_t>(activeTabIndex), 0);
+            if (toggleHovered && input.leftButtonPressedThisFrame) {
+                if (hoveredToggleObjectId == 0) {
+                    PushUIAction(DataTreeView::kToggleEverythingUIAction, static_cast<uint32_t>(activeTabIndex), 0);
+                } else {
+                    PushUIAction(DataTreeView::kToggleNodeUIAction,
+                        static_cast<uint32_t>(activeTabIndex), hoveredToggleObjectId);
+                }
             }
 
             for (const DataTreeView::Row& row : treeRows) {
-                const uint32_t rowColor = (row.kind == DataTreeView::RowKind::EverythingFolder &&
-                    everythingToggleHovered) ? 0xFF3399FF : 0xFFFFFFFF;
+                const bool rowToggleHovered = toggleHovered && row.objectId == hoveredToggleObjectId;
+                const uint32_t rowColor = rowToggleHovered ? 0xFF3399FF : 0xFFFFFFFF;
                 const float baselineY = textBaselineY(row.y, row.height, uiTextScale);
 
                 if (row.hasToggle) {

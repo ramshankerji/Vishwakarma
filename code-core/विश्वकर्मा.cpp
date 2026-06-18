@@ -9,6 +9,9 @@ This thread is also responsible for engineering calculations, consistency of Dat
 #include <thread>
 #include <chrono>
 #include <vector>
+#include <algorithm>
+#include <cstring>
+#include <string>
 #include <random> // Required for std::uniform_int_distribution
 #include "MemoryManagerCPU.h"
 #include "विश्वकर्मा.h"
@@ -121,10 +124,176 @@ std::mt19937 gen(rd()); //rd(): Calls the device we made above to get a single r
 //std::mt19937: A specific algorithm famous for being very fast and having high statistical quality.
 // Period of 2^{19937}-1. All subsequent random numbers are generated from this seeded mt19937 object.
 
+static void CopyAsciiName(char* target, size_t capacity, const char* value) {
+    if (!target || capacity == 0) return;
+    std::memset(target, 0, capacity);
+    if (!value) return;
+    const size_t copyLength = (std::min)(std::strlen(value), capacity - 1);
+    if (copyLength > 0) std::memcpy(target, value, copyLength);
+}
+
+static void InitializeLogicalMeta(META_DATA* object, VishwakarmaStorage::ObjectType objectType,
+    uint64_t parentMemoryId) {
+    if (!object) return;
+    object->dataType = static_cast<uint16_t>(VishwakarmaStorage::ToNumber(objectType));
+    object->schemaVersion = VishwakarmaStorage::kLogicalElementSchemaVersion;
+    object->memoryIDParent = parentMemoryId;
+}
+
+static uint32_t CountLogicalObjectsOfType(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType) {
+    if (!targetTab || !targetTab->storageObjectsMutex) return 0;
+
+    std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+    uint32_t count = 0;
+    for (const StoredLogicalObject& entry : targetTab->storageLogicalObjects) {
+        if (entry.objectType == objectType) ++count;
+    }
+    return count;
+}
+
+static void ExpandDataTreeNode(DATASETTAB* targetTab, uint64_t memoryId) {
+    if (!targetTab || memoryId == 0) return;
+    if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
+
+    std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+    auto& expanded = targetTab->expandedDataTreeNodeIds;
+    if (std::find(expanded.begin(), expanded.end(), memoryId) == expanded.end()) {
+        expanded.push_back(memoryId);
+    }
+}
+
+static void ToggleDataTreeNode(DATASETTAB* targetTab, uint64_t memoryId) {
+    if (!targetTab || memoryId == 0) return;
+    if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
+
+    std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+    auto& expanded = targetTab->expandedDataTreeNodeIds;
+    auto it = std::find(expanded.begin(), expanded.end(), memoryId);
+    if (it == expanded.end()) {
+        expanded.push_back(memoryId);
+    } else {
+        expanded.erase(it);
+    }
+}
+
+static META_DATA* CreateLogicalElement(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType,
+    uint64_t parentMemoryId, const char* requestedName = nullptr) {
+    if (!targetTab || !VishwakarmaStorage::IsLogicalObjectType(objectType)) return nullptr;
+
+    const uint32_t sequence = CountLogicalObjectsOfType(targetTab, objectType) + 1;
+    std::string generatedName = VishwakarmaStorage::ObjectTypeDisplayName(objectType);
+    generatedName += " ";
+    generatedName += std::to_string(sequence);
+    const char* name = requestedName ? requestedName : generatedName.c_str();
+
+    META_DATA* object = nullptr;
+    switch (objectType) {
+    case VishwakarmaStorage::ObjectType::Folder: {
+        FOLDER* folder = new (targetTab->tabNo) FOLDER();
+        CopyAsciiName(folder->name, sizeof(folder->name), name);
+        CopyAsciiName(folder->shortCode, sizeof(folder->shortCode), "F");
+        object = folder;
+        break;
+    }
+    case VishwakarmaStorage::ObjectType::Page2D: {
+        PAGE2D* page = new (targetTab->tabNo) PAGE2D();
+        CopyAsciiName(page->name, sizeof(page->name), name);
+        object = page;
+        break;
+    }
+    case VishwakarmaStorage::ObjectType::Scene3D: {
+        SCENE3D* scene = new (targetTab->tabNo) SCENE3D();
+        CopyAsciiName(scene->name, sizeof(scene->name), name);
+        object = scene;
+        break;
+    }
+    default:
+        return nullptr;
+    }
+
+    InitializeLogicalMeta(object, objectType, parentMemoryId);
+
+    if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
+    {
+        std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+        targetTab->storageLogicalObjects.push_back({ objectType, object->memoryID, object });
+        if (objectType == VishwakarmaStorage::ObjectType::Scene3D && targetTab->defaultScene3DMemoryId == 0) {
+            targetTab->defaultScene3DMemoryId = object->memoryID;
+        }
+    }
+
+    targetTab->allIDsInThisTab.push_back(object->memoryID);
+    if (objectType == VishwakarmaStorage::ObjectType::Scene3D) {
+        ExpandDataTreeNode(targetTab, object->memoryID);
+    }
+    return object;
+}
+
+static uint64_t FindDefaultScene3D(DATASETTAB* targetTab) {
+    if (!targetTab) return 0;
+    if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
+
+    std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+    if (targetTab->defaultScene3DMemoryId != 0) return targetTab->defaultScene3DMemoryId;
+
+    for (const StoredLogicalObject& entry : targetTab->storageLogicalObjects) {
+        if (entry.objectType == VishwakarmaStorage::ObjectType::Scene3D && entry.object) {
+            targetTab->defaultScene3DMemoryId = entry.object->memoryID;
+            auto& expanded = targetTab->expandedDataTreeNodeIds;
+            if (std::find(expanded.begin(), expanded.end(), entry.object->memoryID) == expanded.end()) {
+                expanded.push_back(entry.object->memoryID);
+            }
+            return entry.object->memoryID;
+        }
+    }
+    return 0;
+}
+
+static void EnsureDefaultLogicalHierarchy(DATASETTAB* targetTab) {
+    if (!targetTab) return;
+    if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
+
+    bool hasAnyLogicalObject = false;
+    bool hasScene3D = false;
+    {
+        std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+        hasAnyLogicalObject = !targetTab->storageLogicalObjects.empty();
+        for (const StoredLogicalObject& entry : targetTab->storageLogicalObjects) {
+            if (entry.objectType == VishwakarmaStorage::ObjectType::Scene3D) {
+                hasScene3D = true;
+                if (targetTab->defaultScene3DMemoryId == 0 && entry.object) {
+                    targetTab->defaultScene3DMemoryId = entry.object->memoryID;
+                }
+                break;
+            }
+        }
+    }
+
+    if (!hasAnyLogicalObject) {
+        CreateLogicalElement(targetTab, VishwakarmaStorage::ObjectType::Scene3D, 0, "Scene3D");
+        CreateLogicalElement(targetTab, VishwakarmaStorage::ObjectType::Page2D, 0, "Page2D");
+        CreateLogicalElement(targetTab, VishwakarmaStorage::ObjectType::Folder, 0, "Folder");
+    } else if (!hasScene3D) {
+        CreateLogicalElement(targetTab, VishwakarmaStorage::ObjectType::Scene3D, 0, "Scene3D");
+    }
+}
+
+static uint64_t EnsureDefaultScene3D(DATASETTAB* targetTab) {
+    uint64_t sceneMemoryId = FindDefaultScene3D(targetTab);
+    if (sceneMemoryId != 0) return sceneMemoryId;
+
+    SCENE3D* scene = static_cast<SCENE3D*>(
+        CreateLogicalElement(targetTab, VishwakarmaStorage::ObjectType::Scene3D, 0, "Scene3D"));
+    return scene ? scene->memoryID : 0;
+}
+
 static void RegisterGeneratedGeometryElement(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType,
     META_DATA* object, GeometryData&& geometry) {
     if (!targetTab || !object) return;
 
+    if (object->memoryIDParent == 0) {
+        object->memoryIDParent = EnsureDefaultScene3D(targetTab);
+    }
     object->dataType = static_cast<uint16_t>(VishwakarmaStorage::ToNumber(objectType));
     object->schemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
 
@@ -246,6 +415,10 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
     myTab->engineeringReleased.store(false, std::memory_order_release);
     std::chrono::steady_clock::time_point lastPyramidAddTime;
     lastPyramidAddTime = std::chrono::steady_clock::now();// Initialize the timer
+
+    if (myTab->autoGenerateRandomGeometry || myTab->storageFilePath.empty()) {
+        EnsureDefaultLogicalHierarchy(myTab);
+    }
 
     // Generate initial random geometry only for unsaved/dev tabs. Loaded .yyy tabs keep their stored contents.
     if (myTab->autoGenerateRandomGeometry) {
@@ -487,6 +660,13 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 DataTreeView::ToggleVisibility(myTab->dataTreeView);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::DATA_TREE_TOGGLE_EVERYTHING) {
                 DataTreeView::ToggleEverything(myTab->dataTreeView);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::DATA_TREE_TOGGLE_NODE) {
+                ToggleDataTreeNode(myTab, nextWorkTODO.objectId);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::CREATE_LOGICAL_OBJECT) {
+                const auto objectType = static_cast<VishwakarmaStorage::ObjectType>(nextWorkTODO.x);
+                if (VishwakarmaStorage::IsLogicalObjectType(objectType)) {
+                    CreateLogicalElement(myTab, objectType, 0);
+                }
             }
         }
         
@@ -498,7 +678,10 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
     myTab->allIDsInThisTab.clear();
     if (myTab->storageObjectsMutex) {
         std::lock_guard<std::mutex> lock(*myTab->storageObjectsMutex);
+        myTab->storageLogicalObjects.clear();
         myTab->storageObjects3D.clear();
+        myTab->expandedDataTreeNodeIds.clear();
+        myTab->defaultScene3DMemoryId = 0;
     }
     myTab->engineeringReleased.store(true, std::memory_order_release);
     std::cout << "Main Logic Thread shutting down.\n" << std::endl;

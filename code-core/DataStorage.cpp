@@ -7,20 +7,25 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <random>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "CommonNamedNumbers.h"
 #include "DataStorage_CONE.pb.h"
 #include "DataStorage_CUBOID.pb.h"
 #include "DataStorage_CYLINDER.pb.h"
+#include "DataStorage_FOLDER.pb.h"
 #include "DataStorage_FRUSTUM_OF_CONE.pb.h"
 #include "DataStorage_FRUSTUM_OF_PYRAMID.pb.h"
+#include "DataStorage_PAGE2D.pb.h"
 #include "DataStorage_PARALLELEPIPED.pb.h"
 #include "DataStorage_PIPE.pb.h"
 #include "DataStorage_PYRAMID.pb.h"
+#include "DataStorage_SCENE3D.pb.h"
 #include "DataStorage_SPHERE.pb.h"
 #include "MemoryManagerGPU-DirectX12.h"
 #include "sqlite3.h"
@@ -167,12 +172,12 @@ bool EnsureFileInfo(sqlite3* db, uint64_t objectCounterNext, std::string* errorM
     }
 
     const std::string now = std::to_string(CurrentUnixTimeSeconds());
-    return UpsertFileInfoText(db, "file_format_version", "yyy-mvp-1", errorMessage) &&
+    return UpsertFileInfoText(db, "file_format_version", "yyy-mvp-2", errorMessage) &&
         UpsertFileInfoText(db, "file_kind", "yyy", errorMessage) &&
         UpsertFileInfoText(db, "last_saved_by_application", "Vishwakarma", errorMessage) &&
         UpsertFileInfoText(db, "last_saved_time_utc", now, errorMessage) &&
-        UpsertFileInfoText(db, "schema_catalog_hash", "geometry3d-mvp-schema-v1", errorMessage) &&
-        UpsertFileInfoText(db, "schema_catalog_version", "1", errorMessage) &&
+        UpsertFileInfoText(db, "schema_catalog_hash", "logical-hierarchy-geometry3d-mvp-schema-v1", errorMessage) &&
+        UpsertFileInfoText(db, "schema_catalog_version", "2", errorMessage) &&
         UpsertFileInfoText(db, "object_counter_next", std::to_string(objectCounterNext), errorMessage);
 }
 
@@ -199,6 +204,24 @@ XMHALF4 ReadColor4(const pb::Color4F& message) {
 
 XMHALF4 DefaultColor4() {
     return XMHALF4(0.8f, 0.8f, 0.8f, 1.0f);
+}
+
+std::string FixedCStringToString(const char* value, size_t capacity) {
+    if (!value || capacity == 0) return {};
+    const void* terminator = std::memchr(value, '\0', capacity);
+    const size_t length = terminator
+        ? static_cast<const char*>(terminator) - value
+        : capacity;
+    return std::string(value, value + length);
+}
+
+void CopyStringToFixedCString(const std::string& value, char* target, size_t capacity) {
+    if (!target || capacity == 0) return;
+    std::memset(target, 0, capacity);
+    const size_t copyLength = (std::min)(value.size(), capacity - 1);
+    if (copyLength > 0) {
+        std::memcpy(target, value.data(), copyLength);
+    }
 }
 
 template <typename Message>
@@ -318,6 +341,33 @@ bool EncodePipe(const PIPE& object, std::vector<uint8_t>& payload, std::string* 
     WriteColor4(message.mutable_color_outer(), object.colorOuter);
     WriteColor4(message.mutable_color_inner(), object.colorInner);
     WriteColor4(message.mutable_color_cap(), object.colorCap);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
+bool EncodeFolder(const FOLDER& object, std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Folder message;
+    message.set_name(FixedCStringToString(object.name, sizeof(object.name)));
+    message.set_short_code(FixedCStringToString(object.shortCode, sizeof(object.shortCode)));
+    message.set_previous_sequence_no(object.previousSequenceNo);
+    message.set_next_sequence_no(object.nextSequenceNo);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
+bool EncodePage2D(const PAGE2D& object, std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Page2D message;
+    message.set_name(FixedCStringToString(object.name, sizeof(object.name)));
+    message.set_width_mm(object.widthMM);
+    message.set_height_mm(object.heightMM);
+    message.set_previous_sequence_no(object.previousSequenceNo);
+    message.set_next_sequence_no(object.nextSequenceNo);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
+bool EncodeScene3D(const SCENE3D& object, std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Scene3D message;
+    message.set_name(FixedCStringToString(object.name, sizeof(object.name)));
+    message.set_previous_sequence_no(object.previousSequenceNo);
+    message.set_next_sequence_no(object.nextSequenceNo);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -445,6 +495,39 @@ bool DecodePipe(const std::vector<uint8_t>& payload, PIPE& object) {
     return true;
 }
 
+bool DecodeFolder(const std::vector<uint8_t>& payload, FOLDER& object) {
+    pb::Folder message;
+    if (!ParseMessage(payload, message)) return false;
+
+    CopyStringToFixedCString(message.name(), object.name, sizeof(object.name));
+    CopyStringToFixedCString(message.short_code(), object.shortCode, sizeof(object.shortCode));
+    object.previousSequenceNo = message.previous_sequence_no();
+    object.nextSequenceNo = message.next_sequence_no();
+    return true;
+}
+
+bool DecodePage2D(const std::vector<uint8_t>& payload, PAGE2D& object) {
+    pb::Page2D message;
+    if (!ParseMessage(payload, message)) return false;
+
+    CopyStringToFixedCString(message.name(), object.name, sizeof(object.name));
+    object.widthMM = message.width_mm() > 0.0f ? message.width_mm() : 841.0f;
+    object.heightMM = message.height_mm() > 0.0f ? message.height_mm() : 594.0f;
+    object.previousSequenceNo = message.previous_sequence_no();
+    object.nextSequenceNo = message.next_sequence_no();
+    return true;
+}
+
+bool DecodeScene3D(const std::vector<uint8_t>& payload, SCENE3D& object) {
+    pb::Scene3D message;
+    if (!ParseMessage(payload, message)) return false;
+
+    CopyStringToFixedCString(message.name(), object.name, sizeof(object.name));
+    object.previousSequenceNo = message.previous_sequence_no();
+    object.nextSequenceNo = message.next_sequence_no();
+    return true;
+}
+
 std::string ObjectTypeName(ObjectType objectType) {
     switch (objectType) {
     case ObjectType::Pyramid: return "Pyramid";
@@ -456,6 +539,9 @@ std::string ObjectTypeName(ObjectType objectType) {
     case ObjectType::FrustumOfPyramid: return "FrustumOfPyramid";
     case ObjectType::FrustumOfCone: return "FrustumOfCone";
     case ObjectType::Pipe: return "Pipe";
+    case ObjectType::Folder: return "Folder";
+    case ObjectType::Page2D: return "Page2D";
+    case ObjectType::Scene3D: return "Scene3D";
     default: return "Unknown";
     }
 }
@@ -471,6 +557,9 @@ bool ObjectTypeFromNumber(uint32_t value, ObjectType& objectType) {
     case 7: objectType = ObjectType::FrustumOfPyramid; return true;
     case 8: objectType = ObjectType::FrustumOfCone; return true;
     case 9: objectType = ObjectType::Pipe; return true;
+    case 10: objectType = ObjectType::Folder; return true;
+    case 11: objectType = ObjectType::Page2D; return true;
+    case 12: objectType = ObjectType::Scene3D; return true;
     default: objectType = ObjectType::Unknown; return false;
     }
 }
@@ -505,6 +594,62 @@ bool SerializeGeometryObject(const StoredGeometryObject3D& entry, std::vector<ui
         SetError(errorMessage, "Unsupported object type during save.");
         return false;
     }
+}
+
+bool SerializeLogicalObject(const StoredLogicalObject& entry, std::vector<uint8_t>& payload,
+    std::string* errorMessage) {
+    if (!entry.object) {
+        SetError(errorMessage, "Logical storage object has a null runtime pointer.");
+        return false;
+    }
+
+    switch (entry.objectType) {
+    case ObjectType::Folder:
+        return EncodeFolder(*static_cast<const FOLDER*>(entry.object), payload, errorMessage);
+    case ObjectType::Page2D:
+        return EncodePage2D(*static_cast<const PAGE2D*>(entry.object), payload, errorMessage);
+    case ObjectType::Scene3D:
+        return EncodeScene3D(*static_cast<const SCENE3D*>(entry.object), payload, errorMessage);
+    default:
+        SetError(errorMessage, "Unsupported logical object type during save.");
+        return false;
+    }
+}
+
+bool DeserializeLogicalObject(ObjectType objectType, const std::vector<uint8_t>& payload,
+    uint32_t memoryGroupNo, META_DATA*& object, std::string* errorMessage) {
+    object = nullptr;
+    bool ok = false;
+
+    switch (objectType) {
+    case ObjectType::Folder: {
+        FOLDER* folder = new (memoryGroupNo) FOLDER();
+        ok = DecodeFolder(payload, *folder);
+        object = folder;
+        break;
+    }
+    case ObjectType::Page2D: {
+        PAGE2D* page = new (memoryGroupNo) PAGE2D();
+        ok = DecodePage2D(payload, *page);
+        object = page;
+        break;
+    }
+    case ObjectType::Scene3D: {
+        SCENE3D* scene = new (memoryGroupNo) SCENE3D();
+        ok = DecodeScene3D(payload, *scene);
+        object = scene;
+        break;
+    }
+    default:
+        SetError(errorMessage, "Unsupported logical object type during load.");
+        return false;
+    }
+
+    if (!ok) {
+        SetError(errorMessage, "Could not decode " + ObjectTypeName(objectType) + " protobuf payload.");
+        return false;
+    }
+    return true;
 }
 
 bool DeserializeGeometryObject(ObjectType objectType, const std::vector<uint8_t>& payload,
@@ -636,6 +781,24 @@ void AppendObjectToTab(DATASETTAB& tab, ObjectType objectType, META_DATA* object
     toCopyThreadCV.notify_one();
 }
 
+void AppendLogicalObjectToTab(DATASETTAB& tab, ObjectType objectType, META_DATA* object) {
+    if (!tab.storageObjectsMutex) tab.storageObjectsMutex = std::make_unique<std::mutex>();
+
+    object->dataType = static_cast<uint16_t>(VishwakarmaStorage::ToNumber(objectType));
+    object->schemaVersion = VishwakarmaStorage::kLogicalElementSchemaVersion;
+
+    {
+        std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
+        tab.storageLogicalObjects.push_back({ objectType, object->memoryID, object });
+        if (objectType == ObjectType::Scene3D && tab.defaultScene3DMemoryId == 0) {
+            tab.defaultScene3DMemoryId = object->memoryID;
+            tab.expandedDataTreeNodeIds.push_back(object->memoryID);
+        }
+    }
+
+    tab.allIDsInThisTab.push_back(object->memoryID);
+}
+
 struct ObjectStoreRow {
     uint64_t objectId = 0;
     uint64_t parentId = 0;
@@ -656,6 +819,11 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
     std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
 
     uint64_t maxExistingId = 0;
+    for (const StoredLogicalObject& entry : tab.storageLogicalObjects) {
+        if (entry.object && entry.object->persistedId > maxExistingId) {
+            maxExistingId = entry.object->persistedId;
+        }
+    }
     for (const StoredGeometryObject3D& entry : tab.storageObjects3D) {
         if (entry.object && entry.object->persistedId > maxExistingId) {
             maxExistingId = entry.object->persistedId;
@@ -664,6 +832,18 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
 
     uint64_t assignNextId = maxExistingId + 1;
     if (assignNextId == 0) assignNextId = 1;
+
+    for (StoredLogicalObject& entry : tab.storageLogicalObjects) {
+        if (!entry.object) continue;
+
+        if (entry.object->persistedId == 0) {
+            if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
+                SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                return false;
+            }
+            entry.object->persistedId = assignNextId++;
+        }
+    }
 
     for (StoredGeometryObject3D& entry : tab.storageObjects3D) {
         if (!entry.object) continue;
@@ -675,13 +855,61 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
             }
             entry.object->persistedId = assignNextId++;
         }
+    }
+
+    std::unordered_map<uint64_t, uint64_t> memoryIdToPersistedId;
+    memoryIdToPersistedId.reserve(tab.storageLogicalObjects.size() + tab.storageObjects3D.size());
+
+    for (const StoredLogicalObject& entry : tab.storageLogicalObjects) {
+        if (entry.object && entry.object->persistedId != 0) {
+            memoryIdToPersistedId[entry.object->memoryID] = entry.object->persistedId;
+        }
+    }
+    for (const StoredGeometryObject3D& entry : tab.storageObjects3D) {
+        if (entry.object && entry.object->persistedId != 0) {
+            memoryIdToPersistedId[entry.object->memoryID] = entry.object->persistedId;
+        }
+    }
+
+    auto resolveParentId = [&](META_DATA* object) {
+        if (!object) return uint64_t{ 0 };
+        if (object->memoryIDParent != 0) {
+            auto parentIt = memoryIdToPersistedId.find(object->memoryIDParent);
+            if (parentIt != memoryIdToPersistedId.end()) {
+                object->persistedParentId = parentIt->second;
+                return parentIt->second;
+            }
+        }
+        return object->persistedParentId;
+    };
+
+    for (StoredLogicalObject& entry : tab.storageLogicalObjects) {
+        if (!entry.object) continue;
+
+        std::vector<uint8_t> payload;
+        if (!SerializeLogicalObject(entry, payload, errorMessage)) return false;
+
+        ObjectStoreRow row;
+        row.objectId = entry.object->persistedId;
+        row.parentId = resolveParentId(entry.object);
+        row.objectType = entry.objectType;
+        row.schemaVersion = entry.object->schemaVersion != 0
+            ? entry.object->schemaVersion
+            : VishwakarmaStorage::kLogicalElementSchemaVersion;
+        row.lifecycleState = LifecycleForObject(*entry.object);
+        row.payload = std::move(payload);
+        rows.push_back(std::move(row));
+    }
+
+    for (StoredGeometryObject3D& entry : tab.storageObjects3D) {
+        if (!entry.object) continue;
 
         std::vector<uint8_t> payload;
         if (!SerializeGeometryObject(entry, payload, errorMessage)) return false;
 
         ObjectStoreRow row;
         row.objectId = entry.object->persistedId;
-        row.parentId = entry.object->persistedParentId;
+        row.parentId = resolveParentId(entry.object);
         row.objectType = entry.objectType;
         row.schemaVersion = entry.object->schemaVersion != 0
             ? entry.object->schemaVersion
@@ -807,9 +1035,14 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
     if (!tab.storageObjectsMutex) tab.storageObjectsMutex = std::make_unique<std::mutex>();
     {
         std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
+        tab.storageLogicalObjects.clear();
         tab.storageObjects3D.clear();
+        tab.expandedDataTreeNodeIds.clear();
+        tab.defaultScene3DMemoryId = 0;
     }
     tab.allIDsInThisTab.clear();
+
+    std::unordered_map<uint64_t, uint64_t> persistedIdToMemoryId;
 
     while ((rc = sqlite3_step(statement.stmt)) == SQLITE_ROW) {
         uint64_t objectId = static_cast<uint64_t>(sqlite3_column_int64(statement.stmt, 0));
@@ -832,17 +1065,39 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         }
 
         META_DATA* object = nullptr;
-        if (!DeserializeGeometryObject(objectType, payload, tab.tabNo, object, errorMessage)) {
+        if (VishwakarmaStorage::IsLogicalObjectType(objectType)) {
+            if (!DeserializeLogicalObject(objectType, payload, tab.tabNo, object, errorMessage)) {
+                return false;
+            }
+        } else if (VishwakarmaStorage::IsGeometry3DObjectType(objectType)) {
+            if (!DeserializeGeometryObject(objectType, payload, tab.tabNo, object, errorMessage)) {
+                return false;
+            }
+        } else {
+            SetError(errorMessage, "Unsupported object_type in .yyy file: " + std::to_string(objectTypeNumber));
             return false;
         }
 
         object->persistedId = objectId;
         object->persistedParentId = parentId;
+        if (parentId != 0) {
+            auto parentIt = persistedIdToMemoryId.find(parentId);
+            if (parentIt != persistedIdToMemoryId.end()) {
+                object->memoryIDParent = parentIt->second;
+            }
+        }
         object->schemaVersion = schemaVersion != 0
             ? schemaVersion
-            : VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
+            : (VishwakarmaStorage::IsLogicalObjectType(objectType)
+                ? VishwakarmaStorage::kLogicalElementSchemaVersion
+                : VishwakarmaStorage::kGeometry3DMvpSchemaVersion);
         object->isDeleted = false;
-        AppendObjectToTab(tab, objectType, object);
+        if (VishwakarmaStorage::IsLogicalObjectType(objectType)) {
+            AppendLogicalObjectToTab(tab, objectType, object);
+        } else {
+            AppendObjectToTab(tab, objectType, object);
+        }
+        persistedIdToMemoryId[objectId] = object->memoryID;
     }
 
     if (rc != SQLITE_DONE) {

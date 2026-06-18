@@ -37,10 +37,16 @@
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CYLINDER.pb.cc">
       <Filter>code-core</Filter>
     </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FOLDER.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FRUSTUM_OF_CONE.pb.cc">
       <Filter>code-core</Filter>
     </ClCompile>
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FRUSTUM_OF_PYRAMID.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PAGE2D.pb.cc">
       <Filter>code-core</Filter>
     </ClCompile>
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PARALLELEPIPED.pb.cc">
@@ -50,6 +56,9 @@
       <Filter>code-core</Filter>
     </ClCompile>
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PYRAMID.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_SCENE3D.pb.cc">
       <Filter>code-core</Filter>
     </ClCompile>
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_SPHERE.pb.cc">
@@ -283,10 +292,16 @@
     <None Include="DataStorage_CYLINDER.proto">
       <Filter>code-core</Filter>
     </None>
+    <None Include="DataStorage_FOLDER.proto">
+      <Filter>code-core</Filter>
+    </None>
     <None Include="DataStorage_FRUSTUM_OF_CONE.proto">
       <Filter>code-core</Filter>
     </None>
     <None Include="DataStorage_FRUSTUM_OF_PYRAMID.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_PAGE2D.proto">
       <Filter>code-core</Filter>
     </None>
     <None Include="DataStorage_PARALLELEPIPED.proto">
@@ -296,6 +311,9 @@
       <Filter>code-core</Filter>
     </None>
     <None Include="DataStorage_PYRAMID.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_SCENE3D.proto">
       <Filter>code-core</Filter>
     </None>
     <None Include="DataStorage_SPHERE.proto">
