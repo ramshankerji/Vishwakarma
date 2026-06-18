@@ -25,7 +25,8 @@ float4 main(PSInput input) : SV_TARGET {
         return baseColor;
     }
 
-    uint atlasIndex = min(input.atlasIndex, 9);
+    bool boldText = (input.atlasIndex & 0x80000000u) != 0;
+    uint atlasIndex = min(input.atlasIndex & 0xFFu, 9u);
     float4 sampleColor = atlases[NonUniformResourceIndex(atlasIndex)].Sample(samp, input.uv);
     float coverage = sampleColor.r;
 
@@ -35,6 +36,9 @@ float4 main(PSInput input) : SV_TARGET {
         atlases[0].GetDimensions(atlasWidth, atlasHeight);
 
         float signedDistance = median(sampleColor.r, sampleColor.g, sampleColor.b) - 0.5;
+        if (boldText) {
+            signedDistance += 0.075;
+        }
         float2 unitRange = float2(4.0 / atlasWidth, 4.0 / atlasHeight);
         float2 screenTexSize = 1.0 / fwidth(input.uv);
         float screenPxRange = max(0.5 * dot(unitRange, screenTexSize), 1.0);

@@ -176,6 +176,20 @@ static void ToggleDataTreeNode(DATASETTAB* targetTab, uint64_t memoryId) {
     }
 }
 
+static void SetActiveDataTreeBranch(DATASETTAB* targetTab, uint64_t memoryId) {
+    if (!targetTab || memoryId == 0) return;
+    if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
+
+    std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+    for (const StoredLogicalObject& entry : targetTab->storageLogicalObjects) {
+        if (entry.objectType == VishwakarmaStorage::ObjectType::Scene3D &&
+            entry.object && entry.object->memoryID == memoryId) {
+            targetTab->activeScene3DMemoryId = memoryId;
+            return;
+        }
+    }
+}
+
 static META_DATA* CreateLogicalElement(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType,
     uint64_t parentMemoryId, const char* requestedName = nullptr) {
     if (!targetTab || !VishwakarmaStorage::IsLogicalObjectType(objectType)) return nullptr;
@@ -217,8 +231,13 @@ static META_DATA* CreateLogicalElement(DATASETTAB* targetTab, VishwakarmaStorage
     {
         std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
         targetTab->storageLogicalObjects.push_back({ objectType, object->memoryID, object });
-        if (objectType == VishwakarmaStorage::ObjectType::Scene3D && targetTab->defaultScene3DMemoryId == 0) {
-            targetTab->defaultScene3DMemoryId = object->memoryID;
+        if (objectType == VishwakarmaStorage::ObjectType::Scene3D) {
+            if (targetTab->defaultScene3DMemoryId == 0) {
+                targetTab->defaultScene3DMemoryId = object->memoryID;
+            }
+            if (targetTab->activeScene3DMemoryId == 0) {
+                targetTab->activeScene3DMemoryId = object->memoryID;
+            }
         }
     }
 
@@ -229,16 +248,24 @@ static META_DATA* CreateLogicalElement(DATASETTAB* targetTab, VishwakarmaStorage
     return object;
 }
 
-static uint64_t FindDefaultScene3D(DATASETTAB* targetTab) {
+static uint64_t FindActiveScene3D(DATASETTAB* targetTab) {
     if (!targetTab) return 0;
     if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
 
     std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
-    if (targetTab->defaultScene3DMemoryId != 0) return targetTab->defaultScene3DMemoryId;
+    for (const StoredLogicalObject& entry : targetTab->storageLogicalObjects) {
+        if (entry.objectType == VishwakarmaStorage::ObjectType::Scene3D && entry.object &&
+            entry.object->memoryID == targetTab->activeScene3DMemoryId) {
+            return targetTab->activeScene3DMemoryId;
+        }
+    }
 
     for (const StoredLogicalObject& entry : targetTab->storageLogicalObjects) {
         if (entry.objectType == VishwakarmaStorage::ObjectType::Scene3D && entry.object) {
-            targetTab->defaultScene3DMemoryId = entry.object->memoryID;
+            if (targetTab->defaultScene3DMemoryId == 0) {
+                targetTab->defaultScene3DMemoryId = entry.object->memoryID;
+            }
+            targetTab->activeScene3DMemoryId = entry.object->memoryID;
             auto& expanded = targetTab->expandedDataTreeNodeIds;
             if (std::find(expanded.begin(), expanded.end(), entry.object->memoryID) == expanded.end()) {
                 expanded.push_back(entry.object->memoryID);
@@ -264,6 +291,9 @@ static void EnsureDefaultLogicalHierarchy(DATASETTAB* targetTab) {
                 if (targetTab->defaultScene3DMemoryId == 0 && entry.object) {
                     targetTab->defaultScene3DMemoryId = entry.object->memoryID;
                 }
+                if (targetTab->activeScene3DMemoryId == 0 && entry.object) {
+                    targetTab->activeScene3DMemoryId = entry.object->memoryID;
+                }
                 break;
             }
         }
@@ -278,8 +308,8 @@ static void EnsureDefaultLogicalHierarchy(DATASETTAB* targetTab) {
     }
 }
 
-static uint64_t EnsureDefaultScene3D(DATASETTAB* targetTab) {
-    uint64_t sceneMemoryId = FindDefaultScene3D(targetTab);
+static uint64_t EnsureActiveScene3D(DATASETTAB* targetTab) {
+    uint64_t sceneMemoryId = FindActiveScene3D(targetTab);
     if (sceneMemoryId != 0) return sceneMemoryId;
 
     SCENE3D* scene = static_cast<SCENE3D*>(
@@ -292,7 +322,7 @@ static void RegisterGeneratedGeometryElement(DATASETTAB* targetTab, VishwakarmaS
     if (!targetTab || !object) return;
 
     if (object->memoryIDParent == 0) {
-        object->memoryIDParent = EnsureDefaultScene3D(targetTab);
+        object->memoryIDParent = EnsureActiveScene3D(targetTab);
     }
     object->dataType = static_cast<uint16_t>(VishwakarmaStorage::ToNumber(objectType));
     object->schemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
@@ -662,6 +692,8 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 DataTreeView::ToggleEverything(myTab->dataTreeView);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::DATA_TREE_TOGGLE_NODE) {
                 ToggleDataTreeNode(myTab, nextWorkTODO.objectId);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::DATA_TREE_SET_ACTIVE_BRANCH) {
+                SetActiveDataTreeBranch(myTab, nextWorkTODO.objectId);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::CREATE_LOGICAL_OBJECT) {
                 const auto objectType = static_cast<VishwakarmaStorage::ObjectType>(nextWorkTODO.x);
                 if (VishwakarmaStorage::IsLogicalObjectType(objectType)) {
@@ -682,6 +714,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         myTab->storageObjects3D.clear();
         myTab->expandedDataTreeNodeIds.clear();
         myTab->defaultScene3DMemoryId = 0;
+        myTab->activeScene3DMemoryId = 0;
     }
     myTab->engineeringReleased.store(true, std::memory_order_release);
     std::cout << "Main Logic Thread shutting down.\n" << std::endl;

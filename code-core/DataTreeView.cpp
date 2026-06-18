@@ -113,7 +113,7 @@ std::vector<Row> BuildRows(const BuildRequest& request, const StateSnapshot& sta
     rows.reserve(reserveRows);
 
     auto pushRow = [&](RowKind kind, std::u32string label, uint32_t depth,
-        bool hasToggle, bool isExpanded, uint64_t objectId) {
+        bool hasToggle, bool isExpanded, uint64_t objectId, bool canBecomeActiveBranch) {
         if (rows.size() >= maxRows) return false;
 
         Row row;
@@ -123,6 +123,8 @@ std::vector<Row> BuildRows(const BuildRequest& request, const StateSnapshot& sta
         row.hasToggle = hasToggle;
         row.isExpanded = isExpanded;
         row.objectId = objectId;
+        row.canBecomeActiveBranch = canBecomeActiveBranch;
+        row.isActiveBranch = canBecomeActiveBranch && objectId == request.activeBranchObjectId;
         row.x = treeX + indent * static_cast<float>(depth);
         row.y = treeY + rowHeight * static_cast<float>(rows.size());
         row.width = std::max(0.0f, treeWidth - indent * static_cast<float>(depth));
@@ -155,7 +157,7 @@ std::vector<Row> BuildRows(const BuildRequest& request, const StateSnapshot& sta
 
     const bool rootHasChildren = childrenByParent.find(0) != childrenByParent.end();
     pushRow(RowKind::TabName, WideToDisplayText(request.tabName), 0,
-        rootHasChildren, state.everythingExpanded, 0);
+        rootHasChildren, state.everythingExpanded, 0, false);
 
     if (!state.everythingExpanded || !request.nodes) return rows;
 
@@ -173,7 +175,8 @@ std::vector<Row> BuildRows(const BuildRequest& request, const StateSnapshot& sta
             auto grandchildrenIt = childrenByParent.find(node.objectId);
             const bool hasChildren = grandchildrenIt != childrenByParent.end() && !grandchildrenIt->second.empty();
             const bool isExpanded = expandedNodeIds.find(node.objectId) != expandedNodeIds.end();
-            if (!pushRow(RowKind::ObjectNode, node.label, depth, hasChildren, isExpanded, node.objectId)) {
+            if (!pushRow(RowKind::ObjectNode, node.label, depth, hasChildren, isExpanded, node.objectId,
+                node.canBecomeActiveBranch)) {
                 return false;
             }
 
@@ -204,6 +207,19 @@ bool HitTestToggle(const std::vector<Row>& rows, float mouseX, float mouseY, uin
         if (!row.hasToggle) continue;
         if (mouseX >= row.toggleX && mouseX < row.toggleX + row.toggleWidth &&
             mouseY >= row.toggleY && mouseY < row.toggleY + row.toggleHeight) {
+            objectId = row.objectId;
+            return true;
+        }
+    }
+    objectId = 0;
+    return false;
+}
+
+bool HitTestActiveBranch(const std::vector<Row>& rows, float mouseX, float mouseY, uint64_t& objectId) {
+    for (const Row& row : rows) {
+        if (!row.canBecomeActiveBranch) continue;
+        if (mouseX >= row.textX && mouseX < row.x + row.width &&
+            mouseY >= row.y && mouseY < row.y + row.height) {
             objectId = row.objectId;
             return true;
         }

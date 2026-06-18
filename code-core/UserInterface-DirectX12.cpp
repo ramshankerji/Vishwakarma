@@ -23,6 +23,7 @@ std::atomic<uint32_t> actionWriteIndex;
 // ASCII Character set.
 std::string charset = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
 std::atomic<uint64_t> atlasFence = 0;
+constexpr uint32_t UI_FONT_BOLD_FLAG = 0x80000000u;
 
 struct UIAtlasRegion {
     float uvMinX = 0.0f;
@@ -1012,7 +1013,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     const float uiTextScale = topRibbonLayout.uiTextScale;
 
     auto pushTextClipped = [&](float x, float y, const char32_t* text, float maxWidth, uint32_t color,
-        float scale) {
+        float scale, bool bold = false) {
         if (!text || maxWidth <= 0.0f) return;
 
         float cursorX = x;
@@ -1042,10 +1043,11 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             if (ctx.indexCount + 6 > uiRes.maxIndices) return;
 
             uint16_t base = ctx.vertexCount;
-            ctx.vertexPtr[0] = { xpos,                  ypos,                   g.uvMinX, g.uvMinY, color, UI_ENGLISH_ATLAS_SLOT };
-            ctx.vertexPtr[1] = { xpos + glyphWidth,     ypos,                   g.uvMaxX, g.uvMinY, color, UI_ENGLISH_ATLAS_SLOT };
-            ctx.vertexPtr[2] = { xpos + glyphWidth,     ypos + glyphHeight,     g.uvMaxX, g.uvMaxY, color, UI_ENGLISH_ATLAS_SLOT };
-            ctx.vertexPtr[3] = { xpos,                  ypos + glyphHeight,     g.uvMinX, g.uvMaxY, color, UI_ENGLISH_ATLAS_SLOT };
+            const uint32_t atlasIndex = UI_ENGLISH_ATLAS_SLOT | (bold ? UI_FONT_BOLD_FLAG : 0u);
+            ctx.vertexPtr[0] = { xpos,                  ypos,                   g.uvMinX, g.uvMinY, color, atlasIndex };
+            ctx.vertexPtr[1] = { xpos + glyphWidth,     ypos,                   g.uvMaxX, g.uvMinY, color, atlasIndex };
+            ctx.vertexPtr[2] = { xpos + glyphWidth,     ypos + glyphHeight,     g.uvMaxX, g.uvMaxY, color, atlasIndex };
+            ctx.vertexPtr[3] = { xpos,                  ypos + glyphHeight,     g.uvMinX, g.uvMaxY, color, atlasIndex };
 
             ctx.indexPtr[0] = base + 0;
             ctx.indexPtr[1] = base + 1;
@@ -1368,10 +1370,12 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         if (dataTreeState.isVisible) {
             std::vector<DataTreeView::Node> treeNodes;
             std::vector<uint64_t> expandedNodeIds;
+            uint64_t activeBranchObjectId = 0;
             if (tab.storageObjectsMutex) {
                 std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
                 treeNodes.reserve(tab.storageLogicalObjects.size() + tab.storageObjects3D.size());
                 expandedNodeIds = tab.expandedDataTreeNodeIds;
+                activeBranchObjectId = tab.activeScene3DMemoryId;
 
                 for (const StoredLogicalObject& object : tab.storageLogicalObjects) {
                     if (!object.object) continue;
@@ -1379,6 +1383,8 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
                     node.objectId = object.object->memoryID;
                     node.parentObjectId = object.object->memoryIDParent;
                     node.label = BuildTreeNodeLabel(object.objectType, object.object, object.memoryId);
+                    node.canBecomeActiveBranch =
+                        object.objectType == VishwakarmaStorage::ObjectType::Scene3D;
                     treeNodes.push_back(std::move(node));
                 }
 
@@ -1396,6 +1402,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             treeRequest.tabName = tab.fileName;
             treeRequest.nodes = &treeNodes;
             treeRequest.expandedNodeIds = &expandedNodeIds;
+            treeRequest.activeBranchObjectId = activeBranchObjectId;
             treeRequest.viewportTopPx = topUITotalHeightPx;
             treeRequest.viewportHeightPx = std::max(0.0f, H - topUITotalHeightPx);
             treeRequest.pixelsPerMMX = pixelsPerMMx;
@@ -1406,27 +1413,44 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             uint64_t hoveredToggleObjectId = 0;
             const bool toggleHovered =
                 DataTreeView::HitTestToggle(treeRows, input.mouseX, input.mouseY, hoveredToggleObjectId);
+            uint64_t hoveredBranchObjectId = 0;
+            const bool branchHovered = !toggleHovered &&
+                DataTreeView::HitTestActiveBranch(
+                    treeRows, input.mouseX, input.mouseY, hoveredBranchObjectId);
 
-            if (toggleHovered && input.leftButtonPressedThisFrame) {
-                if (hoveredToggleObjectId == 0) {
-                    PushUIAction(DataTreeView::kToggleEverythingUIAction, static_cast<uint32_t>(activeTabIndex), 0);
-                } else {
-                    PushUIAction(DataTreeView::kToggleNodeUIAction,
-                        static_cast<uint32_t>(activeTabIndex), hoveredToggleObjectId);
+            if (input.leftButtonPressedThisFrame) {
+                if (toggleHovered) {
+                    if (hoveredToggleObjectId == 0) {
+                        PushUIAction(DataTreeView::kToggleEverythingUIAction, static_cast<uint32_t>(activeTabIndex), 0);
+                    } else {
+                        PushUIAction(DataTreeView::kToggleNodeUIAction,
+                            static_cast<uint32_t>(activeTabIndex), hoveredToggleObjectId);
+                    }
+                } else if (branchHovered) {
+                    PushUIAction(DataTreeView::kSetActiveBranchUIAction,
+                        static_cast<uint32_t>(activeTabIndex), hoveredBranchObjectId);
                 }
             }
 
             for (const DataTreeView::Row& row : treeRows) {
                 const bool rowToggleHovered = toggleHovered && row.objectId == hoveredToggleObjectId;
-                const uint32_t rowColor = rowToggleHovered ? 0xFF3399FF : 0xFFFFFFFF;
+                const bool rowBranchHovered = branchHovered && row.objectId == hoveredBranchObjectId;
+                const uint32_t labelColor = row.isActiveBranch
+                    ? 0xFF3399FF // Indian flag saffron/orange: RGB #FF9933.
+                    : (rowBranchHovered ? 0xFFFF9933 : 0xFFFFFFFF);
+                const uint32_t toggleColor = row.isActiveBranch
+                    ? 0xFF3399FF
+                    : (rowToggleHovered ? 0xFFFF9933 : 0xFFFFFFFF);
                 const float baselineY = textBaselineY(row.y, row.height, uiTextScale);
 
                 if (row.hasToggle) {
                     const char32_t toggleText[2] = { row.isExpanded ? U'-' : U'+', U'\0' };
-                    pushTextClipped(row.toggleX, baselineY, toggleText, row.toggleWidth, rowColor, uiTextScale);
+                    pushTextClipped(row.toggleX, baselineY, toggleText, row.toggleWidth,
+                        toggleColor, uiTextScale);
                 }
 
-                pushTextClipped(row.textX, baselineY, row.label.c_str(), row.textMaxWidth, rowColor, uiTextScale);
+                pushTextClipped(row.textX, baselineY, row.label.c_str(), row.textMaxWidth,
+                    labelColor, uiTextScale, row.isActiveBranch);
             }
         }
     }

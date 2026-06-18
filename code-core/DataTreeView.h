@@ -12,6 +12,7 @@ namespace DataTreeView {
 
 constexpr uint32_t kToggleEverythingUIAction = 0xE0000003u;
 constexpr uint32_t kToggleNodeUIAction = 0xE0000004u;
+constexpr uint32_t kSetActiveBranchUIAction = 0xE0000005u;
 
 constexpr float kPinnedIconRailWidthMM = 8.0f;
 constexpr float kTreeWidthMM = 56.0f;
@@ -40,12 +41,14 @@ struct Node {
     uint64_t objectId = 0;
     uint64_t parentObjectId = 0;
     std::u32string label;
+    bool canBecomeActiveBranch = false;
 };
 
 struct BuildRequest {
     std::wstring_view tabName;
     const std::vector<Node>* nodes = nullptr;
     const std::vector<uint64_t>* expandedNodeIds = nullptr;
+    uint64_t activeBranchObjectId = 0;
     float viewportTopPx = 0.0f;
     float viewportHeightPx = 0.0f;
     float pixelsPerMMX = 1.0f;
@@ -59,6 +62,8 @@ struct Row {
     uint32_t depth = 0;
     bool hasToggle = false;
     bool isExpanded = false;
+    bool canBecomeActiveBranch = false;
+    bool isActiveBranch = false;
 
     float x = 0.0f;
     float y = 0.0f;
@@ -79,6 +84,7 @@ void ToggleEverything(State& state);
 std::vector<Row> BuildRows(const BuildRequest& request, const StateSnapshot& state);
 bool HitTestEverythingToggle(const std::vector<Row>& rows, float mouseX, float mouseY);
 bool HitTestToggle(const std::vector<Row>& rows, float mouseX, float mouseY, uint64_t& objectId);
+bool HitTestActiveBranch(const std::vector<Row>& rows, float mouseX, float mouseY, uint64_t& objectId);
 
 std::u32string AsciiToDisplayText(const char* text);
 std::u32string WideToDisplayText(std::wstring_view text);

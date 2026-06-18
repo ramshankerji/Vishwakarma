@@ -790,9 +790,14 @@ void AppendLogicalObjectToTab(DATASETTAB& tab, ObjectType objectType, META_DATA*
     {
         std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
         tab.storageLogicalObjects.push_back({ objectType, object->memoryID, object });
-        if (objectType == ObjectType::Scene3D && tab.defaultScene3DMemoryId == 0) {
-            tab.defaultScene3DMemoryId = object->memoryID;
-            tab.expandedDataTreeNodeIds.push_back(object->memoryID);
+        if (objectType == ObjectType::Scene3D) {
+            if (tab.defaultScene3DMemoryId == 0) {
+                tab.defaultScene3DMemoryId = object->memoryID;
+                tab.expandedDataTreeNodeIds.push_back(object->memoryID);
+            }
+            if (tab.activeScene3DMemoryId == 0) {
+                tab.activeScene3DMemoryId = object->memoryID;
+            }
         }
     }
 
@@ -1039,6 +1044,7 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         tab.storageObjects3D.clear();
         tab.expandedDataTreeNodeIds.clear();
         tab.defaultScene3DMemoryId = 0;
+        tab.activeScene3DMemoryId = 0;
     }
     tab.allIDsInThisTab.clear();
 

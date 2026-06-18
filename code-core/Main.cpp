@@ -203,6 +203,7 @@ DATASETTAB* CreateEngineeringTab(const std::wstring& displayName = L"",
         tab.storageObjects3D.clear();
         tab.expandedDataTreeNodeIds.clear();
         tab.defaultScene3DMemoryId = 0;
+        tab.activeScene3DMemoryId = 0;
     }
     tab.closeRequested.store(false, std::memory_order_release);
     tab.engineeringReleased.store(false, std::memory_order_release);
@@ -332,6 +333,11 @@ void ProcessPendingUIActions() {
             if (action.p1 < MV_MAX_TABS) {
                 PushSystemTodoToTab(&allTabs[static_cast<uint16_t>(action.p1)],
                     ACTION_TYPE::DATA_TREE_TOGGLE_NODE, 0, 0, 0, action.p2);
+            }
+        } else if (action.id == DataTreeView::kSetActiveBranchUIAction) {
+            if (action.p1 < MV_MAX_TABS) {
+                PushSystemTodoToTab(&allTabs[static_cast<uint16_t>(action.p1)],
+                    ACTION_TYPE::DATA_TREE_SET_ACTIVE_BRANCH, 0, 0, 0, action.p2);
             }
         } else if (action.id == static_cast<uint32_t>(Commands::PROJECT_SAVE)) {
             SaveActiveTabToStorage();

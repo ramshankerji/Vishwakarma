@@ -127,6 +127,7 @@ struct DATASETTAB {
     std::vector<StoredGeometryObject3D> storageObjects3D; // MVP persisted geometry objects in this tab.
     std::vector<uint64_t> expandedDataTreeNodeIds; // Expanded logical nodes in the visible data tree.
     uint64_t defaultScene3DMemoryId = 0;
+    uint64_t activeScene3DMemoryId = 0; // Organizational parent for newly generated 3D objects.
     std::unique_ptr<std::mutex> storageObjectsMutex;
 
 	DX12ResourcesPerTab dx; // DirectX12 resources specific to this tab.
