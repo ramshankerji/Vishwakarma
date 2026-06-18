@@ -300,7 +300,17 @@
             <span class="brand-long">Mission Vishwakarma</span>
             <span class="brand-short">Vishwakarma</span>
         </a>
-        <a href="/start/installation/" data-download-url="https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma.exe" class="btn-primary download-link">Download the .exe</a>
+        <a href="https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma.exe" 
+            target="_blank" class="btn-primary download-link" rel="noopener noreferrer">Download</a>
+        <script>
+            document.addEventListener("DOMContentLoaded", function () {
+                document.querySelectorAll("a.download-link").forEach(function (link) {
+                    link.addEventListener("click", function () {
+                        setTimeout(function () { window.location.href = "/start/installation/"; }, 1000);
+                    });
+                });
+            });
+        </script>
         <a href="/start/roadmap" class="nav-roadmap {{ if eq .RelPermalink "/start/roadmap/" }}active{{ end }}">Roadmap</a>
         <a href="/start/pricing" class="nav-pricing {{ if eq .RelPermalink "/start/pricing/" }}active{{ end }}">Pricing</a>
     </header>
