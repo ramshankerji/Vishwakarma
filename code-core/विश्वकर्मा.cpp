@@ -716,6 +716,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         myTab->defaultScene3DMemoryId = 0;
         myTab->activeScene3DMemoryId = 0;
     }
+    DataTreeView::ResetScroll(myTab->dataTreeView);
     myTab->engineeringReleased.store(true, std::memory_order_release);
     std::cout << "Main Logic Thread shutting down.\n" << std::endl;
 }

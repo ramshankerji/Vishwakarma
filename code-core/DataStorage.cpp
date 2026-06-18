@@ -1046,6 +1046,7 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         tab.defaultScene3DMemoryId = 0;
         tab.activeScene3DMemoryId = 0;
     }
+    DataTreeView::ResetScroll(tab.dataTreeView);
     tab.allIDsInThisTab.clear();
 
     std::unordered_map<uint64_t, uint64_t> persistedIdToMemoryId;

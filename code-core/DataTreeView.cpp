@@ -31,6 +31,7 @@ StateSnapshot Snapshot(const State& state) {
     StateSnapshot snapshot;
     snapshot.isVisible = state.isVisible.load(std::memory_order_acquire);
     snapshot.everythingExpanded = state.everythingExpanded.load(std::memory_order_acquire);
+    snapshot.firstVisibleRow = state.firstVisibleRow.load(std::memory_order_acquire);
     return snapshot;
 }
 
@@ -42,6 +43,28 @@ void ToggleVisibility(State& state) {
 void ToggleEverything(State& state) {
     const bool isExpanded = state.everythingExpanded.load(std::memory_order_acquire);
     state.everythingExpanded.store(!isExpanded, std::memory_order_release);
+}
+
+void SetFirstVisibleRow(State& state, uint64_t rowIndex) {
+    state.firstVisibleRow.store(rowIndex, std::memory_order_release);
+}
+
+void ScrollRows(State& state, int64_t rowDelta) {
+    uint64_t current = state.firstVisibleRow.load(std::memory_order_acquire);
+    if (rowDelta < 0) {
+        const uint64_t amount = static_cast<uint64_t>(-(rowDelta + 1)) + 1;
+        current = amount >= current ? 0 : current - amount;
+    } else {
+        const uint64_t amount = static_cast<uint64_t>(rowDelta);
+        current = UINT64_MAX - current < amount ? UINT64_MAX : current + amount;
+    }
+    state.firstVisibleRow.store(current, std::memory_order_release);
+}
+
+void ResetScroll(State& state) {
+    state.firstVisibleRow.store(0, std::memory_order_release);
+    state.scrollbarDragging.store(false, std::memory_order_release);
+    state.scrollbarDragGrabOffsetPx.store(0.0f, std::memory_order_release);
 }
 
 std::u32string AsciiToDisplayText(const char* text) {
@@ -90,54 +113,53 @@ std::u32string UInt64ToDecimalText(uint64_t value) {
     return result;
 }
 
-std::vector<Row> BuildRows(const BuildRequest& request, const StateSnapshot& state) {
-    std::vector<Row> rows;
-    if (!state.isVisible || request.viewportHeightPx <= 0.0f ||
+LayoutMetrics CalculateLayout(const BuildRequest& request) {
+    LayoutMetrics layout;
+    if (request.viewportHeightPx <= 0.0f ||
         request.pixelsPerMMX <= 0.0f || request.pixelsPerMMY <= 0.0f) {
-        return rows;
+        return layout;
     }
 
-    const float treeX = kPinnedIconRailWidthMM * request.pixelsPerMMX;
-    const float treeWidth = kTreeWidthMM * request.pixelsPerMMX;
-    const float rowHeight = std::max(1.0f, std::round(kRowHeightMM * request.pixelsPerMMY));
-    const float indent = kIndentMM * request.pixelsPerMMX;
-    const float toggleWidth = std::max(8.0f, std::round(kToggleButtonWidthMM * request.pixelsPerMMX));
-    const float treeY = request.viewportTopPx + kTreeTopPaddingMM * request.pixelsPerMMY;
-    const float availableHeight = std::max(0.0f,
+    layout.x = kPinnedIconRailWidthMM * request.pixelsPerMMX;
+    layout.width = kTreeWidthMM * request.pixelsPerMMX;
+    layout.y = request.viewportTopPx + kTreeTopPaddingMM * request.pixelsPerMMY;
+    layout.height = std::max(0.0f,
         request.viewportHeightPx - (kTreeTopPaddingMM + kTreeBottomPaddingMM) * request.pixelsPerMMY);
-    const size_t maxRows = static_cast<size_t>(std::floor(availableHeight / rowHeight));
-    if (maxRows == 0) return rows;
+    layout.rowHeight = std::max(1.0f, std::round(kRowHeightMM * request.pixelsPerMMY));
+    layout.indent = kIndentMM * request.pixelsPerMMX;
+    layout.toggleWidth = std::max(8.0f, std::round(kToggleButtonWidthMM * request.pixelsPerMMX));
+    layout.scrollbarX = layout.x;
+    layout.scrollbarY = layout.y;
+    layout.scrollbarWidth = std::max(6.0f, std::round(kScrollbarWidthMM * request.pixelsPerMMX));
+    layout.scrollbarHeight = layout.height;
+    const float scrollbarGap = kScrollbarGapMM * request.pixelsPerMMX;
+    layout.contentX = layout.x + layout.scrollbarWidth + scrollbarGap;
+    layout.contentWidth = std::max(0.0f, layout.width - layout.scrollbarWidth - scrollbarGap);
+    layout.visibleRowCapacity = static_cast<size_t>(std::floor(layout.height / layout.rowHeight));
+    return layout;
+}
+
+bool ContainsPoint(const LayoutMetrics& layout, float x, float y) {
+    return layout.width > 0.0f && layout.height > 0.0f &&
+        x >= layout.x && x < layout.x + layout.width &&
+        y >= layout.y && y < layout.y + layout.height;
+}
+
+BuildResult BuildRows(const BuildRequest& request, const StateSnapshot& state) {
+    BuildResult result;
+    result.layout = CalculateLayout(request);
+    if (!state.isVisible || request.viewportHeightPx <= 0.0f ||
+        request.pixelsPerMMX <= 0.0f || request.pixelsPerMMY <= 0.0f) {
+        return result;
+    }
+
+    const LayoutMetrics& layout = result.layout;
+    const size_t maxRows = layout.visibleRowCapacity;
+    if (maxRows == 0) return result;
 
     const size_t nodeCount = request.nodes ? request.nodes->size() : 0;
     const size_t reserveRows = (std::min)(maxRows, static_cast<size_t>(1 + nodeCount));
-    rows.reserve(reserveRows);
-
-    auto pushRow = [&](RowKind kind, std::u32string label, uint32_t depth,
-        bool hasToggle, bool isExpanded, uint64_t objectId, bool canBecomeActiveBranch) {
-        if (rows.size() >= maxRows) return false;
-
-        Row row;
-        row.kind = kind;
-        row.label = std::move(label);
-        row.depth = depth;
-        row.hasToggle = hasToggle;
-        row.isExpanded = isExpanded;
-        row.objectId = objectId;
-        row.canBecomeActiveBranch = canBecomeActiveBranch;
-        row.isActiveBranch = canBecomeActiveBranch && objectId == request.activeBranchObjectId;
-        row.x = treeX + indent * static_cast<float>(depth);
-        row.y = treeY + rowHeight * static_cast<float>(rows.size());
-        row.width = std::max(0.0f, treeWidth - indent * static_cast<float>(depth));
-        row.height = rowHeight;
-        row.toggleX = row.x;
-        row.toggleY = row.y;
-        row.toggleWidth = hasToggle ? toggleWidth : 0.0f;
-        row.toggleHeight = rowHeight;
-        row.textX = row.x + (hasToggle ? toggleWidth : 0.0f);
-        row.textMaxWidth = std::max(0.0f, treeX + treeWidth - row.textX);
-        rows.push_back(std::move(row));
-        return true;
-    };
+    result.rows.reserve(reserveRows);
 
     std::unordered_set<uint64_t> expandedNodeIds;
     if (request.expandedNodeIds) {
@@ -155,40 +177,126 @@ std::vector<Row> BuildRows(const BuildRequest& request, const StateSnapshot& sta
         }
     }
 
-    const bool rootHasChildren = childrenByParent.find(0) != childrenByParent.end();
-    pushRow(RowKind::TabName, WideToDisplayText(request.tabName), 0,
-        rootHasChildren, state.everythingExpanded, 0, false);
+    result.totalRowCount = 1;
+    if (state.everythingExpanded && request.nodes) {
+        std::unordered_set<uint64_t> countVisited;
+        countVisited.reserve(request.nodes->size());
+        std::function<void(uint64_t)> countChildren = [&](uint64_t parentId) {
+            auto childrenIt = childrenByParent.find(parentId);
+            if (childrenIt == childrenByParent.end()) return;
 
-    if (!state.everythingExpanded || !request.nodes) return rows;
-
-    std::unordered_set<uint64_t> visited;
-    visited.reserve(request.nodes->size());
-
-    std::function<bool(uint64_t, uint32_t)> pushChildren = [&](uint64_t parentId, uint32_t depth) {
-        auto childrenIt = childrenByParent.find(parentId);
-        if (childrenIt == childrenByParent.end()) return true;
-
-        for (size_t childIndex : childrenIt->second) {
-            const Node& node = (*request.nodes)[childIndex];
-            if (node.objectId == 0 || !visited.insert(node.objectId).second) continue;
-
-            auto grandchildrenIt = childrenByParent.find(node.objectId);
-            const bool hasChildren = grandchildrenIt != childrenByParent.end() && !grandchildrenIt->second.empty();
-            const bool isExpanded = expandedNodeIds.find(node.objectId) != expandedNodeIds.end();
-            if (!pushRow(RowKind::ObjectNode, node.label, depth, hasChildren, isExpanded, node.objectId,
-                node.canBecomeActiveBranch)) {
-                return false;
+            for (size_t childIndex : childrenIt->second) {
+                const Node& node = (*request.nodes)[childIndex];
+                if (node.objectId == 0 || !countVisited.insert(node.objectId).second) continue;
+                ++result.totalRowCount;
+                const bool isExpanded = expandedNodeIds.find(node.objectId) != expandedNodeIds.end();
+                if (isExpanded) countChildren(node.objectId);
             }
+        };
+        countChildren(0);
+    }
 
-            if (hasChildren && isExpanded) {
-                if (!pushChildren(node.objectId, depth + 1)) return false;
-            }
-        }
-        return true;
+    result.maxFirstVisibleRow = result.totalRowCount > maxRows
+        ? result.totalRowCount - maxRows
+        : 0;
+    result.firstVisibleRow = (std::min)(
+        static_cast<size_t>((std::min<uint64_t>)(state.firstVisibleRow, SIZE_MAX)),
+        result.maxFirstVisibleRow);
+
+    size_t logicalRowIndex = 0;
+    auto pushRow = [&](RowKind kind, const std::u32string& label, uint32_t depth,
+        bool hasToggle, bool isExpanded, uint64_t objectId, bool canBecomeActiveBranch) {
+        const size_t currentRowIndex = logicalRowIndex++;
+        if (currentRowIndex < result.firstVisibleRow) return true;
+        if (result.rows.size() >= maxRows) return false;
+
+        Row row;
+        row.kind = kind;
+        row.label = label;
+        row.depth = depth;
+        row.hasToggle = hasToggle;
+        row.isExpanded = isExpanded;
+        row.objectId = objectId;
+        row.canBecomeActiveBranch = canBecomeActiveBranch;
+        row.isActiveBranch = canBecomeActiveBranch && objectId == request.activeBranchObjectId;
+        row.x = layout.contentX + layout.indent * static_cast<float>(depth);
+        row.y = layout.y + layout.rowHeight * static_cast<float>(result.rows.size());
+        row.width = std::max(0.0f, layout.contentWidth - layout.indent * static_cast<float>(depth));
+        row.height = layout.rowHeight;
+        row.toggleX = row.x;
+        row.toggleY = row.y;
+        row.toggleWidth = hasToggle ? layout.toggleWidth : 0.0f;
+        row.toggleHeight = layout.rowHeight;
+        row.textX = row.x + (hasToggle ? layout.toggleWidth : 0.0f);
+        row.textMaxWidth = std::max(0.0f, layout.contentX + layout.contentWidth - row.textX);
+        result.rows.push_back(std::move(row));
+        return result.rows.size() < maxRows;
     };
 
-    pushChildren(0, 1);
-    return rows;
+    const bool rootHasChildren = childrenByParent.find(0) != childrenByParent.end();
+    const std::u32string tabLabel = WideToDisplayText(request.tabName);
+    bool keepBuilding = pushRow(RowKind::TabName, tabLabel, 0,
+        rootHasChildren, state.everythingExpanded, 0, false);
+
+    if (keepBuilding && state.everythingExpanded && request.nodes) {
+        std::unordered_set<uint64_t> visited;
+        visited.reserve(request.nodes->size());
+
+        std::function<bool(uint64_t, uint32_t)> pushChildren = [&](uint64_t parentId, uint32_t depth) {
+            auto childrenIt = childrenByParent.find(parentId);
+            if (childrenIt == childrenByParent.end()) return true;
+
+            for (size_t childIndex : childrenIt->second) {
+                const Node& node = (*request.nodes)[childIndex];
+                if (node.objectId == 0 || !visited.insert(node.objectId).second) continue;
+
+                auto grandchildrenIt = childrenByParent.find(node.objectId);
+                const bool hasChildren =
+                    grandchildrenIt != childrenByParent.end() && !grandchildrenIt->second.empty();
+                const bool isExpanded = expandedNodeIds.find(node.objectId) != expandedNodeIds.end();
+                if (!pushRow(RowKind::ObjectNode, node.label, depth, hasChildren, isExpanded,
+                    node.objectId, node.canBecomeActiveBranch)) {
+                    return false;
+                }
+
+                if (hasChildren && isExpanded) {
+                    if (!pushChildren(node.objectId, depth + 1)) return false;
+                }
+            }
+            return true;
+        };
+
+        pushChildren(0, 1);
+    }
+
+    result.scrollbar.trackX = layout.scrollbarX;
+    result.scrollbar.trackY = layout.scrollbarY;
+    result.scrollbar.trackWidth = layout.scrollbarWidth;
+    result.scrollbar.trackHeight = layout.scrollbarHeight;
+    result.scrollbar.thumbX = layout.scrollbarX;
+    result.scrollbar.thumbWidth = layout.scrollbarWidth;
+    result.scrollbar.isScrollable = result.maxFirstVisibleRow > 0;
+
+    if (layout.scrollbarHeight > 0.0f) {
+        const float visibleFraction = result.totalRowCount == 0
+            ? 1.0f
+            : std::min(1.0f, static_cast<float>(maxRows) / static_cast<float>(result.totalRowCount));
+        const float minimumThumbHeight = std::max(8.0f,
+            std::round(kMinimumScrollbarThumbMM * request.pixelsPerMMY));
+        result.scrollbar.thumbHeight = result.scrollbar.isScrollable
+            ? std::clamp(layout.scrollbarHeight * visibleFraction,
+                std::min(minimumThumbHeight, layout.scrollbarHeight), layout.scrollbarHeight)
+            : layout.scrollbarHeight;
+        const float thumbTravel = std::max(0.0f,
+            layout.scrollbarHeight - result.scrollbar.thumbHeight);
+        const float scrollFraction = result.maxFirstVisibleRow == 0
+            ? 0.0f
+            : static_cast<float>(result.firstVisibleRow) /
+                static_cast<float>(result.maxFirstVisibleRow);
+        result.scrollbar.thumbY = layout.scrollbarY + thumbTravel * scrollFraction;
+    }
+
+    return result;
 }
 
 bool HitTestEverythingToggle(const std::vector<Row>& rows, float mouseX, float mouseY) {
@@ -226,6 +334,31 @@ bool HitTestActiveBranch(const std::vector<Row>& rows, float mouseX, float mouse
     }
     objectId = 0;
     return false;
+}
+
+bool HitTestScrollbarTrack(const Scrollbar& scrollbar, float mouseX, float mouseY) {
+    return mouseX >= scrollbar.trackX && mouseX < scrollbar.trackX + scrollbar.trackWidth &&
+        mouseY >= scrollbar.trackY && mouseY < scrollbar.trackY + scrollbar.trackHeight;
+}
+
+bool HitTestScrollbarThumb(const Scrollbar& scrollbar, float mouseX, float mouseY) {
+    return mouseX >= scrollbar.thumbX && mouseX < scrollbar.thumbX + scrollbar.thumbWidth &&
+        mouseY >= scrollbar.thumbY && mouseY < scrollbar.thumbY + scrollbar.thumbHeight;
+}
+
+uint64_t ScrollbarRowForMouseY(const BuildResult& result, float mouseY, float grabOffsetPx) {
+    if (!result.scrollbar.isScrollable || result.maxFirstVisibleRow == 0) return 0;
+
+    const float thumbTravel = result.scrollbar.trackHeight - result.scrollbar.thumbHeight;
+    if (thumbTravel <= 0.0f) return 0;
+
+    const float thumbY = std::clamp(
+        mouseY - grabOffsetPx,
+        result.scrollbar.trackY,
+        result.scrollbar.trackY + thumbTravel);
+    const float scrollFraction = (thumbY - result.scrollbar.trackY) / thumbTravel;
+    return static_cast<uint64_t>(std::llround(
+        scrollFraction * static_cast<float>(result.maxFirstVisibleRow)));
 }
 
 } // namespace DataTreeView

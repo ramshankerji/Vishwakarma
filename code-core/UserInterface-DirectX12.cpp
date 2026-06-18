@@ -1365,9 +1365,28 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     const int activeTabIndex = window.activeTabIndex;
     if (activeTabIndex >= 0 && activeTabIndex < MV_MAX_TABS) {
         DATASETTAB& tab = allTabs[activeTabIndex];
-        const DataTreeView::StateSnapshot dataTreeState = DataTreeView::Snapshot(tab.dataTreeView);
+        DataTreeView::StateSnapshot dataTreeState = DataTreeView::Snapshot(tab.dataTreeView);
 
         if (dataTreeState.isVisible) {
+            DataTreeView::BuildRequest treeRequest;
+            treeRequest.tabName = tab.fileName;
+            treeRequest.activeBranchObjectId = 0;
+            treeRequest.viewportTopPx = topUITotalHeightPx;
+            treeRequest.viewportHeightPx = std::max(0.0f, H - topUITotalHeightPx);
+            treeRequest.pixelsPerMMX = pixelsPerMMx;
+            treeRequest.pixelsPerMMY = pixelsPerMMy;
+
+            const DataTreeView::LayoutMetrics treeLayout = DataTreeView::CalculateLayout(treeRequest);
+            const bool treeHovered =
+                DataTreeView::ContainsPoint(treeLayout, input.mouseX, input.mouseY);
+            if (treeHovered && input.mouseWheelDelta != 0) {
+                const float wheelSteps = input.mouseWheelDelta / static_cast<float>(WHEEL_DELTA);
+                int64_t rowDelta = static_cast<int64_t>(std::llround(-wheelSteps * 3.0f));
+                if (rowDelta == 0) rowDelta = input.mouseWheelDelta > 0 ? -1 : 1;
+                DataTreeView::ScrollRows(tab.dataTreeView, rowDelta);
+                dataTreeState = DataTreeView::Snapshot(tab.dataTreeView);
+            }
+
             std::vector<DataTreeView::Node> treeNodes;
             std::vector<uint64_t> expandedNodeIds;
             uint64_t activeBranchObjectId = 0;
@@ -1398,18 +1417,70 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
                 }
             }
 
-            DataTreeView::BuildRequest treeRequest;
-            treeRequest.tabName = tab.fileName;
             treeRequest.nodes = &treeNodes;
             treeRequest.expandedNodeIds = &expandedNodeIds;
             treeRequest.activeBranchObjectId = activeBranchObjectId;
-            treeRequest.viewportTopPx = topUITotalHeightPx;
-            treeRequest.viewportHeightPx = std::max(0.0f, H - topUITotalHeightPx);
-            treeRequest.pixelsPerMMX = pixelsPerMMx;
-            treeRequest.pixelsPerMMY = pixelsPerMMy;
 
-            const std::vector<DataTreeView::Row> treeRows =
+            DataTreeView::BuildResult treeResult =
                 DataTreeView::BuildRows(treeRequest, dataTreeState);
+            if (treeResult.firstVisibleRow != dataTreeState.firstVisibleRow) {
+                DataTreeView::SetFirstVisibleRow(
+                    tab.dataTreeView, static_cast<uint64_t>(treeResult.firstVisibleRow));
+                dataTreeState.firstVisibleRow = treeResult.firstVisibleRow;
+            }
+
+            bool scrollbarDragging =
+                tab.dataTreeView.scrollbarDragging.load(std::memory_order_acquire);
+            if (input.leftButtonReleasedThisFrame || !input.leftButtonDown ||
+                !treeResult.scrollbar.isScrollable) {
+                scrollbarDragging = false;
+                tab.dataTreeView.scrollbarDragging.store(false, std::memory_order_release);
+            }
+
+            const bool scrollbarTrackHovered = DataTreeView::HitTestScrollbarTrack(
+                treeResult.scrollbar, input.mouseX, input.mouseY);
+            const bool scrollbarThumbHovered = DataTreeView::HitTestScrollbarThumb(
+                treeResult.scrollbar, input.mouseX, input.mouseY);
+
+            if (input.leftButtonPressedThisFrame && scrollbarTrackHovered &&
+                treeResult.scrollbar.isScrollable) {
+                float grabOffsetPx = scrollbarThumbHovered
+                    ? input.mouseY - treeResult.scrollbar.thumbY
+                    : treeResult.scrollbar.thumbHeight * 0.5f;
+                tab.dataTreeView.scrollbarDragGrabOffsetPx.store(
+                    grabOffsetPx, std::memory_order_release);
+                tab.dataTreeView.scrollbarDragging.store(true, std::memory_order_release);
+                scrollbarDragging = true;
+
+                const uint64_t targetRow = DataTreeView::ScrollbarRowForMouseY(
+                    treeResult, input.mouseY, grabOffsetPx);
+                DataTreeView::SetFirstVisibleRow(tab.dataTreeView, targetRow);
+                dataTreeState = DataTreeView::Snapshot(tab.dataTreeView);
+                treeResult = DataTreeView::BuildRows(treeRequest, dataTreeState);
+            } else if (scrollbarDragging && input.leftButtonDown) {
+                const float grabOffsetPx =
+                    tab.dataTreeView.scrollbarDragGrabOffsetPx.load(std::memory_order_acquire);
+                const uint64_t targetRow = DataTreeView::ScrollbarRowForMouseY(
+                    treeResult, input.mouseY, grabOffsetPx);
+                if (targetRow != dataTreeState.firstVisibleRow) {
+                    DataTreeView::SetFirstVisibleRow(tab.dataTreeView, targetRow);
+                    dataTreeState = DataTreeView::Snapshot(tab.dataTreeView);
+                    treeResult = DataTreeView::BuildRows(treeRequest, dataTreeState);
+                }
+            }
+
+            const uint32_t scrollbarTrackColor = 0x66333333;
+            const uint32_t scrollbarThumbColor = scrollbarDragging
+                ? 0xFF3399FF
+                : (scrollbarThumbHovered ? 0xFF5CB4FF : 0xCC8A8A8A);
+            pushRect(treeResult.scrollbar.trackX, treeResult.scrollbar.trackY,
+                treeResult.scrollbar.trackWidth, treeResult.scrollbar.trackHeight,
+                scrollbarTrackColor);
+            pushRect(treeResult.scrollbar.thumbX, treeResult.scrollbar.thumbY,
+                treeResult.scrollbar.thumbWidth, treeResult.scrollbar.thumbHeight,
+                scrollbarThumbColor);
+
+            const std::vector<DataTreeView::Row>& treeRows = treeResult.rows;
             uint64_t hoveredToggleObjectId = 0;
             const bool toggleHovered =
                 DataTreeView::HitTestToggle(treeRows, input.mouseX, input.mouseY, hoveredToggleObjectId);

@@ -196,6 +196,7 @@ DATASETTAB* CreateEngineeringTab(const std::wstring& displayName = L"",
     tab.allIDsInThisTab.clear();
     tab.dataTreeView.isVisible.store(false, std::memory_order_release);
     tab.dataTreeView.everythingExpanded.store(true, std::memory_order_release);
+    DataTreeView::ResetScroll(tab.dataTreeView);
     if (!tab.storageObjectsMutex) tab.storageObjectsMutex = std::make_unique<std::mutex>();
     {
         std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
@@ -1101,6 +1102,46 @@ static bool IsClientPointOverTopRibbon(const SingleUIWindow* window, const POINT
     return ribbonHeight > 0.0f && pt.y >= 0 && (float)pt.y < ribbonHeight;
 }
 
+static bool GetDataTreeLayoutForWindow(
+    const SingleUIWindow* window, const DATASETTAB* tab, DataTreeView::LayoutMetrics& layout) {
+    if (!window || !tab || !tab->dataTreeView.isVisible.load(std::memory_order_acquire) ||
+        window->currentMonitorIndex < 0 || window->currentMonitorIndex >= gpu.currentMonitorCount) {
+        return false;
+    }
+
+    RECT clientRect{};
+    if (!GetClientRect(window->hWnd, &clientRect)) return false;
+
+    const OneMonitorController& monitor = gpu.screens[window->currentMonitorIndex];
+    const float dpiX = (monitor.physicalDpiX > 0) ? (float)monitor.physicalDpiX : (float)monitor.dpiX;
+    const float dpiY = (monitor.physicalDpiY > 0) ? (float)monitor.physicalDpiY : (float)monitor.dpiY;
+    const float ribbonHeight = GetTopRibbonHeightPxForWindow(window);
+
+    DataTreeView::BuildRequest request;
+    request.viewportTopPx = ribbonHeight;
+    request.viewportHeightPx = (std::max)(0.0f,
+        static_cast<float>(clientRect.bottom - clientRect.top) - ribbonHeight);
+    request.pixelsPerMMX = dpiX / 25.4f;
+    request.pixelsPerMMY = dpiY / 25.4f;
+    layout = DataTreeView::CalculateLayout(request);
+    return layout.width > 0.0f && layout.height > 0.0f;
+}
+
+static bool IsClientPointOverDataTree(
+    const SingleUIWindow* window, const DATASETTAB* tab, const POINT& pt) {
+    DataTreeView::LayoutMetrics layout;
+    if (!GetDataTreeLayoutForWindow(window, tab, layout)) return false;
+    return DataTreeView::ContainsPoint(layout, static_cast<float>(pt.x), static_cast<float>(pt.y));
+}
+
+static bool IsClientPointOverDataTreeScrollbar(
+    const SingleUIWindow* window, const DATASETTAB* tab, const POINT& pt) {
+    DataTreeView::LayoutMetrics layout;
+    if (!GetDataTreeLayoutForWindow(window, tab, layout)) return false;
+    return pt.x >= layout.scrollbarX && pt.x < layout.scrollbarX + layout.scrollbarWidth &&
+        pt.y >= layout.scrollbarY && pt.y < layout.scrollbarY + layout.scrollbarHeight;
+}
+
 // PURPOSE:  Processes messages for the main window.
 // This is the function which runs whenever something changes from Operating System and we are expected to update ourselves.
 // Even the user input such as keyboard presses, mouse clicks, open/close are notified to this function.
@@ -1218,6 +1259,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_MOUSEMOVE:
         UpdateUIMousePosition(currentWindow, lParam);
+        if (currentWindow && tab && GetCapture() == hWnd) {
+            SyncModifiersForWindow(currentWindow);
+            return 0;
+        }
         if (tab) {
             ad.actionType = ACTION_TYPE::MOUSEMOVE;
             ad.source = INPUT_SOURCE::MOUSE;
@@ -1236,6 +1281,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             currentWindow->uiInput.leftButtonDown = true;
             currentWindow->uiInput.leftButtonPressedThisFrame = true;
         }
+        if (currentWindow && tab) {
+            POINT clientPoint = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (IsClientPointOverDataTreeScrollbar(currentWindow, tab, clientPoint)) {
+                SetCapture(hWnd);
+                SyncModifiersForWindow(currentWindow);
+                return 0;
+            }
+        }
         if (tab) {
             ad.actionType = ACTION_TYPE::LBUTTONDOWN;
             ad.source = INPUT_SOURCE::MOUSE;
@@ -1249,10 +1302,17 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     
     case WM_LBUTTONUP:
+    {
+        const bool releasingDataTreeScrollbar = GetCapture() == hWnd;
         if (currentWindow) {
             UpdateUIMousePosition(currentWindow, lParam);
             currentWindow->uiInput.leftButtonDown = false;
             currentWindow->uiInput.leftButtonReleasedThisFrame = true;
+        }
+        if (releasingDataTreeScrollbar) {
+            ReleaseCapture();
+            SyncModifiersForWindow(currentWindow);
+            return 0;
         }
         if (tab) {
             ad.actionType = ACTION_TYPE::LBUTTONUP;
@@ -1265,6 +1325,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             SyncModifiersForWindow(currentWindow);
         }
         return 0;
+    }
     
     case WM_RBUTTONDOWN:
         if (currentWindow) {
@@ -1341,16 +1402,18 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         POINT uiPoint = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         ScreenToClient(hWnd, &uiPoint);
         const bool handledByTopRibbon = currentWindow && IsClientPointOverTopRibbon(currentWindow, uiPoint);
+        const bool handledByDataTree =
+            currentWindow && tab && IsClientPointOverDataTree(currentWindow, tab, uiPoint);
 
         if (currentWindow) {
             currentWindow->uiInput.mouseX = static_cast<float>(uiPoint.x);
             currentWindow->uiInput.mouseY = static_cast<float>(uiPoint.y);
-            if (handledByTopRibbon) {
+            if (handledByTopRibbon || handledByDataTree) {
                 currentWindow->uiInput.mouseWheelDelta += GET_WHEEL_DELTA_WPARAM(wParam);
                 SyncModifiersForWindow(currentWindow);
             }
         }
-        if (handledByTopRibbon) return 0;
+        if (handledByTopRibbon || handledByDataTree) return 0;
 
         if (tab) {
             ad.actionType = ACTION_TYPE::MOUSEWHEEL;
@@ -1370,8 +1433,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     //If we want to support dragging from the title bar, we can re - enable this and add logic to handle it.
     
     case WM_CAPTURECHANGED: // Notify all tabs to release captured mouse states (e.g. , if dragging )
+        if (currentWindow) {
+            currentWindow->uiInput.leftButtonDown = false;
+            currentWindow->uiInput.leftButtonReleasedThisFrame = true;
+        }
         for (uint16_t ti = 0; ti < tabCount; ++ti) {
             DATASETTAB & tab = allTabs[tabList[ti]];
+            tab.dataTreeView.scrollbarDragging.store(false, std::memory_order_release);
 
             ad.actionType = ACTION_TYPE::CAPTURECHANGED;
             ad.source = INPUT_SOURCE::MOUSE;
