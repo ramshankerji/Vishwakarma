@@ -602,10 +602,12 @@ void PrecomputeTopRibbonLayout(UITopRibbonLayout& layout, float monitorDPIX, flo
     layout.actionSubGroupLabelY = (UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
         UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
         UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy + 5.0f;
-    layout.topUITotalHeightPx = std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+    layout.internalTabBarY = std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
         UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
         UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX +
         UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy) + 7.0f;
+    layout.internalTabBarHeightPx = std::round(UI_INTERNAL_TAB_BAR_HEIGHT_MM * pixelsPerMMy);
+    layout.topUITotalHeightPx = layout.internalTabBarY + layout.internalTabBarHeightPx;
 
 
     const float groupNavPaddingPx = 8.0f;
@@ -936,7 +938,8 @@ void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t c
 // side favorite / frequent buttons bars, right side property window, bottom status bar.
 // This is also responsible for all relevant DirectX12 configurations required for rendering User Interface.
 void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX12ResourcesUI& uiRes,
-    UITopRibbonLayout& topRibbonLayout, float monitorDPIX, float monitorDPIY, const UIInput& input) {
+    UITopRibbonLayout& topRibbonLayout, float monitorDPIX, float monitorDPIY, const UIInput& input,
+    const std::vector<InternalSubTab>& internalSubTabs, uint64_t activeInternalSubTabMemoryId) {
     
     if (!cmd) return; //Defensive check.
 
@@ -1363,6 +1366,81 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     }
 
     const int activeTabIndex = window.activeTabIndex;
+
+    // INTERNAL HIGH-LEVEL CONTAINER TABS (Scene3D, Page2D, and future container types).
+    const float internalBarY = topRibbonLayout.internalTabBarY;
+    const float internalBarHeight = topRibbonLayout.internalTabBarHeightPx;
+    if (internalBarHeight > 0.0f) {
+        pushRect(0.0f, internalBarY, W, internalBarHeight, uiActiveColors.tabBackground);
+
+        const size_t internalTabCount = internalSubTabs.size();
+        if (internalTabCount > 0) {
+            const float defaultInternalTabWidth = 180.0f;
+            const float minimumInternalTabWidth = std::max(4.0f * pixelsPerMMx, 8.0f);
+            const float internalGapPx = 0.5f * pixelsPerMMx;
+            const float availableWidth = std::max(0.0f, W);
+            float internalTabWidth = std::min(defaultInternalTabWidth,
+                availableWidth / static_cast<float>(internalTabCount));
+            internalTabWidth = std::max(minimumInternalTabWidth, internalTabWidth);
+            size_t visibleInternalTabs = std::min(internalTabCount,
+                static_cast<size_t>(std::floor(availableWidth / internalTabWidth)));
+
+            float internalX = 0.0f;
+            for (size_t i = 0; i < visibleInternalTabs; ++i) {
+                const InternalSubTab& subTab = internalSubTabs[i];
+                const bool isActive = subTab.containerMemoryId == activeInternalSubTabMemoryId;
+                const float tabX = internalX;
+                const float contentX = tabX + internalGapPx;
+                const float contentWidth = std::max(0.0f, internalTabWidth - 2.0f * internalGapPx);
+                const float closeSize = std::max(8.0f, internalBarHeight * 0.62f);
+                const float closeX = contentX + contentWidth - closeSize - 2.0f;
+                const float closeY = internalBarY + (internalBarHeight - closeSize) * 0.5f;
+
+                const bool tabHovered =
+                    input.mouseX >= tabX && input.mouseX < tabX + internalTabWidth &&
+                    input.mouseY >= internalBarY && input.mouseY < internalBarY + internalBarHeight;
+                const bool closeHovered =
+                    input.mouseX >= closeX && input.mouseX < closeX + closeSize &&
+                    input.mouseY >= closeY && input.mouseY < closeY + closeSize;
+
+                uint32_t tabColor = isActive ? uiActiveColors.tabActive : uiActiveColors.tabBackground;
+                if (!isActive && tabHovered) tabColor = uiActiveColors.tabBackgroundHover;
+                PushTopRoundedRectangle(ctx, contentX, internalBarY, contentWidth, internalBarHeight,
+                    roundedCornerRadiusPx, tabColor, uiRes);
+
+                if (input.leftButtonPressedThisFrame) {
+                    if (closeHovered) {
+                        PushUIAction(InternalSubTabs::kCloseUIAction,
+                            static_cast<uint32_t>(activeTabIndex), subTab.containerMemoryId);
+                    } else if (tabHovered) {
+                        PushUIAction(InternalSubTabs::kActivateUIAction,
+                            static_cast<uint32_t>(activeTabIndex), subTab.containerMemoryId);
+                    }
+                }
+
+                std::u32string title = DataTreeView::AsciiToDisplayText(subTab.title.c_str());
+                const uint32_t textColor = isActive
+                    ? uiActiveColors.tabActiveText
+                    : uiActiveColors.tabBackgroundText;
+                pushTextClipped(contentX + 6.0f,
+                    textBaselineY(internalBarY, internalBarHeight, uiTextScale),
+                    title.c_str(), std::max(0.0f, closeX - contentX - 10.0f),
+                    textColor, uiTextScale, isActive);
+
+                const char32_t closeText[2] = { U'x', U'\0' };
+                if (closeHovered) {
+                    PushRoundedRectangle(ctx, closeX, closeY, closeSize, closeSize,
+                        std::max(1.0f, roundedCornerRadiusPx * 0.6f), 0xFF444444, uiRes);
+                }
+                pushTextClipped(closeX + closeSize * 0.28f,
+                    textBaselineY(closeY, closeSize, uiTextScale), closeText,
+                    closeSize * 0.55f, textColor, uiTextScale);
+
+                internalX += internalTabWidth;
+            }
+        }
+    }
+
     if (activeTabIndex >= 0 && activeTabIndex < MV_MAX_TABS) {
         DATASETTAB& tab = allTabs[activeTabIndex];
         DataTreeView::StateSnapshot dataTreeState = DataTreeView::Snapshot(tab.dataTreeView);
@@ -1403,7 +1481,8 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
                     node.parentObjectId = object.object->memoryIDParent;
                     node.label = BuildTreeNodeLabel(object.objectType, object.object, object.memoryId);
                     node.canBecomeActiveBranch =
-                        object.objectType == VishwakarmaStorage::ObjectType::Scene3D;
+                        object.objectType == VishwakarmaStorage::ObjectType::Scene3D ||
+                        object.objectType == VishwakarmaStorage::ObjectType::Page2D;
                     treeNodes.push_back(std::move(node));
                 }
 
@@ -1500,6 +1579,10 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
                 } else if (branchHovered) {
                     PushUIAction(DataTreeView::kSetActiveBranchUIAction,
                         static_cast<uint32_t>(activeTabIndex), hoveredBranchObjectId);
+                    if (input.leftButtonDoubleClickedThisFrame) {
+                        PushUIAction(InternalSubTabs::kOpenUIAction,
+                            static_cast<uint32_t>(activeTabIndex), hoveredBranchObjectId);
+                    }
                 }
             }
 

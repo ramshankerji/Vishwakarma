@@ -424,7 +424,8 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
 }
 
 void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
-    DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage, int monitorId) {
+    DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage,
+    int monitorId, uint64_t activeContainerMemoryId) {
     //int i = 0; // Latter to be iterated over number of screens.
     // Update constant buffer with transformation matrices
     
@@ -440,11 +441,17 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
     // Compute top UI height in pixels based on monitor physical DPI (DPI -> pixels per mm)
     int topUITotalHeightPx = 0;
     if (monitorId >= 0 && monitorId < gpu.currentMonitorCount) {
-        float pixelsPerMMy = static_cast<float>(gpu.screens[monitorId].physicalDpiY) / 25.4f;
-        topUITotalHeightPx = static_cast<int>(std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-            UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-            UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-            UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy)) + 7;
+        const UITopRibbonLayout& layout = gpu.screens[monitorId].topRibbonLayout;
+        if (layout.isValid && layout.topUITotalHeightPx > 0.0f) {
+            topUITotalHeightPx = static_cast<int>(std::round(layout.topUITotalHeightPx));
+        } else {
+            float pixelsPerMMy = static_cast<float>(gpu.screens[monitorId].physicalDpiY) / 25.4f;
+            topUITotalHeightPx = static_cast<int>(std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+                UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+                UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+                UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+                UI_INTERNAL_TAB_BAR_HEIGHT_MM) * pixelsPerMMy)) + 7;
+        }
         // clamp
         if (topUITotalHeightPx < 0) topUITotalHeightPx = 0;
         if (topUITotalHeightPx > winRes.WindowHeight) topUITotalHeightPx = winRes.WindowHeight;
@@ -527,8 +534,12 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
             commandList->IASetVertexBuffers(0, 1, &vbv);
             commandList->IASetIndexBuffer(&ibv);
 
-            commandList->ExecuteIndirect( tabRes.commandSignature.Get(),
-                page.indirectCount, page.indirectBuffer.Get(), 0, nullptr, 0);
+            const uint32_t argumentCount =
+                activeContainerMemoryId != 0 && page.containerMemoryId == activeContainerMemoryId
+                ? page.indirectCount
+                : 0;
+            commandList->ExecuteIndirect(tabRes.commandSignature.Get(),
+                argumentCount, page.indirectBuffer.Get(), 0, nullptr, 0);
         }
     } // End of if (snapshot)
 	// TODO: Add support for transparent pages with proper sorting and blending states.
@@ -682,11 +693,13 @@ void शंकर::ProcessDeferredFrees(uint64_t lastCompletedRenderFrame) {
     }
 }
 
-std::unique_ptr<GeometryPage> CreateNewPage() //Do not make this static function. It accesses global gpu singleton.
+std::unique_ptr<GeometryPage> CreateNewPage(uint64_t containerMemoryId)
+//Do not make this static function. It accesses global gpu singleton.
 {
     auto page = std::make_unique<GeometryPage>();
     page->pageSize = 4 * 1024 * 1024;
     page->indexTail = page->pageSize;
+    page->containerMemoryId = containerMemoryId;
 
     CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);
     auto desc = CD3DX12_RESOURCE_DESC::Buffer(page->pageSize);
@@ -906,8 +919,6 @@ void GpuCopyThread() {
             std::unordered_map<GeometryPage*, std::unique_ptr<GeometryPage>> clonedPages;
             std::vector<std::unique_ptr<GeometryPage>> newPages;
 
-            GeometryPage* newPage = nullptr;
-
             // Pre-Pass: Deduplicate commands for this tab. If the same object is modified twice,
             // or added then modified, etc., we need only FINAL state in this batch to persist.
             std::unordered_map<uint64_t, size_t> latestCommandIndex;
@@ -935,22 +946,36 @@ void GpuCopyThread() {
                 if (it != objectLocation.end()) affectedPages.insert(it->second.page);
             }
 
-            // Find page with largest hole in the middle.
-            GeometryPage* bestAppendCandidate = nullptr;
-            size_t maxHole = 0;
+            // Find the page with the largest contiguous middle gap for each container receiving geometry.
+            // Pages never mix containers, so inactive pages can be hidden with ExecuteIndirect count 0.
+            std::unordered_set<uint64_t> containersNeedingAppend;
+            for (const auto& cmd : deduplicatedBatch) {
+                if (!cmd.geometry.has_value()) continue;
+                uint64_t containerMemoryId = cmd.containerMemoryId;
+                auto existingIt = objectLocation.find(cmd.id);
+                if (containerMemoryId == 0 && existingIt != objectLocation.end()) {
+                    containerMemoryId = existingIt->second.page->containerMemoryId;
+                }
+                containersNeedingAppend.insert(containerMemoryId);
+            }
+
+            std::unordered_map<uint64_t, GeometryPage*> bestAppendCandidates;
+            std::unordered_map<uint64_t, size_t> maxHoleByContainer;
             for (const auto& pagePtr : storage.activePages) {
                 GeometryPage* p = pagePtr.get();
                 if (!p->published.load(std::memory_order_acquire)) continue; //Just for extra safety.
+                if (containersNeedingAppend.find(p->containerMemoryId) == containersNeedingAppend.end()) continue;
 
                 size_t hole = p->indexTail - p->vertexHead;  // middle contiguous free space
+                size_t& maxHole = maxHoleByContainer[p->containerMemoryId];
                 if (hole > maxHole) {
                     maxHole = hole;
-                    bestAppendCandidate = p;
+                    bestAppendCandidates[p->containerMemoryId] = p;
                 }
             }
-            // If this best page is not already being cloned, force-clone it so we can append safely
-            if (bestAppendCandidate && affectedPages.find(bestAppendCandidate) == affectedPages.end()) {
-                affectedPages.insert(bestAppendCandidate);
+            // Force-clone each append candidate so Pass 3 never mutates a published page.
+            for (const auto& [containerMemoryId, candidate] : bestAppendCandidates) {
+                affectedPages.insert(candidate);
             }
 
             commandAllocator->Reset(); // Prepare command allocator for more work !
@@ -958,7 +983,7 @@ void GpuCopyThread() {
 
             //Pass 2: Clone Affected Pages (RCU copy)
             for (GeometryPage* oldPage : affectedPages) {
-                auto clonedPage = CreateNewPage();
+                auto clonedPage = CreateNewPage(oldPage->containerMemoryId);
 
                 // Following 2 commands are for copying the GPU VRAM data.
                 commandList->CopyResource(clonedPage->buffer.Get(), oldPage->buffer.Get());
@@ -988,7 +1013,7 @@ void GpuCopyThread() {
                 }
             }
 
-            GeometryPage* addTargetPage = nullptr;
+            std::unordered_map<uint64_t, GeometryPage*> addTargetPages;
             if (!affectedPages.empty()) { // If no pages cloned, we don't need these GPU operations.
                 ThrowIfFailed(commandList->Close());
                 ID3D12CommandList* lists[] = { commandList.Get() };
@@ -1003,10 +1028,11 @@ void GpuCopyThread() {
                     WaitForSingleObject(gpu.copyFenceEvent, INFINITE);
                 }
 
-                if (bestAppendCandidate) {
-                    auto cloneIt = clonedPages.find(bestAppendCandidate);
-                    if (cloneIt != clonedPages.end()) addTargetPage = cloneIt->second.get(); // mutable clone
-                    else addTargetPage = bestAppendCandidate; // already mutable this batch (rare)
+                for (const auto& [containerMemoryId, candidate] : bestAppendCandidates) {
+                    auto cloneIt = clonedPages.find(candidate);
+                    addTargetPages[containerMemoryId] = cloneIt != clonedPages.end()
+                        ? cloneIt->second.get()
+                        : candidate;
                 }
 
                 // Re-open the command list for Pass-3 GPU work (geometry uploads for ADD/MODIFY-grow cases).
@@ -1066,6 +1092,23 @@ void GpuCopyThread() {
 
             uint32_t matrixIndex; // Allocate a matrix slot (new object)
             XMMATRIX worldMat;
+            std::unordered_map<uint64_t, GeometryPage*> newestPagesByContainer;
+
+            auto AcquireAppendPage = [&](uint64_t containerMemoryId,
+                uint32_t incomingVertexBytes, uint32_t incomingIndexBytes) -> GeometryPage* {
+                GeometryPage*& targetPage = addTargetPages[containerMemoryId];
+                if (targetPage && !targetPage->IsFull(incomingVertexBytes, incomingIndexBytes)) {
+                    return targetPage;
+                }
+
+                GeometryPage*& newestPage = newestPagesByContainer[containerMemoryId];
+                if (!newestPage || newestPage->IsFull(incomingVertexBytes, incomingIndexBytes)) {
+                    newPages.push_back(CreateNewPage(containerMemoryId));
+                    newestPage = newPages.back().get();
+                }
+                targetPage = newestPage;
+                return targetPage;
+            };
 
             for (auto& cmd : deduplicatedBatch) { // Iterate over batch
                 if (cmd.tabID != tabID) continue;
@@ -1078,10 +1121,12 @@ void GpuCopyThread() {
 
                 GeometryPage* workPage = nullptr;
                 GeometryPage* oldPage = nullptr;
+                GeometryPage* modifyTargetPage = nullptr;
                 const GeometryData* geo = nullptr;
                 GeometryPlacementRecordInPage* oldRec = nullptr;
                 GeometryPlacementRecordInPage rec;
                 uint32_t slotIndex = 0;
+                uint64_t targetContainerMemoryId = cmd.containerMemoryId;
                 matrixIndex = 0;
 
                 // We mandatorily check if ID still exist even if the command is ADD as a safety measure.
@@ -1118,14 +1163,8 @@ void GpuCopyThread() {
                         tabRes.pWorldMatrixDataBegin + matrixIndex * sizeof(XMFLOAT4X4)),
                         XMMatrixTranspose(worldMat));
 
-                    if (!addTargetPage || addTargetPage->IsFull(vertexBytes, indexBytes)) {
-                        // addTargetPage is full (or didn't exist) → create a brand-new page
-                        if (!newPage || newPage->IsFull(vertexBytes, indexBytes)) {
-                            newPages.push_back(CreateNewPage());
-                            newPage = newPages.back().get();
-                        }
-                        addTargetPage = newPage;   // switch target to the new page
-                    } // At this point addTargetPage is guaranteed to have space
+                    GeometryPage* addTargetPage =
+                        AcquireAppendPage(targetContainerMemoryId, vertexBytes, indexBytes);
 
                     // Record the geometry upload into commandList
                     rec = RecordGeometryUpload(addTargetPage, *geo, matrixIndex);
@@ -1162,6 +1201,9 @@ void GpuCopyThread() {
                     // Object exists — work on its owning cloned page
                     oldPage = locIt->second.page;
                     slotIndex = locIt->second.slot;
+                    if (targetContainerMemoryId == 0) {
+                        targetContainerMemoryId = oldPage->containerMemoryId;
+                    }
 
                     // Resolve which mutable page we are working with: It will be in clonedPages (was in affectedPages 
                     // from Pass 1), because Pass 1 already included pages from existing objectLocation.
@@ -1176,11 +1218,8 @@ void GpuCopyThread() {
                     workPage->holeBytes += oldRec->vertexSize + oldRec->indexSize;
                     workPage->objectCount--;
 
-                    if (!newPage || newPage->IsFull(newVertexBytes, newIndexBytes))
-                    {
-                        newPages.push_back(CreateNewPage());
-                        newPage = newPages.back().get();
-                    }
+                    modifyTargetPage =
+                        AcquireAppendPage(targetContainerMemoryId, newVertexBytes, newIndexBytes);
 
                     // Allocate a fresh matrix slot for the relocated geometry
                     if (!tabRes.freeMatrixSlots.empty()) {
@@ -1196,13 +1235,14 @@ void GpuCopyThread() {
                     XMStoreFloat4x4(reinterpret_cast<XMFLOAT4X4*>(tabRes.pWorldMatrixDataBegin +
                         matrixIndex * sizeof(XMFLOAT4X4)), XMMatrixTranspose(worldMat));
 
-                    rec = RecordGeometryUpload(newPage, *geo, matrixIndex);
-                    newPage->objects.push_back(rec);
-                    newPage->vertexHead = rec.vertexByteOffset + rec.vertexSize;
-                    newPage->indexTail = rec.indexByteOffset;
-                    newPage->objectCount++;
+                    rec = RecordGeometryUpload(modifyTargetPage, *geo, matrixIndex);
+                    modifyTargetPage->objects.push_back(rec);
+                    modifyTargetPage->vertexHead = rec.vertexByteOffset + rec.vertexSize;
+                    modifyTargetPage->indexTail = rec.indexByteOffset;
+                    modifyTargetPage->objectCount++;
 
-                    objectLocation[cmd.id] = { newPage, static_cast<uint32_t>(newPage->objects.size() - 1) };
+                    objectLocation[cmd.id] = {
+                        modifyTargetPage, static_cast<uint32_t>(modifyTargetPage->objects.size() - 1) };
                     break;
 
                 case CommandToCopyThreadType::REMOVE:
@@ -1576,6 +1616,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             // Reset the "this-frame" flags for next frame (main thread will set them again)
             window.uiInput.leftButtonPressedThisFrame = false;
             window.uiInput.leftButtonReleasedThisFrame = false;
+            window.uiInput.leftButtonDoubleClickedThisFrame = false;
             window.uiInput.rightButtonPressedThisFrame = false;
             window.uiInput.middleButtonPressedThisFrame = false;
             window.uiInput.mouseWheelDelta = 0;
@@ -1585,11 +1626,19 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 DATASETTAB& tab = allTabs[tabIndex];
                 DX12ResourcesPerTab& tabRes = tab.dx;
                 tabRes.camera = tab.camera; // Update camera from Tab.
+                std::vector<InternalSubTab> internalSubTabsSnapshot;
+                uint64_t activeInternalSubTabMemoryId = 0;
+                if (tab.storageObjectsMutex) {
+                    std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
+                    internalSubTabsSnapshot = tab.openInternalSubTabs;
+                    activeInternalSubTabMemoryId = tab.activeInternalSubTabMemoryId;
+                }
                 uint64_t fenceToWaitFor = gpu.copyFenceValue.load(std::memory_order_acquire);// Cross-Queue Sync.
                 //if (fenceToWaitFor > 0) { threadRes.commandQueue->Wait(gpu.copyFence.Get(), fenceToWaitFor); }
                 //Above is commented out because render thread now no longer need to wait for copyFence,
                 //because, now render thread operate over READ ONLY page list.
-                gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes, tab.geometry, monitorId);// Renders geometry.
+                gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes, tab.geometry,
+                    monitorId, activeInternalSubTabMemoryId);// Renders geometry.
                 // Render User Interface using safe snapshot copy of current Input.
 
                 if (atlasFence.load(std::memory_order_acquire) == 0 ||
@@ -1603,7 +1652,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                         gpu.screens[monitorId].topRibbonLayout,
                         static_cast<float>(gpu.screens[monitorId].physicalDpiX),
                         static_cast<float>(gpu.screens[monitorId].physicalDpiY),
-                        inputSnapshot);
+                        inputSnapshot, internalSubTabsSnapshot, activeInternalSubTabMemoryId);
                 }
             }
 

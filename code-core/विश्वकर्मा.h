@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <vector>
 #include <mutex>
+#include <string>
 #include "MemoryManagerCPU.h"
 #include "MemoryManagerGPU-DirectX12.h"
 #include "UserInputProcessing.h"
@@ -81,6 +82,12 @@ struct StoredLogicalObject {
     META_DATA* object = nullptr;
 };
 
+struct InternalSubTab {
+    VishwakarmaStorage::ObjectType containerType = VishwakarmaStorage::ObjectType::Unknown;
+    uint64_t containerMemoryId = 0;
+    std::string title;
+};
+
 struct DATASETTAB {
     uint64_t tabID;
     std::wstring fileName;
@@ -126,6 +133,8 @@ struct DATASETTAB {
     std::vector<StoredLogicalObject> storageLogicalObjects; // Persisted organization objects in this tab.
     std::vector<StoredGeometryObject3D> storageObjects3D; // MVP persisted geometry objects in this tab.
     std::vector<uint64_t> expandedDataTreeNodeIds; // Expanded logical nodes in the visible data tree.
+    std::vector<InternalSubTab> openInternalSubTabs; // Engineering-thread owned; render thread copies under storageObjectsMutex.
+    uint64_t activeInternalSubTabMemoryId = 0; // Zero means no high-level container is currently visible.
     uint64_t defaultScene3DMemoryId = 0;
     uint64_t activeScene3DMemoryId = 0; // Organizational parent for newly generated 3D objects.
     std::unique_ptr<std::mutex> storageObjectsMutex;

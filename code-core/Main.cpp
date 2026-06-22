@@ -203,6 +203,8 @@ DATASETTAB* CreateEngineeringTab(const std::wstring& displayName = L"",
         tab.storageLogicalObjects.clear();
         tab.storageObjects3D.clear();
         tab.expandedDataTreeNodeIds.clear();
+        tab.openInternalSubTabs.clear();
+        tab.activeInternalSubTabMemoryId = 0;
         tab.defaultScene3DMemoryId = 0;
         tab.activeScene3DMemoryId = 0;
     }
@@ -339,6 +341,21 @@ void ProcessPendingUIActions() {
             if (action.p1 < MV_MAX_TABS) {
                 PushSystemTodoToTab(&allTabs[static_cast<uint16_t>(action.p1)],
                     ACTION_TYPE::DATA_TREE_SET_ACTIVE_BRANCH, 0, 0, 0, action.p2);
+            }
+        } else if (action.id == InternalSubTabs::kOpenUIAction) {
+            if (action.p1 < MV_MAX_TABS) {
+                PushSystemTodoToTab(&allTabs[static_cast<uint16_t>(action.p1)],
+                    ACTION_TYPE::OPEN_INTERNAL_SUB_TAB, 0, 0, 0, action.p2);
+            }
+        } else if (action.id == InternalSubTabs::kActivateUIAction) {
+            if (action.p1 < MV_MAX_TABS) {
+                PushSystemTodoToTab(&allTabs[static_cast<uint16_t>(action.p1)],
+                    ACTION_TYPE::ACTIVATE_INTERNAL_SUB_TAB, 0, 0, 0, action.p2);
+            }
+        } else if (action.id == InternalSubTabs::kCloseUIAction) {
+            if (action.p1 < MV_MAX_TABS) {
+                PushSystemTodoToTab(&allTabs[static_cast<uint16_t>(action.p1)],
+                    ACTION_TYPE::CLOSE_INTERNAL_SUB_TAB, 0, 0, 0, action.p2);
             }
         } else if (action.id == static_cast<uint32_t>(Commands::PROJECT_SAVE)) {
             SaveActiveTabToStorage();
@@ -869,7 +886,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     WNDCLASSEXW wcex;
 
     wcex.cbSize = sizeof(WNDCLASSEXW);
-    wcex.style = CS_HREDRAW | CS_VREDRAW;
+    wcex.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
 	wcex.lpfnWndProc = WndProc; //This is the root of all Windows message handling for our application.
     wcex.cbClsExtra = 0;
     wcex.cbWndExtra = 0;
@@ -1094,7 +1111,8 @@ static float GetTopRibbonHeightPxForWindow(const SingleUIWindow* window) {
     return std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
         UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
         UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX) * pixelsPerMMy) + 7.0f;
+        UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+        UI_INTERNAL_TAB_BAR_HEIGHT_MM) * pixelsPerMMy) + 7.0f;
 }
 
 static bool IsClientPointOverTopRibbon(const SingleUIWindow* window, const POINT& pt) {
@@ -1275,11 +1293,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         return 0;
 
+    case WM_LBUTTONDBLCLK:
     case WM_LBUTTONDOWN:
+    {
+        const bool isDoubleClick = message == WM_LBUTTONDBLCLK;
         if (currentWindow) {
             UpdateUIMousePosition(currentWindow, lParam);
             currentWindow->uiInput.leftButtonDown = true;
             currentWindow->uiInput.leftButtonPressedThisFrame = true;
+            currentWindow->uiInput.leftButtonDoubleClickedThisFrame = isDoubleClick;
         }
         if (currentWindow && tab) {
             POINT clientPoint = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
@@ -1300,6 +1322,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             SyncModifiersForWindow(currentWindow);
         }
         return 0;
+    }
     
     case WM_LBUTTONUP:
     {

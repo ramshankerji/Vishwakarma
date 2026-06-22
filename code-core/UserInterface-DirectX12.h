@@ -19,6 +19,7 @@
 
 // Do not #include "विश्वकर्मा.h" otherwise it will lead to circular dependency error. Declare this struct exist.
 struct SingleUIWindow; // Add this forward declaration:
+struct InternalSubTab;
 
 using Microsoft::WRL::ComPtr;
 
@@ -68,4 +69,5 @@ void PrecomputeTopRibbonLayout(UITopRibbonLayout& layout, float monitorDPIX, flo
 
 void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmdList,
     DX12ResourcesUI& uiRes, UITopRibbonLayout& topRibbonLayout,
-    float monitorDPIX, float monitorDPIY, const UIInput& input);
+    float monitorDPIX, float monitorDPIY, const UIInput& input,
+    const std::vector<InternalSubTab>& internalSubTabs, uint64_t activeInternalSubTabMemoryId);

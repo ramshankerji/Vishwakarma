@@ -153,6 +153,7 @@ constexpr float UI_TEXT_HEIGHT_MM = 2.5f; // EIL's recommended text hight for pr
 // Perhaps this is also good for UI text to maintain consistency between printed and on-screen drawings.
 // TODO: Latter, we will allow user to customize text height from settings.
 constexpr float UI_TAB_BAR_HEIGHT_MM = 4.0f;
+constexpr float UI_INTERNAL_TAB_BAR_HEIGHT_MM = 4.0f;
 constexpr float UI_ACTION_GROUP_LABEL_HEIGHT_MM = 4.0f;
 constexpr float UI_ACTION_GROUP_HEIGHT_MM = 12.0f; // Divisible by 2/3/4
 constexpr float UI_VIEWLIST_HEIGHT_MM = 4.0f;
@@ -275,6 +276,7 @@ struct UIInput {
     bool leftButtonDown = false, rightButtonDown = false, middleButtonDown = false;
     // Rising/falling edge for this exact frame (used by immediate-mode hit-testing)
     bool leftButtonPressedThisFrame = false,  leftButtonReleasedThisFrame = false;
+    bool leftButtonDoubleClickedThisFrame = false;
     bool rightButtonPressedThisFrame = false, middleButtonPressedThisFrame = false;
     int mouseWheelDelta = 0;          // WM_MOUSEWHEEL
     // Modifiers — per-window snapshot (synced with GetAsyncKeyState in WndProc)
@@ -315,6 +317,12 @@ struct UIActionEntry {
     uint64_t p1;
     uint64_t p2;
 };
+
+namespace InternalSubTabs {
+constexpr uint32_t kOpenUIAction = 0xE0000010u;
+constexpr uint32_t kActivateUIAction = 0xE0000011u;
+constexpr uint32_t kCloseUIAction = 0xE0000012u;
+}
 
 //TODO: WARNING: Get rid of mutex and use lock-free multi producer single consumer ring buffer for this.
 extern std::mutex g_actionQueueMutex;
@@ -737,6 +745,8 @@ struct UITopRibbonLayout {
     float textEndInsetPx = 0.0f;
     float buttonGapPx = 0.0f;
     float tabBarHeightPx = 0.0f;
+    float internalTabBarY = 0.0f;
+    float internalTabBarHeightPx = 0.0f;
     float actionGroupLabelY = 0.0f;
     float actionGroupLabelHeightPx = 0.0f;
     float topActionGroupY = 0.0f;

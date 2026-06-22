@@ -190,6 +190,97 @@ static void SetActiveDataTreeBranch(DATASETTAB* targetTab, uint64_t memoryId) {
     }
 }
 
+static const char* LogicalObjectNameForInternalSubTab(
+    VishwakarmaStorage::ObjectType objectType, const META_DATA* object) {
+    if (!object) return "";
+
+    switch (objectType) {
+    case VishwakarmaStorage::ObjectType::Page2D:
+        return static_cast<const PAGE2D*>(object)->name;
+    case VishwakarmaStorage::ObjectType::Scene3D:
+        return static_cast<const SCENE3D*>(object)->name;
+    default:
+        return "";
+    }
+}
+
+static void OpenInternalSubTab(DATASETTAB* targetTab, uint64_t memoryId) {
+    if (!targetTab || memoryId == 0) return;
+    if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
+
+    std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+    for (const StoredLogicalObject& entry : targetTab->storageLogicalObjects) {
+        if (!entry.object || entry.object->memoryID != memoryId) continue;
+        if (entry.objectType != VishwakarmaStorage::ObjectType::Scene3D &&
+            entry.objectType != VishwakarmaStorage::ObjectType::Page2D) {
+            return;
+        }
+
+        auto openIt = std::find_if(targetTab->openInternalSubTabs.begin(),
+            targetTab->openInternalSubTabs.end(), [memoryId](const InternalSubTab& subTab) {
+                return subTab.containerMemoryId == memoryId;
+            });
+        if (openIt == targetTab->openInternalSubTabs.end()) {
+            const char* objectName = LogicalObjectNameForInternalSubTab(entry.objectType, entry.object);
+            std::string title = objectName && objectName[0] != '\0'
+                ? objectName
+                : VishwakarmaStorage::ObjectTypeDisplayName(entry.objectType);
+            targetTab->openInternalSubTabs.push_back({ entry.objectType, memoryId, std::move(title) });
+        }
+
+        targetTab->activeInternalSubTabMemoryId = memoryId;
+        if (entry.objectType == VishwakarmaStorage::ObjectType::Scene3D) {
+            targetTab->activeScene3DMemoryId = memoryId;
+        }
+        return;
+    }
+}
+
+static void ActivateInternalSubTab(DATASETTAB* targetTab, uint64_t memoryId) {
+    if (!targetTab || memoryId == 0 || !targetTab->storageObjectsMutex) return;
+
+    std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+    const auto openIt = std::find_if(targetTab->openInternalSubTabs.begin(),
+        targetTab->openInternalSubTabs.end(), [memoryId](const InternalSubTab& subTab) {
+            return subTab.containerMemoryId == memoryId;
+        });
+    if (openIt == targetTab->openInternalSubTabs.end()) return;
+
+    targetTab->activeInternalSubTabMemoryId = memoryId;
+    if (openIt->containerType == VishwakarmaStorage::ObjectType::Scene3D) {
+        targetTab->activeScene3DMemoryId = memoryId;
+    }
+}
+
+static void CloseInternalSubTab(DATASETTAB* targetTab, uint64_t memoryId) {
+    if (!targetTab || memoryId == 0 || !targetTab->storageObjectsMutex) return;
+
+    std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+    auto closeIt = std::find_if(targetTab->openInternalSubTabs.begin(),
+        targetTab->openInternalSubTabs.end(), [memoryId](const InternalSubTab& subTab) {
+            return subTab.containerMemoryId == memoryId;
+        });
+    if (closeIt == targetTab->openInternalSubTabs.end()) return;
+
+    const size_t closedIndex = static_cast<size_t>(
+        std::distance(targetTab->openInternalSubTabs.begin(), closeIt));
+    const bool closedActive = targetTab->activeInternalSubTabMemoryId == memoryId;
+    targetTab->openInternalSubTabs.erase(closeIt);
+
+    if (!closedActive) return;
+    if (targetTab->openInternalSubTabs.empty()) {
+        targetTab->activeInternalSubTabMemoryId = 0;
+        return;
+    }
+
+    const size_t replacementIndex = (std::min)(closedIndex, targetTab->openInternalSubTabs.size() - 1);
+    const InternalSubTab& replacement = targetTab->openInternalSubTabs[replacementIndex];
+    targetTab->activeInternalSubTabMemoryId = replacement.containerMemoryId;
+    if (replacement.containerType == VishwakarmaStorage::ObjectType::Scene3D) {
+        targetTab->activeScene3DMemoryId = replacement.containerMemoryId;
+    }
+}
+
 static META_DATA* CreateLogicalElement(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType,
     uint64_t parentMemoryId, const char* requestedName = nullptr) {
     if (!targetTab || !VishwakarmaStorage::IsLogicalObjectType(objectType)) return nullptr;
@@ -329,7 +420,8 @@ static void RegisterGeneratedGeometryElement(DATASETTAB* targetTab, VishwakarmaS
 
     {
         std::lock_guard<std::mutex> lock(toCopyThreadMutex);
-        commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD, geometry, object->memoryID, targetTab->tabID });
+        commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD, geometry, object->memoryID,
+            targetTab->tabID, object->memoryIDParent });
     }
 
     if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
@@ -694,6 +786,12 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 ToggleDataTreeNode(myTab, nextWorkTODO.objectId);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::DATA_TREE_SET_ACTIVE_BRANCH) {
                 SetActiveDataTreeBranch(myTab, nextWorkTODO.objectId);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::OPEN_INTERNAL_SUB_TAB) {
+                OpenInternalSubTab(myTab, nextWorkTODO.objectId);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::ACTIVATE_INTERNAL_SUB_TAB) {
+                ActivateInternalSubTab(myTab, nextWorkTODO.objectId);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::CLOSE_INTERNAL_SUB_TAB) {
+                CloseInternalSubTab(myTab, nextWorkTODO.objectId);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::CREATE_LOGICAL_OBJECT) {
                 const auto objectType = static_cast<VishwakarmaStorage::ObjectType>(nextWorkTODO.x);
                 if (VishwakarmaStorage::IsLogicalObjectType(objectType)) {
@@ -713,6 +811,8 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         myTab->storageLogicalObjects.clear();
         myTab->storageObjects3D.clear();
         myTab->expandedDataTreeNodeIds.clear();
+        myTab->openInternalSubTabs.clear();
+        myTab->activeInternalSubTabMemoryId = 0;
         myTab->defaultScene3DMemoryId = 0;
         myTab->activeScene3DMemoryId = 0;
     }

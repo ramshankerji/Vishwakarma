@@ -769,7 +769,8 @@ void AppendObjectToTab(DATASETTAB& tab, ObjectType objectType, META_DATA* object
     GeometryData geometry;
     if (GeometryForObject(objectType, object, geometry)) {
         std::lock_guard<std::mutex> lock(toCopyThreadMutex);
-        commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD, geometry, object->memoryID, tab.tabID });
+        commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD, geometry, object->memoryID,
+            tab.tabID, object->memoryIDParent });
     }
 
     {
@@ -1043,6 +1044,8 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         tab.storageLogicalObjects.clear();
         tab.storageObjects3D.clear();
         tab.expandedDataTreeNodeIds.clear();
+        tab.openInternalSubTabs.clear();
+        tab.activeInternalSubTabMemoryId = 0;
         tab.defaultScene3DMemoryId = 0;
         tab.activeScene3DMemoryId = 0;
     }

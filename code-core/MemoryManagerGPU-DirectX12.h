@@ -115,6 +115,7 @@ struct GeometryPage {
     Microsoft::WRL::ComPtr<ID3D12Resource> buffer;// Layout:[Vertex Region ↑ ][Free Space][ Index Region ↓ ]
     Microsoft::WRL::ComPtr<ID3D12Resource> indirectBuffer;// ExecuteIndirect argument buffer for this page
     uint32_t indirectCount = 0; // Number of valid indirect draw commands
+    uint64_t containerMemoryId = 0; // High-level Scene3D/Page2D/etc. owning every object in this page.
 
     // ALLOCATION STATE (CPU-side only)
     uint32_t vertexHead = 0; // Vertex region grows upward from 0
@@ -335,6 +336,7 @@ struct CommandToCopyThread
     std::optional<GeometryData> geometry; // Present for ADD and MODIFY
     uint64_t id = 0; // Always present
     uint64_t tabID = 0; // NEW: We must know which tab this object belongs to!
+    uint64_t containerMemoryId = 0; // Parent high-level container; pages never mix container IDs.
 };
 
 extern std::atomic<bool> pauseRenderThreads; // Defined in Main.cpp
@@ -498,7 +500,8 @@ public:
     void InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D12CommandQueue* commandQueue);
     // monitorId: index into gpu.screens[] for DPI/physical info used by UI layout calculations
     void PopulateCommandList(ID3D12GraphicsCommandList* cmdList, //Called by per monitor render thread.
-        DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage, int monitorId);
+        DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage,
+        int monitorId, uint64_t activeContainerMemoryId);
     void WaitForPreviousFrame(const DX12ResourcesPerRenderThread& dx);
     void ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UINT newHeight);
 
