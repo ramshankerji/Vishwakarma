@@ -44,5 +44,3 @@ It needs to be build using cmake so as to generate the "freetype.lib" which shal
 Open the .sln file in folder Vishwakarma\code-external\freetype\builds\windows\visualc
 Change the build target to Debug, Add x64 in the Configuration manager and than build.
 TODO: Change these step to use CMAKE to generate fresh x64 sln files.
-
-

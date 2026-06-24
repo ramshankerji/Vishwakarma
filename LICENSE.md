@@ -17,3 +17,4 @@ This software is made possible by the Great Open Source Authors of following lib
 | FreeType | FTL / GPLv2 | [https://freetype.org/](https://freetype.org/) | [Link](https://gitlab.freedesktop.org/freetype/freetype.git) |
 | msdf-atlas-gen | MIT | [https://github.com/Chlumsky/msdf-atlas-gen](https://github.com/Chlumsky/msdf-atlas-gen) | [Link](https://github.com/Chlumsky/msdf-atlas-gen.git) |
 | DirectX-Headers | MIT | [https://github.com/microsoft/DirectX-Headers](https://github.com/microsoft/DirectX-Headers) | [Link](https://github.com/microsoft/DirectX-Headers) |
+| LunaSVG | MIT | [https://github.com/sammycage/lunasvg](https://github.com/sammycage/lunasvg) | [Link](https://github.com/sammycage/lunasvg) |

@@ -3,7 +3,8 @@
 Generate one SVG icon by asking the Google Gemini API for SVG markup.
 
 Usage:
-    python code-miscellaneous/generate_svg_icon.py --id=57345 --text="Polyline" --apikey=<Gemini API Key>
+    python code-miscellaneous/generate_svg_icon.py --id=57345 --text="Polyline" 
+        --apikey=<Gemini API Key>
 
 The generated SVG is written to website/static/SVGIcons by default.
 """
@@ -26,7 +27,6 @@ SVGGuideLines = [
     """Generate an valid SVG Icon with  viewBox="0 0 64 64"  """,
     "Professional looking, Minimalist, RGB",
     "Shall be used as Icons in Various Screen Density display, rasterized at runtime",
-    "No raster images, scripts, animations, embedded objects, external links, fonts, or CSS imports.",
     "Keep the SVG text in pretty-printed format, with indentation and line breaks.",
 ]
 GeminiAPIKey = "Do-Not-Commit-API-KEY-to-GIT" #"Do-Not-Commit-API-KEY-to-GIT"
@@ -51,35 +51,22 @@ DISALLOWED_SVG_TAGS = {
     "video",
 }
 
-
-def info(message: str):
-    print(f"[INFO] {message}")
-
-
-def error(message: str):
-    print(f"[ERROR] {message}", file=sys.stderr)
-
-
-def strip_namespace(tag: str) -> str:
-    return tag.split("}")[-1]
-
+def info(message: str): print(f"[INFO] {message}")
+def error(message: str): print(f"[ERROR] {message}", file=sys.stderr)
+def strip_namespace(tag: str) -> str: return tag.split("}")[-1]
 
 def slugify(text: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9]+", "_", text.strip()).strip("_").lower()
     return slug or "icon"
-
 
 def parse_uint32(value: str) -> int:
     try:
         parsed_value = int(value, 0)
     except ValueError as exc:
         raise argparse.ArgumentTypeError("--id must be a 32 bit number.") from exc
-
     if parsed_value < 0 or parsed_value > 0xFFFFFFFF:
         raise argparse.ArgumentTypeError("--id must be between 0 and 4294967295.")
-
     return parsed_value
-
 
 def build_prompt(description: str) -> str:
     guidelines = "\n".join(f"- {line}" for line in SVGGuideLines)
@@ -98,7 +85,6 @@ Strict output rules:
 - Prefer simple paths, polylines, lines, rectangles, circles, polygons, and RGB colors.
 - Keep the icon clear when rasterized at small screen densities.
 """
-
 
 def make_gemini_request(api_key: str, model: str, prompt: str) -> dict:
     encoded_model = urllib.parse.quote(model, safe="")
@@ -222,35 +208,22 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Generate an SVG icon using Google Gemini API."
     )
-    parser.add_argument(
-        "--id",
-        required=True,
-        type=parse_uint32,
+    parser.add_argument("--id", required=True, type=parse_uint32,
         help="Unsigned 32 bit icon ID used in the output filename.",
     )
-    parser.add_argument(
-        "--text",
-        required=True,
+    parser.add_argument("--text", required=True,
         help='Action/icon description, for example --text="Polyline".',
     )
-    parser.add_argument(
-        "--apikey",
-        default=None,
+    parser.add_argument("--apikey", default=None,
         help="Gemini API key. Falls back to the embedded GeminiAPIKey value when omitted.",
     )
-    parser.add_argument(
-        "--model",
-        default=GeminiModel,
+    parser.add_argument("--model", default=GeminiModel,
         help=f"Gemini model to call. Default: {GeminiModel}",
     )
-    parser.add_argument(
-        "--output-dir",
-        default=str(OUTPUT_DIR),
+    parser.add_argument("--output-dir", default=str(OUTPUT_DIR),
         help=f"Output directory. Default: {OUTPUT_DIR}",
     )
-    parser.add_argument(
-        "--overwrite",
-        action="store_true",
+    parser.add_argument("--overwrite", action="store_true",
         help="Overwrite the output file if it already exists.",
     )
     return parser.parse_args()
@@ -301,7 +274,6 @@ def main() -> int:
 
     info(f"SVG icon written to: {output_path}")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -16,3 +16,6 @@
 [submodule "code-external/protobuf"]
 	path = code-external/protobuf
 	url = https://github.com/protocolbuffers/protobuf.git
+[submodule "code-external/lunasvg"]
+	path = code-external/lunasvg
+	url = https://github.com/sammycage/lunasvg.git
