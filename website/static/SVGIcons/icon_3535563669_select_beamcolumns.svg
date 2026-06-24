@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#212121" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Vertical Beam 1 -->
+    <path d="M16 8v48" />
+    <!-- Vertical Beam 2 -->
+    <path d="M48 8v48" />
+    <!-- Horizontal Beam 1 -->
+    <path d="M8 20h48" />
+    <!-- Horizontal Beam 2 -->
+    <path d="M8 44h48" />
+    <!-- Selection Indicator (Dashed box around intersection) -->
+    <rect x="28" y="32" width="8" height="8" stroke="#2196F3" stroke-dasharray="2 2" />
+  </g>
+</svg>

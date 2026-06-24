@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Magnifying glass -->
+    <circle cx="26" cy="26" r="14" />
+    <path d="M36 36 L48 48" />
+    <!-- Filter sliders -->
+    <path d="M44 12 L56 12" />
+    <path d="M44 20 L56 20" />
+    <path d="M44 28 L56 28" />
+    <circle cx="48" cy="12" r="3" fill="#333" />
+    <circle cx="52" cy="20" r="3" fill="#333" />
+    <circle cx="46" cy="28" r="3" fill="#333" />
+  </g>
+</svg>

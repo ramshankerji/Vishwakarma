@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Selection Box -->
+    <rect x="12" y="12" width="40" height="40" rx="4" stroke-dasharray="6 6" />
+    <!-- Cursor Arrow -->
+    <path d="M32 32 L44 44 L38 46 L32 32 Z" fill="#333" stroke="none" />
+    <path d="M32 32 L44 44" />
+    <!-- Selection Dots -->
+    <circle cx="12" cy="12" r="3" fill="#333" />
+    <circle cx="52" cy="12" r="3" fill="#333" />
+    <circle cx="12" cy="52" r="3" fill="#333" />
+    <circle cx="52" cy="52" r="3" fill="#333" />
+  </g>
+</svg>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main structural bar -->
+    <path d="M12 12h40v40H12z"/>
+    <!-- Reinforcement bars (cross-hatch) -->
+    <path d="M12 24h40M12 36h40M24 12v40M36 12v40"/>
+    <!-- Selection cursor/indicator -->
+    <path d="M52 52l8 8" stroke="#007AFF" stroke-width="6"/>
+    <circle cx="52" cy="52" r="6" fill="#007AFF" stroke="none"/>
+  </g>
+</svg>

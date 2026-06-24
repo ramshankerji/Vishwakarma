@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main pipe segment -->
+    <path d="M12 12h24v12c0 8.84 7.16 16 16 16" />
+    <!-- Selection indicator (dashed-like effect) -->
+    <path d="M4 4h12M4 4v12M60 60h-12M60 60v-12" stroke="#0984E3" stroke-width="6" />
+    <!-- Pipe thickness detail -->
+    <circle cx="12" cy="12" r="4" stroke="#2D3436" />
+    <circle cx="52" cy="40" r="4" stroke="#2D3436" />
+  </g>
+</svg>
