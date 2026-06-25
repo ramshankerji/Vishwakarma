@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="sqlite">
+      <UniqueIdentifier>{3B079F7C-0BCF-43F0-A60C-A51D56162865}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="lunasvg">
+      <UniqueIdentifier>{AD2B68B0-C408-4C50-94C3-C9CF247AF11F}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="plutovg">
+      <UniqueIdentifier>{79270360-6BA3-4E02-B042-422926876531}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="libpng">
+      <UniqueIdentifier>{3AE0952A-DF95-4C67-B6AE-1E6BD797AF4B}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="zlib">
+      <UniqueIdentifier>{7C2F5D94-968A-4451-95B9-7001D30EED60}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="sqlite\sqlite3.c">
+      <Filter>sqlite</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\source\graphics.cpp">
+      <Filter>lunasvg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\source\lunasvg.cpp">
+      <Filter>lunasvg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\source\svgelement.cpp">
+      <Filter>lunasvg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\source\svggeometryelement.cpp">
+      <Filter>lunasvg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\source\svglayoutstate.cpp">
+      <Filter>lunasvg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\source\svgpaintelement.cpp">
+      <Filter>lunasvg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\source\svgparser.cpp">
+      <Filter>lunasvg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\source\svgproperty.cpp">
+      <Filter>lunasvg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\source\svgrenderstate.cpp">
+      <Filter>lunasvg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\source\svgtextelement.cpp">
+      <Filter>lunasvg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\plutovg\source\plutovg-blend.c">
+      <Filter>plutovg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\plutovg\source\plutovg-canvas.c">
+      <Filter>plutovg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\plutovg\source\plutovg-font.c">
+      <Filter>plutovg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\plutovg\source\plutovg-ft-math.c">
+      <Filter>plutovg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\plutovg\source\plutovg-ft-raster.c">
+      <Filter>plutovg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\plutovg\source\plutovg-ft-stroker.c">
+      <Filter>plutovg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\plutovg\source\plutovg-matrix.c">
+      <Filter>plutovg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\plutovg\source\plutovg-paint.c">
+      <Filter>plutovg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\plutovg\source\plutovg-path.c">
+      <Filter>plutovg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\plutovg\source\plutovg-rasterize.c">
+      <Filter>plutovg</Filter>
+    </ClCompile>
+    <ClCompile Include="lunasvg\plutovg\source\plutovg-surface.c">
+      <Filter>plutovg</Filter>
+    </ClCompile>
+    <ClCompile Include="libpng-code\png.c">
+      <Filter>libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="libpng-code\pngerror.c">
+      <Filter>libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="libpng-code\pngget.c">
+      <Filter>libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="libpng-code\pngmem.c">
+      <Filter>libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="libpng-code\pngpread.c">
+      <Filter>libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="libpng-code\pngread.c">
+      <Filter>libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="libpng-code\pngrio.c">
+      <Filter>libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="libpng-code\pngrtran.c">
+      <Filter>libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="libpng-code\pngrutil.c">
+      <Filter>libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="libpng-code\pngset.c">
+      <Filter>libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="libpng-code\pngtrans.c">
+      <Filter>libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="libpng-code\pngwio.c">
+      <Filter>libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="libpng-code\pngwrite.c">
+      <Filter>libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="libpng-code\pngwtran.c">
+      <Filter>libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="libpng-code\pngwutil.c">
+      <Filter>libpng</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\adler32.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\crc32.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\deflate.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\infback.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\inffast.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\inflate.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\inftrees.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\trees.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\uncompr.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+    <ClCompile Include="zlib\zutil.c">
+      <Filter>zlib</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

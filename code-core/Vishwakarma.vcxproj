@@ -43,23 +43,26 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <VishwakarmaRoot>$(MSBuildThisFileDirectory)..\</VishwakarmaRoot>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <OutDir>$(SolutionDir)\build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)\build\$(Configuration)\Intermediate\</IntDir>
+    <OutDir>$(VishwakarmaRoot)build\$(Configuration)\</OutDir>
+    <IntDir>$(VishwakarmaRoot)build\$(Configuration)\Intermediate\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <OutDir>$(SolutionDir)\build\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)\build\$(Configuration)\Intermediate\</IntDir>
+    <OutDir>$(VishwakarmaRoot)build\$(Configuration)\</OutDir>
+    <IntDir>$(VishwakarmaRoot)build\$(Configuration)\Intermediate\</IntDir>
   </PropertyGroup>
   <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <ProtobufLibrary Include="$(SolutionDir)build\protobuf-x64-debug\Debug\libprotobuf-lited.lib" />
-    <ProtobufLibrary Include="$(SolutionDir)build\protobuf-x64-debug\_deps\absl-build\absl\**\Debug\*.lib" />
-    <ProtobufLibrary Include="$(SolutionDir)build\protobuf-x64-debug\third_party\utf8_range\Debug\*.lib" />
+    <ProtobufLibrary Include="$(VishwakarmaRoot)build\protobuf-x64-debug\Debug\libprotobuf-lited.lib" />
+    <ProtobufLibrary Include="$(VishwakarmaRoot)build\protobuf-x64-debug\_deps\absl-build\absl\**\Debug\*.lib" />
+    <ProtobufLibrary Include="$(VishwakarmaRoot)build\protobuf-x64-debug\third_party\utf8_range\Debug\*.lib" />
   </ItemGroup>
   <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <ProtobufLibrary Include="$(SolutionDir)build\protobuf-x64-release\Release\libprotobuf-lite.lib" />
-    <ProtobufLibrary Include="$(SolutionDir)build\protobuf-x64-release\_deps\absl-build\absl\**\Release\*.lib" />
-    <ProtobufLibrary Include="$(SolutionDir)build\protobuf-x64-release\third_party\utf8_range\Release\*.lib" />
+    <ProtobufLibrary Include="$(VishwakarmaRoot)build\protobuf-x64-release\Release\libprotobuf-lite.lib" />
+    <ProtobufLibrary Include="$(VishwakarmaRoot)build\protobuf-x64-release\_deps\absl-build\absl\**\Release\*.lib" />
+    <ProtobufLibrary Include="$(VishwakarmaRoot)build\protobuf-x64-release\third_party\utf8_range\Release\*.lib" />
   </ItemGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ProtobufAdditionalDependencies>@(ProtobufLibrary)</ProtobufAdditionalDependencies>
@@ -85,8 +88,8 @@ FT_STATIC;LUNASVG_BUILD_STATIC;PLUTOVG_BUILD_STATIC;%(PreprocessorDefinitions)</
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>Shcore.lib;Comdlg32.lib;freetype.lib;$(ProtobufAdditionalDependencies);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\code-external\libpng-code\build\Debug;..\code-external\zlib\build\Debug;..\code-external\freetype\objs\x64\Release Static\;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>Shcore.lib;Comdlg32.lib;$(VishwakarmaRoot)build\$(Configuration)\External\VishwakarmaExternal.lib;freetype.lib;$(ProtobufAdditionalDependencies);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\code-external\freetype\build\Release;..\code-external\freetype\objs\x64\Release Static\;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <ResourceCompile>
       <AdditionalIncludeDirectories>..\code-core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -111,14 +114,15 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
       <AdditionalOptions>/FS /utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>Shcore.lib;Comdlg32.lib;freetype.lib;$(ProtobufAdditionalDependencies);%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\code-external\libpng-code\build\Debug;..\code-external\zlib\build\Debug;..\code-external\freetype\objs\x64\Release Static\;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>Shcore.lib;Comdlg32.lib;$(VishwakarmaRoot)build\$(Configuration)\External\VishwakarmaExternal.lib;freetype.lib;$(ProtobufAdditionalDependencies);%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>..\code-external\freetype\build\Release;..\code-external\freetype\objs\x64\Release Static\;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <ResourceCompile>
       <AdditionalIncludeDirectories>..\code-core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -146,139 +150,6 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_SCENE3D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_SPHERE.pb.cc" />
     <ClCompile Include="..\code-core\विश्वकर्मा.cpp" />
-    <ClCompile Include="..\code-external\sqlite\sqlite3.c" />
-    <ClCompile Include="..\code-external\lunasvg\source\graphics.cpp" />
-    <ClCompile Include="..\code-external\lunasvg\source\lunasvg.cpp" />
-    <ClCompile Include="..\code-external\lunasvg\source\svgelement.cpp" />
-    <ClCompile Include="..\code-external\lunasvg\source\svggeometryelement.cpp" />
-    <ClCompile Include="..\code-external\lunasvg\source\svglayoutstate.cpp" />
-    <ClCompile Include="..\code-external\lunasvg\source\svgpaintelement.cpp" />
-    <ClCompile Include="..\code-external\lunasvg\source\svgparser.cpp" />
-    <ClCompile Include="..\code-external\lunasvg\source\svgproperty.cpp" />
-    <ClCompile Include="..\code-external\lunasvg\source\svgrenderstate.cpp" />
-    <ClCompile Include="..\code-external\lunasvg\source\svgtextelement.cpp" />
-    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-blend.c" />
-    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-canvas.c" />
-    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-font.c" />
-    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-ft-math.c" />
-    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-ft-raster.c" />
-    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-ft-stroker.c" />
-    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-matrix.c" />
-    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-paint.c" />
-    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-path.c" />
-    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-rasterize.c" />
-    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-surface.c">
-      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-    </ClCompile>
-    <ClCompile Include="..\code-external\libpng-code\png.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">PNG_SIMPLIFIED_WRITE_SUPPORTED;PNG_SIMPLIFIED_READ_SUPPORTED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">PNG_SIMPLIFIED_WRITE_SUPPORTED;PNG_SIMPLIFIED_READ_SUPPORTED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-    </ClCompile>
-    <ClCompile Include="..\code-external\libpng-code\pngerror.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\libpng-code\pngget.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\libpng-code\pngmem.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\libpng-code\pngpread.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(PreprocessorDefinitions)</PreprocessorDefinitions>
-    </ClCompile>
-    <ClCompile Include="..\code-external\libpng-code\pngread.c">
-      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\libpng-code\pngrio.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\libpng-code\pngrtran.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\libpng-code\pngrutil.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\libpng-code\pngset.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\libpng-code\pngtrans.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\libpng-code\pngwio.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\libpng-code\pngwrite.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-    </ClCompile>
-    <ClCompile Include="..\code-external\libpng-code\pngwtran.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\libpng-code\pngwutil.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\zlib\adler32.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\zlib\crc32.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\zlib\deflate.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\zlib\infback.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\zlib\inffast.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\zlib\inflate.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\zlib\inftrees.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\zlib\trees.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\zlib\uncompr.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="..\code-external\zlib\zutil.c">
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
-      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
-    </ClCompile>
     <ClCompile Include="FontManager.cpp" />
     <ClCompile Include="FontManager.h" />
     <ClCompile Include="GlobalVariables.cpp" />
@@ -353,6 +224,13 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <Image Include="..\website\static\apple-touch-icon.png" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\code-external\VishwakarmaExternal.vcxproj">
+      <Project>{4AF7E5DE-34F4-4F63-B34B-02966188D3E1}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
     <FxCompile Include="PixelShader.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
@@ -406,6 +284,10 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
       <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_uiVertexShader</VariableName>
     </FxCompile>
   </ItemGroup>
+  <Target Name="ValidatePrebuiltProtobuf" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(Configuration)|$(Platform)'=='Debug|x64' And !Exists('$(VishwakarmaRoot)build\protobuf-x64-debug\Debug\libprotobuf-lited.lib')" Text="Prebuilt Debug protobuf library not found at $(VishwakarmaRoot)build\protobuf-x64-debug\Debug\libprotobuf-lited.lib. Build code-external\protobuf once into build\protobuf-x64-debug before building Vishwakarma; project .proto files still regenerate every app build." />
+    <Error Condition="'$(Configuration)|$(Platform)'=='Release|x64' And !Exists('$(VishwakarmaRoot)build\protobuf-x64-release\Release\libprotobuf-lite.lib')" Text="Prebuilt Release protobuf library not found at $(VishwakarmaRoot)build\protobuf-x64-release\Release\libprotobuf-lite.lib. Build code-external\protobuf once into build\protobuf-x64-release before building Vishwakarma; project .proto files still regenerate every app build." />
+  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

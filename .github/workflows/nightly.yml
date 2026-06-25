@@ -26,6 +26,15 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
 
+    - name: Prepare libpng config header
+      shell: pwsh
+      run: |
+        $src = "code-external/libpng-code/scripts/pnglibconf.h.prebuilt"
+        $dst = "code-external/libpng-code/pnglibconf.h"
+        if (!(Test-Path $dst)) {
+          Copy-Item $src $dst
+        }
+
     - name: Cache Protobuf Build
       # Without this caching step, build was taking around 15 minutes. Just for this step!
       id: cache-protobuf
@@ -48,6 +57,30 @@ jobs:
         # Build Protobuf so the .lib files are ready for the linker. 
         # The /verbosity:minimal flag reduces the amount of output in the logs.
         cmake --build build/protobuf-x64-release --config Release -- /m /v:q /clp:ErrorsOnly
+
+    - name: Cache MSDF Build Tools
+      id: cache-msdf-tools
+      uses: actions/cache@v4
+      with:
+        path: |
+          code-external/zlib/build
+          code-external/libpng-code/build
+          code-external/freetype/build
+          code-external/msdf-atlas-gen/build
+        key: ${{ runner.os }}-msdf-tools-release-${{ hashFiles('code-miscellaneous/msdf_atlas_generator.bat', 'code-external/zlib/**/*.c', 'code-external/zlib/**/*.h', 'code-external/zlib/CMakeLists.txt', 'code-external/libpng-code/**/*.c', 'code-external/libpng-code/**/*.h', 'code-external/libpng-code/CMakeLists.txt', 'code-external/libpng-code/scripts/pnglibconf.h.prebuilt', 'code-external/freetype/CMakeLists.txt', 'code-external/freetype/include/**', 'code-external/freetype/src/**', 'code-external/msdf-atlas-gen/CMakeLists.txt', 'code-external/msdf-atlas-gen/msdf-atlas-gen/**', 'code-external/msdf-atlas-gen/msdfgen/**') }}
+
+    - name: Cache VishwakarmaExternal Static Library
+      id: cache-vishwakarma-external
+      uses: actions/cache@v4
+      with:
+        path: build/Release/External
+        key: ${{ runner.os }}-vishwakarma-external-release-${{ hashFiles('code-external/VishwakarmaExternal.vcxproj', 'code-external/sqlite/sqlite3.c', 'code-external/sqlite/sqlite3.h', 'code-external/lunasvg/include/**', 'code-external/lunasvg/source/**', 'code-external/lunasvg/plutovg/include/**', 'code-external/lunasvg/plutovg/source/**', 'code-external/libpng-code/*.c', 'code-external/libpng-code/*.h', 'code-external/libpng-code/scripts/pnglibconf.h.prebuilt', 'code-external/zlib/*.c', 'code-external/zlib/*.h', 'code-external/freetype/include/**') }}
+        restore-keys: |
+          ${{ runner.os }}-vishwakarma-external-release-
+
+    - name: Build VishwakarmaExternal Static Library
+      if: steps.cache-vishwakarma-external.outputs.cache-hit != 'true'
+      run: msbuild code-external/VishwakarmaExternal.vcxproj /p:Configuration=Release /p:Platform=x64 /m
 
     - name: Install System Dependencies (FontForge & CLOC)
       shell: pwsh
@@ -79,17 +112,6 @@ jobs:
         name: generated-font
         path: Fonts/*.ttf
 
-    - name: Prepare libpng config header
-      shell: pwsh
-      run: |
-        $src = "code-external/libpng-code/scripts/pnglibconf.h.prebuilt"
-        $dst = "code-external/libpng-code/pnglibconf.h"
-        if (!(Test-Path $dst)) {
-          Copy-Item $src $dst
-        }
-    
-    - name: Build FreeType
-      run: msbuild code-external/freetype/builds/windows/vc2010/freetype.vcxproj /p:Configuration="Release Static" /p:Platform=x64 /m
     - name: Build Main Project in Release Mode
       #run: msbuild Vishwakarma.sln /p:Configuration=Release /p:Platform=x64
       # We are forcing to downgrade to v143 since this is what is available on GitHub Actions runners.
