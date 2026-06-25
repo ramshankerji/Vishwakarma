@@ -42,16 +42,17 @@ jobs:
       with:
         path: build/protobuf-x64-release
         # Creates a unique cache key based on the OS and the contents of Protobuf's CMakeLists.txt
-        key: ${{ runner.os }}-protobuf-${{ hashFiles('code-external/protobuf/CMakeLists.txt') }}
+        key: ${{ runner.os }}-protobuf-x64-release-mt-v2-${{ hashFiles('code-external/protobuf/CMakeLists.txt') }}
 
     # 2. UPDATE YOUR EXISTING BUILD STEP WITH AN 'if' CONDITION
     - name: Build Protobuf and Fetch Abseil
       if: steps.cache-protobuf.outputs.cache-hit != 'true'
       run: |
-        # Configure Protobuf. The two new flags force CMake and Protobuf to use /MD (MultiThreadedDLL)
+        # Configure Protobuf. The two new flags force CMake and Protobuf to use /MD (MultiThreaded)
         cmake -S code-external/protobuf -B build/protobuf-x64-release -Dprotobuf_BUILD_TESTS=OFF `
-          -DCMAKE_BUILD_TYPE=Release -Dprotobuf_MSVC_STATIC_RUNTIME=OFF `
-          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL -DCMAKE_CXX_STANDARD=20 `
+          -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
+          -DCMAKE_BUILD_TYPE=Release -Dprotobuf_MSVC_STATIC_RUNTIME=ON `
+          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DCMAKE_CXX_STANDARD=20 `
           -DCMAKE_CXX_FLAGS="/std:c++20"
 
         # Build Protobuf so the .lib files are ready for the linker. 
