@@ -212,6 +212,7 @@ DATASETTAB* CreateEngineeringTab(const std::wstring& displayName = L"",
     tab.engineeringReleased.store(false, std::memory_order_release);
     closeQueuedTabs[tabID] = false;
     gpu.InitD3DPerTab(tab.dx);
+    if (tab.cad2d) InitCad2DTabResources(*tab.cad2d);
 
     nextList[tabCount] = tabID;
     PublishTabList(nextList, tabCount + 1);
@@ -274,6 +275,7 @@ void CleanupReleasedTabs() {
         if (tab.closeRequested.load(std::memory_order_acquire) &&
             tab.engineeringReleased.load(std::memory_order_acquire)) {
             gpu.CleanupTabResources(tab.dx);
+            if (tab.cad2d) CleanupCad2DTabResources(*tab.cad2d);
             tab.closeRequested.store(false, std::memory_order_release);
             tab.engineeringReleased.store(false, std::memory_order_release);
             closeQueuedTabs[tabID] = false;
@@ -947,6 +949,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         tab.tabNo = i;
         tab.fileName = initialTabNames[i];
         gpu.InitD3DPerTab(tab.dx);
+        if (tab.cad2d) InitCad2DTabResources(*tab.cad2d);
         // We can set random colors here later to distinguish them further.
         // allTabs[i].color = ...
     }
@@ -1066,7 +1069,11 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     // Cleanup Tabs (Geometry)
     uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
     uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
-    for (uint16_t i = 0; i < tabCount; ++i) gpu.CleanupTabResources(allTabs[tabList[i]].dx);
+    for (uint16_t i = 0; i < tabCount; ++i) {
+        DATASETTAB& tab = allTabs[tabList[i]];
+        gpu.CleanupTabResources(tab.dx);
+        if (tab.cad2d) CleanupCad2DTabResources(*tab.cad2d);
+    }
 
     CleanupUIResources(gpu.uiResources);
     gpu.CleanupD3DGlobal();// Global Cleanup

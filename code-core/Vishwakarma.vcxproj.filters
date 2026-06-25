@@ -70,6 +70,12 @@
     <ClCompile Include="MemoryManagerGPU-DirectX12.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
+    <ClCompile Include="MemoryManagerGPU2D.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="MemoryManagerGPU2D-DirectX12.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
     <ClCompile Include="ImageHandling.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
@@ -156,6 +162,12 @@
     <ClInclude Include="MemoryManagerGPU-DirectX12.h">
       <Filter>code-core</Filter>
     </ClInclude>
+    <ClInclude Include="MemoryManagerGPU2D.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="MemoryManagerGPU2D-DirectX12.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
     <ClInclude Include="MemoryManagerGPU-Vulkan1.1.h">
       <Filter>code-core</Filter>
     </ClInclude>
@@ -203,6 +215,10 @@
     <FxCompile Include="ShaderSceneVertex.hlsl" />
     <FxCompile Include="ShaderUIPixel.hlsl" />
     <FxCompile Include="ShaderUIVertex.hlsl" />
+    <FxCompile Include="Shader2D_LineVertex.hlsl" />
+    <FxCompile Include="Shader2D_LinePixel.hlsl" />
+    <FxCompile Include="Shader2D_TextVertex.hlsl" />
+    <FxCompile Include="Shader2D_TextPixel.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <None Include="DataStorage_Common3D.proto">

@@ -8,6 +8,25 @@ For a **2D CAD surface**, we would not build a CPU tessellator. We would build a
 
 Our current D3D12 engine already has useful foundations: high-performance adapter selection, per-tab/per-window resources, root-signature based binding, page-based geometry storage, and `ExecuteIndirect` drawing over GPU pages. That should be reused conceptually, but the payload should change from “already-built triangle geometry” to “CAD primitive records + GPU-generated draw work.”  
 
+## MVP decisions for first implementation
+
+These decisions are mandatory for the first Page2D implementation pass. The broader sections below remain the long-term renderer design; this MVP section overrides them wherever the first pass intentionally differs.
+
+1. **No 2D persistence in the first pass.** Page2D line and text content may be generated in memory only. Similar to the current 3D test path that keeps adding one shape every second, the engineering thread should auto-generate a create-line action about once per second, consume it, and upload the resulting 2D primitive records to GPU memory.
+2. **Render directly into the existing scene RTT.** Do not create a dedicated CAD render target in the first pass. A dedicated Page2D render target and multi-view/multi-window composition can come later.
+3. **ComputerUnit definition.** For Page2D, `1.0` ComputerUnit always means `1 mm`. CPU-side Page2D coordinates should be stored as `float64`/`double` for long-term CAD precision. GPU records may use page-local/rebased `float32` values for rendering.
+4. **Coordinate origin.** Page2D uses a lower-left origin. This matches the intended future print-layout child coordinate system.
+5. **Canvas.** The first Page2D viewport is an infinite CAD canvas, not a paper sheet preview. Use a dulled white background with black default geometry/text.
+6. **Active container visibility.** When a Page2D internal sub-tab is active, Scene3D is not rendered in that viewport. Scene3D engineering/copy-thread work may continue in the background and keep uploading to VRAM, but inactive container pages should not draw.
+7. **Object identity.** Continue using the existing global `memoryID` generator. Do not introduce a separate Page2D object ID generator.
+8. **No optimization-first work.** GPU culling, tile binning, compute-generated indirect counts, and advanced batching are deferred. The first implementation should prioritize a correct visible result.
+9. **Lineweight is day-0 CAD behavior.** MVP line rendering must support CAD lineweight. Prefer analytic thick-line rendering: one line segment is one instance, the vertex shader expands `SV_VertexID` 0..5 into two triangles, and the pixel shader computes anti-aliased coverage. Geometry cost should remain proportional to the number of line segments, not to the number of pixels touched by the line.
+10. **Text.** First-pass text uses font value `0`, meaning Noto Sans. ASCII is sufficient for MVP. Text records must keep the future font system in mind and include string, text height in ComputerUnits, rotation, color, justification, `xOffset`, and `yOffset`.
+11. **Text zoom behavior.** CAD text height is in ComputerUnits and therefore zooms with the drawing. At large zoom-out, text may become too small to read or effectively disappear.
+12. **Shader files.** New 2D shader files should be prefixed with `Shader2D_` and added to the existing Visual Studio `FxCompile` build pattern.
+13. **Input.** Page2D navigation uses mouse wheel zoom and middle-button drag pan.
+14. **Source ownership.** Keep all 2D GPU rendering implementation code in `MemoryManagerGPU2D.h`, `MemoryManagerGPU2D.cpp`, `MemoryManagerGPU2D-DirectX12.h`, and `MemoryManagerGPU2D-DirectX12.cpp`.
+
 ## 1. Overall architecture
 
 DataStorage: Unlike 3D world, where there can be multiple views depicting the same object in different representation (solid/wireframe/transparency etc.), Page2D is a flat structure. Each 2D element is uniquely owned by a single Page2D parent. Or 2D equivalent logical container elements such as P&ID, SLD, 3Dto2D sheets etc. Multiple plot layouts generated out of a Scene2D collection, will render like separate independently rendered Page2D.  

@@ -1,6 +1,7 @@
 // Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
 
 #include "MemoryManagerGPU-DirectX12.h"
+#include "MemoryManagerGPU2D-DirectX12.h"
 #include "UserInterface-DirectX12.h"
 #include "ShaderSceneVertex.h"
 #include "ShaderScenePixel.h"
@@ -890,7 +891,8 @@ void GpuCopyThread() {
                 bool hasGeometry = !commandToCopyThreadQueue.empty();
                 bool hasTextures = gUploadQueue.readIndex.load(std::memory_order_relaxed) 
                     < gUploadQueue.writeIndex.load(std::memory_order_relaxed);
-                return hasGeometry || hasTextures || shutdownSignal;
+                bool hasCad2D = HasPendingCad2DCopyCommands();
+                return hasGeometry || hasTextures || hasCad2D || shutdownSignal;
                 });
 
             while (!commandToCopyThreadQueue.empty()) {
@@ -899,6 +901,12 @@ void GpuCopyThread() {
             }
         } // lock released here. We have a local batch of commands to process without holding the lock.
         if (shutdownSignal) break; // Exit if shutdown was signaled while waiting.
+
+        std::vector<CommandToCopyThread2D> cad2DBatch;
+        PopAllCad2DCopyCommands(cad2DBatch);
+        if (!cad2DBatch.empty()) {
+            ProcessCad2DCopyBatch(cad2DBatch);
+        }
 
         uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
         uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
@@ -1441,6 +1449,10 @@ void GpuCopyThread() {
                         // unique_ptr destructs automatically on removal
                     }), storage.retiredPages.end()
                 );
+
+                if (allTabs[tabList[i]].cad2d) {
+                    PruneCad2DRetiredResources(*allTabs[tabList[i]].cad2d, safeRetireFence);
+                }
             }
         } // End of cleanup section.
     } // End of while (!shutdownSignal)
@@ -1454,6 +1466,9 @@ void GpuCopyThread() {
         for (auto& rs : storage.retiredSnapshots) { delete rs.snapshot; }
         storage.retiredSnapshots.clear();
         storage.retiredPages.clear();
+        if (allTabs[tabList[i]].cad2d) {
+            ReleaseCad2DRetiredResources(*allTabs[tabList[i]].cad2d);
+        }
     }
     std::wcout << "GPU Copy Thread shutting down." << std::endl;
 }
@@ -1628,17 +1643,30 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 tabRes.camera = tab.camera; // Update camera from Tab.
                 std::vector<InternalSubTab> internalSubTabsSnapshot;
                 uint64_t activeInternalSubTabMemoryId = 0;
+                VishwakarmaStorage::ObjectType activeInternalSubTabType =
+                    VishwakarmaStorage::ObjectType::Unknown;
                 if (tab.storageObjectsMutex) {
                     std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
                     internalSubTabsSnapshot = tab.openInternalSubTabs;
                     activeInternalSubTabMemoryId = tab.activeInternalSubTabMemoryId;
+                    for (const InternalSubTab& subTab : internalSubTabsSnapshot) {
+                        if (subTab.containerMemoryId == activeInternalSubTabMemoryId) {
+                            activeInternalSubTabType = subTab.containerType;
+                            break;
+                        }
+                    }
                 }
                 uint64_t fenceToWaitFor = gpu.copyFenceValue.load(std::memory_order_acquire);// Cross-Queue Sync.
                 //if (fenceToWaitFor > 0) { threadRes.commandQueue->Wait(gpu.copyFence.Get(), fenceToWaitFor); }
                 //Above is commented out because render thread now no longer need to wait for copyFence,
                 //because, now render thread operate over READ ONLY page list.
-                gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes, tab.geometry,
-                    monitorId, activeInternalSubTabMemoryId);// Renders geometry.
+                if (activeInternalSubTabType == VishwakarmaStorage::ObjectType::Page2D && tab.cad2d) {
+                    RenderCad2DPage(threadRes.commandList.Get(), winRes, *tab.cad2d,
+                        gpu.uiResources, monitorId, activeInternalSubTabMemoryId);
+                } else {
+                    gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes, tab.geometry,
+                        monitorId, activeInternalSubTabMemoryId);// Renders geometry.
+                }
                 // Render User Interface using safe snapshot copy of current Input.
 
                 if (atlasFence.load(std::memory_order_acquire) == 0 ||

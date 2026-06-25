@@ -7,6 +7,7 @@
 #include <string>
 #include "MemoryManagerCPU.h"
 #include "MemoryManagerGPU-DirectX12.h"
+#include "MemoryManagerGPU2D-DirectX12.h"
 #include "UserInputProcessing.h"
 #include "CommonNamedNumbers.h"
 #include "DataTreeView.h"
@@ -145,6 +146,7 @@ struct DATASETTAB {
     std::unique_ptr<ThreadSafeQueueCPU> userInputQueue;
     std::unique_ptr<ThreadSafeQueueCPU> todoCPUQueue;
     TabGeometryStorage geometry;
+    std::unique_ptr<TabCad2DStorage> cad2d;
 
     /*Self TODOs are modification to enginering world data, like create new Beam, Modify existing Column etc.
     This is different from userInputQueue because this 2nd queue can come from filesystem thread, 
@@ -171,6 +173,7 @@ struct DATASETTAB {
         userInputQueue = std::make_unique<ThreadSafeQueueCPU>();
         todoCPUQueue = std::make_unique<ThreadSafeQueueCPU>();
         storageObjectsMutex = std::make_unique<std::mutex>();
+        cad2d = std::make_unique<TabCad2DStorage>();
     }
     DATASETTAB(const DATASETTAB&) = delete;// Disable copy (mutex cannot copy). Otherwise it can't reside in std::vector.
     DATASETTAB& operator=(const DATASETTAB&) = delete;
