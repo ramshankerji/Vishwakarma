@@ -12,6 +12,7 @@
 #include "TextureSaver.h"
 #include "DataTreeView.h"
 #include "UserInterfaceTranslationCompiled.h"
+#include "SVGIconRenderer.h"
 #include <array>
 #include <cmath>
 #include <utility>
@@ -86,6 +87,25 @@ static UIAtlasRegion MakeAtlasRegion(int x, int y, int w, int h, int atlasW, int
 
 UIColors uiLightDefaultColors, uiActiveColors; // Initialized to default light theme colors.
 
+static void SetAtlasPixelRGBA(AtlasBitmap& atlas, int x, int y, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+    if (x < 0 || y < 0 || x >= atlas.width || y >= atlas.height) return;
+
+    if (atlas.bytesPerPixel == 4) {
+        const size_t offset = (static_cast<size_t>(y) * atlas.width + x) * 4u;
+        atlas.pixels[offset + 0] = r;
+        atlas.pixels[offset + 1] = g;
+        atlas.pixels[offset + 2] = b;
+        atlas.pixels[offset + 3] = a;
+    }
+    else {
+        atlas.pixels[static_cast<size_t>(y) * atlas.width + x] = a;
+    }
+}
+
+static void SetAtlasCoverage(AtlasBitmap& atlas, int x, int y, uint8_t coverage) {
+    SetAtlasPixelRGBA(atlas, x, y, 255, 255, 255, coverage);
+}
+
 static void GenerateRoundedRectangleNineSlice(AtlasBitmap& atlas, int originX, int originY,
     int sourceSizePx, int sourceRadiusPx, UIRoundedRectangleNineSlice& outSlice) {
     const int atlasW = atlas.width;
@@ -104,7 +124,7 @@ static void GenerateRoundedRectangleNineSlice(AtlasBitmap& atlas, int originX, i
             const float distance = std::sqrt(dx * dx + dy * dy);
             const float coverage = std::clamp((float)sourceRadiusPx + 0.5f - distance, 0.0f, 1.0f);
 
-            atlas.pixels[(originY + y) * atlasW + (originX + x)] = (uint8_t)std::round(coverage * 255.0f);
+            SetAtlasCoverage(atlas, originX + x, originY + y, (uint8_t)std::round(coverage * 255.0f));
         }
     }
 
@@ -126,7 +146,28 @@ static void GenerateRoundedRectangleNineSlice(AtlasBitmap& atlas, int originX, i
 static void FillRect(AtlasBitmap& atlas, int x, int y, int w, int h, uint8_t coverage) {
     for (int yy = y; yy < y + h; ++yy) {
         for (int xx = x; xx < x + w; ++xx) {
-            atlas.pixels[yy * atlas.width + xx] = coverage;
+            SetAtlasCoverage(atlas, xx, yy, coverage);
+        }
+    }
+}
+
+static void CopyRenderedSVGIconToAtlas(AtlasBitmap& atlas, const SVGIconRenderer::RenderedSVGIcon& icon,
+    int originX, int originY, int cellSize) {
+    if (icon.rgba.empty() || icon.width <= 0 || icon.height <= 0) return;
+
+    const int copyW = std::min(icon.width, cellSize);
+    const int copyH = std::min(icon.height, cellSize);
+    const int dstX = originX + std::max(0, (cellSize - copyW) / 2);
+    const int dstY = originY + std::max(0, (cellSize - copyH) / 2);
+
+    for (int y = 0; y < copyH; ++y) {
+        for (int x = 0; x < copyW; ++x) {
+            const size_t srcOffset = (static_cast<size_t>(y) * icon.width + x) * 4u;
+            SetAtlasPixelRGBA(atlas, dstX + x, dstY + y,
+                icon.rgba[srcOffset + 0],
+                icon.rgba[srcOffset + 1],
+                icon.rgba[srcOffset + 2],
+                icon.rgba[srcOffset + 3]);
         }
     }
 }
@@ -149,7 +190,8 @@ static bool TryReserveIconCell(int iconIndex, int atlasW, int atlasH, int& outX,
     return outX + iconCellSize <= atlasW && outY + iconCellSize <= atlasH;
 }
 
-static void StoreIconCellGlyph(char32_t codepoint, int x, int y, int atlasW, int atlasH) {
+static void StoreIconCellGlyph(char32_t codepoint, int x, int y, int atlasW, int atlasH,
+    bool includeInFallbackPool = true) {
     constexpr int iconCellSize = 24;
     Glyph glyph{};
     glyph.uvMinX = (float)x / atlasW;
@@ -160,7 +202,9 @@ static void StoreIconCellGlyph(char32_t codepoint, int x, int y, int atlasW, int
     glyph.height = iconCellSize;
     glyph.advanceX = iconCellSize;
     iconGlyphLookup[codepoint] = glyph;
-    gIconAtlasMetadata.mixedIconCodepoints.push_back(codepoint);
+    if (includeInFallbackPool) {
+        gIconAtlasMetadata.mixedIconCodepoints.push_back(codepoint);
+    }
 }
 
 static AtlasBitmap BuildIconAtlas() {
@@ -171,7 +215,8 @@ static AtlasBitmap BuildIconAtlas() {
     AtlasBitmap atlas{};
     atlas.width = atlasW;
     atlas.height = atlasH;
-    atlas.pixels.resize(atlasW * atlasH, 0);
+    atlas.bytesPerPixel = 4;
+    atlas.pixels.resize(static_cast<size_t>(atlasW) * atlasH * atlas.bytesPerPixel, 0);
 
     // The source rounded rectangle is split into 9 texture regions at draw time.
     // Destination corners are resized to ~2 mm in screen space by PushRoundedRectangle.
@@ -182,9 +227,11 @@ static AtlasBitmap BuildIconAtlas() {
 
     std::array<int, 4> iconXs{};
     std::array<int, 4> iconYs{};
+    int nextIconIndex = 0;
     for (int i = 0; i < 4; ++i) {
-        if (!TryReserveIconCell(i, atlasW, atlasH, iconXs[i], iconYs[i])) continue;
+        if (!TryReserveIconCell(nextIconIndex, atlasW, atlasH, iconXs[i], iconYs[i])) continue;
         StoreIconCellGlyph(gIconAtlasMetadata.dummyIconCodepoints[i], iconXs[i], iconYs[i], atlasW, atlasH);
+        ++nextIconIndex;
     }
 
     // Dummy icon 0: plus
@@ -202,7 +249,7 @@ static AtlasBitmap BuildIconAtlas() {
             const float dy = (float)y + 0.5f - 10.0f;
             const float d = std::sqrt(dx * dx + dy * dy);
             if (d >= 5.0f && d <= 8.0f) {
-                atlas.pixels[(iconYs[2] + 2 + y) * atlasW + (iconXs[2] + 2 + x)] = 255;
+                SetAtlasCoverage(atlas, iconXs[2] + 2 + x, iconYs[2] + 2 + y, 255);
             }
         }
     }
@@ -213,12 +260,23 @@ static AtlasBitmap BuildIconAtlas() {
     FillRect(atlas, iconXs[3] + 4, iconYs[3] + 13, 7, 7, 255);
     FillRect(atlas, iconXs[3] + 13, iconYs[3] + 13, 7, 7, 255);
 
+    const std::vector<SVGIconRenderer::RenderedSVGIcon> svgIcons =
+        SVGIconRenderer::RenderEmbeddedSVGIcons(iconCellSize);
+    for (const SVGIconRenderer::RenderedSVGIcon& svgIcon : svgIcons) {
+        int cellX = 0;
+        int cellY = 0;
+        if (!TryReserveIconCell(nextIconIndex, atlasW, atlasH, cellX, cellY)) break;
+
+        CopyRenderedSVGIconToAtlas(atlas, svgIcon, cellX, cellY, iconCellSize);
+        StoreIconCellGlyph(SVGIconRenderer::IconForID(svgIcon.id), cellX, cellY, atlasW, atlasH, false);
+        ++nextIconIndex;
+    }
+
     if (ftIconFace) {
         FT_Set_Pixel_Sizes(ftIconFace, 0, proceduralIconDrawSize);
 
         FT_UInt glyphIndex = 0;
         FT_ULong charCode = FT_Get_First_Char(ftIconFace, &glyphIndex);
-        int iconIndex = (int)gIconAtlasMetadata.mixedIconCodepoints.size();
         while (glyphIndex != 0) {
             const char32_t codepoint = (char32_t)charCode;
             if (IsPrivateUseCodepoint(codepoint) &&
@@ -228,7 +286,7 @@ static AtlasBitmap BuildIconAtlas() {
                 FT_Load_Char(ftIconFace, charCode, FT_LOAD_RENDER) == 0) {
                 int cellX = 0;
                 int cellY = 0;
-                if (!TryReserveIconCell(iconIndex, atlasW, atlasH, cellX, cellY)) break;
+                if (!TryReserveIconCell(nextIconIndex, atlasW, atlasH, cellX, cellY)) break;
 
                 FT_GlyphSlot g = ftIconFace->glyph;
                 const int bitmapX = cellX + std::max(0, (iconCellSize - (int)g->bitmap.width) / 2);
@@ -237,13 +295,13 @@ static AtlasBitmap BuildIconAtlas() {
                 const int copyH = std::min((int)g->bitmap.rows, iconCellSize);
                 for (int y = 0; y < copyH; ++y) {
                     for (int x = 0; x < copyW; ++x) {
-                        atlas.pixels[(bitmapY + y) * atlasW + (bitmapX + x)] =
-                            g->bitmap.buffer[y * g->bitmap.pitch + x];
+                        SetAtlasCoverage(atlas, bitmapX + x, bitmapY + y,
+                            g->bitmap.buffer[y * g->bitmap.pitch + x]);
                     }
                 }
 
                 StoreIconCellGlyph(codepoint, cellX, cellY, atlasW, atlasH);
-                ++iconIndex;
+                ++nextIconIndex;
             }
 
             charCode = FT_Get_Next_Char(ftIconFace, charCode, &glyphIndex);
@@ -484,7 +542,7 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
     desc.pixels = englishAtlas.pixels.data();
     desc.rowPitch = englishAtlas.width * englishAtlas.bytesPerPixel;
 
-    int bytesPerPixel = 1;
+    int bytesPerPixel = iconAtlas.bytesPerPixel;
 
     SubmitTextureUpload(desc, &uiRes.uiAtlasTextures[UI_ENGLISH_ATLAS_SLOT], &atlasFence);// Enqueue the upload through upload queue
     // RESERVED FENCE VALUE FOR THIS UPLOAD (this is the key change)
@@ -1291,6 +1349,17 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         const char32_t* label = LocalizedControlLabel(ctrl);
         uint32_t baseColor = StableRandomUIColour((uint32_t)ctrl.action ^ ((uint32_t)i * 0x9E3779B9u));// Render
         uint32_t iconColor = StableRandomUIColour(((uint32_t)ctrl.action << 1) ^ 0xA511E9B3u ^ (uint32_t)i);
+        char32_t resolvedIconChar = ctrl.iconChar;
+        const uint32_t actionIconID = static_cast<uint32_t>(ctrl.action);
+        if (resolvedIconChar == SVGIconRenderer::NoIcon && SVGIconRenderer::HasEmbeddedSVGIcon(actionIconID)) {
+            resolvedIconChar = SVGIconRenderer::IconForID(actionIconID);
+        }
+
+        const uint32_t iconID = static_cast<uint32_t>(resolvedIconChar);
+        const bool hasDedicatedSVGIcon =
+            resolvedIconChar != SVGIconRenderer::NoIcon &&
+            SVGIconRenderer::HasEmbeddedSVGIcon(iconID) &&
+            iconGlyphLookup.find(resolvedIconChar) != iconGlyphLookup.end();
         const bool controlVisible = btnX + btnWidth >= 0.0f && btnX <= W;
         bool hovered = false;
 
@@ -1303,7 +1372,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
                 if (hovered) {
                     PushRoundedRectangle(ctx, btnX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
                         drawColor, uiRes);
-                } else {
+                } else if (!hasDedicatedSVGIcon) {
                     float highlightWidth = ctrl.showText ? iconReservedWidthPx : btnWidth;
                     PushRoundedRectangle(ctx, btnX, btnY, highlightWidth, btnHeight, roundedCornerRadiusPx,
                         baseColor, uiRes);
@@ -1320,7 +1389,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             }
 
             if (!ctrl.isEnabled) { // Gray-out overlay for disabled controls
-                if (controlVisible) {
+                if (controlVisible && !hasDedicatedSVGIcon) {
                     float highlightWidth = ctrl.showText ? iconReservedWidthPx : btnWidth;
                     PushRoundedRectangle(ctx, btnX, btnY, highlightWidth, btnHeight, roundedCornerRadiusPx,
                         0xAA333333, uiRes);
@@ -1346,7 +1415,11 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
 
         float iconX = btnX + (iconReservedWidthPx - iconSizePx) * 0.5f;
         float iconY = btnY + (btnHeight - iconSizePx) * 0.5f;
-        if (!gIconAtlasMetadata.mixedIconCodepoints.empty()) {
+        if (hasDedicatedSVGIcon) {
+            const uint32_t dedicatedIconColor = ctrl.isEnabled ? 0xFFFFFFFF : uiActiveColors.actionIconDisabled;
+            PushIcon(ctx, iconX, iconY, iconSizePx, iconSizePx, resolvedIconChar, dedicatedIconColor, uiRes);
+        }
+        else if (!gIconAtlasMetadata.mixedIconCodepoints.empty()) {
             const uint32_t randomIconIndex =
                 ((uint32_t)ctrl.action ^ (uint32_t)i) % (uint32_t)gIconAtlasMetadata.mixedIconCodepoints.size();
             PushIcon(ctx, iconX, iconY, iconSizePx, iconSizePx,

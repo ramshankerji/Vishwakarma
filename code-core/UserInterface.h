@@ -10,6 +10,7 @@
 #include FT_FREETYPE_H
 
 #include "ListOfCommands.h"
+#include "SVGIconRenderer.h"
 #include "FontManager.h" // FreeType font atlas generation
 #include "UserInterface-TextTranslations.h" // localization
 #include "UserInterfaceTranslationCompiled.h"
@@ -328,6 +329,10 @@ constexpr uint32_t kCloseUIAction = 0xE0000012u;
 extern std::mutex g_actionQueueMutex;
 extern std::deque<UIActionEntry> g_actionQueue;
 
+constexpr char32_t UIIconForCommand(Commands command) noexcept {
+    return SVGIconRenderer::IconForID(static_cast<uint32_t>(command));
+}
+
 // Call from UI thread: push an action into the global action queue
 inline void PushUIAction(uint32_t id, uint64_t p1 = 0, uint64_t p2 = 0) {
     std::lock_guard<std::mutex> lk(g_actionQueueMutex);
@@ -418,35 +423,35 @@ constexpr size_t TotalTopUIActionSubGroups = std::size(topUIActionSubGroupNames)
 constexpr UIControlDefinition AllUIControls[] = {
     // ACTION GROUP 0: Common
     // Subgroup : Organize
-    { Commands::PROJECT_OPEN,          UITextID::PROJECT_OPEN, U'x', 1, 3, 0, 0, true, true, 0 , 0 },
-    { Commands::PROJECT_SAVE,          UITextID::PROJECT_SAVE, U'x', 1, 3, 1, 0, true, true, 0 , 0 },
-    { Commands::PROJECT_CLOSE,         UITextID::PROJECT_CLOSE, U'x', 1, 3, 2, 0, true, true, 0 , 0 },
-    { Commands::CREATE_FOLDER,         UITextID::CREATE_FOLDER, U'x', 1, 3, 0, 0, true, true, 0 , 0 }, //Dropdown: Copy/Delete/Duplicate Folder
-    { Commands::CREATE_PAGE2D,         UITextID::CREATE_PAGE2D, U'x', 1, 3, 1, 0, true, true, 0 , 0 }, //Represents a 2D sheet.
-    { Commands::CREATE_SCENE3D,        UITextID::CREATE_SCENE3D, U'x', 1, 3, 2, 0, true, true, 0 , 0 }, //Represents a 3D world.
-    { Commands::FOLDER_VISIBILITY,     UITextID::FOLDER_VISIBILITY, U'x', 1, 1, 0, 0, true, true, 0 , 0 }, //Toggle Heirarchy ON/OFF
+    { Commands::PROJECT_OPEN,          UITextID::PROJECT_OPEN, UIIconForCommand(Commands::PROJECT_OPEN), 1, 3, 0, 0, true, true, 0 , 0 },
+    { Commands::PROJECT_SAVE,          UITextID::PROJECT_SAVE, UIIconForCommand(Commands::PROJECT_SAVE), 1, 3, 1, 0, true, true, 0 , 0 },
+    { Commands::PROJECT_CLOSE,         UITextID::PROJECT_CLOSE, UIIconForCommand(Commands::PROJECT_CLOSE), 1, 3, 2, 0, true, true, 0 , 0 },
+    { Commands::CREATE_FOLDER,         UITextID::CREATE_FOLDER, UIIconForCommand(Commands::CREATE_FOLDER), 1, 3, 0, 0, true, true, 0 , 0 }, //Dropdown: Copy/Delete/Duplicate Folder
+    { Commands::CREATE_PAGE2D,         UITextID::CREATE_PAGE2D, UIIconForCommand(Commands::CREATE_PAGE2D), 1, 3, 1, 0, true, true, 0 , 0 }, //Represents a 2D sheet.
+    { Commands::CREATE_SCENE3D,        UITextID::CREATE_SCENE3D, UIIconForCommand(Commands::CREATE_SCENE3D), 1, 3, 2, 0, true, true, 0 , 0 }, //Represents a 3D world.
+    { Commands::FOLDER_VISIBILITY,     UITextID::FOLDER_VISIBILITY, UIIconForCommand(Commands::FOLDER_VISIBILITY), 1, 1, 0, 0, true, true, 0 , 0 }, //Toggle Heirarchy ON/OFF
 
     // Subgroup : Search
     // Text box to search for objects in current view. Search happens in current view only to keep it simple.
-    { Commands::SEARCH_BOX,            UITextID::SEARCH_BOX, U'x', 2, 3, 0, 1, true, true, 0 , 6 },
-    { Commands::SEARCH_NORMAL,         UITextID::SEARCH_NORMAL, U'x', 2, 3, 1, 1, true, true, 0 , 6 },
-    { Commands::SEARCH_ADVANCED,       UITextID::SEARCH_ADVANCED, U'x', 2, 3, 2, 1, true, true, 0 , 6 }, // Dedicated sidebar in future.
-    { Commands::SEARCH_PREVIOUS,       UITextID::SEARCH_PREVIOUS, U'x', 2, 2, 0, 1, true, true, 0 , 6 },
-    { Commands::SEARCH_NEXT,           UITextID::SEARCH_NEXT, U'x', 2, 2, 1, 1, true, true, 0 , 6 },
+    { Commands::SEARCH_BOX,            UITextID::SEARCH_BOX, UIIconForCommand(Commands::SEARCH_BOX), 2, 3, 0, 1, true, true, 0 , 6 },
+    { Commands::SEARCH_NORMAL,         UITextID::SEARCH_NORMAL, UIIconForCommand(Commands::SEARCH_NORMAL), 2, 3, 1, 1, true, true, 0 , 6 },
+    { Commands::SEARCH_ADVANCED,       UITextID::SEARCH_ADVANCED, UIIconForCommand(Commands::SEARCH_ADVANCED), 2, 3, 2, 1, true, true, 0 , 6 }, // Dedicated sidebar in future.
+    { Commands::SEARCH_PREVIOUS,       UITextID::SEARCH_PREVIOUS, UIIconForCommand(Commands::SEARCH_PREVIOUS), 2, 2, 0, 1, true, true, 0 , 6 },
+    { Commands::SEARCH_NEXT,           UITextID::SEARCH_NEXT, UIIconForCommand(Commands::SEARCH_NEXT), 2, 2, 1, 1, true, true, 0 , 6 },
 
     // Subgroup : Select
-    { Commands::SELECT_ANYTHING,       UITextID::SELECT_ANYTHING, U'x', 1, 3, 0, 0, true, true, 0 , 2 },
-    { Commands::SELECT_PIPING,         UITextID::SELECT_PIPING, U'x', 1, 3, 1, 0, true, true, 0 , 2 },
-    { Commands::SELECT_BEAMCOLUMNS,    UITextID::SELECT_BEAMCOLUMNS, U'x', 1, 3, 2, 0, true, true, 0 , 2 },
-    { Commands::SELECT_REINFORCEMENT,  UITextID::SELECT_REINFORCEMENT, U'x', 1, 3, 0, 0, true, true, 0 , 2 },
-    { Commands::SELECT_TEMPLATES,      UITextID::SELECT_TEMPLATES, U'x', 1, 3, 1, 0, true, true, 0 , 2 }, // 3D templates and 2D blocks.
-    { Commands::SELECT_TEXT,           UITextID::SELECT_TEXT, U'x', 1, 3, 2, 0, true, true, 0 , 2 }, // Text in 3D scene and 2D sheets.
-    { Commands::SELECT_LINES,          UITextID::SELECT_LINES, U'x', 1, 3, 0, 0, true, true, 0 , 2 }, // Anything othe than text and templates.
+    { Commands::SELECT_ANYTHING,       UITextID::SELECT_ANYTHING, UIIconForCommand(Commands::SELECT_ANYTHING), 1, 3, 0, 0, true, true, 0 , 2 },
+    { Commands::SELECT_PIPING,         UITextID::SELECT_PIPING, UIIconForCommand(Commands::SELECT_PIPING), 1, 3, 1, 0, true, true, 0 , 2 },
+    { Commands::SELECT_BEAMCOLUMNS,    UITextID::SELECT_BEAMCOLUMNS, UIIconForCommand(Commands::SELECT_BEAMCOLUMNS), 1, 3, 2, 0, true, true, 0 , 2 },
+    { Commands::SELECT_REINFORCEMENT,  UITextID::SELECT_REINFORCEMENT, UIIconForCommand(Commands::SELECT_REINFORCEMENT), 1, 3, 0, 0, true, true, 0 , 2 },
+    { Commands::SELECT_TEMPLATES,      UITextID::SELECT_TEMPLATES, UIIconForCommand(Commands::SELECT_TEMPLATES), 1, 3, 1, 0, true, true, 0 , 2 }, // 3D templates and 2D blocks.
+    { Commands::SELECT_TEXT,           UITextID::SELECT_TEXT, UIIconForCommand(Commands::SELECT_TEXT), 1, 3, 2, 0, true, true, 0 , 2 }, // Text in 3D scene and 2D sheets.
+    { Commands::SELECT_LINES,          UITextID::SELECT_LINES, UIIconForCommand(Commands::SELECT_LINES), 1, 3, 0, 0, true, true, 0 , 2 }, // Anything othe than text and templates.
 
     // ACTION GROUP 1: (2D) General
     // Subgroup : Create 2D Shapes
-    { Commands::CREATE_LINE,           UITextID::CREATE_LINE, U'x', 1, 3, 0, 0, true, true, 1 , 5 },
-    { Commands::CREATE_POLYLINE,       UITextID::CREATE_POLYLINE, U'x', 1, 3, 1, 0, true, true, 1 , 5 },
+    { Commands::CREATE_LINE,           UITextID::CREATE_LINE, UIIconForCommand(Commands::CREATE_LINE), 1, 3, 0, 0, true, true, 1 , 5 },
+    { Commands::CREATE_POLYLINE,       UITextID::CREATE_POLYLINE, UIIconForCommand(Commands::CREATE_POLYLINE), 1, 3, 1, 0, true, true, 1 , 5 },
     //Polygon Dropdown: Triangle, Rectangle, Pentagon, Hexagon, Heptagon, Octagon.
     { Commands::CREATE_POLYGON,        UITextID::CREATE_POLYGON, U'x', 1, 3, 2, 0, true, true, 1 , 5 },
     { Commands::CREATE_CIRCLE,         UITextID::CREATE_CIRCLE, U'x', 1, 3, 0, 0, true, true, 1 , 5 },

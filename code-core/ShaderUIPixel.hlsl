@@ -43,7 +43,8 @@ float4 main(PSInput input) : SV_TARGET {
         float2 screenTexSize = 1.0 / fwidth(input.uv);
         float screenPxRange = max(0.5 * dot(unitRange, screenTexSize), 1.0);
         coverage = saturate(signedDistance * screenPxRange + 0.5);
+        return float4(baseColor.rgb, baseColor.a * coverage);
     }
 
-    return float4(baseColor.rgb, baseColor.a * coverage);
+    return float4(sampleColor.rgb * baseColor.rgb, sampleColor.a * baseColor.a);
 }

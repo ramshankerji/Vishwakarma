@@ -72,9 +72,9 @@
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>FT2_BUILD_LIBRARY;
-FT_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+FT_STATIC;LUNASVG_BUILD_STATIC;PLUTOVG_BUILD_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(IntDir);$(IntDir)GeneratedProtobuf;..\code-external\protobuf\src;..\code-external\protobuf\third_party\utf8_range;..\build\protobuf-x64-debug\_deps\absl-src;..\build\protobuf-x64-release\_deps\absl-src;..\code-external\DirectX-Headers\include\directx;..\code-external\zlib;..\code-external\sqlite;..\code-core;..\code-external\libpng-code;..\code-external\freetype\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(IntDir);$(IntDir)GeneratedProtobuf;..\code-external\protobuf\src;..\code-external\protobuf\third_party\utf8_range;..\build\protobuf-x64-debug\_deps\absl-src;..\build\protobuf-x64-release\_deps\absl-src;..\code-external\DirectX-Headers\include\directx;..\code-external\zlib;..\code-external\sqlite;..\code-core;..\code-external\libpng-code;..\code-external\freetype\include;..\code-external\lunasvg\include;..\code-external\lunasvg\source;..\code-external\lunasvg\plutovg\include;..\code-external\lunasvg\plutovg\source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>preCompiledHeadersWindows.h</PrecompiledHeaderFile>
       <AdditionalOptions>/FS /utf-8 %(AdditionalOptions)</AdditionalOptions>
@@ -93,7 +93,8 @@ FT_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ResourceCompile>
     <PreBuildEvent>
       <Command>call "$(ProjectDir)..\code-miscellaneous\msdf_atlas_generator.bat"
-powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateDataStorageProtobuf.ps1" -OutputDir "$(IntDir)GeneratedProtobuf"</Command>
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateDataStorageProtobuf.ps1" -OutputDir "$(IntDir)GeneratedProtobuf"
+python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)SVGIconManifest.h" "$(ProjectDir)..\website\static\SVGIcons" "$(IntDir)SVGIconEmbeddedData.generated.h"</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -102,10 +103,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscel
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>
-      </PreprocessorDefinitions>
+      <PreprocessorDefinitions>LUNASVG_BUILD_STATIC;PLUTOVG_BUILD_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(IntDir);$(IntDir)GeneratedProtobuf;..\code-external\protobuf\src;..\code-external\protobuf\third_party\utf8_range;..\build\protobuf-x64-release\_deps\absl-src;..\build\protobuf-x64-debug\_deps\absl-src;..\code-external\DirectX-Headers\include\directx;..\code-external\zlib;..\code-external\sqlite;..\code-core;..\code-external\libpng-code;..\code-external\freetype\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(IntDir);$(IntDir)GeneratedProtobuf;..\code-external\protobuf\src;..\code-external\protobuf\third_party\utf8_range;..\build\protobuf-x64-release\_deps\absl-src;..\build\protobuf-x64-debug\_deps\absl-src;..\code-external\DirectX-Headers\include\directx;..\code-external\zlib;..\code-external\sqlite;..\code-core;..\code-external\libpng-code;..\code-external\freetype\include;..\code-external\lunasvg\include;..\code-external\lunasvg\source;..\code-external\lunasvg\plutovg\include;..\code-external\lunasvg\plutovg\source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>preCompiledHeadersWindows.h</PrecompiledHeaderFile>
       <AdditionalOptions>/FS /utf-8 %(AdditionalOptions)</AdditionalOptions>
@@ -125,7 +125,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscel
     </ResourceCompile>
     <PreBuildEvent>
       <Command>call "$(ProjectDir)..\code-miscellaneous\msdf_atlas_generator.bat"
-powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateDataStorageProtobuf.ps1" -OutputDir "$(IntDir)GeneratedProtobuf"</Command>
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateDataStorageProtobuf.ps1" -OutputDir "$(IntDir)GeneratedProtobuf"
+python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)SVGIconManifest.h" "$(ProjectDir)..\website\static\SVGIcons" "$(IntDir)SVGIconEmbeddedData.generated.h"</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -146,6 +147,30 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscel
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_SPHERE.pb.cc" />
     <ClCompile Include="..\code-core\विश्वकर्मा.cpp" />
     <ClCompile Include="..\code-external\sqlite\sqlite3.c" />
+    <ClCompile Include="..\code-external\lunasvg\source\graphics.cpp" />
+    <ClCompile Include="..\code-external\lunasvg\source\lunasvg.cpp" />
+    <ClCompile Include="..\code-external\lunasvg\source\svgelement.cpp" />
+    <ClCompile Include="..\code-external\lunasvg\source\svggeometryelement.cpp" />
+    <ClCompile Include="..\code-external\lunasvg\source\svglayoutstate.cpp" />
+    <ClCompile Include="..\code-external\lunasvg\source\svgpaintelement.cpp" />
+    <ClCompile Include="..\code-external\lunasvg\source\svgparser.cpp" />
+    <ClCompile Include="..\code-external\lunasvg\source\svgproperty.cpp" />
+    <ClCompile Include="..\code-external\lunasvg\source\svgrenderstate.cpp" />
+    <ClCompile Include="..\code-external\lunasvg\source\svgtextelement.cpp" />
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-blend.c" />
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-canvas.c" />
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-font.c" />
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-ft-math.c" />
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-ft-raster.c" />
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-ft-stroker.c" />
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-matrix.c" />
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-paint.c" />
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-path.c" />
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-rasterize.c" />
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-surface.c">
+      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <ClCompile Include="..\code-external\libpng-code\png.c">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
@@ -246,6 +271,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscel
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="..\code-external\zlib\uncompr.c">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\code-external\zlib\zutil.c">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
@@ -257,6 +286,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscel
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="MemoryManagerGPU-DirectX12.cpp" />
     <ClCompile Include="preCompiledHeadersWindows.cpp" />
+    <ClCompile Include="SVGIconRenderer.cpp" />
     <ClCompile Include="UserInterface-DirectX12.cpp" />
     <ClCompile Include="UserInterfaceTranslationCompiled.cpp" />
   </ItemGroup>
@@ -288,6 +318,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscel
     <ClInclude Include="MemoryManagerGPU-Vulkan1.1.h" />
     <ClInclude Include="preCompiledHeadersWindows.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="SVGIconManifest.h" />
+    <ClInclude Include="SVGIconRenderer.h" />
     <ClInclude Include="TextureSaver.h" />
     <ClInclude Include="UserInputProcessing.h" />
     <ClInclude Include="UserInterface-DirectX12.h" />
@@ -314,6 +346,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscel
     <None Include="DataStorage_SPHERE.proto" />
     <None Include="..\code-miscellaneous\GenerateDataStorageProtobuf.ps1" />
     <None Include="..\code-miscellaneous\msdf_charset_exporter.py" />
+    <None Include="..\code-miscellaneous\svg_icon_embedder.py" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="..\code-core\logo.ico" />

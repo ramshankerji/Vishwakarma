@@ -136,10 +136,76 @@
     <ClCompile Include="..\code-external\zlib\trees.c">
       <Filter>code-external\zlib</Filter>
     </ClCompile>
+    <ClCompile Include="..\code-external\zlib\uncompr.c">
+      <Filter>code-external\zlib</Filter>
+    </ClCompile>
     <ClCompile Include="..\code-external\zlib\zutil.c">
       <Filter>code-external\zlib</Filter>
     </ClCompile>
     <ClCompile Include="..\code-external\sqlite\sqlite3.c">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\source\graphics.cpp">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\source\lunasvg.cpp">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\source\svgelement.cpp">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\source\svggeometryelement.cpp">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\source\svglayoutstate.cpp">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\source\svgpaintelement.cpp">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\source\svgparser.cpp">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\source\svgproperty.cpp">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\source\svgrenderstate.cpp">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\source\svgtextelement.cpp">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-blend.c">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-canvas.c">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-font.c">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-ft-math.c">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-ft-raster.c">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-ft-stroker.c">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-matrix.c">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-paint.c">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-path.c">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-rasterize.c">
+      <Filter>code-external</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-external\lunasvg\plutovg\source\plutovg-surface.c">
       <Filter>code-external</Filter>
     </ClCompile>
     <ClCompile Include="..\code-external\libpng-code\pngread.c">
@@ -167,6 +233,9 @@
       <Filter>code-core</Filter>
     </ClCompile>
     <ClCompile Include="UserInterfaceTranslationCompiled.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="SVGIconRenderer.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
   </ItemGroup>
@@ -270,6 +339,12 @@
     <ClInclude Include="ListOfCommands.h">
       <Filter>code-core</Filter>
     </ClInclude>
+    <ClInclude Include="SVGIconManifest.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="SVGIconRenderer.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="VertexShader.hlsl" />
@@ -320,6 +395,9 @@
       <Filter>code-core</Filter>
     </None>
     <None Include="..\code-miscellaneous\GenerateDataStorageProtobuf.ps1">
+      <Filter>code-miscellaneous</Filter>
+    </None>
+    <None Include="..\code-miscellaneous\svg_icon_embedder.py">
       <Filter>code-miscellaneous</Filter>
     </None>
   </ItemGroup>
