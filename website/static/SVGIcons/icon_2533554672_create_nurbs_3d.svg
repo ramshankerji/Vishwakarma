@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Base Grid/Plane -->
+    <path d="M12 48 L32 36 L52 48 L32 60 Z" stroke="#B2BEC3"/>
+    <!-- NURBS Curve -->
+    <path d="M16 32 C 24 16, 40 16, 48 32 S 56 48, 48 52" stroke="#0984E3"/>
+    <!-- Control Points -->
+    <circle cx="16" cy="32" r="3" fill="#D63031" stroke="none"/>
+    <circle cx="32" cy="24" r="3" fill="#D63031" stroke="none"/>
+    <circle cx="48" cy="32" r="3" fill="#D63031" stroke="none"/>
+    <!-- Construction Lines -->
+    <path d="M16 32 L32 24 L48 32" stroke="#D63031" stroke-width="2" stroke-dasharray="4 4"/>
+  </g>
+</svg>

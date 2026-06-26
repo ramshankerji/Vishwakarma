@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#212121" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Pencil body -->
+    <path d="M42 10L54 22L22 54L10 54L10 42L42 10Z" />
+    <!-- Move arrows -->
+    <path d="M32 4L32 24M22 14L32 4L42 14" />
+  </g>
+</svg>

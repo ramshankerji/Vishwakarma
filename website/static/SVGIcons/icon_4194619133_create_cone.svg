@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#212121" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Base ellipse -->
+    <ellipse cx="32" cy="50" rx="20" ry="8" />
+    <!-- Cone sides -->
+    <path d="M12 50 L32 14 L52 50" />
+    <!-- Top highlight/cap -->
+    <path d="M32 14 L32 22" />
+  </g>
+</svg>

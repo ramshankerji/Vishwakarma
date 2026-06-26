@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2c3e50" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Structural I-Beam representation -->
+    <path d="M16 12h32M32 12v40M16 52h32" />
+    <!-- Book/Code document outline -->
+    <path d="M12 8h24l16 16v32H12z" />
+    <path d="M36 8v16h16" />
+    <!-- Text lines -->
+    <path d="M18 34h28M18 42h28M18 50h16" stroke-width="2" />
+  </g>
+</svg>

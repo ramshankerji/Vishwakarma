@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Pin Head -->
+    <circle cx="32" cy="16" r="8" />
+    <!-- Pin Body -->
+    <line x1="32" y1="24" x2="32" y2="44" />
+    <!-- Support/Heart Shape -->
+    <path d="M48 36c0 8-16 16-16 20c0-4-16-12-16-20c0-4.4 3.6-8 8-8c3.2 0 6 2 7.2 4.8c1.2-2.8 4-4.8 7.2-4.8c4.4 0 8 3.6 8 8z" fill="#FF7675" stroke="none" />
+  </g>
+</svg>

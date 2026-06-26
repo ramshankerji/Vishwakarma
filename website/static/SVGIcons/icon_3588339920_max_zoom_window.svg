@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#222" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer Window Frame -->
+    <rect x="8" y="12" width="48" height="40" rx="4" />
+    <!-- Diagonal Arrows -->
+    <path d="M24 28 L16 36 M16 36 L24 36 M16 36 L16 28" />
+    <path d="M40 36 L48 28 M48 28 L40 28 M48 28 L48 36" />
+    <!-- Top Bar -->
+    <line x1="8" y1="22" x2="56" y2="22" />
+  </g>
+</svg>

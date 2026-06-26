@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main dimension line -->
+    <line x1="12" y1="48" x2="52" y2="48" />
+    <line x1="12" y1="42" x2="12" y2="54" />
+    <line x1="52" y1="42" x2="52" y2="54" />
+    
+    <!-- Plus sign representing 'Create' -->
+    <circle cx="44" cy="20" r="16" stroke="#333" stroke-width="4" />
+    <line x1="44" y1="12" x2="44" y2="28" />
+    <line x1="36" y1="20" x2="52" y2="20" />
+  </g>
+</svg>

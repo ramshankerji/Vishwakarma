@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Paperclip shape -->
+    <path d="M24 48V20c0-6.63 5.37-12 12-12s12 5.37 12 12v28c0 4.42-3.58 8-8 8s-8-3.58-8-8V24c0-2.21 1.79-4 4-4s4 1.79 4 4v20" />
+    <!-- Plus sign for "Create" -->
+    <path d="M12 24h12M18 18v12" stroke="#0984E3" />
+    <!-- Clock/Timer indicator for "Temp" -->
+    <circle cx="18" cy="46" r="8" stroke="#D63031" />
+    <path d="M18 42v4l3 3" stroke="#D63031" />
+  </g>
+</svg>

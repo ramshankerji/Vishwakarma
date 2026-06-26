@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Left Load Block -->
+    <rect x="8" y="12" width="16" height="16" />
+    <path d="M16 28v8" />
+    
+    <!-- Right Load Block -->
+    <rect x="40" y="12" width="16" height="16" />
+    <path d="M48 28v8" />
+    
+    <!-- Connecting Beam -->
+    <path d="M16 40h32" />
+    
+    <!-- Summation/Combination Symbol -->
+    <path d="M32 40v12" />
+    <path d="M24 52h16" />
+    <circle cx="32" cy="56" r="2" fill="#2D3436" />
+  </g>
+</svg>

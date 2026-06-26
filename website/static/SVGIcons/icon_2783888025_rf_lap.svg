@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer track loop -->
+    <path d="M16 48h32a16 16 0 0 0 0-32H16a16 16 0 0 0 0 32z" />
+    <!-- Finish line flag marker -->
+    <path d="M32 16v16" stroke="#E17055" />
+    <path d="M32 16l8 4-8 4" fill="#E17055" stroke="none" />
+    <!-- Lap indicator arrow -->
+    <path d="M24 48l-8 8" />
+    <path d="M16 56h8v-8" />
+  </g>
+</svg>

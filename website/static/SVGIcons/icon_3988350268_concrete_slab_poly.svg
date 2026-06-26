@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main slab perspective -->
+    <path d="M8 20 L32 8 L56 20 L32 32 Z" fill="#B0BEC5" stroke="#546E7A" />
+    <path d="M8 20 L32 32 L32 56 L8 44 Z" fill="#90A4AE" stroke="#546E7A" />
+    <path d="M32 32 L56 20 L56 44 L32 56 Z" fill="#78909C" stroke="#546E7A" />
+    <!-- Poly/Mesh overlay lines -->
+    <path d="M8 20 L32 32 L56 20 M32 32 L32 56" stroke="#455A64" stroke-width="2" stroke-dasharray="4 4" />
+  </g>
+</svg>

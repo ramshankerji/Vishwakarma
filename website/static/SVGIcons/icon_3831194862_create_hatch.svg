@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer Square -->
+    <rect x="12" y="12" width="40" height="40" rx="4" />
+    <!-- Hatch Lines -->
+    <line x1="20" y1="44" x2="44" y2="20" />
+    <line x1="28" y1="52" x2="52" y2="28" />
+    <line x1="12" y1="36" x2="36" y2="12" />
+  </g>
+</svg>

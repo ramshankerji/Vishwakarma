@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2563eb" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Vessel Body -->
+    <path d="M12 20h40l-6 32H18z" />
+    <!-- 3D Depth Lines -->
+    <path d="M12 20l8 8m32 0l-8-8m-24 0v32" />
+    <!-- Top Rim -->
+    <ellipse cx="32" cy="20" rx="20" ry="6" />
+    <!-- Plus Icon (Create) -->
+    <circle cx="52" cy="12" r="10" fill="#ffffff" stroke="#16a34a" stroke-width="3" />
+    <path d="M52 8v8m-4-4h8" stroke="#16a34a" stroke-width="3" />
+  </g>
+</svg>

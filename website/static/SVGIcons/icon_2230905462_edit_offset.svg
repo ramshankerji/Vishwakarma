@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main shape representing the offset object -->
+    <path d="M12 16h40v32H12z" />
+    <!-- Offset line indicator -->
+    <path d="M12 32h-6m6 16h-6m6-32h-6" stroke="#333" stroke-dasharray="2 4" />
+    <!-- Pencil icon for edit -->
+    <path d="M44 44l12-12-8-8-12 12v8h8z" fill="#333" stroke="none" />
+    <path d="M44 44l12-12-8-8-12 12v8h8z" />
+  </g>
+</svg>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Building Outline -->
+    <path d="M16 56V24l16-8 16 8v32H16z" />
+    <!-- Wind Gusts -->
+    <path d="M8 20h24M8 28h32M12 36h28M16 44h24" />
+    <!-- Arrow indicating load direction -->
+    <path d="M48 12l8 8-8 8" />
+    <line x1="56" y1="20" x2="40" y2="20" />
+  </g>
+</svg>

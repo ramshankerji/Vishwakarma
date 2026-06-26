@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Document Outline -->
+    <path d="M14 8h28l12 12v36H14z" />
+    <path d="M42 8v12h12" />
+    <!-- DXF Text -->
+    <path d="M20 32l8 12M28 32l-8 12M32 32h8v12h-8zM40 32l-4 6 4 6" />
+    <!-- Import Arrow -->
+    <path d="M32 48v12M26 54l6 6 6-6" />
+  </g>
+</svg>

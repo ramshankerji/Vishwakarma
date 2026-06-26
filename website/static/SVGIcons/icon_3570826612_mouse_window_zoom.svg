@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Window Frame -->
+    <rect x="10" y="14" width="44" height="36" rx="4" />
+    <line x1="10" y1="24" x2="54" y2="24" />
+    <circle cx="18" cy="19" r="2" fill="#333" />
+    <circle cx="26" cy="19" r="2" fill="#333" />
+    
+    <!-- Mouse Cursor -->
+    <path d="M42 42l4 14 3-8 8-3z" fill="#fff" stroke="#333" stroke-width="3" />
+    
+    <!-- Zoom Plus Sign -->
+    <g stroke="#333" stroke-width="3">
+      <line x1="32" y1="30" x2="32" y2="40" />
+      <line x1="27" y1="35" x2="37" y2="35" />
+    </g>
+  </g>
+</svg>

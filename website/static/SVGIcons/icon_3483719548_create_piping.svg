@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main Pipe -->
+    <path d="M12 12h28a8 8 0 0 1 8 8v32" />
+    <!-- Pipe Thickness/Depth -->
+    <path d="M12 20h28a0 0 0 0 1 0 0v24" stroke="#B2BEC3" />
+    <!-- Plus Sign -->
+    <circle cx="52" cy="52" r="10" fill="#00B894" stroke="none" />
+    <path d="M52 46v12M46 52h12" stroke="#FFFFFF" stroke-width="3" />
+  </g>
+</svg>

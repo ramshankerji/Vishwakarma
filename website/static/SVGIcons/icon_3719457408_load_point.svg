@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Pin marker -->
+    <path d="M32 10c-9.9 0-18 8.1-18 18 0 13.5 18 26 18 26s18-12.5 18-26c0-9.9-8.1-18-18-18z" />
+    <circle cx="32" cy="28" r="5" fill="#2D3436" />
+    <!-- Loading arrow -->
+    <path d="M46 48h10v10" />
+    <path d="M56 48l-8 8" />
+  </g>
+</svg>

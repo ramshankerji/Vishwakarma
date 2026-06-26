@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Building Outline -->
+    <path d="M16 56V20l16-8 16 8v36H16z" />
+    <!-- Seismic Waveform -->
+    <path d="M24 32l4-8 4 16 6-12 4 8" stroke="#D63031" />
+    <!-- Download Arrow -->
+    <path d="M32 44V28" />
+    <path d="M26 38l6 6 6-6" />
+  </g>
+</svg>

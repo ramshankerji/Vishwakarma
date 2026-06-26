@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer Frame -->
+    <rect x="12" y="12" width="40" height="40" rx="4" />
+    <!-- Compression Plates -->
+    <path d="M20 22h24M20 42h24" />
+    <!-- Arrows indicating compression -->
+    <path d="M32 26v12M28 30l4-4 4 4M28 34l4 4 4-4" stroke="#0984E3" />
+  </g>
+</svg>

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main Part (Rectangle) -->
+    <rect x="12" y="12" width="40" height="40" rx="4" />
+    <!-- Cut Line (Diagonal) -->
+    <path d="M12 52 L52 12" stroke="#E74C3C" stroke-dasharray="6 4" />
+    <!-- Scissors Pivot -->
+    <circle cx="32" cy="32" r="3" fill="#333" />
+    <!-- Scissors Blades -->
+    <path d="M32 32 L56 56 M32 32 L8 8" stroke="#333" />
+  </g>
+</svg>

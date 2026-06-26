@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Thermometer Body -->
+    <path d="M24 10v32a8 8 0 1 0 16 0V10a8 8 0 0 0-16 0z" />
+    <!-- Temperature Level -->
+    <path d="M32 38V20" stroke="#E17055" />
+    <!-- Loading/Refresh Arrow -->
+    <path d="M48 24a12 12 0 1 1-4.24-8.49L48 20" stroke="#0984E3" />
+    <path d="M48 12v8h-8" stroke="#0984E3" />
+  </g>
+</svg>

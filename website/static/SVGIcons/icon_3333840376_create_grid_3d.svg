@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Back grid -->
+    <path d="M16 12h32v32H16z" stroke="#B2BEC3" />
+    <path d="M32 12v32M16 28h32" stroke="#B2BEC3" />
+    <!-- Front grid (Perspective) -->
+    <path d="M12 20h32v32H12z" stroke="#0984E3" />
+    <path d="M28 20v32M12 36h32" stroke="#0984E3" />
+    <!-- Connecting lines -->
+    <path d="M12 20l4-8M44 20l4-8M12 52l4-8M44 52l4-8" stroke="#0984E3" />
+  </g>
+</svg>

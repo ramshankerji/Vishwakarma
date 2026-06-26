@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Isometric Cube Base -->
+    <path d="M32 52 L12 41 L12 23 L32 34 Z" />
+    <path d="M32 52 L52 41 L52 23 L32 34 Z" />
+    <path d="M32 12 L12 23 L32 34 L52 23 Z" />
+    <!-- Perspective Lines -->
+    <line x1="32" y1="34" x2="32" y2="52" />
+  </g>
+</svg>

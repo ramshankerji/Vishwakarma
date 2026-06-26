@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main Body -->
+    <rect x="16" y="12" width="32" height="40" rx="4" />
+    <!-- Fan Blades -->
+    <circle cx="32" cy="32" r="8" />
+    <path d="M32 24 V16 M32 40 V48 M24 32 H16 M40 32 H48" />
+    <!-- Air Vents -->
+    <path d="M22 52 H42 M22 56 H42" stroke-width="2" />
+    <!-- Cooling Indicator -->
+    <path d="M48 16 L56 8 M52 20 L60 12" stroke="#0984E3" stroke-width="3" />
+  </g>
+</svg>

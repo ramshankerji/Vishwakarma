@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer container representing the whole -->
+    <rect x="12" y="12" width="40" height="40" rx="4" />
+    <!-- Partial fill representing the subset -->
+    <path d="M12 32 h20 v20 h-20 z" fill="#0984E3" stroke="none" />
+    <!-- Divider line -->
+    <path d="M32 12 v40" stroke="#FFFFFF" stroke-width="2" />
+  </g>
+</svg>

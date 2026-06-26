@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Play Triangle -->
+    <path d="M12 16l36 16l-36 16V16z" fill="#333" />
+    <!-- Sequence Lines -->
+    <path d="M12 56h40M12 8h40" />
+  </g>
+</svg>

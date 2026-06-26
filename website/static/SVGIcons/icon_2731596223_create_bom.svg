@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Document Outline -->
+    <path d="M16 8h24l12 12v36H16z" />
+    <path d="M40 8v12h12" />
+    <!-- List/BOM Lines -->
+    <path d="M24 32h24" />
+    <path d="M24 40h24" />
+    <path d="M24 48h16" />
+    <!-- Plus Icon -->
+    <circle cx="16" cy="48" r="12" fill="#fff" stroke="#2ecc71" />
+    <path d="M16 42v12M10 48h12" stroke="#2ecc71" />
+  </g>
+</svg>

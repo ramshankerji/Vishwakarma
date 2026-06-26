@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Base support structure -->
+    <path d="M12 52h40M32 52V32" />
+    <!-- Fixed pin/anchor point -->
+    <circle cx="32" cy="24" r="8" fill="#0984E3" stroke="none" />
+    <circle cx="32" cy="24" r="8" stroke="#2D3436" />
+    <!-- Support bracket -->
+    <path d="M20 32h24" />
+  </g>
+</svg>

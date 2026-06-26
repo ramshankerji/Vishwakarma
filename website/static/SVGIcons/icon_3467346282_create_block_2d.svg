@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main Block -->
+    <rect x="16" y="16" width="32" height="32" rx="4" />
+    <!-- Plus Icon -->
+    <path d="M32 24v16M24 32h16" />
+  </g>
+</svg>

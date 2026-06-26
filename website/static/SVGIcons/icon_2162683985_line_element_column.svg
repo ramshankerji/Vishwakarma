@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Horizontal Line -->
+    <line x1="12" y1="32" x2="52" y2="32" />
+    <!-- Left Column -->
+    <rect x="12" y="12" width="12" height="40" rx="2" />
+    <!-- Right Column -->
+    <rect x="40" y="12" width="12" height="40" rx="2" />
+  </g>
+</svg>

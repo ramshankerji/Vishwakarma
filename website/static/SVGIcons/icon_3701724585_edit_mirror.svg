@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Mirror vertical axis -->
+    <line x1="32" y1="8" x2="32" y2="56" stroke-dasharray="4 4" />
+    <!-- Left shape -->
+    <path d="M24 16 L12 32 L24 48 Z" />
+    <!-- Right shape (mirrored) -->
+    <path d="M40 16 L52 32 L40 48 Z" />
+    <!-- Edit pencil icon -->
+    <path d="M48 8 L56 16 L36 36 L28 36 L28 28 Z" stroke="#007AFF" />
+  </g>
+</svg>

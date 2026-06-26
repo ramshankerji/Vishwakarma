@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Document Outline -->
+    <path d="M16 8h24l12 12v36H16z" />
+    <path d="M40 8v12h12" />
+    <!-- Text Lines (Representing Code/Civil) -->
+    <path d="M24 32h16" />
+    <path d="M24 40h16" />
+    <path d="M24 48h8" />
+    <!-- IS456/LSD Badge -->
+    <rect x="12" y="12" width="12" height="12" rx="2" stroke="#0984E3" />
+    <path d="M15 15h6v6h-6z" stroke="#0984E3" />
+  </g>
+</svg>

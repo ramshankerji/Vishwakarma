@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#4A4A4A" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Base structure -->
+    <path d="M12 52h40" />
+    <!-- Dome arc -->
+    <path d="M16 52c0-22.09 14.33-40 32-40s32 17.91 32 40" transform="translate(-16 0)" />
+    <!-- Texture/Detail lines -->
+    <path d="M32 12v40" stroke-width="2" stroke-dasharray="4 4" />
+    <path d="M20 44h24" stroke-width="2" />
+  </g>
+</svg>

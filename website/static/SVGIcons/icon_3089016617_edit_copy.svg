@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Background rectangle -->
+    <rect x="20" y="12" width="32" height="40" rx="4" />
+    <!-- Foreground rectangle (offset) -->
+    <path d="M12 52V24a4 4 0 0 1 4-4h4" />
+  </g>
+</svg>

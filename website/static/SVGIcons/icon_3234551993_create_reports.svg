@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3748" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Document Outline -->
+    <path d="M16 8h24l12 12v36H16z" />
+    <path d="M40 8v12h12" />
+    <!-- Bar Chart Elements -->
+    <rect x="24" y="32" width="6" height="16" fill="#4A90E2" stroke="none" />
+    <rect x="34" y="24" width="6" height="24" fill="#4A90E2" stroke="none" />
+    <rect x="44" y="36" width="6" height="12" fill="#4A90E2" stroke="none" />
+    <!-- Plus Sign -->
+    <circle cx="16" cy="48" r="12" fill="#FFFFFF" stroke="#4A90E2" stroke-width="4" />
+    <path d="M16 42v12M10 48h12" stroke="#4A90E2" stroke-width="4" />
+  </g>
+</svg>

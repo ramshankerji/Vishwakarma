@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main rectangle -->
+    <rect x="12" y="12" width="40" height="40" rx="4" />
+    <!-- Stretch arrows -->
+    <path d="M32 12 L32 4" />
+    <path d="M28 8 L32 4 L36 8" />
+    <path d="M32 52 L32 60" />
+    <path d="M28 56 L32 60 L36 56" />
+    <path d="M12 32 L4 32" />
+    <path d="M8 28 L4 32 L8 36" />
+    <path d="M52 32 L60 32" />
+    <path d="M56 28 L60 32 L56 36" />
+    <!-- Edit pencil tip -->
+    <path d="M42 22 L22 42 L26 46 L46 26 Z" fill="#333333" />
+  </g>
+</svg>

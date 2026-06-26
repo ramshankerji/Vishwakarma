@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#222" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Primitive Shape (Cube) -->
+    <path d="M16 20 L40 20 L48 28 L48 48 L24 48 L16 40 Z" />
+    <path d="M16 20 L24 28 L48 28" />
+    <path d="M24 28 L24 48" />
+    <!-- Cutting Line -->
+    <path stroke="#E74C3C" stroke-dasharray="4 4" d="M8 52 L56 12" />
+  </g>
+</svg>

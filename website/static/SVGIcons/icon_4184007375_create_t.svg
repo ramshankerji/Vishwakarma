@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#212121" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- T Shape -->
+    <path d="M14 16h36M32 16v36" />
+    <!-- Plus Sign -->
+    <path d="M48 48h12M54 42v12" />
+  </g>
+</svg>

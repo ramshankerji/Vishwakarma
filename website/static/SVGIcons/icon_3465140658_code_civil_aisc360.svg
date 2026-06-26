@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2563eb" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- I-Beam Profile -->
+    <path d="M16 12h32M16 52h32M32 12v40" />
+    <!-- Structural Bracing / Angle -->
+    <path d="M20 20l24 24M44 20l-24 24" />
+  </g>
+  <!-- Decorative Frame -->
+  <rect x="8" y="8" width="48" height="48" rx="4" stroke="#1e293b" stroke-width="2" />
+</svg>

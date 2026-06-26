@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main corner shape -->
+    <path d="M12 52V12h40" />
+    <!-- Chamfer line -->
+    <path d="M12 32 L32 12" stroke="#007AFF" stroke-width="5" />
+    <!-- Edit pencil indicator -->
+    <path d="M42 42l10-10 6 6-10 10z" fill="#007AFF" stroke="none" />
+    <path d="M42 42l10 10" stroke="#333" stroke-width="3" />
+  </g>
+</svg>

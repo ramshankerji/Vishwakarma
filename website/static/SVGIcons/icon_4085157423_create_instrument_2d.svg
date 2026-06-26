@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main Instrument Body -->
+    <rect x="12" y="16" width="40" height="32" rx="4" />
+    <!-- Inner Detail -->
+    <rect x="20" y="24" width="24" height="16" rx="2" />
+    <!-- Plus Icon -->
+    <path d="M52 8h8M56 4v8" stroke="#00B894" stroke-width="5" />
+  </g>
+</svg>

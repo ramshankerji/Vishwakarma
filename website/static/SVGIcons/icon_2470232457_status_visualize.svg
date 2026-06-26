@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer frame -->
+    <rect x="10" y="14" width="44" height="36" rx="4" />
+    <!-- Bar chart elements -->
+    <path d="M20 42V30" stroke="#0984E3" />
+    <path d="M32 42V22" stroke="#00B894" />
+    <path d="M44 42V34" stroke="#E17055" />
+    <!-- Decorative status dot -->
+    <circle cx="54" cy="14" r="4" fill="#D63031" stroke="none" />
+  </g>
+</svg>

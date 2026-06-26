@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Surface/Plane representation -->
+    <path d="M12 48h40v4H12z" fill="#333" stroke="none"/>
+    <!-- Link chain segments -->
+    <path d="M22 36c-4-4-4-10 0-14s10-4 14 0"/>
+    <path d="M42 28c4 4 4 10 0 14s-10 4-14 0"/>
+    <!-- Unlink break indicator (slash) -->
+    <line x1="20" y1="44" x2="44" y2="20" stroke="#E74C3C" stroke-width="5"/>
+  </g>
+</svg>

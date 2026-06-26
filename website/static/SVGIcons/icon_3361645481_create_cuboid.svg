@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main Cuboid Body -->
+    <path d="M12 20 L36 12 L60 20 L36 28 Z" />
+    <path d="M12 20 L12 44 L36 52 L36 28 Z" />
+    <path d="M36 28 L60 36 L60 20" />
+    <path d="M36 28 L36 52" />
+    <!-- Plus Icon Overlay -->
+    <circle cx="20" cy="20" r="12" fill="#FFFFFF" stroke="#0984E3" stroke-width="4" />
+    <path d="M20 14 L20 26 M14 20 L26 20" stroke="#0984E3" stroke-width="4" />
+  </g>
+</svg>

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2196F3" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main Transmission Line -->
+    <path d="M8 32h48" />
+    <!-- Coupled Line -->
+    <path d="M16 20h32" />
+    <!-- Coupling Ports -->
+    <path d="M16 20v12" />
+    <path d="M48 20v12" />
+    <!-- Port Indicators -->
+    <circle cx="8" cy="32" r="3" fill="#2196F3" />
+    <circle cx="56" cy="32" r="3" fill="#2196F3" />
+    <circle cx="16" cy="20" r="3" fill="#2196F3" />
+    <circle cx="48" cy="20" r="3" fill="#2196F3" />
+  </g>
+</svg>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Pressure Vessel Body -->
+    <path d="M16 16h32v24c0 8.8-7.2 16-16 16s-16-7.2-16-16V16z" />
+    <path d="M16 16c0-4.4 7.2-8 16-8s16 3.6 16 8" />
+    <!-- ASME Text Representation -->
+    <path d="M22 24h8l-4 8h-4z" />
+    <path d="M34 24h6v8h-6z" />
+    <path d="M44 24h-4v8h4c2.2 0 4-1.8 4-4s-1.8-4-4-4z" />
+    <!-- VIII Roman Numeral -->
+    <path d="M24 40h16" />
+    <path d="M26 44v8M32 44v8M38 44v8" />
+  </g>
+</svg>

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Document Outline -->
+    <path d="M16 8h24l12 12v32a4 4 0 0 1-4 4H16a4 4 0 0 1-4-4V12a4 4 0 0 1 4-4z" />
+    <path d="M40 8v12h12" />
+    <!-- Arrow pointing down into the document -->
+    <path d="M32 24v24M24 40l8 8 8-8" />
+  </g>
+</svg>

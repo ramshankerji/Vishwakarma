@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main Wall Line -->
+    <path d="M12 12h40v40H12z" />
+    <!-- Vertical Divider -->
+    <path d="M32 12v40" />
+    <!-- Horizontal Detail -->
+    <path d="M12 32h40" />
+  </g>
+</svg>

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Surface/Base Plate -->
+    <path d="M12 48h40v4H12z" fill="#636E72" stroke="none"/>
+    <path d="M12 48h40M16 52h32"/>
+    
+    <!-- RF Signal Arcs -->
+    <path d="M32 40c8.8 0 16-7.2 16-16"/>
+    <path d="M32 32c4.4 0 8-3.6 8-8"/>
+    
+    <!-- Link/Connection Point -->
+    <circle cx="32" cy="48" r="3" fill="#D63031" stroke="none"/>
+    <line x1="32" y1="45" x2="32" y2="24"/>
+  </g>
+</svg>

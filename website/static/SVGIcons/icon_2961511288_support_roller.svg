@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Support Bracket -->
+    <path d="M16 48h32M24 48v-8h16v8" />
+    <!-- Roller Cylinder -->
+    <rect x="18" y="20" width="28" height="12" rx="2" fill="#666" stroke="none" />
+    <!-- Axle -->
+    <line x1="12" y1="26" x2="52" y2="26" stroke="#999" stroke-width="3" />
+    <!-- Side Supports -->
+    <path d="M14 26v14M50 26v14" />
+  </g>
+</svg>

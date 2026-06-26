@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#212121" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer Hierarchy Box -->
+    <rect x="12" y="12" width="40" height="40" rx="4" />
+    <!-- Inner Hierarchy Box -->
+    <rect x="22" y="22" width="20" height="20" rx="2" />
+    <!-- Zoom Plus Icon -->
+    <path d="M32 28v12M26 34h12" stroke="#212121" stroke-width="3" />
+    <!-- Corner Arrows indicating Max Zoom -->
+    <path d="M8 8h8M8 8v8M56 8h-8M56 8v8M8 56h8M8 56v-8M56 56h-8M56 56v-8" />
+  </g>
+</svg>

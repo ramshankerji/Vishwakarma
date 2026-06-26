@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Panel Outline -->
+    <rect x="10" y="10" width="44" height="44" rx="4" />
+    <!-- Code Lines -->
+    <path d="M20 22h24M20 32h24M20 42h14" />
+    <!-- Script Symbol (Curly Brace) -->
+    <path d="M42 28c2 0 2-2 2-4s0-4-2-4M22 36c-2 0-2 2-2 4s0 4 2 4" />
+  </g>
+</svg>

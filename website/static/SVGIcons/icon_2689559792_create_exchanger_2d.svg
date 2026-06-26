@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Top Arrow -->
+    <path d="M24 16 L40 16 L32 8 L24 16 Z" fill="#0984E3" stroke="none"/>
+    <path d="M32 16 L32 48"/>
+    <!-- Bottom Arrow -->
+    <path d="M40 48 L24 48 L32 56 L40 48 Z" fill="#D63031" stroke="none"/>
+    <path d="M32 48 L32 16"/>
+    <!-- Circular Path -->
+    <path d="M44 24 A16 16 0 1 0 20 40"/>
+    <path d="M20 40 L20 32"/>
+    <path d="M20 40 L28 40"/>
+  </g>
+</svg>

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Document Outline -->
+    <path d="M14 8h28l12 12v36H14z" />
+    <path d="M42 8v12h12" />
+    <!-- Static/Code Pattern -->
+    <path d="M22 32h20M22 40h20M22 48h12" />
+    <!-- Magnifying Glass -->
+    <circle cx="24" cy="24" r="8" stroke="#0984E3" />
+    <path d="M30 30l6 6" stroke="#0984E3" />
+  </g>
+</svg>

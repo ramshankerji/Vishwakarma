@@ -45,6 +45,12 @@ struct UIIconAtlasMetadata {
 
 static UIIconAtlasMetadata gIconAtlasMetadata{};
 
+constexpr int kIconCellSize = 24;
+constexpr int kIconCellGap = 4;
+constexpr int kIconStartY = 48;
+constexpr int kIconAtlasMinDimension = 256;
+constexpr int kIconAtlasMaxDimension = 4096;
+
 static const char* LogicalObjectName(VishwakarmaStorage::ObjectType objectType, const META_DATA* object) {
     if (!object) return "";
 
@@ -179,39 +185,59 @@ static bool IsPrivateUseCodepoint(char32_t codepoint) {
 }
 
 static bool TryReserveIconCell(int iconIndex, int atlasW, int atlasH, int& outX, int& outY) {
-    constexpr int iconCellSize = 24;
-    constexpr int iconCellGap = 4;
-    constexpr int iconStartY = 48;
-    const int cellsPerRow = (atlasW + iconCellGap) / (iconCellSize + iconCellGap);
+    const int cellsPerRow = (atlasW + kIconCellGap) / (kIconCellSize + kIconCellGap);
     if (cellsPerRow <= 0) return false;
 
-    outX = (iconIndex % cellsPerRow) * (iconCellSize + iconCellGap);
-    outY = iconStartY + (iconIndex / cellsPerRow) * (iconCellSize + iconCellGap);
-    return outX + iconCellSize <= atlasW && outY + iconCellSize <= atlasH;
+    outX = (iconIndex % cellsPerRow) * (kIconCellSize + kIconCellGap);
+    outY = kIconStartY + (iconIndex / cellsPerRow) * (kIconCellSize + kIconCellGap);
+    return outX + kIconCellSize <= atlasW && outY + kIconCellSize <= atlasH;
 }
 
 static void StoreIconCellGlyph(char32_t codepoint, int x, int y, int atlasW, int atlasH,
     bool includeInFallbackPool = true) {
-    constexpr int iconCellSize = 24;
     Glyph glyph{};
     glyph.uvMinX = (float)x / atlasW;
     glyph.uvMinY = (float)y / atlasH;
-    glyph.uvMaxX = (float)(x + iconCellSize) / atlasW;
-    glyph.uvMaxY = (float)(y + iconCellSize) / atlasH;
-    glyph.width = iconCellSize;
-    glyph.height = iconCellSize;
-    glyph.advanceX = iconCellSize;
+    glyph.uvMaxX = (float)(x + kIconCellSize) / atlasW;
+    glyph.uvMaxY = (float)(y + kIconCellSize) / atlasH;
+    glyph.width = kIconCellSize;
+    glyph.height = kIconCellSize;
+    glyph.advanceX = kIconCellSize;
     iconGlyphLookup[codepoint] = glyph;
     if (includeInFallbackPool) {
         gIconAtlasMetadata.mixedIconCodepoints.push_back(codepoint);
     }
 }
 
+static int ComputeIconAtlasDimension(size_t iconCount) {
+    const size_t iconsToPlace = std::max<size_t>(iconCount, 1u);
+    int dimension = kIconAtlasMinDimension;
+
+    while (dimension < kIconAtlasMaxDimension) {
+        const int cellsPerRow = (dimension + kIconCellGap) / (kIconCellSize + kIconCellGap);
+        if (cellsPerRow > 0) {
+            const size_t rows =
+                (iconsToPlace + static_cast<size_t>(cellsPerRow) - 1u) / static_cast<size_t>(cellsPerRow);
+            const size_t requiredHeight = static_cast<size_t>(kIconStartY) +
+                (rows - 1u) * static_cast<size_t>(kIconCellSize + kIconCellGap) +
+                static_cast<size_t>(kIconCellSize);
+            if (requiredHeight <= static_cast<size_t>(dimension)) return dimension;
+        }
+
+        dimension *= 2;
+    }
+
+    return kIconAtlasMaxDimension;
+}
+
 static AtlasBitmap BuildIconAtlas() {
-    constexpr int atlasW = 256;
-    constexpr int atlasH = 256;
-    constexpr int iconCellSize = 24;
     constexpr int proceduralIconDrawSize = 20;
+    const std::vector<SVGIconRenderer::RenderedSVGIcon> svgIcons =
+        SVGIconRenderer::RenderEmbeddedSVGIcons(kIconCellSize);
+    const int atlasDimension = ComputeIconAtlasDimension(4u + svgIcons.size());
+    const int atlasW = atlasDimension;
+    const int atlasH = atlasDimension;
+
     AtlasBitmap atlas{};
     atlas.width = atlasW;
     atlas.height = atlasH;
@@ -260,14 +286,12 @@ static AtlasBitmap BuildIconAtlas() {
     FillRect(atlas, iconXs[3] + 4, iconYs[3] + 13, 7, 7, 255);
     FillRect(atlas, iconXs[3] + 13, iconYs[3] + 13, 7, 7, 255);
 
-    const std::vector<SVGIconRenderer::RenderedSVGIcon> svgIcons =
-        SVGIconRenderer::RenderEmbeddedSVGIcons(iconCellSize);
     for (const SVGIconRenderer::RenderedSVGIcon& svgIcon : svgIcons) {
         int cellX = 0;
         int cellY = 0;
         if (!TryReserveIconCell(nextIconIndex, atlasW, atlasH, cellX, cellY)) break;
 
-        CopyRenderedSVGIconToAtlas(atlas, svgIcon, cellX, cellY, iconCellSize);
+        CopyRenderedSVGIconToAtlas(atlas, svgIcon, cellX, cellY, kIconCellSize);
         StoreIconCellGlyph(SVGIconRenderer::IconForID(svgIcon.id), cellX, cellY, atlasW, atlasH, false);
         ++nextIconIndex;
     }
@@ -289,10 +313,10 @@ static AtlasBitmap BuildIconAtlas() {
                 if (!TryReserveIconCell(nextIconIndex, atlasW, atlasH, cellX, cellY)) break;
 
                 FT_GlyphSlot g = ftIconFace->glyph;
-                const int bitmapX = cellX + std::max(0, (iconCellSize - (int)g->bitmap.width) / 2);
-                const int bitmapY = cellY + std::max(0, (iconCellSize - (int)g->bitmap.rows) / 2);
-                const int copyW = std::min((int)g->bitmap.width, iconCellSize);
-                const int copyH = std::min((int)g->bitmap.rows, iconCellSize);
+                const int bitmapX = cellX + std::max(0, (kIconCellSize - (int)g->bitmap.width) / 2);
+                const int bitmapY = cellY + std::max(0, (kIconCellSize - (int)g->bitmap.rows) / 2);
+                const int copyW = std::min((int)g->bitmap.width, kIconCellSize);
+                const int copyH = std::min((int)g->bitmap.rows, kIconCellSize);
                 for (int y = 0; y < copyH; ++y) {
                     for (int x = 0; x < copyW; ++x) {
                         SetAtlasCoverage(atlas, bitmapX + x, bitmapY + y,

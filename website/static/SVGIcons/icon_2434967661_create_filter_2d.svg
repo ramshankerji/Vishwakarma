@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Funnel Shape -->
+    <path d="M12 12h40l-14 18v18l-12 6v-24z" />
+    <!-- Plus Icon -->
+    <circle cx="48" cy="48" r="12" fill="#00B894" stroke="none" />
+    <path d="M48 42v12M42 48h12" stroke="#FFFFFF" stroke-width="3" />
+  </g>
+</svg>

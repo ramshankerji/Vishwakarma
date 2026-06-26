@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- BOM structure representation -->
+    <path d="M16 16h32v8H16z" fill="#74B9FF" stroke="none"/>
+    <path d="M24 32h8v8h-8zM40 32h8v8h-8zM32 48h8v8h-8z"/>
+    <path d="M32 24v8M44 24v8M36 40v8"/>
+    <!-- Refresh arrow -->
+    <path d="M52 48c4-4 6-9 6-15 0-11-9-20-20-20" stroke="#0984E3"/>
+    <path d="M58 48h-8v8" stroke="#0984E3"/>
+  </g>
+</svg>

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer boundary -->
+    <rect x="8" y="8" width="48" height="48" rx="4" />
+    <!-- Polygonal hole (Hexagon) -->
+    <path d="M32 16 L48 24 L48 40 L32 48 L16 40 L16 24 Z" fill="#f0f0f0" />
+  </g>
+</svg>

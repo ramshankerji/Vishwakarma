@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2c3e50" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Document outline -->
+    <path d="M16 8h24l12 12v36H16z" />
+    <path d="M40 8v12h12" />
+    <!-- Structural beam cross-section (I-beam) -->
+    <path d="M24 28h16M24 48h16M32 28v20" />
+    <!-- Text/Code lines -->
+    <path d="M20 34h4M20 40h4M20 46h4" stroke-width="3" />
+  </g>
+  <!-- Eurocode 2 identifier -->
+  <text x="32" y="58" font-family="sans-serif" font-size="10" font-weight="bold" fill="#e74c3c" text-anchor="middle">EC2</text>
+</svg>

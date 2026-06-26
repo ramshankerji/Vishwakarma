@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Eye shape -->
+    <path d="M6 32c10-16 42-16 52 0-10 16-42 16-52 0z" />
+    <circle cx="32" cy="32" r="8" />
+    <!-- Strikethrough line -->
+    <line x1="12" y1="52" x2="52" y2="12" />
+  </g>
+</svg>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Gauge Arc -->
+    <path d="M16 48 A 24 24 0 1 1 48 48" />
+    <!-- Pressure Needle -->
+    <path d="M32 48 L 44 20" stroke="#D63031" />
+    <!-- Center Pivot -->
+    <circle cx="32" cy="48" r="3" fill="#2D3436" />
+    <!-- Load/Bar Indicators -->
+    <line x1="16" y1="48" x2="12" y2="48" />
+    <line x1="48" y1="48" x2="52" y2="48" />
+    <line x1="32" y1="24" x2="32" y2="20" />
+  </g>
+</svg>

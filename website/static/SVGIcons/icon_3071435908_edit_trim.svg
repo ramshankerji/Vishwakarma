@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main horizontal bar -->
+    <path d="M12 32h40" />
+    <!-- Left trim bracket -->
+    <path d="M20 20v24" />
+    <path d="M20 32h-8" />
+    <!-- Right trim bracket -->
+    <path d="M44 20v24" />
+    <path d="M44 32h8" />
+    <!-- Edit pencil tip -->
+    <path d="M48 12l4 4-24 24-4-4z" fill="#333" />
+  </g>
+</svg>

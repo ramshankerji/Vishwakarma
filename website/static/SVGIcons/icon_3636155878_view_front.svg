@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#212121" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer Frame -->
+    <rect x="12" y="12" width="40" height="40" rx="4" />
+    <!-- Front Face Detail -->
+    <path d="M24 24h16v16H24z" />
+    <path d="M12 24h12M40 24h12M24 12v12M40 12v12M24 40v12M40 40v12" />
+  </g>
+</svg>

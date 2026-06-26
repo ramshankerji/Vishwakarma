@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Box representing the object -->
+    <rect x="16" y="24" width="32" height="24" rx="2" />
+    <!-- Downward arrow representing gravity/weight -->
+    <path d="M32 12v24M24 28l8 8 8-8" />
+    <!-- Ground line -->
+    <path d="M12 56h40" />
+  </g>
+</svg>

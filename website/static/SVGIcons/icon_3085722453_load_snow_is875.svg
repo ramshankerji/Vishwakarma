@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Snowflakes -->
+    <path d="M16 16l8 8m-8 0l8-8m4 4h12m-6-6v12" />
+    <path d="M44 20l4 4m-4 0l4-4m2 2h6m-3-3v6" />
+    <path d="M12 40l6 6m-6 0l6-6m3 3h9m-4.5-4.5v9" />
+    <!-- Structural Load Arrow -->
+    <path d="M32 12v32" />
+    <path d="M24 36l8 8 8-8" />
+    <!-- Base Line -->
+    <path d="M12 52h40" />
+  </g>
+</svg>

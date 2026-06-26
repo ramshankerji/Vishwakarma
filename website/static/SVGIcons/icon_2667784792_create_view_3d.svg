@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Cube base -->
+    <path d="M12 38 L32 48 L52 38 L32 28 Z" />
+    <path d="M12 38 L12 26 L32 16 L52 26 L52 38" />
+    <path d="M32 16 L32 28" />
+    <!-- Plus sign -->
+    <path d="M48 52 L48 60 M44 56 L52 56" stroke="#0984E3" stroke-width="5" />
+  </g>
+</svg>

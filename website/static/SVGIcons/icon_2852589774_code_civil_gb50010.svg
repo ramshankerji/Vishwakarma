@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Book Cover -->
+    <path d="M16 8h32a4 4 0 0 1 4 4v40a4 4 0 0 1-4 4H16a4 4 0 0 1-4-4V12a4 4 0 0 1 4-4z" />
+    <!-- Spine -->
+    <path d="M16 8v48" />
+    <!-- Text Lines -->
+    <path d="M24 20h24M24 28h24M24 36h16" />
+    <!-- Paragraph Symbol -->
+    <path d="M28 44c4 0 6 2 6 6s-2 6-6 6v-16m4 0c4 0 6 2 6 6s-2 6-6 6" />
+  </g>
+</svg>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3748" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer Frame -->
+    <rect x="12" y="12" width="40" height="40" rx="4" />
+    <!-- Inner Perspective Lines -->
+    <path d="M12 12 L22 22 M52 12 L42 22 M12 52 L22 42 M52 52 L42 42" />
+    <!-- Central Analysis Node/Cube -->
+    <rect x="22" y="22" width="20" height="20" rx="2" stroke="#3182CE" />
+    <path d="M22 22 L28 28 M42 22 L36 28 M22 42 L28 36 M42 42 L36 36" stroke="#3182CE" />
+  </g>
+</svg>

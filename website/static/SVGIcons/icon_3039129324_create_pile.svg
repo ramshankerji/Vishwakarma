@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Base layer -->
+    <path d="M12 52 L52 52 L48 40 L16 40 Z" />
+    <!-- Middle layer -->
+    <path d="M16 40 L48 40 L44 28 L20 28 Z" />
+    <!-- Top layer -->
+    <path d="M20 28 L44 28 L40 16 L24 16 Z" />
+    <!-- Plus sign -->
+    <circle cx="52" cy="52" r="10" stroke="#2ecc71" />
+    <path d="M52 46 L52 58 M46 52 L58 52" stroke="#2ecc71" />
+  </g>
+</svg>

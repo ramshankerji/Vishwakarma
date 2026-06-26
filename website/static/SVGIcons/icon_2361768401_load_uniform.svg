@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Shirt Outline -->
+    <path d="M16 12h32l6 12-6 6-4-2v26H16V28l-4 2-6-6 6-12z" />
+    <!-- Downward Arrow -->
+    <path d="M32 18v20M24 30l8 8 8-8" />
+  </g>
+</svg>

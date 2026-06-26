@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#212121" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main Ellipsoid Body -->
+    <ellipse cx="32" cy="32" rx="22" ry="14" />
+    <!-- Perspective/Contour Lines -->
+    <path d="M 32 18 A 10 14 0 0 1 32 46 A 10 14 0 0 1 32 18" />
+    <path d="M 10 32 A 22 14 0 0 1 54 32" />
+    <!-- Plus Icon (Create Action) -->
+    <circle cx="52" cy="52" r="10" fill="#ffffff" stroke="#212121" stroke-width="3" />
+    <path d="M 52 47 L 52 57 M 47 52 L 57 52" stroke="#212121" stroke-width="3" />
+  </g>
+</svg>

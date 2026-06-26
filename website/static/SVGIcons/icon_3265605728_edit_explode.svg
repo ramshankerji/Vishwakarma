@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#212121" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Pencil body -->
+    <path d="M44 8L12 40l-4 16 16-4 32-32z" />
+    <path d="M36 16l12 12" />
+    <!-- Explosion lines -->
+    <path d="M52 12l6-4" />
+    <path d="M60 20l4-2" />
+    <path d="M56 28l8 2" />
+  </g>
+</svg>

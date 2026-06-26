@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main square frame -->
+    <rect x="12" y="12" width="40" height="40" rx="4" />
+    <!-- Diagonal resize arrows -->
+    <path d="M40 12 L52 12 L52 24" />
+    <path d="M24 52 L12 52 L12 40" />
+    <!-- Pencil icon for edit -->
+    <path d="M44 20 L36 28 L20 44 L16 48 L20 44 L36 28 Z" />
+    <path d="M32 32 L40 40" />
+  </g>
+</svg>

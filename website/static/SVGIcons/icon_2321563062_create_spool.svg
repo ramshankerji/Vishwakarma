@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Spool Body -->
+    <ellipse cx="32" cy="32" rx="12" ry="24" />
+    <path d="M20 8h24M20 56h24" />
+    <!-- Plus Icon -->
+    <circle cx="52" cy="12" r="10" fill="#00B894" stroke="none" />
+    <path d="M52 8v8M48 12h8" stroke="#FFFFFF" stroke-width="3" />
+  </g>
+</svg>

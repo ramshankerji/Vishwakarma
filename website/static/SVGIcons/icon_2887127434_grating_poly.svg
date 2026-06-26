@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main frame -->
+    <rect x="12" y="12" width="40" height="40" rx="4" />
+    <!-- Grating lines -->
+    <line x1="24" y1="12" x2="24" y2="52" />
+    <line x1="36" y1="12" x2="36" y2="52" />
+    <line x1="12" y1="24" x2="52" y2="24" />
+    <line x1="12" y1="36" x2="52" y2="36" />
+    <!-- Highlight/Action indicator -->
+    <path d="M48 8 L56 16" stroke="#E63946" stroke-width="5" />
+  </g>
+</svg>

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Document Outline -->
+    <path d="M16 8h24l12 12v36H16z" />
+    <path d="M40 8v12h12" />
+    <!-- Export Arrow -->
+    <path d="M32 44V24M24 32l8-8 8 8" />
+  </g>
+</svg>

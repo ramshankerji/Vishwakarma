@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Chart Line -->
+    <path d="M12 48 L24 32 L36 40 L52 16" />
+    <!-- Arrow Down -->
+    <path d="M32 56 L32 24" />
+    <path d="M24 48 L32 56 L40 48" />
+    <!-- Container/Frame -->
+    <rect x="8" y="8" width="48" height="48" rx="4" />
+  </g>
+</svg>

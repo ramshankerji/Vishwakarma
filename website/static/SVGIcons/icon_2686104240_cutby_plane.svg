@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Cube -->
+    <path d="M16 20l16-8 16 8v24l-16 8-16-8z" />
+    <path d="M32 12v24" />
+    <path d="M16 20l16 8 16-8" />
+    <!-- Cutting Plane -->
+    <path d="M8 48l48-32" stroke="#E74C3C" stroke-width="3" stroke-dasharray="4 2" />
+    <path d="M8 48l12 8 36-24-12-8z" fill="#E74C3C" fill-opacity="0.2" stroke="#E74C3C" stroke-width="2" />
+  </g>
+</svg>

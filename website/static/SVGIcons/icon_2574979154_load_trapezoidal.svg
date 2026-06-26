@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Trapezoid shape -->
+    <path d="M12 48 L52 48 L44 20 L20 20 Z" />
+    <!-- Arrow pointing down into the trapezoid -->
+    <path d="M32 12 L32 36 M24 28 L32 36 L40 28" />
+  </g>
+</svg>

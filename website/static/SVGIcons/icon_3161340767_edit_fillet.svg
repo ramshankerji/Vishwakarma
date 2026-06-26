@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Corner shape -->
+    <path d="M12 52V20c0-4.4 3.6-8 8-8h32" />
+    <!-- Edit pencil indicator -->
+    <path d="M40 40l12-12 8 8-12 12z" fill="#333" />
+    <path d="M40 40l4 4 8-8-4-4z" fill="#fff" />
+    <!-- Fillet arc indicator -->
+    <path d="M12 36c0 8.8 7.2 16 16 16" stroke-dasharray="4 4" />
+  </g>
+</svg>

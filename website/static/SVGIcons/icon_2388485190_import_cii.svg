@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Document Outline -->
+    <path d="M16 8h24l12 12v36H16z" />
+    <path d="M40 8v12h12" />
+    <!-- Arrow Down -->
+    <path d="M32 28v20" />
+    <path d="M24 40l8 8 8-8" />
+    <!-- Cii Text -->
+    <path d="M22 22h-4v8h4" stroke="#0984E3" />
+    <path d="M28 22v8" stroke="#0984E3" />
+    <path d="M34 22v8" stroke="#0984E3" />
+  </g>
+</svg>

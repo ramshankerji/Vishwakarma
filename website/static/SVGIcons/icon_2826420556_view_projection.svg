@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Main Screen/Projection Surface -->
+    <rect x="8" y="12" width="48" height="32" rx="2" />
+    <!-- Projection Cone -->
+    <path d="M32 44 L16 60 M32 44 L48 60" />
+    <!-- Projection Source/Lens -->
+    <circle cx="32" cy="60" r="3" fill="#333" />
+    <!-- Internal Grid/Content Indicator -->
+    <path d="M20 12 L20 44 M32 12 L32 44 M44 12 L44 44 M8 22 L56 22 M8 34 L56 34" stroke-width="2" opacity="0.4" />
+  </g>
+</svg>

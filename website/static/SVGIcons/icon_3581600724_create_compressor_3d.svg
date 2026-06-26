@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 3D Cube Base -->
+    <path d="M16 24l16 8 16-8-16-8z" />
+    <path d="M16 24v16l16 8v-16z" />
+    <path d="M48 40V24L32 32v16z" />
+    <!-- Compression Arrows -->
+    <path d="M32 12v8M28 16l4-4 4 4" stroke="#0984E3" />
+    <path d="M32 52v-8M28 48l4 4 4-4" stroke="#D63031" />
+  </g>
+</svg>

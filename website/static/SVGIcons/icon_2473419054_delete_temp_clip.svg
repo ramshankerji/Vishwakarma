@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Film strip base -->
+    <rect x="12" y="16" width="40" height="32" rx="4" />
+    <path d="M12 24h40M12 40h40M20 16v8M32 16v8M44 16v8M20 40v8M32 40v8M44 40v8" />
+    <!-- Trash icon overlay -->
+    <path d="M48 8l-2 8h-12l-2-8" stroke="#E53935" />
+    <path d="M42 20v24M34 20v24" stroke="#E53935" />
+  </g>
+</svg>
