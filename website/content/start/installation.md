@@ -5,10 +5,11 @@ weight: 11101
 If download didn't start automatically, click the link : [Download Vishwakarma.exe directly](https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma.exe)  
 
 # Windows SmartScreen Notice
-Windows may show this SmartScreen prompt when you run `Vishwakarma.exe`. This happens because Mission Vishwakarma is free and open source software and our executable is not yet code signed. Just click "More Info" and "Run Anyway".  
+Windows may show this SmartScreen prompt when you run `Vishwakarma.exe`. This happens because Mission Vishwakarma is free and open source software and our executable is not yet code signed. Just click "**More Info**" and "**Run Anyway**".  
 We are waiting for about INR 50k in funding so we can purchase a code signing certificate and remove this annoying warning for users. Until then, please download the executable only from our official release link:
 
-![Windows SmartScreen warning for Vishwakarma.exe](/windows_smartscreen_vishwakarma.svg)  
+![Windows SmartScreen warning More Info](/windows_protected_pc.svg)  
+![Windows SmartScreen warning Run Anyway](/windows_smartscreen_vishwakarma.svg)  
 
 # Basics
 Just build anything meeting the minimum System Requirement.  

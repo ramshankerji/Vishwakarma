@@ -1,14 +1,29 @@
-May Lord Vishwakarma enlighten you to create a beautiful world, happy homes and safe infrastructure for the nation. Remember, it is our duty and responsibility as Engineers to create safe structures, machines and factories. We engineers must follow all the National Codes, Building Codes, Safety Codes, local By-Laws and so on. YOU ARE RESPONSIBLE FOR YOUR CREATION.  
+## License Status
+May Lord Vishwakarma guide us to create a beautiful world, happy homes, safe infrastructure, reliable machines, and responsible factories.  
 
-Currently this software and its source codes may be considered property of my employer, even tough this project is being developed by me (Ram Shanker) in my personal time and laptop. Once there is enough development to show to management, I intend to take formal approval for open source collaboration with the industry and academia using AGPLv3 license. Dependencies (in folder code-external) used in the software have their own licenses.  
+Engineering software does not replace engineering responsibility. Engineers must follow applicable National Codes, Building Codes, Safety Codes, local by-laws, professional standards, and sound engineering judgement. **You are responsible for your creation.  **
 
-For the reasons explained above, source-code contribution (pull request in github terminology) are not accepted yet. Till the time I receive approval for AGPLv3, all contributors, agree to transfer the copyright of their contribution (including but not limited to code, documentation, know-how etc.) to Ram Shanker on free, perpetual & ir-revocable basis.  
+## Current Status
+Mission Vishwakarma is being developed initially by Ram Shanker in personal time and mostly on personal hardware. However, formal approval for open-source release and external collaboration has not yet been obtained. Until such approval is received, the Mission Vishwakarma source code is not yet released under an open-source licence. The intended future licence is GNU AGPLv3, subject to formal approval. Until then:
+* Source-code contributions and pull requests are not accepted;
+* No external contributor should submit code, documentation, design files, or other copyrightable material;
+* No licence is granted to copy, modify, redistribute, sublicense, or create derivative works from the Mission Vishwakarma source code, except where expressly permitted in writing;
+* Third-party dependencies remain governed by their own licences.
 
-It is to be noted that even though this software is free, many engineering design codes are not free / public domain document. You agree to obtain separate authorization / purchase the code from respective standards body.
+## Future Open Source Plan
+Once formal approval is received, Mission Vishwakarma is intended to be released as Free and Open Source Software under the GNU AGPLv3 licence. To sustain development, we may offer paid support, training, deployment assistance, sponsorship, or related professional services in the future.
 
-ALL ENGINEERING MODELS CREATED USING THIS SOFTWARES REMAIN PROPERTY OF THE RESPECTIVE ENGINEER / ORGANIZATION.
+## Contributions
+At this stage, please do not submit source-code contributions or pull requests. Feedback, bug reports, suggestions, crash reports, usage observations, documentation comments, and testing reports are welcome. When external code contributions are opened in the future, contributors may be required to accept a Contributor Licence Agreement, Developer Certificate of Origin, or similar contribution process.
 
-This software is made possible by the Great Open Source Authors of following libraries.
+## Engineering Codes and Standards
+Many engineering design codes, standards, manuals, and specifications are copyrighted by their respective standards bodies or publishers. Mission Vishwakarma does not provide or redistribute such copyrighted standards. Users are responsible for obtaining required standards, codes, manuals, specifications, and reference documents from authorized sources.
+
+## User Models and Project Data
+All engineering models, drawings, files, calculations, project data, and outputs created by users using Mission Vishwakarma remain the property of the respective engineer, organization, or lawful owner.  
+
+## Third-Party Dependencies
+Mission Vishwakarma uses third-party open-source libraries. These dependencies are governed by their own licences.
 
 | Library Name | License | Homepage | Upstream |
 | :--- | :--- | :--- | :--- |

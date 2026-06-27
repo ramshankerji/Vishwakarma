@@ -2,39 +2,56 @@
 title: "Legal Aspects"
 weight: 11200
 ---
-This page lists out all our legal standings.
+---
 
-For all legal matters, only the Jurisdiction of Courts in South Delhi District Court is applicable. Fore details, refer EULA.
+title: "Legal Aspects"
+weight: 11200
+-------------
+This page provides a brief overview of the legal position of Mission Vishwakarma.  
+This page is not a substitute for the actual software licence, End User Licence Agreement, Contributor Licence Agreement, Privacy Policy, or legal advice from a qualified professional.
 
-Export / Download / Use of this software outside India is prohibited. This restriction is in place to minimize legal risk and ensure long term sustainability of the project. However anyone outside india can download at their own risk. There is no technological blockage for the same.
+## Governing Law and Jurisdiction
+Mission Vishwakarma is currently developed and maintained from India.  
+Unless otherwise stated in a specific agreement, the laws of India shall apply. Subject to applicable law and mandatory statutory remedies, courts at New Delhi / Delhi shall have jurisdiction for disputes relating to Mission Vishwakarma.  
+For detailed terms, please refer to the End User Licence Agreement.  
 
-We need not worry about US export controls. Explained brilliantly by [Linux Foundation](https://www.linuxfoundation.jp/blog/2020/07/understanding-us-export-controls-with-open-source-projects/)
+## Intended Use
+Mission Vishwakarma is primarily developed for Indian engineering, manufacturing, CAD, CAM, fabrication, construction, education, and research users.  
+The software may be accessible outside India. However, users outside India are responsible for checking their own local legal, professional, engineering, export-control, cybersecurity, privacy, consumer-protection, and regulatory requirements before using the software.  
+Reference: [Linux Foundation](https://www.linuxfoundation.jp/blog/2020/07/understanding-us-export-controls-with-open-source-projects/)
 
-This software has been developed independently by Ram Shanker (initially). Latter on many volunteers shall join the effort. Hence, initial copy-right of all files (excluding those in code-external folder) lies with Ram Shanker.
+## Copyright and Open Source
+Mission Vishwakarma was initially developed independently by Ram Shanker.  
+Unless otherwise stated, the initial copyright in original Mission Vishwakarma files, excluding third-party or external components, belongs to Ram Shanker.  
+As more contributors join the project, contributors may retain copyright in their own contributions unless a separate written agreement states otherwise.  
+Mission Vishwakarma is planned as Free and Open Source Software. To sustain development, we may charge for support services, training, sponsorship, deployment assistance, or related professional services in the future.  
+References: Forgero Developer Certificate of Origin: https://forgejo.org/docs/next/contributor/dco/  
 
-This core software is planned to be a FREE Open-Source software. To sustain the software development momentum, we will charge for support services in future.
+## Design Codes and Standards
+Many engineering design codes, standards, manuals, and specifications are copyrighted by their respective standards bodies or publishers.  
+Mission Vishwakarma does not provide or redistribute copyrighted standards. Users are expected to independently obtain required standards from authorized sources.  
+References to standards, clauses, methods, notation, load cases, material properties, or design concepts are only for identification, interoperability, education, workflow clarity, or engineering context. They are not a substitute for the original standards.  
 
-Even though the software is free. Many Design codes are Copyrights of their respective Standards Body. To use those standards, our users (engineers) are expected to independently purchase them from original source. Hence we have a separate End-User License Agreement (EULA). With this disclaimer and EULA, reference to those standards are considered Fair-Use.
+## Patents and Third-Party Rights
+We do not knowingly include material that infringes third-party patents, copyrights, trademarks, trade secrets, or other rights.  
+However, we cannot guarantee that every algorithm, workflow, feature, dependency, file format, process, or contribution is free from third-party claims in every jurisdiction.  
+To safeguard users, developers, and organizations, contributors may be required to accept a Contributor Licence Agreement, Developer Certificate of Origin, or similar contribution process.  
+Current Contributor Licence Agreement: https://mv.ramshanker.in/start/contributor-license-agreement/
 
-Our current End User License Agreement ( EULA ) is here. https://mv.ramshanker.in/start/end-user-license-agreement/  
+## EULA
+Current End User Licence Agreement:https://mv.rams hanker.in/start/end-user-license-agreement/  
+The EULA contains detailed terms relating to software use, disclaimers, limitations, support, liability, and engineering responsibility.  
 
-We do not infringe anyone's patents. To safeguard our users, developers, and organizations, we ask all our developers to sign a Contributor License Agreement.
+## Privacy
+Privacy of users is important to Mission Vishwakarma.  
+Crash dumps, diagnostic reports, telemetry, and usage logs will only be collected where permitted and with appropriate user notice and consent.  
+Current Privacy Policy: https://mv.ramshanker.in/start/privacy-policy/
 
-Our current Contributor License Agreement is here. https://mv.ramshanker.in/start/contributor-license-agreement/  
-We have taken inspiration from following CLAs:  
-Forgero Developer Certificate of Origin: https://forgejo.org/docs/next/contributor/dco/  
-Blender CLA:  
+## AI Assistance
+Some legal, policy, documentation, and software text may have been drafted or improved with the assistance of contemporary AI tools and then reviewed or edited by project maintainers in good faith.  
+AI assistance does not replace review by qualified lawyers, accountants, privacy professionals, cybersecurity professionals, or engineering experts.  
+Once the project has sufficient resources, we intend to get important legal, privacy, security, licensing, and compliance documents reviewed by competent professionals.
 
-
-Privacy of our users is of utmost importance. We intend to maintain a delicate balance between privacy of users and need of developers to guide future software development. We intend to follow all applicable privacy laws. Following laws should be a good start.  
-
-1. GDPR (General Data Protection Regulation) - European Union (and EEA)
-2. CCPA / CPRA (California Consumer Privacy Act / Privacy Rights Act) - California US
-3. DPDP Act 2023 (Digital Personal Data Protection Act) - India
-4. PIPEDA (Personal Information Protection and Electronic Documents Act) - Canada
-
-Considering above, our privacy policy is here. https://mv.ramshanker.in/start/privacy-policy/
-
-Disclaimer: EULA, CLA and Privacy Policy has been drafted with assistance of contemporary AI chat-bots, subsequently updated by us in good faith. Once we have some revenue to pay for the legal fees, we will get it vetted by competent lawyers. Opt-out mechanism etc. shall be developed over time.  
-
-This software is provided as-is. This software does not replace the requirement of sound Engineering Principles and Judgement. Engineers / Builders are responsible for the stuff they create. Not this software.
+## Engineering Responsibility and No Warranty
+Mission Vishwakarma is provided as-is. It does not replace sound engineering principles, professional judgement, independent checking, peer review, statutory approval, or code compliance. Engineers, builders, fabricators, manufacturers, consultants, organizations, and users are responsible for the work they create using the software.  
+Users must independently verify all software outputs before using them for design, construction, manufacturing, fabrication, procurement, safety-critical work, commercial decisions, statutory submissions, or professional certification.

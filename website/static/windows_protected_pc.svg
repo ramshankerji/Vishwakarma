@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="549" height="513" viewBox="0 0 549 513" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Windows protected your PC dialog</title>
+  <desc id="desc">Vector recreation of a Microsoft Defender SmartScreen warning dialog.</desc>
+  <defs>
+    <filter id="dialogShadow" x="0" y="0" width="549" height="513" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.26"/>
+    </filter>
+    <clipPath id="dialogClip">
+      <rect x="9" y="8" width="532" height="498" rx="6" ry="6"/>
+    </clipPath>
+    <style>
+      .ui { font-family: "Segoe UI", Arial, Helvetica, sans-serif; }
+      .title { font-size: 28px; font-weight: 400; fill: #ffffff; }
+      .body { font-size: 15px; font-weight: 400; fill: #ffffff; }
+      .link { font-size: 15px; font-weight: 400; fill: #ffffff; text-decoration: underline; }
+      .buttonText { font-size: 14px; font-weight: 600; fill: #000000; }
+    </style>
+  </defs>
+
+  <rect width="549" height="513" fill="#F3F3F3"/>
+
+  <g filter="url(#dialogShadow)">
+    <rect x="9" y="8" width="532" height="498" rx="6" ry="6" fill="#0067C0"/>
+  </g>
+
+  <g clip-path="url(#dialogClip)" class="ui">
+    <!-- Close button -->
+    <rect x="495" y="8" width="46" height="32" fill="#FFFFFF"/>
+    <path d="M514.6 20.6L522.4 28.4M522.4 20.6L514.6 28.4" stroke="#222222" stroke-width="1.25" stroke-linecap="square"/>
+
+    <!-- Main text -->
+    <text x="29" y="60" class="title">Windows protected your PC</text>
+
+    <text x="31" y="101" class="body">Microsoft Defender SmartScreen prevented an unrecognised app from</text>
+    <text x="31" y="121" class="body">starting. Running this app might put your PC at risk.</text>
+
+    <text x="29" y="141" class="link">More info</text>
+
+    <!-- Action button -->
+    <rect x="420" y="446" width="93" height="35" fill="#FFFFFF"/>
+    <text x="466.5" y="469" class="buttonText" text-anchor="middle">Don't run</text>
+  </g>
+</svg>
