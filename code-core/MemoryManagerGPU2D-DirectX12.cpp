@@ -433,7 +433,7 @@ void RenderCad2DPage(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWin
 
     CD3DX12_CPU_DESCRIPTOR_HANDLE rttHandle(winRes.rttRtvHeap->GetCPUDescriptorHandleForHeapStart(),
         winRes.frameIndex, gpu.rtvDescriptorSize);
-    const float cadBackground[] = { 0.92f, 0.92f, 0.88f, 1.0f };
+    const float cadBackground[] = { 230.0f / 255.0f, 230.0f / 255.0f, 230.0f / 255.0f, 1.0f };
     commandList->ClearRenderTargetView(rttHandle, cadBackground, 0, nullptr);
 
     Cad2DViewConstants constants{};

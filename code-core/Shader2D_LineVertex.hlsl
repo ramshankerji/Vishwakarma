@@ -61,12 +61,27 @@ PSInput main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID) {
     float2 p0 = ModelToScreen(rec.p0CU);
     float2 p1 = ModelToScreen(rec.p1CU);
 
+    float lineWidthPx = ResolveLineWidthPx(rec);
+    if (lineWidthPx <= 1.001) {
+        float2 rawAxis = p1 - p0;
+        if (abs(rawAxis.y) <= 0.0001 && abs(rawAxis.x) > 0.0001) {
+            float y = floor((p0.y + p1.y) * 0.5) + 0.5;
+            p0.y = y;
+            p1.y = y;
+        }
+        else if (abs(rawAxis.x) <= 0.0001 && abs(rawAxis.y) > 0.0001) {
+            float x = floor((p0.x + p1.x) * 0.5) + 0.5;
+            p0.x = x;
+            p1.x = x;
+        }
+    }
+
     float2 axis = p1 - p0;
     float len = max(length(axis), 0.0001);
     float2 dir = axis / len;
     float2 normal = float2(-dir.y, dir.x);
 
-    float halfWidth = ResolveLineWidthPx(rec) * 0.5;
+    float halfWidth = lineWidthPx * 0.5;
     float expand = halfWidth + 1.25;
 
     float2 corners[6] = {

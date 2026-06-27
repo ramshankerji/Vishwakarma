@@ -24,8 +24,8 @@ float4 main(PSInput input) : SV_TARGET {
     float2 closest = input.p0Px + ba * t;
     float distanceToSegment = length(input.screenPositionPx - closest);
 
-    float aa = max(fwidth(distanceToSegment), 0.75);
-    float coverage = saturate((input.halfWidthPx + aa - distanceToSegment) / aa);
+    float aa = max(fwidth(distanceToSegment), 0.0001);
+    float coverage = saturate((input.halfWidthPx + aa * 0.5 - distanceToSegment) / aa);
     float4 color = DecodeABGR(input.colorABGR);
     return float4(color.rgb, color.a * coverage);
 }

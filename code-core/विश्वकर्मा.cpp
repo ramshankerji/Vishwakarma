@@ -109,6 +109,54 @@ uint16_t activeWindowIndexesA[MV_MAX_WINDOWS], activeWindowIndexesB[MV_MAX_WINDO
 std::atomic<uint16_t*> publishedWindowIndexes;
 std::atomic<uint16_t>  publishedWindowCount;
 
+static int SceneTopUIHeightPxForWindow(const SingleUIWindow& window, int windowHeight) {
+    int topUITotalHeightPx = 0;
+    const int monitorId = window.currentMonitorIndex;
+    if (monitorId >= 0 && monitorId < gpu.currentMonitorCount) {
+        const UITopRibbonLayout& layout = gpu.screens[monitorId].topRibbonLayout;
+        if (layout.isValid && layout.topUITotalHeightPx > 0.0f) {
+            topUITotalHeightPx = static_cast<int>(std::round(layout.topUITotalHeightPx));
+        }
+        else {
+            const float dpiY = gpu.screens[monitorId].physicalDpiY > 0
+                ? static_cast<float>(gpu.screens[monitorId].physicalDpiY)
+                : 96.0f;
+            const float pixelsPerMMy = dpiY / 25.4f;
+            topUITotalHeightPx = static_cast<int>(std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+                UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+                UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+                UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+                UI_INTERNAL_TAB_BAR_HEIGHT_MM) * pixelsPerMMy)) + 7;
+        }
+    }
+
+    return std::clamp(topUITotalHeightPx, 0, windowHeight);
+}
+
+bool GetVisibleSceneViewportForTab(const DATASETTAB& tab, int& widthPx, int& heightPx, int& topPx) {
+    widthPx = 0;
+    heightPx = 0;
+    topPx = 0;
+
+    uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
+    const uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+    for (uint16_t i = 0; i < windowCount; ++i) {
+        const SingleUIWindow& window = allWindows[windowList[i]];
+        if (window.activeTabIndex != static_cast<int>(tab.tabID)) continue;
+
+        const int windowWidth = window.dx.WindowWidth > 0 ? window.dx.WindowWidth : window.currentWidth;
+        const int windowHeight = window.dx.WindowHeight > 0 ? window.dx.WindowHeight : window.currentHeight;
+        if (windowWidth <= 0 || windowHeight <= 0) continue;
+
+        topPx = SceneTopUIHeightPxForWindow(window, windowHeight);
+        widthPx = windowWidth;
+        heightPx = windowHeight - topPx;
+        return heightPx > 0;
+    }
+
+    return false;
+}
+
 /*Each tab will be hosted in exactly 1 windows.
 However some of the views of the tab can be extracted to other windows.
 Each tab gets its own engineering thread, capable of doing background processing, receiving network data, file I/O etc.
@@ -748,12 +796,52 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 if (newDistance < 1.0f) newDistance = 1.0f;
                 if (newDistance > myTab->camera.farZ - 10.0f) newDistance = myTab->camera.farZ - 10.0f;
 
-                // Update Position. We keep the same direction, just change the magnitude
+                // Keep the point under the cursor visually anchored while changing distance.
                 if (distance > 0.002f) {
                     float scale = newDistance / distance;
-                    myTab->camera.position.x = myTab->camera.target.x + (dx * scale);
-                    myTab->camera.position.y = myTab->camera.target.y + (dy * scale);
-                    myTab->camera.position.z = myTab->camera.target.z + (dz * scale);
+                    bool appliedCursorZoom = false;
+                    int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
+                    if (GetVisibleSceneViewportForTab(*myTab, viewportWidth, viewportHeight, viewportTop)) {
+                        const float mouseX = std::clamp((float)input.x, 0.0f, (float)viewportWidth);
+                        const float mouseY = std::clamp((float)(input.y - viewportTop), 0.0f, (float)viewportHeight);
+                        const float ndcX = mouseX / (float)viewportWidth * 2.0f - 1.0f;
+                        const float ndcY = 1.0f - mouseY / (float)viewportHeight * 2.0f;
+                        const float aspect = (float)viewportWidth / (float)viewportHeight;
+                        const float tanHalfFov = std::tan(myTab->camera.fov * 0.5f);
+
+                        DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&myTab->camera.position);
+                        DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&myTab->camera.target);
+                        DirectX::XMVECTOR worldUp = DirectX::XMLoadFloat3(&myTab->camera.up);
+                        DirectX::XMVECTOR forward = DirectX::XMVector3Normalize(DirectX::XMVectorSubtract(target, eye));
+                        DirectX::XMVECTOR right = DirectX::XMVector3Cross(worldUp, forward);
+                        if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(right)) > 0.000001f) {
+                            right = DirectX::XMVector3Normalize(right);
+                            DirectX::XMVECTOR viewUp = DirectX::XMVector3Cross(forward, right);
+                            DirectX::XMVECTOR ray = DirectX::XMVectorAdd(forward,
+                                DirectX::XMVectorAdd(
+                                    DirectX::XMVectorScale(right, ndcX * tanHalfFov * aspect),
+                                    DirectX::XMVectorScale(viewUp, ndcY * tanHalfFov)));
+                            ray = DirectX::XMVector3Normalize(ray);
+
+                            const float denom = DirectX::XMVectorGetX(DirectX::XMVector3Dot(ray, forward));
+                            if (std::abs(denom) > 0.000001f) {
+                                DirectX::XMVECTOR focusPoint =
+                                    DirectX::XMVectorAdd(eye, DirectX::XMVectorScale(ray, distance / denom));
+                                eye = DirectX::XMVectorAdd(focusPoint,
+                                    DirectX::XMVectorScale(DirectX::XMVectorSubtract(eye, focusPoint), scale));
+                                target = DirectX::XMVectorAdd(focusPoint,
+                                    DirectX::XMVectorScale(DirectX::XMVectorSubtract(target, focusPoint), scale));
+                                DirectX::XMStoreFloat3(&myTab->camera.position, eye);
+                                DirectX::XMStoreFloat3(&myTab->camera.target, target);
+                                appliedCursorZoom = true;
+                            }
+                        }
+                    }
+                    if (!appliedCursorZoom) {
+                        myTab->camera.position.x = myTab->camera.target.x + (dx * scale);
+                        myTab->camera.position.y = myTab->camera.target.y + (dy * scale);
+                        myTab->camera.position.z = myTab->camera.target.z + (dz * scale);
+                    }
                 }
 
                 //std::cout << "Zoom Updated. New Distance: " << newDistance << "\n";// Debug logging (Optional)

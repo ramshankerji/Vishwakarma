@@ -273,6 +273,7 @@ struct SingleUIWindow {
 };
 
 void विश्वकर्मा(uint64_t tabID);
+bool GetVisibleSceneViewportForTab(const DATASETTAB& tab, int& widthPx, int& heightPx, int& topPx);
 
 // Register a newly created engineering std::thread into the global registry (takes ownership)
 void AddEngineeringThread(std::thread&& t);

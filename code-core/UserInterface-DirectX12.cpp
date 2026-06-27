@@ -1091,6 +1091,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     const VishwakarmaStorage::ObjectType activeInternalSubTabType =
         ActiveInternalSubTabType(internalSubTabs, activeInternalSubTabMemoryId);
     const bool useDarkDataTreeText =
+        activeInternalSubTabMemoryId == 0 ||
         activeInternalSubTabType == VishwakarmaStorage::ObjectType::Page2D ||
         activeInternalSubTabType == VishwakarmaStorage::ObjectType::Scene3D;
     const uint32_t dataTreeTextColor = useDarkDataTreeText ? 0xFF000000 : 0xFFFFFFFF;
