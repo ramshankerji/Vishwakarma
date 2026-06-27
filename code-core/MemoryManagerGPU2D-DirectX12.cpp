@@ -30,8 +30,13 @@ namespace {
 struct Cad2DContainerRecords {
     std::vector<Cad2DLineRecordCPU> lines;
     std::vector<Cad2DPolylineRecordCPU> polylines;
+    std::vector<Cad2DPolygonRecordCPU> polygons;
     std::vector<Cad2DTextRecordCPU> texts;
 };
+
+constexpr uint32_t kMinPolygonLineSegmentCount = 3;
+constexpr uint32_t kMaxPolygonLineSegmentCount = 16;
+constexpr double kDegreesToRadians = 3.14159265358979323846 / 180.0;
 
 uint32_t TopUIHeightPx(int monitorId, const DX12ResourcesPerWindow& winRes) {
     int topUITotalHeightPx = 0;
@@ -137,6 +142,33 @@ void AppendPolylineLineRecords(const Cad2DPolylineRecordCPU& polyline,
         gpuLine.lineWeight = polyline.lineWeight;
         gpuLine.lineWeightMode = static_cast<uint32_t>(polyline.lineWeightMode);
         gpuLine.colorABGR = polyline.colorABGR;
+        gpuLines.push_back(gpuLine);
+    }
+}
+
+uint32_t ClampedPolygonLineSegmentCount(uint32_t lineSegmentCount) {
+    return std::clamp(lineSegmentCount, kMinPolygonLineSegmentCount, kMaxPolygonLineSegmentCount);
+}
+
+void AppendPolygonLineRecords(const Cad2DPolygonRecordCPU& polygon,
+    std::vector<Cad2DLineGPURecord>& gpuLines) {
+    if (polygon.radius <= 0.0) return;
+
+    const uint32_t lineSegmentCount = ClampedPolygonLineSegmentCount(polygon.lineSegmentCount);
+    const double angleStep = 360.0 / static_cast<double>(lineSegmentCount);
+    for (uint32_t i = 0; i < lineSegmentCount; ++i) {
+        const double angle0 = (polygon.rotationDegrees + angleStep * static_cast<double>(i)) * kDegreesToRadians;
+        const double angle1 = (polygon.rotationDegrees + angleStep * static_cast<double>((i + 1) % lineSegmentCount)) *
+            kDegreesToRadians;
+
+        Cad2DLineGPURecord gpuLine{};
+        gpuLine.x1 = static_cast<float>(polygon.centerX + std::sin(angle0) * polygon.radius);
+        gpuLine.y1 = static_cast<float>(polygon.centerY + std::cos(angle0) * polygon.radius);
+        gpuLine.x2 = static_cast<float>(polygon.centerX + std::sin(angle1) * polygon.radius);
+        gpuLine.y2 = static_cast<float>(polygon.centerY + std::cos(angle1) * polygon.radius);
+        gpuLine.lineWeight = polygon.lineWeight;
+        gpuLine.lineWeightMode = static_cast<uint32_t>(polygon.lineWeightMode);
+        gpuLine.colorABGR = polygon.colorABGR;
         gpuLines.push_back(gpuLine);
     }
 }
@@ -430,6 +462,7 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage) {
     std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
     storage.lineRecords.clear();
     storage.polylineRecords.clear();
+    storage.polygonRecords.clear();
     storage.textRecords.clear();
     storage.demoLineCounter.store(0, std::memory_order_release);
     storage.demoTextQueued.store(false, std::memory_order_release);
@@ -438,6 +471,10 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage) {
     storage.polylineCreationMode.store(false, std::memory_order_release);
     storage.polylineCreationObjectId = 0;
     storage.polylineCreationPoints.clear();
+    storage.polygonCreationMode.store(false, std::memory_order_release);
+    storage.polygonCreationHasCenter.store(false, std::memory_order_release);
+    storage.polygonCreationCenterXCU.store(0.0, std::memory_order_release);
+    storage.polygonCreationCenterYCU.store(0.0, std::memory_order_release);
 }
 
 void RenderCad2DPage(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
@@ -546,6 +583,7 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
 
         std::vector<Cad2DLineRecordCPU> lines;
         std::vector<Cad2DPolylineRecordCPU> polylines;
+        std::vector<Cad2DPolygonRecordCPU> polygons;
         std::vector<Cad2DTextRecordCPU> texts;
         {
             std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
@@ -586,12 +624,32 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
                         *existing = std::move(updated);
                     }
                 }
+                else if (command.type == CommandToCopyThread2DType::AddPolygon) {
+                    auto existing = std::find_if(storage.polygonRecords.begin(), storage.polygonRecords.end(),
+                        [&](const Cad2DPolygonRecordCPU& polygon) {
+                            return polygon.objectId == command.polygon.objectId;
+                        });
+                    if (existing == storage.polygonRecords.end()) {
+                        storage.polygonRecords.push_back(command.polygon);
+                        if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(),
+                            command.polygon.objectId) == tab.allIDsInThisTab.end()) {
+                            tab.allIDsInThisTab.push_back(command.polygon.objectId);
+                        }
+                    }
+                    else {
+                        Cad2DPolygonRecordCPU updated = command.polygon;
+                        if (updated.persistedId == 0) updated.persistedId = existing->persistedId;
+                        if (updated.persistedParentId == 0) updated.persistedParentId = existing->persistedParentId;
+                        *existing = updated;
+                    }
+                }
                 else if (command.type == CommandToCopyThread2DType::AddText) {
                     storage.textRecords.push_back(command.text);
                 }
             }
             lines = storage.lineRecords;
             polylines = storage.polylineRecords;
+            polygons = storage.polygonRecords;
             texts = storage.textRecords;
         }
 
@@ -601,6 +659,9 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
         }
         for (const Cad2DPolylineRecordCPU& polyline : polylines) {
             if (polyline.containerMemoryId != 0) containers[polyline.containerMemoryId].polylines.push_back(polyline);
+        }
+        for (const Cad2DPolygonRecordCPU& polygon : polygons) {
+            if (polygon.containerMemoryId != 0) containers[polygon.containerMemoryId].polygons.push_back(polygon);
         }
         for (const Cad2DTextRecordCPU& text : texts) {
             if (text.containerMemoryId != 0) containers[text.containerMemoryId].texts.push_back(text);
@@ -625,10 +686,19 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
             for (const Cad2DPolylineRecordCPU& polyline : records.polylines) {
                 if (polyline.points.size() >= 2) polylineSegmentCount += polyline.points.size() - 1;
             }
-            gpuLines.reserve(records.lines.size() + polylineSegmentCount);
+            size_t polygonSegmentCount = 0;
+            for (const Cad2DPolygonRecordCPU& polygon : records.polygons) {
+                if (polygon.radius > 0.0) {
+                    polygonSegmentCount += ClampedPolygonLineSegmentCount(polygon.lineSegmentCount);
+                }
+            }
+            gpuLines.reserve(records.lines.size() + polylineSegmentCount + polygonSegmentCount);
             for (const Cad2DLineRecordCPU& line : records.lines) gpuLines.push_back(ToGpuLineRecord(line));
             for (const Cad2DPolylineRecordCPU& polyline : records.polylines) {
                 AppendPolylineLineRecords(polyline, gpuLines);
+            }
+            for (const Cad2DPolygonRecordCPU& polygon : records.polygons) {
+                AppendPolygonLineRecords(polygon, gpuLines);
             }
             UploadVector(commandList.Get(), page->lineBuffer, gpuLines, uploads);
             page->lineCount = static_cast<uint32_t>(gpuLines.size());

@@ -1,0 +1,18 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+option optimize_for = LITE_RUNTIME;
+
+message Polygon2D {
+  uint32 line_segment_count = 1;
+  double center_x = 2;
+  double center_y = 3;
+  double radius = 4;
+  double rotation_degrees = 5;
+  float line_weight = 6;
+  uint32 line_weight_mode = 7;
+  uint32 color_abgr = 8;
+}

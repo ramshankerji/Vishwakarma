@@ -13,6 +13,9 @@
 namespace {
 std::mutex gCad2DCopyQueueMutex;
 std::queue<CommandToCopyThread2D> gCad2DCopyQueue;
+constexpr uint32_t kDefaultPolygonLineSegmentCount = 4;
+constexpr double kDefaultPolygonRotationDegrees = 45.0;
+constexpr double kMinPolygonRadiusCU = 1.0e-9;
 
 StoredLogicalObject* FindLogicalObjectByIdLocked(DATASETTAB& tab, uint64_t memoryId) {
     for (StoredLogicalObject& entry : tab.storageLogicalObjects) {
@@ -25,6 +28,10 @@ void ClearLineCreationState(TabCad2DStorage& storage) {
     storage.lineCreationMode.store(false, std::memory_order_release);
     storage.lineCreationHasPreviousPoint.store(false, std::memory_order_release);
     storage.polylineCreationMode.store(false, std::memory_order_release);
+    storage.polygonCreationMode.store(false, std::memory_order_release);
+    storage.polygonCreationHasCenter.store(false, std::memory_order_release);
+    storage.polygonCreationCenterXCU.store(0.0, std::memory_order_release);
+    storage.polygonCreationCenterYCU.store(0.0, std::memory_order_release);
     std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
     storage.polylineCreationObjectId = 0;
     storage.polylineCreationPoints.clear();
@@ -113,6 +120,39 @@ void HandlePolylineCreationClick(DATASETTAB& tab, double xCU, double yCU) {
         EnqueueCad2DPolyline(tab.tabID, page2DMemoryId, std::move(polyline));
     }
 }
+
+void HandlePolygonCreationClick(DATASETTAB& tab, double xCU, double yCU) {
+    TabCad2DStorage& storage = *tab.cad2d;
+    if (!storage.polygonCreationHasCenter.load(std::memory_order_acquire)) {
+        storage.polygonCreationCenterXCU.store(xCU, std::memory_order_release);
+        storage.polygonCreationCenterYCU.store(yCU, std::memory_order_release);
+        storage.polygonCreationHasCenter.store(true, std::memory_order_release);
+        return;
+    }
+
+    const uint64_t page2DMemoryId = Cad2DFindTargetPage2DMemoryId(tab);
+    if (page2DMemoryId == 0) return;
+
+    const double centerX = storage.polygonCreationCenterXCU.load(std::memory_order_acquire);
+    const double centerY = storage.polygonCreationCenterYCU.load(std::memory_order_acquire);
+    const double radius = std::hypot(xCU - centerX, yCU - centerY);
+    if (radius <= kMinPolygonRadiusCU) return;
+
+    Cad2DPolygonRecordCPU polygon{};
+    polygon.containerMemoryId = page2DMemoryId;
+    polygon.lineSegmentCount = kDefaultPolygonLineSegmentCount;
+    polygon.centerX = centerX;
+    polygon.centerY = centerY;
+    polygon.radius = radius;
+    polygon.rotationDegrees = kDefaultPolygonRotationDegrees;
+    polygon.lineWeight = 1.0f;
+    polygon.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+    polygon.colorABGR = 0xFF000000u;
+    polygon.schemaVersion = VishwakarmaStorage::kGeometry2DPolygonSchemaVersion;
+    EnqueueCad2DPolygon(tab.tabID, page2DMemoryId, polygon);
+
+    storage.polygonCreationHasCenter.store(false, std::memory_order_release);
+}
 }
 
 void EnqueueCad2DLine(uint64_t tabID, uint64_t containerMemoryId, Cad2DLineRecordCPU line) {
@@ -143,6 +183,24 @@ void EnqueueCad2DPolyline(uint64_t tabID, uint64_t containerMemoryId, Cad2DPolyl
     command.tabID = tabID;
     command.containerMemoryId = containerMemoryId;
     command.polyline = std::move(polyline);
+
+    {
+        std::lock_guard<std::mutex> lock(gCad2DCopyQueueMutex);
+        gCad2DCopyQueue.push(std::move(command));
+    }
+    toCopyThreadCV.notify_one();
+}
+
+void EnqueueCad2DPolygon(uint64_t tabID, uint64_t containerMemoryId, Cad2DPolygonRecordCPU polygon) {
+    if (polygon.objectId == 0) polygon.objectId = MemoryID::next();
+    polygon.containerMemoryId = containerMemoryId;
+
+    CommandToCopyThread2D command{};
+    command.type = CommandToCopyThread2DType::AddPolygon;
+    command.id = polygon.objectId;
+    command.tabID = tabID;
+    command.containerMemoryId = containerMemoryId;
+    command.polygon = polygon;
 
     {
         std::lock_guard<std::mutex> lock(gCad2DCopyQueueMutex);
@@ -225,12 +283,21 @@ void Cad2DBeginPolylineCreation(DATASETTAB& tab) {
     tab.cad2d->polylineCreationMode.store(true, std::memory_order_release);
 }
 
+void Cad2DBeginPolygonCreation(DATASETTAB& tab) {
+    if (!tab.cad2d || !Cad2DIsActivePage2D(tab)) return;
+
+    ClearLineCreationState(*tab.cad2d);
+    tab.cad2d->polygonCreationMode.store(true, std::memory_order_release);
+    tab.cad2d->polygonCreationHasCenter.store(false, std::memory_order_release);
+}
+
 bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
     if (!tab.cad2d) return false;
     if (!Cad2DIsActivePage2D(tab)) {
         const bool anyCreationMode =
             tab.cad2d->lineCreationMode.load(std::memory_order_acquire) ||
-            tab.cad2d->polylineCreationMode.load(std::memory_order_acquire);
+            tab.cad2d->polylineCreationMode.load(std::memory_order_acquire) ||
+            tab.cad2d->polygonCreationMode.load(std::memory_order_acquire);
         if (input.actionType == ACTION_TYPE::KEYDOWN && input.x == VK_ESCAPE && anyCreationMode) {
             ClearLineCreationState(*tab.cad2d);
             return true;
@@ -242,7 +309,8 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
     case ACTION_TYPE::KEYDOWN:
         if (input.x == VK_ESCAPE &&
             (tab.cad2d->lineCreationMode.load(std::memory_order_acquire) ||
-                tab.cad2d->polylineCreationMode.load(std::memory_order_acquire))) {
+                tab.cad2d->polylineCreationMode.load(std::memory_order_acquire) ||
+                tab.cad2d->polygonCreationMode.load(std::memory_order_acquire))) {
             ClearLineCreationState(*tab.cad2d);
             return true;
         }
@@ -306,6 +374,12 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
             double xCU = 0.0, yCU = 0.0;
             if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
                 HandlePolylineCreationClick(tab, xCU, yCU);
+            }
+        }
+        else if (tab.cad2d->polygonCreationMode.load(std::memory_order_acquire)) {
+            double xCU = 0.0, yCU = 0.0;
+            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+                HandlePolygonCreationClick(tab, xCU, yCU);
             }
         }
         return true;

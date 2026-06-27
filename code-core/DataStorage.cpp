@@ -28,6 +28,7 @@
 #include "DataStorage_PARALLELEPIPED.pb.h"
 #include "DataStorage_PIPE.pb.h"
 #include "DataStorage_POLYLINE2D.pb.h"
+#include "DataStorage_POLYGON2D.pb.h"
 #include "DataStorage_PYRAMID.pb.h"
 #include "DataStorage_SCENE3D.pb.h"
 #include "DataStorage_SPHERE.pb.h"
@@ -44,8 +45,15 @@ namespace pb = vishwakarma::storage;
 using VishwakarmaStorage::LifecycleState;
 using VishwakarmaStorage::ObjectType;
 
+constexpr uint32_t kMinPolygonLineSegmentCount = 3;
+constexpr uint32_t kMaxPolygonLineSegmentCount = 16;
+
 void SetError(std::string* errorMessage, const std::string& value) {
     if (errorMessage) *errorMessage = value;
+}
+
+uint32_t ClampedPolygonLineSegmentCount(uint32_t lineSegmentCount) {
+    return std::clamp(lineSegmentCount, kMinPolygonLineSegmentCount, kMaxPolygonLineSegmentCount);
 }
 
 std::string SqliteError(sqlite3* db, const char* prefix) {
@@ -402,6 +410,20 @@ bool EncodePolyline2D(const Cad2DPolylineRecordCPU& polyline,
     return SerializeMessage(message, payload, errorMessage);
 }
 
+bool EncodePolygon2D(const Cad2DPolygonRecordCPU& polygon,
+    std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Polygon2D message;
+    message.set_line_segment_count(ClampedPolygonLineSegmentCount(polygon.lineSegmentCount));
+    message.set_center_x(polygon.centerX);
+    message.set_center_y(polygon.centerY);
+    message.set_radius(polygon.radius);
+    message.set_rotation_degrees(polygon.rotationDegrees);
+    message.set_line_weight(polygon.lineWeight);
+    message.set_line_weight_mode(static_cast<uint32_t>(polygon.lineWeightMode));
+    message.set_color_abgr(polygon.colorABGR);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
 bool DecodePyramid(const std::vector<uint8_t>& payload, PYRAMID& object) {
     pb::Pyramid message;
     if (!ParseMessage(payload, message)) return false;
@@ -602,6 +624,21 @@ bool DecodePolyline2D(const std::vector<uint8_t>& payload, Cad2DPolylineRecordCP
     return polyline.points.size() >= 2;
 }
 
+bool DecodePolygon2D(const std::vector<uint8_t>& payload, Cad2DPolygonRecordCPU& polygon) {
+    pb::Polygon2D message;
+    if (!ParseMessage(payload, message)) return false;
+
+    polygon.lineSegmentCount = ClampedPolygonLineSegmentCount(message.line_segment_count());
+    polygon.centerX = message.center_x();
+    polygon.centerY = message.center_y();
+    polygon.radius = message.radius();
+    polygon.rotationDegrees = message.rotation_degrees();
+    polygon.lineWeight = message.line_weight() > 0.0f ? message.line_weight() : 0.25f;
+    polygon.lineWeightMode = ReadLineWeightMode(message.line_weight_mode());
+    polygon.colorABGR = message.color_abgr();
+    return polygon.radius > 0.0;
+}
+
 std::string ObjectTypeName(ObjectType objectType) {
     switch (objectType) {
     case ObjectType::Pyramid: return "Pyramid";
@@ -618,6 +655,7 @@ std::string ObjectTypeName(ObjectType objectType) {
     case ObjectType::Scene3D: return "Scene3D";
     case ObjectType::Line2D: return "Line2D";
     case ObjectType::Polyline2D: return "Polyline2D";
+    case ObjectType::Polygon2D: return "Polygon2D";
     default: return "Unknown";
     }
 }
@@ -638,6 +676,7 @@ bool ObjectTypeFromNumber(uint32_t value, ObjectType& objectType) {
     case 12: objectType = ObjectType::Scene3D; return true;
     case 13: objectType = ObjectType::Line2D; return true;
     case 14: objectType = ObjectType::Polyline2D; return true;
+    case 15: objectType = ObjectType::Polygon2D; return true;
     default: objectType = ObjectType::Unknown; return false;
     }
 }
@@ -647,9 +686,14 @@ uint16_t DefaultSchemaVersionForObjectType(ObjectType objectType) {
         return VishwakarmaStorage::kLogicalElementSchemaVersion;
     }
     if (VishwakarmaStorage::IsGeometry2DObjectType(objectType)) {
-        return objectType == ObjectType::Polyline2D
-            ? VishwakarmaStorage::kGeometry2DPolylineSchemaVersion
-            : VishwakarmaStorage::kGeometry2DLineSchemaVersion;
+        switch (objectType) {
+        case ObjectType::Polyline2D:
+            return VishwakarmaStorage::kGeometry2DPolylineSchemaVersion;
+        case ObjectType::Polygon2D:
+            return VishwakarmaStorage::kGeometry2DPolygonSchemaVersion;
+        default:
+            return VishwakarmaStorage::kGeometry2DLineSchemaVersion;
+        }
     }
     return VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
 }
@@ -953,6 +997,36 @@ void AppendPolyline2DToTab(DATASETTAB& tab, Cad2DPolylineRecordCPU polyline) {
     EnqueueCad2DPolyline(tab.tabID, polyline.containerMemoryId, polyline);
 }
 
+void AppendPolygon2DToTab(DATASETTAB& tab, Cad2DPolygonRecordCPU polygon) {
+    if (!tab.cad2d) tab.cad2d = std::make_unique<TabCad2DStorage>();
+    if (polygon.objectId == 0) polygon.objectId = MemoryID::next();
+    polygon.lineSegmentCount = ClampedPolygonLineSegmentCount(polygon.lineSegmentCount);
+    if (polygon.schemaVersion == 0) {
+        polygon.schemaVersion = VishwakarmaStorage::kGeometry2DPolygonSchemaVersion;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
+        auto existing = std::find_if(tab.cad2d->polygonRecords.begin(), tab.cad2d->polygonRecords.end(),
+            [&](const Cad2DPolygonRecordCPU& existingPolygon) {
+                return existingPolygon.objectId == polygon.objectId;
+            });
+        if (existing == tab.cad2d->polygonRecords.end()) {
+            tab.cad2d->polygonRecords.push_back(polygon);
+        }
+        else {
+            *existing = polygon;
+        }
+    }
+
+    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), polygon.objectId) ==
+        tab.allIDsInThisTab.end()) {
+        tab.allIDsInThisTab.push_back(polygon.objectId);
+    }
+
+    EnqueueCad2DPolygon(tab.tabID, polygon.containerMemoryId, polygon);
+}
+
 struct ObjectStoreRow {
     uint64_t objectId = 0;
     uint64_t parentId = 0;
@@ -997,6 +1071,11 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         for (const Cad2DPolylineRecordCPU& polyline : cad2d->polylineRecords) {
             if (polyline.persistedId > maxExistingId) {
                 maxExistingId = polyline.persistedId;
+            }
+        }
+        for (const Cad2DPolygonRecordCPU& polygon : cad2d->polygonRecords) {
+            if (polygon.persistedId > maxExistingId) {
+                maxExistingId = polygon.persistedId;
             }
         }
     }
@@ -1059,11 +1138,27 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
                 polyline.schemaVersion = VishwakarmaStorage::kGeometry2DPolylineSchemaVersion;
             }
         }
+        for (Cad2DPolygonRecordCPU& polygon : cad2d->polygonRecords) {
+            if (polygon.objectId == 0) {
+                polygon.objectId = MemoryID::next();
+            }
+            polygon.lineSegmentCount = ClampedPolygonLineSegmentCount(polygon.lineSegmentCount);
+            if (polygon.persistedId == 0) {
+                if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
+                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    return false;
+                }
+                polygon.persistedId = assignNextId++;
+            }
+            if (polygon.schemaVersion == 0) {
+                polygon.schemaVersion = VishwakarmaStorage::kGeometry2DPolygonSchemaVersion;
+            }
+        }
     }
 
     std::unordered_map<uint64_t, uint64_t> memoryIdToPersistedId;
     memoryIdToPersistedId.reserve(tab.storageLogicalObjects.size() + tab.storageObjects3D.size() +
-        (cad2d ? cad2d->lineRecords.size() + cad2d->polylineRecords.size() : 0));
+        (cad2d ? cad2d->lineRecords.size() + cad2d->polylineRecords.size() + cad2d->polygonRecords.size() : 0));
 
     for (const StoredLogicalObject& entry : tab.storageLogicalObjects) {
         if (entry.object && entry.object->persistedId != 0) {
@@ -1084,6 +1179,11 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         for (const Cad2DPolylineRecordCPU& polyline : cad2d->polylineRecords) {
             if (polyline.objectId != 0 && polyline.persistedId != 0) {
                 memoryIdToPersistedId[polyline.objectId] = polyline.persistedId;
+            }
+        }
+        for (const Cad2DPolygonRecordCPU& polygon : cad2d->polygonRecords) {
+            if (polygon.objectId != 0 && polygon.persistedId != 0) {
+                memoryIdToPersistedId[polygon.objectId] = polygon.persistedId;
             }
         }
     }
@@ -1120,6 +1220,17 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
             }
         }
         return polyline.persistedParentId;
+    };
+
+    auto resolvePolygonParentId = [&](Cad2DPolygonRecordCPU& polygon) {
+        if (polygon.containerMemoryId != 0) {
+            auto parentIt = memoryIdToPersistedId.find(polygon.containerMemoryId);
+            if (parentIt != memoryIdToPersistedId.end()) {
+                polygon.persistedParentId = parentIt->second;
+                return parentIt->second;
+            }
+        }
+        return polygon.persistedParentId;
     };
 
     for (StoredLogicalObject& entry : tab.storageLogicalObjects) {
@@ -1173,6 +1284,25 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
                 ? polyline.schemaVersion
                 : VishwakarmaStorage::kGeometry2DPolylineSchemaVersion;
             row.lifecycleState = polyline.isDeleted ? LifecycleState::SoftDeleted : LifecycleState::Live;
+            row.payload = std::move(payload);
+            rows.push_back(std::move(row));
+        }
+
+        for (Cad2DPolygonRecordCPU& polygon : cad2d->polygonRecords) {
+            if (polygon.objectId == 0 || polygon.radius <= 0.0) continue;
+            polygon.lineSegmentCount = ClampedPolygonLineSegmentCount(polygon.lineSegmentCount);
+
+            std::vector<uint8_t> payload;
+            if (!EncodePolygon2D(polygon, payload, errorMessage)) return false;
+
+            ObjectStoreRow row;
+            row.objectId = polygon.persistedId;
+            row.parentId = resolvePolygonParentId(polygon);
+            row.objectType = ObjectType::Polygon2D;
+            row.schemaVersion = polygon.schemaVersion != 0
+                ? polygon.schemaVersion
+                : VishwakarmaStorage::kGeometry2DPolygonSchemaVersion;
+            row.lifecycleState = polygon.isDeleted ? LifecycleState::SoftDeleted : LifecycleState::Live;
             row.payload = std::move(payload);
             rows.push_back(std::move(row));
         }
@@ -1324,6 +1454,7 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
         tab.cad2d->lineRecords.clear();
         tab.cad2d->polylineRecords.clear();
+        tab.cad2d->polygonRecords.clear();
         tab.cad2d->textRecords.clear();
         tab.cad2d->demoLineCounter.store(0, std::memory_order_release);
         tab.cad2d->demoTextQueued.store(false, std::memory_order_release);
@@ -1332,6 +1463,10 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         tab.cad2d->polylineCreationMode.store(false, std::memory_order_release);
         tab.cad2d->polylineCreationObjectId = 0;
         tab.cad2d->polylineCreationPoints.clear();
+        tab.cad2d->polygonCreationMode.store(false, std::memory_order_release);
+        tab.cad2d->polygonCreationHasCenter.store(false, std::memory_order_release);
+        tab.cad2d->polygonCreationCenterXCU.store(0.0, std::memory_order_release);
+        tab.cad2d->polygonCreationCenterYCU.store(0.0, std::memory_order_release);
     }
     DataTreeView::ResetScroll(tab.dataTreeView);
     tab.allIDsInThisTab.clear();
@@ -1406,6 +1541,31 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
 
                 const uint64_t runtimeObjectId = polyline.objectId;
                 AppendPolyline2DToTab(tab, std::move(polyline));
+                persistedIdToMemoryId[objectId] = runtimeObjectId;
+            }
+            else if (objectType == ObjectType::Polygon2D) {
+                Cad2DPolygonRecordCPU polygon;
+                if (!DecodePolygon2D(payload, polygon)) {
+                    SetError(errorMessage, "Could not decode " + ObjectTypeName(objectType) + " protobuf payload.");
+                    return false;
+                }
+
+                polygon.objectId = MemoryID::next();
+                polygon.persistedId = objectId;
+                polygon.persistedParentId = parentId;
+                polygon.schemaVersion = schemaVersion != 0
+                    ? schemaVersion
+                    : DefaultSchemaVersionForObjectType(objectType);
+                polygon.isDeleted = false;
+                if (parentId != 0) {
+                    auto parentIt = persistedIdToMemoryId.find(parentId);
+                    if (parentIt != persistedIdToMemoryId.end()) {
+                        polygon.containerMemoryId = parentIt->second;
+                    }
+                }
+
+                const uint64_t runtimeObjectId = polygon.objectId;
+                AppendPolygon2DToTab(tab, polygon);
                 persistedIdToMemoryId[objectId] = runtimeObjectId;
             }
             else {

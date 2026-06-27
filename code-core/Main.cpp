@@ -378,6 +378,8 @@ void ProcessPendingUIActions() {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_LINE_CREATION2D);
         } else if (action.id == static_cast<uint32_t>(Commands::CREATE_POLYLINE)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_POLYLINE_CREATION2D);
+        } else if (action.id == static_cast<uint32_t>(Commands::CREATE_POLYGON)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_POLYGON_CREATION2D);
         }
     }
 

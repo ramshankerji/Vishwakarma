@@ -1750,12 +1750,14 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             tab.cad2d && tab.cad2d->lineCreationMode.load(std::memory_order_acquire);
         const bool polylineCreationMode =
             tab.cad2d && tab.cad2d->polylineCreationMode.load(std::memory_order_acquire);
-        if (lineCreationMode || polylineCreationMode) {
+        const bool polygonCreationMode =
+            tab.cad2d && tab.cad2d->polygonCreationMode.load(std::memory_order_acquire);
+        if (lineCreationMode || polylineCreationMode || polygonCreationMode) {
             const float cursorIconSize = iconSizePx;
             const float cursorIconGap = 6.0f;
-            const Commands cursorCommand = polylineCreationMode
-                ? Commands::CREATE_POLYLINE
-                : Commands::CREATE_LINE;
+            const Commands cursorCommand = polygonCreationMode
+                ? Commands::CREATE_POLYGON
+                : (polylineCreationMode ? Commands::CREATE_POLYLINE : Commands::CREATE_LINE);
             const char32_t cursorIcon =
                 SVGIconRenderer::IconForID(static_cast<uint32_t>(cursorCommand));
             const float iconX = std::clamp(
