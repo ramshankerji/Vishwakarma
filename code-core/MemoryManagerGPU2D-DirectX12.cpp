@@ -9,6 +9,7 @@
 #include <iostream>
 #include <map>
 #include <unordered_map>
+#include <utility>
 
 #include "MemoryManagerGPU-DirectX12.h"
 #include "UserInterface-DirectX12.h"
@@ -28,6 +29,7 @@ extern std::atomic<uint16_t> publishedTabCount;
 namespace {
 struct Cad2DContainerRecords {
     std::vector<Cad2DLineRecordCPU> lines;
+    std::vector<Cad2DPolylineRecordCPU> polylines;
     std::vector<Cad2DTextRecordCPU> texts;
 };
 
@@ -120,6 +122,23 @@ Cad2DLineGPURecord ToGpuLineRecord(const Cad2DLineRecordCPU& line) {
     gpuLine.lineWeightMode = static_cast<uint32_t>(line.lineWeightMode);
     gpuLine.colorABGR = line.colorABGR;
     return gpuLine;
+}
+
+void AppendPolylineLineRecords(const Cad2DPolylineRecordCPU& polyline,
+    std::vector<Cad2DLineGPURecord>& gpuLines) {
+    if (polyline.points.size() < 2) return;
+
+    for (size_t i = 1; i < polyline.points.size(); ++i) {
+        Cad2DLineGPURecord gpuLine{};
+        gpuLine.x1 = static_cast<float>(polyline.points[i - 1].x);
+        gpuLine.y1 = static_cast<float>(polyline.points[i - 1].y);
+        gpuLine.x2 = static_cast<float>(polyline.points[i].x);
+        gpuLine.y2 = static_cast<float>(polyline.points[i].y);
+        gpuLine.lineWeight = polyline.lineWeight;
+        gpuLine.lineWeightMode = static_cast<uint32_t>(polyline.lineWeightMode);
+        gpuLine.colorABGR = polyline.colorABGR;
+        gpuLines.push_back(gpuLine);
+    }
 }
 
 struct PendingGlyphQuad {
@@ -410,9 +429,15 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage) {
 
     std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
     storage.lineRecords.clear();
+    storage.polylineRecords.clear();
     storage.textRecords.clear();
     storage.demoLineCounter.store(0, std::memory_order_release);
     storage.demoTextQueued.store(false, std::memory_order_release);
+    storage.lineCreationMode.store(false, std::memory_order_release);
+    storage.lineCreationHasPreviousPoint.store(false, std::memory_order_release);
+    storage.polylineCreationMode.store(false, std::memory_order_release);
+    storage.polylineCreationObjectId = 0;
+    storage.polylineCreationPoints.clear();
 }
 
 void RenderCad2DPage(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
@@ -520,6 +545,7 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
         TabCad2DStorage& storage = *tab.cad2d;
 
         std::vector<Cad2DLineRecordCPU> lines;
+        std::vector<Cad2DPolylineRecordCPU> polylines;
         std::vector<Cad2DTextRecordCPU> texts;
         {
             std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
@@ -541,17 +567,40 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
                         *existing = command.line;
                     }
                 }
+                else if (command.type == CommandToCopyThread2DType::AddPolyline) {
+                    auto existing = std::find_if(storage.polylineRecords.begin(), storage.polylineRecords.end(),
+                        [&](const Cad2DPolylineRecordCPU& polyline) {
+                            return polyline.objectId == command.polyline.objectId;
+                        });
+                    if (existing == storage.polylineRecords.end()) {
+                        storage.polylineRecords.push_back(command.polyline);
+                        if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(),
+                            command.polyline.objectId) == tab.allIDsInThisTab.end()) {
+                            tab.allIDsInThisTab.push_back(command.polyline.objectId);
+                        }
+                    }
+                    else {
+                        Cad2DPolylineRecordCPU updated = command.polyline;
+                        if (updated.persistedId == 0) updated.persistedId = existing->persistedId;
+                        if (updated.persistedParentId == 0) updated.persistedParentId = existing->persistedParentId;
+                        *existing = std::move(updated);
+                    }
+                }
                 else if (command.type == CommandToCopyThread2DType::AddText) {
                     storage.textRecords.push_back(command.text);
                 }
             }
             lines = storage.lineRecords;
+            polylines = storage.polylineRecords;
             texts = storage.textRecords;
         }
 
         std::map<uint64_t, Cad2DContainerRecords> containers;
         for (const Cad2DLineRecordCPU& line : lines) {
             if (line.containerMemoryId != 0) containers[line.containerMemoryId].lines.push_back(line);
+        }
+        for (const Cad2DPolylineRecordCPU& polyline : polylines) {
+            if (polyline.containerMemoryId != 0) containers[polyline.containerMemoryId].polylines.push_back(polyline);
         }
         for (const Cad2DTextRecordCPU& text : texts) {
             if (text.containerMemoryId != 0) containers[text.containerMemoryId].texts.push_back(text);
@@ -572,8 +621,15 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
             page->containerMemoryId = containerMemoryId;
 
             std::vector<Cad2DLineGPURecord> gpuLines;
-            gpuLines.reserve(records.lines.size());
+            size_t polylineSegmentCount = 0;
+            for (const Cad2DPolylineRecordCPU& polyline : records.polylines) {
+                if (polyline.points.size() >= 2) polylineSegmentCount += polyline.points.size() - 1;
+            }
+            gpuLines.reserve(records.lines.size() + polylineSegmentCount);
             for (const Cad2DLineRecordCPU& line : records.lines) gpuLines.push_back(ToGpuLineRecord(line));
+            for (const Cad2DPolylineRecordCPU& polyline : records.polylines) {
+                AppendPolylineLineRecords(polyline, gpuLines);
+            }
             UploadVector(commandList.Get(), page->lineBuffer, gpuLines, uploads);
             page->lineCount = static_cast<uint32_t>(gpuLines.size());
 

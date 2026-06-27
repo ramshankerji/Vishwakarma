@@ -23,6 +23,7 @@ enum class ObjectType : uint32_t {
     Page2D = 11,
     Scene3D = 12,
     Line2D = 13,
+    Polyline2D = 14,
 };
 
 enum class LifecycleState : uint32_t {
@@ -35,6 +36,7 @@ enum class LifecycleState : uint32_t {
 constexpr uint16_t kGeometry3DMvpSchemaVersion = 1;
 constexpr uint16_t kLogicalElementSchemaVersion = 1;
 constexpr uint16_t kGeometry2DLineSchemaVersion = 1;
+constexpr uint16_t kGeometry2DPolylineSchemaVersion = 1;
 constexpr uint64_t kMaxLocalObjectId = (1ULL << 40) - 1ULL;
 
 constexpr uint32_t ToNumber(ObjectType value) {
@@ -56,7 +58,8 @@ constexpr bool IsLogicalObjectType(ObjectType value) {
 }
 
 constexpr bool IsGeometry2DObjectType(ObjectType value) {
-    return value == ObjectType::Line2D;
+    return value == ObjectType::Line2D ||
+        value == ObjectType::Polyline2D;
 }
 
 inline const char* ObjectTypeDisplayName(ObjectType value) {
@@ -74,6 +77,7 @@ inline const char* ObjectTypeDisplayName(ObjectType value) {
     case ObjectType::Page2D: return "Page2D";
     case ObjectType::Scene3D: return "Scene3D";
     case ObjectType::Line2D: return "Line2D";
+    case ObjectType::Polyline2D: return "Polyline2D";
     default: return "Unknown";
     }
 }

@@ -49,6 +49,9 @@
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PIPE.pb.cc">
       <Filter>code-core</Filter>
     </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_POLYLINE2D.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PYRAMID.pb.cc">
       <Filter>code-core</Filter>
     </ClCompile>
@@ -255,6 +258,9 @@
       <Filter>code-core</Filter>
     </None>
     <None Include="DataStorage_PIPE.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_POLYLINE2D.proto">
       <Filter>code-core</Filter>
     </None>
     <None Include="DataStorage_PYRAMID.proto">

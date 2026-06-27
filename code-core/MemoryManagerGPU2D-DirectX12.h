@@ -94,6 +94,7 @@ struct TabCad2DStorage {
 
     std::mutex cpuRecordsMutex;
     std::vector<Cad2DLineRecordCPU> lineRecords;
+    std::vector<Cad2DPolylineRecordCPU> polylineRecords;
     std::vector<Cad2DTextRecordCPU> textRecords;
 
     std::atomic<Cad2DPageSnapshot*> activeSnapshot{ nullptr };
@@ -106,6 +107,15 @@ struct TabCad2DStorage {
 
     std::atomic<uint32_t> demoLineCounter{ 0 };
     std::atomic<bool> demoTextQueued{ false };
+
+    std::atomic<bool> lineCreationMode{ false };
+    std::atomic<bool> lineCreationHasPreviousPoint{ false };
+    std::atomic<double> lineCreationPreviousXCU{ 0.0 };
+    std::atomic<double> lineCreationPreviousYCU{ 0.0 };
+
+    std::atomic<bool> polylineCreationMode{ false };
+    uint64_t polylineCreationObjectId = 0;
+    std::vector<Cad2DPoint2D> polylineCreationPoints;
 };
 
 void InitCad2DTabResources(TabCad2DStorage& storage);

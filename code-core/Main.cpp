@@ -374,6 +374,10 @@ void ProcessPendingUIActions() {
         } else if (action.id == static_cast<uint32_t>(Commands::CREATE_SCENE3D)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::CREATE_LOGICAL_OBJECT,
                 static_cast<int>(VishwakarmaStorage::ToNumber(VishwakarmaStorage::ObjectType::Scene3D)));
+        } else if (action.id == static_cast<uint32_t>(Commands::CREATE_LINE)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_LINE_CREATION2D);
+        } else if (action.id == static_cast<uint32_t>(Commands::CREATE_POLYLINE)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_POLYLINE_CREATION2D);
         }
     }
 

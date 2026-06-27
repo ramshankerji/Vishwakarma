@@ -20,6 +20,99 @@ StoredLogicalObject* FindLogicalObjectByIdLocked(DATASETTAB& tab, uint64_t memor
     }
     return nullptr;
 }
+
+void ClearLineCreationState(TabCad2DStorage& storage) {
+    storage.lineCreationMode.store(false, std::memory_order_release);
+    storage.lineCreationHasPreviousPoint.store(false, std::memory_order_release);
+    storage.polylineCreationMode.store(false, std::memory_order_release);
+    std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
+    storage.polylineCreationObjectId = 0;
+    storage.polylineCreationPoints.clear();
+}
+
+bool Page2DCoordinateFromInput(DATASETTAB& tab, const ACTION_DETAILS& input,
+    double& outXCU, double& outYCU) {
+    if (!tab.cad2d) return false;
+
+    int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
+    if (!GetVisibleSceneViewportForTab(tab, viewportWidth, viewportHeight, viewportTop)) {
+        return false;
+    }
+    if (input.x < 0 || input.x >= viewportWidth ||
+        input.y < viewportTop || input.y >= viewportTop + viewportHeight) {
+        return false;
+    }
+
+    const double zoom = (std::max)(
+        (double)tab.cad2d->view.zoomPixelsPerCU.load(std::memory_order_acquire), 0.02);
+    const double centerX = tab.cad2d->view.centerXCU.load(std::memory_order_acquire);
+    const double centerY = tab.cad2d->view.centerYCU.load(std::memory_order_acquire);
+    const double offsetX = (double)input.x - (double)viewportWidth * 0.5;
+    const double offsetY = (double)viewportHeight * 0.5 - (double)(input.y - viewportTop);
+
+    outXCU = centerX + offsetX / zoom;
+    outYCU = centerY + offsetY / zoom;
+    return true;
+}
+
+void HandleLineCreationClick(DATASETTAB& tab, double xCU, double yCU) {
+    TabCad2DStorage& storage = *tab.cad2d;
+    if (!storage.lineCreationHasPreviousPoint.load(std::memory_order_acquire)) {
+        storage.lineCreationPreviousXCU.store(xCU, std::memory_order_release);
+        storage.lineCreationPreviousYCU.store(yCU, std::memory_order_release);
+        storage.lineCreationHasPreviousPoint.store(true, std::memory_order_release);
+        return;
+    }
+
+    const uint64_t page2DMemoryId = Cad2DFindTargetPage2DMemoryId(tab);
+    if (page2DMemoryId == 0) return;
+
+    Cad2DLineRecordCPU line{};
+    line.containerMemoryId = page2DMemoryId;
+    line.x1 = storage.lineCreationPreviousXCU.load(std::memory_order_acquire);
+    line.y1 = storage.lineCreationPreviousYCU.load(std::memory_order_acquire);
+    line.x2 = xCU;
+    line.y2 = yCU;
+    line.lineWeight = 1.0f;
+    line.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+    line.colorABGR = 0xFF000000u;
+    line.schemaVersion = VishwakarmaStorage::kGeometry2DLineSchemaVersion;
+    EnqueueCad2DLine(tab.tabID, page2DMemoryId, line);
+
+    storage.lineCreationPreviousXCU.store(xCU, std::memory_order_release);
+    storage.lineCreationPreviousYCU.store(yCU, std::memory_order_release);
+}
+
+void HandlePolylineCreationClick(DATASETTAB& tab, double xCU, double yCU) {
+    const uint64_t page2DMemoryId = Cad2DFindTargetPage2DMemoryId(tab);
+    if (page2DMemoryId == 0) return;
+
+    Cad2DPolylineRecordCPU polyline{};
+    bool shouldEnqueue = false;
+    {
+        TabCad2DStorage& storage = *tab.cad2d;
+        std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
+        storage.polylineCreationPoints.push_back({ xCU, yCU });
+        if (storage.polylineCreationPoints.size() < 2) return;
+
+        if (storage.polylineCreationObjectId == 0) {
+            storage.polylineCreationObjectId = MemoryID::next();
+        }
+
+        polyline.objectId = storage.polylineCreationObjectId;
+        polyline.containerMemoryId = page2DMemoryId;
+        polyline.points = storage.polylineCreationPoints;
+        polyline.lineWeight = 1.0f;
+        polyline.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+        polyline.colorABGR = 0xFF000000u;
+        polyline.schemaVersion = VishwakarmaStorage::kGeometry2DPolylineSchemaVersion;
+        shouldEnqueue = true;
+    }
+
+    if (shouldEnqueue) {
+        EnqueueCad2DPolyline(tab.tabID, page2DMemoryId, std::move(polyline));
+    }
+}
 }
 
 void EnqueueCad2DLine(uint64_t tabID, uint64_t containerMemoryId, Cad2DLineRecordCPU line) {
@@ -32,6 +125,24 @@ void EnqueueCad2DLine(uint64_t tabID, uint64_t containerMemoryId, Cad2DLineRecor
     command.tabID = tabID;
     command.containerMemoryId = containerMemoryId;
     command.line = line;
+
+    {
+        std::lock_guard<std::mutex> lock(gCad2DCopyQueueMutex);
+        gCad2DCopyQueue.push(std::move(command));
+    }
+    toCopyThreadCV.notify_one();
+}
+
+void EnqueueCad2DPolyline(uint64_t tabID, uint64_t containerMemoryId, Cad2DPolylineRecordCPU polyline) {
+    if (polyline.objectId == 0) polyline.objectId = MemoryID::next();
+    polyline.containerMemoryId = containerMemoryId;
+
+    CommandToCopyThread2D command{};
+    command.type = CommandToCopyThread2DType::AddPolyline;
+    command.id = polyline.objectId;
+    command.tabID = tabID;
+    command.containerMemoryId = containerMemoryId;
+    command.polyline = std::move(polyline);
 
     {
         std::lock_guard<std::mutex> lock(gCad2DCopyQueueMutex);
@@ -99,10 +210,43 @@ bool Cad2DIsActivePage2D(DATASETTAB& tab) {
     return active && active->objectType == VishwakarmaStorage::ObjectType::Page2D;
 }
 
+void Cad2DBeginLineCreation(DATASETTAB& tab) {
+    if (!tab.cad2d || !Cad2DIsActivePage2D(tab)) return;
+
+    ClearLineCreationState(*tab.cad2d);
+    tab.cad2d->lineCreationMode.store(true, std::memory_order_release);
+    tab.cad2d->lineCreationHasPreviousPoint.store(false, std::memory_order_release);
+}
+
+void Cad2DBeginPolylineCreation(DATASETTAB& tab) {
+    if (!tab.cad2d || !Cad2DIsActivePage2D(tab)) return;
+
+    ClearLineCreationState(*tab.cad2d);
+    tab.cad2d->polylineCreationMode.store(true, std::memory_order_release);
+}
+
 bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
-    if (!tab.cad2d || !Cad2DIsActivePage2D(tab)) return false;
+    if (!tab.cad2d) return false;
+    if (!Cad2DIsActivePage2D(tab)) {
+        const bool anyCreationMode =
+            tab.cad2d->lineCreationMode.load(std::memory_order_acquire) ||
+            tab.cad2d->polylineCreationMode.load(std::memory_order_acquire);
+        if (input.actionType == ACTION_TYPE::KEYDOWN && input.x == VK_ESCAPE && anyCreationMode) {
+            ClearLineCreationState(*tab.cad2d);
+            return true;
+        }
+        return false;
+    }
 
     switch (input.actionType) {
+    case ACTION_TYPE::KEYDOWN:
+        if (input.x == VK_ESCAPE &&
+            (tab.cad2d->lineCreationMode.load(std::memory_order_acquire) ||
+                tab.cad2d->polylineCreationMode.load(std::memory_order_acquire))) {
+            ClearLineCreationState(*tab.cad2d);
+            return true;
+        }
+        break;
     case ACTION_TYPE::MOUSEMOVE:
     {
         const int dx = input.x - tab.lastMouseX;
@@ -152,6 +296,18 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
         return true;
     case ACTION_TYPE::LBUTTONDOWN:
         tab.mouseLeftDown = true;
+        if (tab.cad2d->lineCreationMode.load(std::memory_order_acquire)) {
+            double xCU = 0.0, yCU = 0.0;
+            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+                HandleLineCreationClick(tab, xCU, yCU);
+            }
+        }
+        else if (tab.cad2d->polylineCreationMode.load(std::memory_order_acquire)) {
+            double xCU = 0.0, yCU = 0.0;
+            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+                HandlePolylineCreationClick(tab, xCU, yCU);
+            }
+        }
         return true;
     case ACTION_TYPE::LBUTTONUP:
         tab.mouseLeftDown = false;

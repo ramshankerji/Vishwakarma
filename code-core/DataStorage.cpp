@@ -27,6 +27,7 @@
 #include "DataStorage_PAGE2D.pb.h"
 #include "DataStorage_PARALLELEPIPED.pb.h"
 #include "DataStorage_PIPE.pb.h"
+#include "DataStorage_POLYLINE2D.pb.h"
 #include "DataStorage_PYRAMID.pb.h"
 #include "DataStorage_SCENE3D.pb.h"
 #include "DataStorage_SPHERE.pb.h"
@@ -387,6 +388,20 @@ bool EncodeLine2D(const Cad2DLineRecordCPU& line, std::vector<uint8_t>& payload,
     return SerializeMessage(message, payload, errorMessage);
 }
 
+bool EncodePolyline2D(const Cad2DPolylineRecordCPU& polyline,
+    std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Polyline2D message;
+    for (const Cad2DPoint2D& point : polyline.points) {
+        pb::Polyline2DPoint* pointMessage = message.add_points();
+        pointMessage->set_x(point.x);
+        pointMessage->set_y(point.y);
+    }
+    message.set_line_weight(polyline.lineWeight);
+    message.set_line_weight_mode(static_cast<uint32_t>(polyline.lineWeightMode));
+    message.set_color_abgr(polyline.colorABGR);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
 bool DecodePyramid(const std::vector<uint8_t>& payload, PYRAMID& object) {
     pb::Pyramid message;
     if (!ParseMessage(payload, message)) return false;
@@ -571,6 +586,22 @@ bool DecodeLine2D(const std::vector<uint8_t>& payload, Cad2DLineRecordCPU& line)
     return true;
 }
 
+bool DecodePolyline2D(const std::vector<uint8_t>& payload, Cad2DPolylineRecordCPU& polyline) {
+    pb::Polyline2D message;
+    if (!ParseMessage(payload, message)) return false;
+
+    polyline.points.clear();
+    polyline.points.reserve(message.points_size());
+    for (int i = 0; i < message.points_size(); ++i) {
+        const pb::Polyline2DPoint& pointMessage = message.points(i);
+        polyline.points.push_back({ pointMessage.x(), pointMessage.y() });
+    }
+    polyline.lineWeight = message.line_weight() > 0.0f ? message.line_weight() : 0.25f;
+    polyline.lineWeightMode = ReadLineWeightMode(message.line_weight_mode());
+    polyline.colorABGR = message.color_abgr();
+    return polyline.points.size() >= 2;
+}
+
 std::string ObjectTypeName(ObjectType objectType) {
     switch (objectType) {
     case ObjectType::Pyramid: return "Pyramid";
@@ -586,6 +617,7 @@ std::string ObjectTypeName(ObjectType objectType) {
     case ObjectType::Page2D: return "Page2D";
     case ObjectType::Scene3D: return "Scene3D";
     case ObjectType::Line2D: return "Line2D";
+    case ObjectType::Polyline2D: return "Polyline2D";
     default: return "Unknown";
     }
 }
@@ -605,6 +637,7 @@ bool ObjectTypeFromNumber(uint32_t value, ObjectType& objectType) {
     case 11: objectType = ObjectType::Page2D; return true;
     case 12: objectType = ObjectType::Scene3D; return true;
     case 13: objectType = ObjectType::Line2D; return true;
+    case 14: objectType = ObjectType::Polyline2D; return true;
     default: objectType = ObjectType::Unknown; return false;
     }
 }
@@ -614,7 +647,9 @@ uint16_t DefaultSchemaVersionForObjectType(ObjectType objectType) {
         return VishwakarmaStorage::kLogicalElementSchemaVersion;
     }
     if (VishwakarmaStorage::IsGeometry2DObjectType(objectType)) {
-        return VishwakarmaStorage::kGeometry2DLineSchemaVersion;
+        return objectType == ObjectType::Polyline2D
+            ? VishwakarmaStorage::kGeometry2DPolylineSchemaVersion
+            : VishwakarmaStorage::kGeometry2DLineSchemaVersion;
     }
     return VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
 }
@@ -889,6 +924,35 @@ void AppendLine2DToTab(DATASETTAB& tab, Cad2DLineRecordCPU line) {
     EnqueueCad2DLine(tab.tabID, line.containerMemoryId, line);
 }
 
+void AppendPolyline2DToTab(DATASETTAB& tab, Cad2DPolylineRecordCPU polyline) {
+    if (!tab.cad2d) tab.cad2d = std::make_unique<TabCad2DStorage>();
+    if (polyline.objectId == 0) polyline.objectId = MemoryID::next();
+    if (polyline.schemaVersion == 0) {
+        polyline.schemaVersion = VishwakarmaStorage::kGeometry2DPolylineSchemaVersion;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
+        auto existing = std::find_if(tab.cad2d->polylineRecords.begin(), tab.cad2d->polylineRecords.end(),
+            [&](const Cad2DPolylineRecordCPU& existingPolyline) {
+                return existingPolyline.objectId == polyline.objectId;
+            });
+        if (existing == tab.cad2d->polylineRecords.end()) {
+            tab.cad2d->polylineRecords.push_back(polyline);
+        }
+        else {
+            *existing = polyline;
+        }
+    }
+
+    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), polyline.objectId) ==
+        tab.allIDsInThisTab.end()) {
+        tab.allIDsInThisTab.push_back(polyline.objectId);
+    }
+
+    EnqueueCad2DPolyline(tab.tabID, polyline.containerMemoryId, polyline);
+}
+
 struct ObjectStoreRow {
     uint64_t objectId = 0;
     uint64_t parentId = 0;
@@ -928,6 +992,11 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         for (const Cad2DLineRecordCPU& line : cad2d->lineRecords) {
             if (line.persistedId > maxExistingId) {
                 maxExistingId = line.persistedId;
+            }
+        }
+        for (const Cad2DPolylineRecordCPU& polyline : cad2d->polylineRecords) {
+            if (polyline.persistedId > maxExistingId) {
+                maxExistingId = polyline.persistedId;
             }
         }
     }
@@ -975,11 +1044,26 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
                 line.schemaVersion = VishwakarmaStorage::kGeometry2DLineSchemaVersion;
             }
         }
+        for (Cad2DPolylineRecordCPU& polyline : cad2d->polylineRecords) {
+            if (polyline.objectId == 0) {
+                polyline.objectId = MemoryID::next();
+            }
+            if (polyline.persistedId == 0) {
+                if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
+                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    return false;
+                }
+                polyline.persistedId = assignNextId++;
+            }
+            if (polyline.schemaVersion == 0) {
+                polyline.schemaVersion = VishwakarmaStorage::kGeometry2DPolylineSchemaVersion;
+            }
+        }
     }
 
     std::unordered_map<uint64_t, uint64_t> memoryIdToPersistedId;
     memoryIdToPersistedId.reserve(tab.storageLogicalObjects.size() + tab.storageObjects3D.size() +
-        (cad2d ? cad2d->lineRecords.size() : 0));
+        (cad2d ? cad2d->lineRecords.size() + cad2d->polylineRecords.size() : 0));
 
     for (const StoredLogicalObject& entry : tab.storageLogicalObjects) {
         if (entry.object && entry.object->persistedId != 0) {
@@ -995,6 +1079,11 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         for (const Cad2DLineRecordCPU& line : cad2d->lineRecords) {
             if (line.objectId != 0 && line.persistedId != 0) {
                 memoryIdToPersistedId[line.objectId] = line.persistedId;
+            }
+        }
+        for (const Cad2DPolylineRecordCPU& polyline : cad2d->polylineRecords) {
+            if (polyline.objectId != 0 && polyline.persistedId != 0) {
+                memoryIdToPersistedId[polyline.objectId] = polyline.persistedId;
             }
         }
     }
@@ -1020,6 +1109,17 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
             }
         }
         return line.persistedParentId;
+    };
+
+    auto resolvePolylineParentId = [&](Cad2DPolylineRecordCPU& polyline) {
+        if (polyline.containerMemoryId != 0) {
+            auto parentIt = memoryIdToPersistedId.find(polyline.containerMemoryId);
+            if (parentIt != memoryIdToPersistedId.end()) {
+                polyline.persistedParentId = parentIt->second;
+                return parentIt->second;
+            }
+        }
+        return polyline.persistedParentId;
     };
 
     for (StoredLogicalObject& entry : tab.storageLogicalObjects) {
@@ -1055,6 +1155,24 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
                 ? line.schemaVersion
                 : VishwakarmaStorage::kGeometry2DLineSchemaVersion;
             row.lifecycleState = line.isDeleted ? LifecycleState::SoftDeleted : LifecycleState::Live;
+            row.payload = std::move(payload);
+            rows.push_back(std::move(row));
+        }
+
+        for (Cad2DPolylineRecordCPU& polyline : cad2d->polylineRecords) {
+            if (polyline.objectId == 0 || polyline.points.size() < 2) continue;
+
+            std::vector<uint8_t> payload;
+            if (!EncodePolyline2D(polyline, payload, errorMessage)) return false;
+
+            ObjectStoreRow row;
+            row.objectId = polyline.persistedId;
+            row.parentId = resolvePolylineParentId(polyline);
+            row.objectType = ObjectType::Polyline2D;
+            row.schemaVersion = polyline.schemaVersion != 0
+                ? polyline.schemaVersion
+                : VishwakarmaStorage::kGeometry2DPolylineSchemaVersion;
+            row.lifecycleState = polyline.isDeleted ? LifecycleState::SoftDeleted : LifecycleState::Live;
             row.payload = std::move(payload);
             rows.push_back(std::move(row));
         }
@@ -1205,9 +1323,15 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
     if (tab.cad2d) {
         std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
         tab.cad2d->lineRecords.clear();
+        tab.cad2d->polylineRecords.clear();
         tab.cad2d->textRecords.clear();
         tab.cad2d->demoLineCounter.store(0, std::memory_order_release);
         tab.cad2d->demoTextQueued.store(false, std::memory_order_release);
+        tab.cad2d->lineCreationMode.store(false, std::memory_order_release);
+        tab.cad2d->lineCreationHasPreviousPoint.store(false, std::memory_order_release);
+        tab.cad2d->polylineCreationMode.store(false, std::memory_order_release);
+        tab.cad2d->polylineCreationObjectId = 0;
+        tab.cad2d->polylineCreationPoints.clear();
     }
     DataTreeView::ResetScroll(tab.dataTreeView);
     tab.allIDsInThisTab.clear();
@@ -1235,33 +1359,59 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         }
 
         if (VishwakarmaStorage::IsGeometry2DObjectType(objectType)) {
-            if (objectType != ObjectType::Line2D) {
+            if (objectType == ObjectType::Line2D) {
+                Cad2DLineRecordCPU line;
+                if (!DecodeLine2D(payload, line)) {
+                    SetError(errorMessage, "Could not decode " + ObjectTypeName(objectType) + " protobuf payload.");
+                    return false;
+                }
+
+                line.objectId = MemoryID::next();
+                line.persistedId = objectId;
+                line.persistedParentId = parentId;
+                line.schemaVersion = schemaVersion != 0
+                    ? schemaVersion
+                    : DefaultSchemaVersionForObjectType(objectType);
+                line.isDeleted = false;
+                if (parentId != 0) {
+                    auto parentIt = persistedIdToMemoryId.find(parentId);
+                    if (parentIt != persistedIdToMemoryId.end()) {
+                        line.containerMemoryId = parentIt->second;
+                    }
+                }
+
+                AppendLine2DToTab(tab, line);
+                persistedIdToMemoryId[objectId] = line.objectId;
+            }
+            else if (objectType == ObjectType::Polyline2D) {
+                Cad2DPolylineRecordCPU polyline;
+                if (!DecodePolyline2D(payload, polyline)) {
+                    SetError(errorMessage, "Could not decode " + ObjectTypeName(objectType) + " protobuf payload.");
+                    return false;
+                }
+
+                polyline.objectId = MemoryID::next();
+                polyline.persistedId = objectId;
+                polyline.persistedParentId = parentId;
+                polyline.schemaVersion = schemaVersion != 0
+                    ? schemaVersion
+                    : DefaultSchemaVersionForObjectType(objectType);
+                polyline.isDeleted = false;
+                if (parentId != 0) {
+                    auto parentIt = persistedIdToMemoryId.find(parentId);
+                    if (parentIt != persistedIdToMemoryId.end()) {
+                        polyline.containerMemoryId = parentIt->second;
+                    }
+                }
+
+                const uint64_t runtimeObjectId = polyline.objectId;
+                AppendPolyline2DToTab(tab, std::move(polyline));
+                persistedIdToMemoryId[objectId] = runtimeObjectId;
+            }
+            else {
                 SetError(errorMessage, "Unsupported 2D object_type in .yyy file: " + std::to_string(objectTypeNumber));
                 return false;
             }
-
-            Cad2DLineRecordCPU line;
-            if (!DecodeLine2D(payload, line)) {
-                SetError(errorMessage, "Could not decode " + ObjectTypeName(objectType) + " protobuf payload.");
-                return false;
-            }
-
-            line.objectId = MemoryID::next();
-            line.persistedId = objectId;
-            line.persistedParentId = parentId;
-            line.schemaVersion = schemaVersion != 0
-                ? schemaVersion
-                : DefaultSchemaVersionForObjectType(objectType);
-            line.isDeleted = false;
-            if (parentId != 0) {
-                auto parentIt = persistedIdToMemoryId.find(parentId);
-                if (parentIt != persistedIdToMemoryId.end()) {
-                    line.containerMemoryId = parentIt->second;
-                }
-            }
-
-            AppendLine2DToTab(tab, line);
-            persistedIdToMemoryId[objectId] = line.objectId;
             continue;
         }
 
