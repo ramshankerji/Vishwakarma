@@ -526,7 +526,20 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
             for (const CommandToCopyThread2D& command : commands) {
                 if (command.containerMemoryId == 0) continue;
                 if (command.type == CommandToCopyThread2DType::AddLine) {
-                    storage.lineRecords.push_back(command.line);
+                    auto existing = std::find_if(storage.lineRecords.begin(), storage.lineRecords.end(),
+                        [&](const Cad2DLineRecordCPU& line) {
+                            return line.objectId == command.line.objectId;
+                        });
+                    if (existing == storage.lineRecords.end()) {
+                        storage.lineRecords.push_back(command.line);
+                        if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(),
+                            command.line.objectId) == tab.allIDsInThisTab.end()) {
+                            tab.allIDsInThisTab.push_back(command.line.objectId);
+                        }
+                    }
+                    else {
+                        *existing = command.line;
+                    }
                 }
                 else if (command.type == CommandToCopyThread2DType::AddText) {
                     storage.textRecords.push_back(command.text);

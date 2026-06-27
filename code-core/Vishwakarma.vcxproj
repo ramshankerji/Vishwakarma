@@ -143,6 +143,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FOLDER.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FRUSTUM_OF_CONE.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FRUSTUM_OF_PYRAMID.pb.cc" />
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_LINE2D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PAGE2D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PARALLELEPIPED.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PIPE.pb.cc" />
@@ -213,6 +214,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <None Include="DataStorage_FOLDER.proto" />
     <None Include="DataStorage_FRUSTUM_OF_CONE.proto" />
     <None Include="DataStorage_FRUSTUM_OF_PYRAMID.proto" />
+    <None Include="DataStorage_LINE2D.proto" />
     <None Include="DataStorage_PAGE2D.proto" />
     <None Include="DataStorage_PARALLELEPIPED.proto" />
     <None Include="DataStorage_PIPE.proto" />

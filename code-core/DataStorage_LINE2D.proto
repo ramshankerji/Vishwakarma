@@ -1,0 +1,17 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+option optimize_for = LITE_RUNTIME;
+
+message Line2D {
+  double x1 = 1;
+  double y1 = 2;
+  double x2 = 3;
+  double y2 = 4;
+  float line_weight = 5;
+  uint32 line_weight_mode = 6;
+  uint32 color_abgr = 7;
+}

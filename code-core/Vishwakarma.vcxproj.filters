@@ -37,6 +37,9 @@
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FRUSTUM_OF_PYRAMID.pb.cc">
       <Filter>code-core</Filter>
     </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_LINE2D.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PAGE2D.pb.cc">
       <Filter>code-core</Filter>
     </ClCompile>
@@ -240,6 +243,9 @@
       <Filter>code-core</Filter>
     </None>
     <None Include="DataStorage_FRUSTUM_OF_PYRAMID.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_LINE2D.proto">
       <Filter>code-core</Filter>
     </None>
     <None Include="DataStorage_PAGE2D.proto">

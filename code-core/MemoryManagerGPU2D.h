@@ -32,6 +32,8 @@ enum class Cad2DTextJustification : uint32_t {
 struct Cad2DLineRecordCPU {
     uint64_t objectId = 0;
     uint64_t containerMemoryId = 0;
+    uint64_t persistedId = 0;
+    uint64_t persistedParentId = 0;
     double x1 = 0.0;
     double y1 = 0.0;
     double x2 = 0.0;
@@ -39,6 +41,8 @@ struct Cad2DLineRecordCPU {
     float lineWeight = 0.25f;
     Cad2DLineWeightMode lineWeightMode = Cad2DLineWeightMode::PaperMM;
     uint32_t colorABGR = 0xFF000000u;
+    uint16_t schemaVersion = 0;
+    bool isDeleted = false;
 };
 
 struct Cad2DTextRecordCPU {

@@ -5,10 +5,12 @@
 #include "DataStorage.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <random>
 #include <string>
 #include <unordered_map>
@@ -21,12 +23,14 @@
 #include "DataStorage_FOLDER.pb.h"
 #include "DataStorage_FRUSTUM_OF_CONE.pb.h"
 #include "DataStorage_FRUSTUM_OF_PYRAMID.pb.h"
+#include "DataStorage_LINE2D.pb.h"
 #include "DataStorage_PAGE2D.pb.h"
 #include "DataStorage_PARALLELEPIPED.pb.h"
 #include "DataStorage_PIPE.pb.h"
 #include "DataStorage_PYRAMID.pb.h"
 #include "DataStorage_SCENE3D.pb.h"
 #include "DataStorage_SPHERE.pb.h"
+#include "ID.h"
 #include "MemoryManagerGPU-DirectX12.h"
 #include "sqlite3.h"
 #include "विश्वकर्मा.h"
@@ -172,12 +176,12 @@ bool EnsureFileInfo(sqlite3* db, uint64_t objectCounterNext, std::string* errorM
     }
 
     const std::string now = std::to_string(CurrentUnixTimeSeconds());
-    return UpsertFileInfoText(db, "file_format_version", "yyy-mvp-2", errorMessage) &&
+    return UpsertFileInfoText(db, "file_format_version", "yyy-mvp-3", errorMessage) &&
         UpsertFileInfoText(db, "file_kind", "yyy", errorMessage) &&
         UpsertFileInfoText(db, "last_saved_by_application", "Vishwakarma", errorMessage) &&
         UpsertFileInfoText(db, "last_saved_time_utc", now, errorMessage) &&
-        UpsertFileInfoText(db, "schema_catalog_hash", "logical-hierarchy-geometry3d-mvp-schema-v1", errorMessage) &&
-        UpsertFileInfoText(db, "schema_catalog_version", "2", errorMessage) &&
+        UpsertFileInfoText(db, "schema_catalog_hash", "logical-hierarchy-geometry3d-page2d-line2d-mvp-schema-v1", errorMessage) &&
+        UpsertFileInfoText(db, "schema_catalog_version", "3", errorMessage) &&
         UpsertFileInfoText(db, "object_counter_next", std::to_string(objectCounterNext), errorMessage);
 }
 
@@ -371,6 +375,18 @@ bool EncodeScene3D(const SCENE3D& object, std::vector<uint8_t>& payload, std::st
     return SerializeMessage(message, payload, errorMessage);
 }
 
+bool EncodeLine2D(const Cad2DLineRecordCPU& line, std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Line2D message;
+    message.set_x1(line.x1);
+    message.set_y1(line.y1);
+    message.set_x2(line.x2);
+    message.set_y2(line.y2);
+    message.set_line_weight(line.lineWeight);
+    message.set_line_weight_mode(static_cast<uint32_t>(line.lineWeightMode));
+    message.set_color_abgr(line.colorABGR);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
 bool DecodePyramid(const std::vector<uint8_t>& payload, PYRAMID& object) {
     pb::Pyramid message;
     if (!ParseMessage(payload, message)) return false;
@@ -528,6 +544,33 @@ bool DecodeScene3D(const std::vector<uint8_t>& payload, SCENE3D& object) {
     return true;
 }
 
+Cad2DLineWeightMode ReadLineWeightMode(uint32_t value) {
+    switch (value) {
+    case static_cast<uint32_t>(Cad2DLineWeightMode::ModelComputerUnit):
+        return Cad2DLineWeightMode::ModelComputerUnit;
+    case static_cast<uint32_t>(Cad2DLineWeightMode::ScreenPixel):
+        return Cad2DLineWeightMode::ScreenPixel;
+    case static_cast<uint32_t>(Cad2DLineWeightMode::PaperMM):
+        return Cad2DLineWeightMode::PaperMM;
+    default:
+        return Cad2DLineWeightMode::PaperMM;
+    }
+}
+
+bool DecodeLine2D(const std::vector<uint8_t>& payload, Cad2DLineRecordCPU& line) {
+    pb::Line2D message;
+    if (!ParseMessage(payload, message)) return false;
+
+    line.x1 = message.x1();
+    line.y1 = message.y1();
+    line.x2 = message.x2();
+    line.y2 = message.y2();
+    line.lineWeight = message.line_weight() > 0.0f ? message.line_weight() : 0.25f;
+    line.lineWeightMode = ReadLineWeightMode(message.line_weight_mode());
+    line.colorABGR = message.color_abgr();
+    return true;
+}
+
 std::string ObjectTypeName(ObjectType objectType) {
     switch (objectType) {
     case ObjectType::Pyramid: return "Pyramid";
@@ -542,6 +585,7 @@ std::string ObjectTypeName(ObjectType objectType) {
     case ObjectType::Folder: return "Folder";
     case ObjectType::Page2D: return "Page2D";
     case ObjectType::Scene3D: return "Scene3D";
+    case ObjectType::Line2D: return "Line2D";
     default: return "Unknown";
     }
 }
@@ -560,8 +604,19 @@ bool ObjectTypeFromNumber(uint32_t value, ObjectType& objectType) {
     case 10: objectType = ObjectType::Folder; return true;
     case 11: objectType = ObjectType::Page2D; return true;
     case 12: objectType = ObjectType::Scene3D; return true;
+    case 13: objectType = ObjectType::Line2D; return true;
     default: objectType = ObjectType::Unknown; return false;
     }
+}
+
+uint16_t DefaultSchemaVersionForObjectType(ObjectType objectType) {
+    if (VishwakarmaStorage::IsLogicalObjectType(objectType)) {
+        return VishwakarmaStorage::kLogicalElementSchemaVersion;
+    }
+    if (VishwakarmaStorage::IsGeometry2DObjectType(objectType)) {
+        return VishwakarmaStorage::kGeometry2DLineSchemaVersion;
+    }
+    return VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
 }
 
 bool SerializeGeometryObject(const StoredGeometryObject3D& entry, std::vector<uint8_t>& payload,
@@ -805,6 +860,35 @@ void AppendLogicalObjectToTab(DATASETTAB& tab, ObjectType objectType, META_DATA*
     tab.allIDsInThisTab.push_back(object->memoryID);
 }
 
+void AppendLine2DToTab(DATASETTAB& tab, Cad2DLineRecordCPU line) {
+    if (!tab.cad2d) tab.cad2d = std::make_unique<TabCad2DStorage>();
+    if (line.objectId == 0) line.objectId = MemoryID::next();
+    if (line.schemaVersion == 0) {
+        line.schemaVersion = VishwakarmaStorage::kGeometry2DLineSchemaVersion;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
+        auto existing = std::find_if(tab.cad2d->lineRecords.begin(), tab.cad2d->lineRecords.end(),
+            [&](const Cad2DLineRecordCPU& existingLine) {
+                return existingLine.objectId == line.objectId;
+            });
+        if (existing == tab.cad2d->lineRecords.end()) {
+            tab.cad2d->lineRecords.push_back(line);
+        }
+        else {
+            *existing = line;
+        }
+    }
+
+    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), line.objectId) ==
+        tab.allIDsInThisTab.end()) {
+        tab.allIDsInThisTab.push_back(line.objectId);
+    }
+
+    EnqueueCad2DLine(tab.tabID, line.containerMemoryId, line);
+}
+
 struct ObjectStoreRow {
     uint64_t objectId = 0;
     uint64_t parentId = 0;
@@ -823,6 +907,11 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
     if (!tab.storageObjectsMutex) tab.storageObjectsMutex = std::make_unique<std::mutex>();
 
     std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
+    TabCad2DStorage* cad2d = tab.cad2d.get();
+    std::unique_lock<std::mutex> cad2DLock;
+    if (cad2d) {
+        cad2DLock = std::unique_lock<std::mutex>(cad2d->cpuRecordsMutex);
+    }
 
     uint64_t maxExistingId = 0;
     for (const StoredLogicalObject& entry : tab.storageLogicalObjects) {
@@ -833,6 +922,13 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
     for (const StoredGeometryObject3D& entry : tab.storageObjects3D) {
         if (entry.object && entry.object->persistedId > maxExistingId) {
             maxExistingId = entry.object->persistedId;
+        }
+    }
+    if (cad2d) {
+        for (const Cad2DLineRecordCPU& line : cad2d->lineRecords) {
+            if (line.persistedId > maxExistingId) {
+                maxExistingId = line.persistedId;
+            }
         }
     }
 
@@ -863,8 +959,27 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         }
     }
 
+    if (cad2d) {
+        for (Cad2DLineRecordCPU& line : cad2d->lineRecords) {
+            if (line.objectId == 0) {
+                line.objectId = MemoryID::next();
+            }
+            if (line.persistedId == 0) {
+                if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
+                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    return false;
+                }
+                line.persistedId = assignNextId++;
+            }
+            if (line.schemaVersion == 0) {
+                line.schemaVersion = VishwakarmaStorage::kGeometry2DLineSchemaVersion;
+            }
+        }
+    }
+
     std::unordered_map<uint64_t, uint64_t> memoryIdToPersistedId;
-    memoryIdToPersistedId.reserve(tab.storageLogicalObjects.size() + tab.storageObjects3D.size());
+    memoryIdToPersistedId.reserve(tab.storageLogicalObjects.size() + tab.storageObjects3D.size() +
+        (cad2d ? cad2d->lineRecords.size() : 0));
 
     for (const StoredLogicalObject& entry : tab.storageLogicalObjects) {
         if (entry.object && entry.object->persistedId != 0) {
@@ -874,6 +989,13 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
     for (const StoredGeometryObject3D& entry : tab.storageObjects3D) {
         if (entry.object && entry.object->persistedId != 0) {
             memoryIdToPersistedId[entry.object->memoryID] = entry.object->persistedId;
+        }
+    }
+    if (cad2d) {
+        for (const Cad2DLineRecordCPU& line : cad2d->lineRecords) {
+            if (line.objectId != 0 && line.persistedId != 0) {
+                memoryIdToPersistedId[line.objectId] = line.persistedId;
+            }
         }
     }
 
@@ -887,6 +1009,17 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
             }
         }
         return object->persistedParentId;
+    };
+
+    auto resolveLineParentId = [&](Cad2DLineRecordCPU& line) {
+        if (line.containerMemoryId != 0) {
+            auto parentIt = memoryIdToPersistedId.find(line.containerMemoryId);
+            if (parentIt != memoryIdToPersistedId.end()) {
+                line.persistedParentId = parentIt->second;
+                return parentIt->second;
+            }
+        }
+        return line.persistedParentId;
     };
 
     for (StoredLogicalObject& entry : tab.storageLogicalObjects) {
@@ -905,6 +1038,26 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         row.lifecycleState = LifecycleForObject(*entry.object);
         row.payload = std::move(payload);
         rows.push_back(std::move(row));
+    }
+
+    if (cad2d) {
+        for (Cad2DLineRecordCPU& line : cad2d->lineRecords) {
+            if (line.objectId == 0) continue;
+
+            std::vector<uint8_t> payload;
+            if (!EncodeLine2D(line, payload, errorMessage)) return false;
+
+            ObjectStoreRow row;
+            row.objectId = line.persistedId;
+            row.parentId = resolveLineParentId(line);
+            row.objectType = ObjectType::Line2D;
+            row.schemaVersion = line.schemaVersion != 0
+                ? line.schemaVersion
+                : VishwakarmaStorage::kGeometry2DLineSchemaVersion;
+            row.lifecycleState = line.isDeleted ? LifecycleState::SoftDeleted : LifecycleState::Live;
+            row.payload = std::move(payload);
+            rows.push_back(std::move(row));
+        }
     }
 
     for (StoredGeometryObject3D& entry : tab.storageObjects3D) {
@@ -1049,6 +1202,13 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         tab.defaultScene3DMemoryId = 0;
         tab.activeScene3DMemoryId = 0;
     }
+    if (tab.cad2d) {
+        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
+        tab.cad2d->lineRecords.clear();
+        tab.cad2d->textRecords.clear();
+        tab.cad2d->demoLineCounter.store(0, std::memory_order_release);
+        tab.cad2d->demoTextQueued.store(false, std::memory_order_release);
+    }
     DataTreeView::ResetScroll(tab.dataTreeView);
     tab.allIDsInThisTab.clear();
 
@@ -1072,6 +1232,37 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         if (!ReadObjectPayload(statement.stmt, 5, payload)) {
             SetError(errorMessage, "Could not read object payload from SQLite.");
             return false;
+        }
+
+        if (VishwakarmaStorage::IsGeometry2DObjectType(objectType)) {
+            if (objectType != ObjectType::Line2D) {
+                SetError(errorMessage, "Unsupported 2D object_type in .yyy file: " + std::to_string(objectTypeNumber));
+                return false;
+            }
+
+            Cad2DLineRecordCPU line;
+            if (!DecodeLine2D(payload, line)) {
+                SetError(errorMessage, "Could not decode " + ObjectTypeName(objectType) + " protobuf payload.");
+                return false;
+            }
+
+            line.objectId = MemoryID::next();
+            line.persistedId = objectId;
+            line.persistedParentId = parentId;
+            line.schemaVersion = schemaVersion != 0
+                ? schemaVersion
+                : DefaultSchemaVersionForObjectType(objectType);
+            line.isDeleted = false;
+            if (parentId != 0) {
+                auto parentIt = persistedIdToMemoryId.find(parentId);
+                if (parentIt != persistedIdToMemoryId.end()) {
+                    line.containerMemoryId = parentIt->second;
+                }
+            }
+
+            AppendLine2DToTab(tab, line);
+            persistedIdToMemoryId[objectId] = line.objectId;
+            continue;
         }
 
         META_DATA* object = nullptr;
@@ -1098,9 +1289,7 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         }
         object->schemaVersion = schemaVersion != 0
             ? schemaVersion
-            : (VishwakarmaStorage::IsLogicalObjectType(objectType)
-                ? VishwakarmaStorage::kLogicalElementSchemaVersion
-                : VishwakarmaStorage::kGeometry3DMvpSchemaVersion);
+            : DefaultSchemaVersionForObjectType(objectType);
         object->isDeleted = false;
         if (VishwakarmaStorage::IsLogicalObjectType(objectType)) {
             AppendLogicalObjectToTab(tab, objectType, object);
