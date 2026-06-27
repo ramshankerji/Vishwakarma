@@ -31,7 +31,7 @@ enum class RowKind : uint8_t {
 };
 
 struct State {
-    std::atomic<bool> isVisible{ false };
+    std::atomic<bool> isVisible{ true };
     std::atomic<bool> everythingExpanded{ true };
     std::atomic<uint64_t> firstVisibleRow{ 0 };
     std::atomic<bool> scrollbarDragging{ false };

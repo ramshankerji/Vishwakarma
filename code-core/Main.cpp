@@ -194,7 +194,7 @@ DATASETTAB* CreateEngineeringTab(const std::wstring& displayName = L"",
     tab.mode = storageFilePath.empty() ? 0 : 1;
     tab.autoGenerateRandomGeometry = autoGenerateRandomGeometry;
     tab.allIDsInThisTab.clear();
-    tab.dataTreeView.isVisible.store(false, std::memory_order_release);
+    tab.dataTreeView.isVisible.store(true, std::memory_order_release);
     tab.dataTreeView.everythingExpanded.store(true, std::memory_order_release);
     DataTreeView::ResetScroll(tab.dataTreeView);
     if (!tab.storageObjectsMutex) tab.storageObjectsMutex = std::make_unique<std::mutex>();

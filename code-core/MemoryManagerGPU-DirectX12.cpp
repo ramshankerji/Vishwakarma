@@ -5,6 +5,8 @@
 #include "UserInterface-DirectX12.h"
 #include "ShaderSceneVertex.h"
 #include "ShaderScenePixel.h"
+#include <algorithm>
+#include <cmath>
 #include "विश्वकर्मा.h"
 #include <iomanip>
 #include <unordered_set>
@@ -13,6 +15,66 @@
 extern शंकर gpu;
 UploadQueue gUploadQueue;
 extern std::atomic<uint64_t> atlasFence;
+
+namespace {
+constexpr float kSceneSkyTopR = 0.62f;
+constexpr float kSceneSkyTopG = 0.82f;
+constexpr float kSceneSkyTopB = 1.00f;
+constexpr float kSceneSkyHorizonR = 0.94f;
+constexpr float kSceneSkyHorizonG = 0.98f;
+constexpr float kSceneSkyHorizonB = 1.00f;
+constexpr int kSceneSkyGradientBands = 48;
+
+float LerpFloat(float a, float b, float t) {
+    return a + (b - a) * t;
+}
+
+int SceneTopUIHeightPx(int monitorId, const DX12ResourcesPerWindow& winRes) {
+    int topUITotalHeightPx = 0;
+    if (monitorId >= 0 && monitorId < gpu.currentMonitorCount) {
+        const UITopRibbonLayout& layout = gpu.screens[monitorId].topRibbonLayout;
+        if (layout.isValid && layout.topUITotalHeightPx > 0.0f) {
+            topUITotalHeightPx = static_cast<int>(std::round(layout.topUITotalHeightPx));
+        } else {
+            float pixelsPerMMy = static_cast<float>(gpu.screens[monitorId].physicalDpiY) / 25.4f;
+            topUITotalHeightPx = static_cast<int>(std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+                UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+                UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+                UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
+                UI_INTERNAL_TAB_BAR_HEIGHT_MM) * pixelsPerMMy)) + 7;
+        }
+    }
+
+    return std::clamp(topUITotalHeightPx, 0, winRes.WindowHeight);
+}
+
+void ClearSceneSkyGradient(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
+    D3D12_CPU_DESCRIPTOR_HANDLE rttHandle, int monitorId) {
+    if (!commandList || winRes.WindowWidth <= 0 || winRes.WindowHeight <= 0) return;
+
+    const int topUI = SceneTopUIHeightPx(monitorId, winRes);
+    const int sceneHeight = winRes.WindowHeight - topUI;
+    if (sceneHeight <= 0) return;
+
+    const int bandCount = (std::min)(kSceneSkyGradientBands, sceneHeight);
+    for (int band = 0; band < bandCount; ++band) {
+        const LONG y0 = static_cast<LONG>(topUI + (sceneHeight * band) / bandCount);
+        const LONG y1 = static_cast<LONG>(topUI + (sceneHeight * (band + 1)) / bandCount);
+        if (y1 <= y0) continue;
+
+        const float t = (static_cast<float>(band) + 0.5f) / static_cast<float>(bandCount);
+        const float smoothT = t * t * (3.0f - 2.0f * t);
+        const float skyColor[] = {
+            LerpFloat(kSceneSkyTopR, kSceneSkyHorizonR, smoothT),
+            LerpFloat(kSceneSkyTopG, kSceneSkyHorizonG, smoothT),
+            LerpFloat(kSceneSkyTopB, kSceneSkyHorizonB, smoothT),
+            1.0f
+        };
+        const D3D12_RECT rect = { 0, y0, static_cast<LONG>(winRes.WindowWidth), y1 };
+        commandList->ClearRenderTargetView(rttHandle, skyColor, 1, &rect);
+    }
+}
+} // namespace
 
 void PrintHResult(int i) {
     HRESULT reason = gpu.device->GetDeviceRemovedReason();
@@ -369,7 +431,8 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     //Since clearValue doesn't change per iteration, we can optimize by defining it once outside the loop.
     auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(gpu.rttFormat, dx.WindowWidth, dx.WindowHeight,
         1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
-    D3D12_CLEAR_VALUE clearValue{ .Format = gpu.rttFormat, .Color = {0.0f, 0.2f, 0.4f, 1.0f} }; //C++20 allows this beauty!
+    D3D12_CLEAR_VALUE clearValue{ .Format = gpu.rttFormat,
+        .Color = {kSceneSkyTopR, kSceneSkyTopG, kSceneSkyTopB, 1.0f} }; //C++20 allows this beauty!
     
     for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; i++) {
         CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
@@ -440,23 +503,7 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
     if (winRes.WindowHeight == 0) return; //Prevent divide by 0. If minimized window: WindowHeight = 0.
 
     // Compute top UI height in pixels based on monitor physical DPI (DPI -> pixels per mm)
-    int topUITotalHeightPx = 0;
-    if (monitorId >= 0 && monitorId < gpu.currentMonitorCount) {
-        const UITopRibbonLayout& layout = gpu.screens[monitorId].topRibbonLayout;
-        if (layout.isValid && layout.topUITotalHeightPx > 0.0f) {
-            topUITotalHeightPx = static_cast<int>(std::round(layout.topUITotalHeightPx));
-        } else {
-            float pixelsPerMMy = static_cast<float>(gpu.screens[monitorId].physicalDpiY) / 25.4f;
-            topUITotalHeightPx = static_cast<int>(std::round((UI_TAB_BAR_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-                UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-                UI_ACTION_GROUP_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-                UI_ACTION_GROUP_LABEL_HEIGHT_MM + UI_DIVIDER_GAP_PX +
-                UI_INTERNAL_TAB_BAR_HEIGHT_MM) * pixelsPerMMy)) + 7;
-        }
-        // clamp
-        if (topUITotalHeightPx < 0) topUITotalHeightPx = 0;
-        if (topUITotalHeightPx > winRes.WindowHeight) topUITotalHeightPx = winRes.WindowHeight;
-    }
+    const int topUITotalHeightPx = SceneTopUIHeightPx(monitorId, winRes);
 
     // Adjust viewport/scissor to exclude the top UI area so 3D scene starts below it.
     int sceneHeight = winRes.WindowHeight - topUITotalHeightPx;
@@ -506,7 +553,7 @@ void शंकर::PopulateCommandList(ID3D12GraphicsCommandList* commandList,
 	//commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle); //Removed. Already done by GpuRenderThread.
 
     // Clear render target and depth stencil
-    const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f }; // Example color, adjust as needed
+    const float clearColor[] = { kSceneSkyTopR, kSceneSkyTopG, kSceneSkyTopB, 1.0f }; // Example color, adjust as needed
     //commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr); //Removed. Already done by GpuRenderThread.
     commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
@@ -1617,7 +1664,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
 
             threadRes.commandList->OMSetRenderTargets(1, &rttHandle, FALSE, &dsvHandle);
 
-            const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };// Clear
+            const float clearColor[] = { kSceneSkyTopR, kSceneSkyTopG, kSceneSkyTopB, 1.0f };// Clear
             threadRes.commandList->ClearRenderTargetView(rttHandle, clearColor, 0, nullptr);
             threadRes.commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
@@ -1664,6 +1711,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                     RenderCad2DPage(threadRes.commandList.Get(), winRes, *tab.cad2d,
                         gpu.uiResources, monitorId, activeInternalSubTabMemoryId);
                 } else {
+                    ClearSceneSkyGradient(threadRes.commandList.Get(), winRes, rttHandle, monitorId);
                     gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes, tab.geometry,
                         monitorId, activeInternalSubTabMemoryId);// Renders geometry.
                 }
@@ -1861,7 +1909,8 @@ void शंकर::ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UI
     // Recreate RTT Textures
     CD3DX12_CPU_DESCRIPTOR_HANDLE rttRtvHandle(dx.rttRtvHeap->GetCPUDescriptorHandleForHeapStart());
     CD3DX12_CPU_DESCRIPTOR_HANDLE rttSrvHandle(dx.rttSrvHeap->GetCPUDescriptorHandleForHeapStart());
-    D3D12_CLEAR_VALUE clearValue{ .Format = gpu.rttFormat, .Color = {0.0f, 0.2f, 0.4f, 1.0f} };
+    D3D12_CLEAR_VALUE clearValue{ .Format = gpu.rttFormat,
+        .Color = {kSceneSkyTopR, kSceneSkyTopG, kSceneSkyTopB, 1.0f} };
 
     for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; i++) {
         auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(gpu.rttFormat,

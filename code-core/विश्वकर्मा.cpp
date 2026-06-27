@@ -367,6 +367,36 @@ static uint64_t FindActiveScene3D(DATASETTAB* targetTab) {
     return 0;
 }
 
+static uint64_t FindFirstLogicalObject(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType) {
+    if (!targetTab || !targetTab->storageObjectsMutex) return 0;
+
+    std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+    for (const StoredLogicalObject& entry : targetTab->storageLogicalObjects) {
+        if (entry.objectType == objectType && entry.object) {
+            return entry.object->memoryID;
+        }
+    }
+    return 0;
+}
+
+static void OpenInitialLogicalContainerSubTabs(DATASETTAB* targetTab) {
+    if (!targetTab) return;
+
+    const uint64_t page2DMemoryId =
+        FindFirstLogicalObject(targetTab, VishwakarmaStorage::ObjectType::Page2D);
+    const uint64_t scene3DMemoryId =
+        FindFirstLogicalObject(targetTab, VishwakarmaStorage::ObjectType::Scene3D);
+
+    if (page2DMemoryId != 0) {
+        SetActiveDataTreeBranch(targetTab, page2DMemoryId);
+        OpenInternalSubTab(targetTab, page2DMemoryId);
+    }
+    if (scene3DMemoryId != 0) {
+        SetActiveDataTreeBranch(targetTab, scene3DMemoryId);
+        OpenInternalSubTab(targetTab, scene3DMemoryId);
+    }
+}
+
 static void EnsureDefaultLogicalHierarchy(DATASETTAB* targetTab) {
     if (!targetTab) return;
     if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
@@ -540,6 +570,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
 
     if (myTab->autoGenerateRandomGeometry || myTab->storageFilePath.empty()) {
         EnsureDefaultLogicalHierarchy(myTab);
+        OpenInitialLogicalContainerSubTabs(myTab);
     }
 
     // Generate initial random geometry only for unsaved/dev tabs. Loaded .yyy tabs keep their stored contents.

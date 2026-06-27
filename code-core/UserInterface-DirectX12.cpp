@@ -82,6 +82,18 @@ static std::u32string BuildTreeNodeLabel(VishwakarmaStorage::ObjectType objectTy
     return label;
 }
 
+static VishwakarmaStorage::ObjectType ActiveInternalSubTabType(
+    const std::vector<InternalSubTab>& internalSubTabs, uint64_t activeInternalSubTabMemoryId) {
+    if (activeInternalSubTabMemoryId == 0) return VishwakarmaStorage::ObjectType::Unknown;
+
+    for (const InternalSubTab& subTab : internalSubTabs) {
+        if (subTab.containerMemoryId == activeInternalSubTabMemoryId) {
+            return subTab.containerType;
+        }
+    }
+    return VishwakarmaStorage::ObjectType::Unknown;
+}
+
 static UIAtlasRegion MakeAtlasRegion(int x, int y, int w, int h, int atlasW, int atlasH) {
     UIAtlasRegion region{};
     region.uvMinX = (float)x / (float)atlasW;
@@ -1076,6 +1088,14 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     float tabBarHeightPx = topRibbonLayout.tabBarHeightPx;
     float topUITotalHeightPx = topRibbonLayout.topUITotalHeightPx;
     float roundedCornerRadiusPx = topRibbonLayout.roundedCornerRadiusPx;
+    const VishwakarmaStorage::ObjectType activeInternalSubTabType =
+        ActiveInternalSubTabType(internalSubTabs, activeInternalSubTabMemoryId);
+    const bool useDarkDataTreeText =
+        activeInternalSubTabType == VishwakarmaStorage::ObjectType::Page2D ||
+        activeInternalSubTabType == VishwakarmaStorage::ObjectType::Scene3D;
+    const uint32_t dataTreeTextColor = useDarkDataTreeText ? 0xFF000000 : 0xFFFFFFFF;
+    const uint32_t dataTreeActiveColor = 0xFF3399FF;
+    const uint32_t dataTreeHoverColor = 0xFFFF9933;
 
     auto canPushRect = [&]() {
         return ctx.vertexCount + 4 <= uiRes.maxVertices &&
@@ -1569,7 +1589,15 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
                 std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
                 treeNodes.reserve(tab.storageLogicalObjects.size() + tab.storageObjects3D.size());
                 expandedNodeIds = tab.expandedDataTreeNodeIds;
-                activeBranchObjectId = tab.activeScene3DMemoryId;
+                if (activeInternalSubTabType == VishwakarmaStorage::ObjectType::Page2D) {
+                    activeBranchObjectId = activeInternalSubTabMemoryId;
+                } else {
+                    activeBranchObjectId = tab.activeScene3DMemoryId;
+                    if (activeBranchObjectId == 0 &&
+                        activeInternalSubTabType == VishwakarmaStorage::ObjectType::Scene3D) {
+                        activeBranchObjectId = activeInternalSubTabMemoryId;
+                    }
+                }
 
                 for (const StoredLogicalObject& object : tab.storageLogicalObjects) {
                     if (!object.object) continue;
@@ -1687,11 +1715,11 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
                 const bool rowToggleHovered = toggleHovered && row.objectId == hoveredToggleObjectId;
                 const bool rowBranchHovered = branchHovered && row.objectId == hoveredBranchObjectId;
                 const uint32_t labelColor = row.isActiveBranch
-                    ? 0xFF3399FF // Indian flag saffron/orange: RGB #FF9933.
-                    : (rowBranchHovered ? 0xFFFF9933 : 0xFFFFFFFF);
+                    ? dataTreeActiveColor
+                    : (rowBranchHovered ? dataTreeHoverColor : dataTreeTextColor);
                 const uint32_t toggleColor = row.isActiveBranch
-                    ? 0xFF3399FF
-                    : (rowToggleHovered ? 0xFFFF9933 : 0xFFFFFFFF);
+                    ? dataTreeActiveColor
+                    : (rowToggleHovered ? dataTreeHoverColor : dataTreeTextColor);
                 const float baselineY = textBaselineY(row.y, row.height, uiTextScale);
 
                 if (row.hasToggle) {
