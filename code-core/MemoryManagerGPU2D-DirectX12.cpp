@@ -475,6 +475,12 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage) {
     storage.polygonCreationHasCenter.store(false, std::memory_order_release);
     storage.polygonCreationCenterXCU.store(0.0, std::memory_order_release);
     storage.polygonCreationCenterYCU.store(0.0, std::memory_order_release);
+    storage.textCreationMode.store(false, std::memory_order_release);
+    storage.textCreationHasAnchor.store(false, std::memory_order_release);
+    storage.textCreationXCU.store(0.0, std::memory_order_release);
+    storage.textCreationYCU.store(0.0, std::memory_order_release);
+    storage.textCreationObjectId = 0;
+    storage.textCreationDraft.clear();
 }
 
 void RenderCad2DPage(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
@@ -644,7 +650,23 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
                     }
                 }
                 else if (command.type == CommandToCopyThread2DType::AddText) {
-                    storage.textRecords.push_back(command.text);
+                    auto existing = std::find_if(storage.textRecords.begin(), storage.textRecords.end(),
+                        [&](const Cad2DTextRecordCPU& text) {
+                            return text.objectId == command.text.objectId;
+                        });
+                    if (existing == storage.textRecords.end()) {
+                        storage.textRecords.push_back(command.text);
+                        if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(),
+                            command.text.objectId) == tab.allIDsInThisTab.end()) {
+                            tab.allIDsInThisTab.push_back(command.text.objectId);
+                        }
+                    }
+                    else {
+                        Cad2DTextRecordCPU updated = command.text;
+                        if (updated.persistedId == 0) updated.persistedId = existing->persistedId;
+                        if (updated.persistedParentId == 0) updated.persistedParentId = existing->persistedParentId;
+                        *existing = std::move(updated);
+                    }
                 }
             }
             lines = storage.lineRecords;

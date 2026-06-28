@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "MemoryManagerGPU2D.h"
@@ -122,6 +123,13 @@ struct TabCad2DStorage {
     std::atomic<bool> polygonCreationHasCenter{ false };
     std::atomic<double> polygonCreationCenterXCU{ 0.0 };
     std::atomic<double> polygonCreationCenterYCU{ 0.0 };
+
+    std::atomic<bool> textCreationMode{ false };
+    std::atomic<bool> textCreationHasAnchor{ false };
+    std::atomic<double> textCreationXCU{ 0.0 };
+    std::atomic<double> textCreationYCU{ 0.0 };
+    uint64_t textCreationObjectId = 0;
+    std::string textCreationDraft;
 };
 
 void InitCad2DTabResources(TabCad2DStorage& storage);

@@ -14,7 +14,9 @@
 #include "UserInterfaceTranslationCompiled.h"
 #include "SVGIconRenderer.h"
 #include <array>
+#include <cfloat>
 #include <cmath>
+#include <mutex>
 #include <utility>
 extern शंकर gpu;
 extern std::atomic<uint16_t*> publishedTabIndexes;
@@ -1752,6 +1754,8 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             tab.cad2d && tab.cad2d->polylineCreationMode.load(std::memory_order_acquire);
         const bool polygonCreationMode =
             tab.cad2d && tab.cad2d->polygonCreationMode.load(std::memory_order_acquire);
+        const bool textCreationMode =
+            tab.cad2d && tab.cad2d->textCreationMode.load(std::memory_order_acquire);
         if (lineCreationMode || polylineCreationMode || polygonCreationMode) {
             const float cursorIconSize = iconSizePx;
             const float cursorIconGap = 6.0f;
@@ -1765,6 +1769,72 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             const float iconY = std::clamp(
                 input.mouseY + cursorIconGap, 0.0f, std::max(0.0f, H - cursorIconSize));
             PushIcon(ctx, iconX, iconY, cursorIconSize, cursorIconSize, cursorIcon, 0xFF000000u, uiRes);
+        }
+
+        if (textCreationMode &&
+            tab.cad2d->textCreationHasAnchor.load(std::memory_order_acquire) &&
+            ((GetTickCount64() / 500ULL) % 2ULL) == 0ULL) {
+            int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
+            if (GetVisibleSceneViewportForTab(tab, viewportWidth, viewportHeight, viewportTop) &&
+                viewportWidth > 0 && viewportHeight > 0) {
+                const float zoom = std::max(
+                    tab.cad2d->view.zoomPixelsPerCU.load(std::memory_order_acquire), 0.02f);
+                const double centerX = tab.cad2d->view.centerXCU.load(std::memory_order_acquire);
+                const double centerY = tab.cad2d->view.centerYCU.load(std::memory_order_acquire);
+                const double anchorX = tab.cad2d->textCreationXCU.load(std::memory_order_acquire);
+                const double anchorY = tab.cad2d->textCreationYCU.load(std::memory_order_acquire);
+                std::string draftText;
+                {
+                    std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
+                    draftText = tab.cad2d->textCreationDraft;
+                }
+
+                float caretOffsetCU = 0.0f;
+                if (!draftText.empty()) {
+                    const float textScale = 9.0f / NotoSansMSDF_Size;
+                    float cursorXCU = 0.0f;
+                    float minX = FLT_MAX;
+                    float maxX = -FLT_MAX;
+                    bool hasGlyphBounds = false;
+                    for (unsigned char c : draftText) {
+                        if (c > 0x7F) continue;
+                        const auto glyphIt = glyphLookup.find(static_cast<char32_t>(c));
+                        if (glyphIt == glyphLookup.end()) continue;
+
+                        const Glyph& glyph = glyphIt->second;
+                        if (glyph.width > 0 && glyph.height > 0) {
+                            const float x0 = cursorXCU + static_cast<float>(glyph.bearingX) * textScale;
+                            const float x1 = x0 + static_cast<float>(glyph.width) * textScale;
+                            minX = std::min(minX, x0);
+                            maxX = std::max(maxX, x1);
+                            hasGlyphBounds = true;
+                        }
+                        cursorXCU += static_cast<float>(glyph.advanceX) * textScale;
+                    }
+                    const float alignX = hasGlyphBounds ? -(minX + maxX) * 0.5f : -cursorXCU * 0.5f;
+                    caretOffsetCU = cursorXCU + alignX;
+                }
+
+                const float caretScreenX = static_cast<float>((double)viewportWidth * 0.5 +
+                    (anchorX + (double)caretOffsetCU - centerX) * (double)zoom);
+                const float caretScreenY = static_cast<float>((double)viewportTop +
+                    (double)viewportHeight * 0.5 - (anchorY - centerY) * (double)zoom);
+
+                if (caretScreenX >= 0.0f && caretScreenX < static_cast<float>(viewportWidth) &&
+                    caretScreenY >= static_cast<float>(viewportTop) &&
+                    caretScreenY < static_cast<float>(viewportTop + viewportHeight)) {
+                    const float caretHeight = std::clamp(9.0f * zoom, 10.0f,
+                        std::max(10.0f, static_cast<float>(viewportHeight)));
+                    const float caretWidth = 2.0f;
+                    const float caretX = std::clamp(caretScreenX - caretWidth * 0.5f,
+                        0.0f, std::max(0.0f, W - caretWidth));
+                    const float caretY = std::clamp(caretScreenY - caretHeight * 0.5f,
+                        static_cast<float>(viewportTop),
+                        std::max(static_cast<float>(viewportTop),
+                            static_cast<float>(viewportTop + viewportHeight) - caretHeight));
+                    pushRect(caretX, caretY, caretWidth, caretHeight, 0xFF000000u);
+                }
+            }
         }
     }
 

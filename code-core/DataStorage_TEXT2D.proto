@@ -1,0 +1,20 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+option optimize_for = LITE_RUNTIME;
+
+message Text2D {
+  double x = 1;
+  double y = 2;
+  float text_height_cu = 3;
+  float rotation_radians = 4;
+  uint32 color_abgr = 5;
+  uint64 font = 6;
+  uint32 justification = 7;
+  float x_offset_cu = 8;
+  float y_offset_cu = 9;
+  string text = 10;
+}

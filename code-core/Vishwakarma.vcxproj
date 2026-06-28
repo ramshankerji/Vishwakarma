@@ -149,6 +149,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PIPE.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_POLYLINE2D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_POLYGON2D.pb.cc" />
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_TEXT2D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PYRAMID.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_SCENE3D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_SPHERE.pb.cc" />
@@ -222,6 +223,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <None Include="DataStorage_PIPE.proto" />
     <None Include="DataStorage_POLYLINE2D.proto" />
     <None Include="DataStorage_POLYGON2D.proto" />
+    <None Include="DataStorage_TEXT2D.proto" />
     <None Include="DataStorage_PYRAMID.proto" />
     <None Include="DataStorage_SCENE3D.proto" />
     <None Include="DataStorage_SPHERE.proto" />

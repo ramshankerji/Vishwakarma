@@ -6,6 +6,7 @@
 #include <cmath>
 #include <utility>
 
+#include "CommonNamedNumbers.h"
 #include "MemoryManagerGPU-DirectX12.h"
 #include "विश्वकर्मा.h"
 #include "ID.h"
@@ -16,6 +17,7 @@ std::queue<CommandToCopyThread2D> gCad2DCopyQueue;
 constexpr uint32_t kDefaultPolygonLineSegmentCount = 4;
 constexpr double kDefaultPolygonRotationDegrees = 45.0;
 constexpr double kMinPolygonRadiusCU = 1.0e-9;
+constexpr float kDefaultTextHeightCU = 9.0f;
 
 StoredLogicalObject* FindLogicalObjectByIdLocked(DATASETTAB& tab, uint64_t memoryId) {
     for (StoredLogicalObject& entry : tab.storageLogicalObjects) {
@@ -32,9 +34,15 @@ void ClearLineCreationState(TabCad2DStorage& storage) {
     storage.polygonCreationHasCenter.store(false, std::memory_order_release);
     storage.polygonCreationCenterXCU.store(0.0, std::memory_order_release);
     storage.polygonCreationCenterYCU.store(0.0, std::memory_order_release);
+    storage.textCreationMode.store(false, std::memory_order_release);
+    storage.textCreationHasAnchor.store(false, std::memory_order_release);
+    storage.textCreationXCU.store(0.0, std::memory_order_release);
+    storage.textCreationYCU.store(0.0, std::memory_order_release);
     std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
     storage.polylineCreationObjectId = 0;
     storage.polylineCreationPoints.clear();
+    storage.textCreationObjectId = 0;
+    storage.textCreationDraft.clear();
 }
 
 bool Page2DCoordinateFromInput(DATASETTAB& tab, const ACTION_DETAILS& input,
@@ -152,6 +160,90 @@ void HandlePolygonCreationClick(DATASETTAB& tab, double xCU, double yCU) {
     EnqueueCad2DPolygon(tab.tabID, page2DMemoryId, polygon);
 
     storage.polygonCreationHasCenter.store(false, std::memory_order_release);
+}
+
+void HandleTextCreationClick(DATASETTAB& tab, double xCU, double yCU) {
+    TabCad2DStorage& storage = *tab.cad2d;
+    storage.textCreationXCU.store(xCU, std::memory_order_release);
+    storage.textCreationYCU.store(yCU, std::memory_order_release);
+    storage.textCreationHasAnchor.store(true, std::memory_order_release);
+
+    std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
+    if (storage.textCreationObjectId != 0 || !storage.textCreationDraft.empty()) {
+        storage.textCreationObjectId = 0;
+        storage.textCreationDraft.clear();
+    }
+}
+
+void EnqueueTextCreationDraft(DATASETTAB& tab, uint64_t page2DMemoryId, uint64_t objectId,
+    double xCU, double yCU, std::string textValue) {
+    Cad2DTextRecordCPU text{};
+    text.objectId = objectId;
+    text.containerMemoryId = page2DMemoryId;
+    text.x = xCU;
+    text.y = yCU;
+    text.textHeightCU = kDefaultTextHeightCU;
+    text.rotationRadians = 0.0f;
+    text.colorABGR = 0xFF000000u;
+    text.font = 0;
+    text.justification = Cad2DTextJustification::Center;
+    text.text = std::move(textValue);
+    text.schemaVersion = VishwakarmaStorage::kGeometry2DTextSchemaVersion;
+    EnqueueCad2DText(tab.tabID, page2DMemoryId, std::move(text));
+}
+
+bool HandleTextCreationChar(DATASETTAB& tab, int charCode) {
+    TabCad2DStorage& storage = *tab.cad2d;
+    if (charCode == '\r' || charCode == '\n') {
+        storage.textCreationHasAnchor.store(false, std::memory_order_release);
+        std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
+        storage.textCreationObjectId = 0;
+        storage.textCreationDraft.clear();
+        return true;
+    }
+
+    if (!storage.textCreationHasAnchor.load(std::memory_order_acquire)) {
+        return true;
+    }
+
+    const uint64_t page2DMemoryId = Cad2DFindTargetPage2DMemoryId(tab);
+    if (page2DMemoryId == 0) return true;
+
+    uint64_t objectId = 0;
+    std::string draft;
+    bool shouldEnqueue = false;
+    {
+        std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
+        if (charCode == '\b') {
+            if (storage.textCreationDraft.empty()) return true;
+            storage.textCreationDraft.pop_back();
+            shouldEnqueue = storage.textCreationObjectId != 0;
+        }
+        else if (charCode == '\t') {
+            storage.textCreationDraft.append("    ");
+            shouldEnqueue = true;
+        }
+        else if (charCode >= 32 && charCode <= 126) {
+            storage.textCreationDraft.push_back(static_cast<char>(charCode));
+            shouldEnqueue = true;
+        }
+        else {
+            return true;
+        }
+
+        if (shouldEnqueue && storage.textCreationObjectId == 0) {
+            storage.textCreationObjectId = MemoryID::next();
+        }
+        objectId = storage.textCreationObjectId;
+        draft = storage.textCreationDraft;
+    }
+
+    if (shouldEnqueue && objectId != 0) {
+        const double xCU = storage.textCreationXCU.load(std::memory_order_acquire);
+        const double yCU = storage.textCreationYCU.load(std::memory_order_acquire);
+        EnqueueTextCreationDraft(tab, page2DMemoryId, objectId, xCU, yCU, std::move(draft));
+    }
+    return true;
 }
 }
 
@@ -291,13 +383,22 @@ void Cad2DBeginPolygonCreation(DATASETTAB& tab) {
     tab.cad2d->polygonCreationHasCenter.store(false, std::memory_order_release);
 }
 
+void Cad2DBeginTextCreation(DATASETTAB& tab) {
+    if (!tab.cad2d || !Cad2DIsActivePage2D(tab)) return;
+
+    ClearLineCreationState(*tab.cad2d);
+    tab.cad2d->textCreationMode.store(true, std::memory_order_release);
+    tab.cad2d->textCreationHasAnchor.store(false, std::memory_order_release);
+}
+
 bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
     if (!tab.cad2d) return false;
     if (!Cad2DIsActivePage2D(tab)) {
         const bool anyCreationMode =
             tab.cad2d->lineCreationMode.load(std::memory_order_acquire) ||
             tab.cad2d->polylineCreationMode.load(std::memory_order_acquire) ||
-            tab.cad2d->polygonCreationMode.load(std::memory_order_acquire);
+            tab.cad2d->polygonCreationMode.load(std::memory_order_acquire) ||
+            tab.cad2d->textCreationMode.load(std::memory_order_acquire);
         if (input.actionType == ACTION_TYPE::KEYDOWN && input.x == VK_ESCAPE && anyCreationMode) {
             ClearLineCreationState(*tab.cad2d);
             return true;
@@ -310,9 +411,23 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
         if (input.x == VK_ESCAPE &&
             (tab.cad2d->lineCreationMode.load(std::memory_order_acquire) ||
                 tab.cad2d->polylineCreationMode.load(std::memory_order_acquire) ||
-                tab.cad2d->polygonCreationMode.load(std::memory_order_acquire))) {
+                tab.cad2d->polygonCreationMode.load(std::memory_order_acquire) ||
+                tab.cad2d->textCreationMode.load(std::memory_order_acquire))) {
             ClearLineCreationState(*tab.cad2d);
             return true;
+        }
+        if (tab.cad2d->textCreationMode.load(std::memory_order_acquire)) {
+            return true;
+        }
+        break;
+    case ACTION_TYPE::KEYUP:
+        if (tab.cad2d->textCreationMode.load(std::memory_order_acquire)) {
+            return true;
+        }
+        break;
+    case ACTION_TYPE::CHAR:
+        if (tab.cad2d->textCreationMode.load(std::memory_order_acquire)) {
+            return HandleTextCreationChar(tab, input.x);
         }
         break;
     case ACTION_TYPE::MOUSEMOVE:
@@ -382,6 +497,12 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
                 HandlePolygonCreationClick(tab, xCU, yCU);
             }
         }
+        else if (tab.cad2d->textCreationMode.load(std::memory_order_acquire)) {
+            double xCU = 0.0, yCU = 0.0;
+            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+                HandleTextCreationClick(tab, xCU, yCU);
+            }
+        }
         return true;
     case ACTION_TYPE::LBUTTONUP:
         tab.mouseLeftDown = false;
@@ -420,7 +541,8 @@ void Cad2DAutoGenerateDemoContent(DATASETTAB& tab) {
         text.rotationRadians = 0.0f;
         text.colorABGR = 0xFF000000u;
         text.font = 0;
-        text.justification = Cad2DTextJustification::BottomLeft;
+        text.justification = Cad2DTextJustification::Center;
+        text.schemaVersion = VishwakarmaStorage::kGeometry2DTextSchemaVersion;
         text.text = "Page2D GPU text - Noto Sans";
         EnqueueCad2DText(tab.tabID, page2DMemoryId, std::move(text));
     }
