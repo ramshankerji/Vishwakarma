@@ -1,19 +1,14 @@
 ---
 title: "Legal Aspects"
 weight: 11200
----
----
-
-title: "Legal Aspects"
-weight: 11200
 -------------
 This page provides a brief overview of the legal position of Mission Vishwakarma.  
-This page is not a substitute for the actual software licence, End User Licence Agreement, Contributor Licence Agreement, Privacy Policy, or legal advice from a qualified professional.
+This page is not a substitute for the actual software license, End User License Agreement, Contributor License Agreement, Privacy Policy, or legal advice from a qualified professional.
 
 ## Governing Law and Jurisdiction
 Mission Vishwakarma is currently developed and maintained from India.  
 Unless otherwise stated in a specific agreement, the laws of India shall apply. Subject to applicable law and mandatory statutory remedies, courts at New Delhi / Delhi shall have jurisdiction for disputes relating to Mission Vishwakarma.  
-For detailed terms, please refer to the End User Licence Agreement.  
+For detailed terms, please refer to the End User License Agreement.  
 
 ## Intended Use
 Mission Vishwakarma is primarily developed for Indian engineering, manufacturing, CAD, CAM, fabrication, construction, education, and research users.  
@@ -35,11 +30,11 @@ References to standards, clauses, methods, notation, load cases, material proper
 ## Patents and Third-Party Rights
 We do not knowingly include material that infringes third-party patents, copyrights, trademarks, trade secrets, or other rights.  
 However, we cannot guarantee that every algorithm, workflow, feature, dependency, file format, process, or contribution is free from third-party claims in every jurisdiction.  
-To safeguard users, developers, and organizations, contributors may be required to accept a Contributor Licence Agreement, Developer Certificate of Origin, or similar contribution process.  
-Current Contributor Licence Agreement: https://mv.ramshanker.in/start/contributor-license-agreement/
+To safeguard users, developers, and organizations, contributors may be required to accept a Contributor License Agreement, Developer Certificate of Origin, or similar contribution process.  
+Current Contributor License Agreement: https://mv.ramshanker.in/start/contributor-license-agreement/
 
 ## EULA
-Current End User Licence Agreement:https://mv.rams hanker.in/start/end-user-license-agreement/  
+Current End User License Agreement:https://mv.rams hanker.in/start/end-user-license-agreement/  
 The EULA contains detailed terms relating to software use, disclaimers, limitations, support, liability, and engineering responsibility.  
 
 ## Privacy
