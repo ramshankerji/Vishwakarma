@@ -17,6 +17,8 @@
 #include "विश्वकर्मा.h"
 #include "Shader2D_LineVertex.h"
 #include "Shader2D_LinePixel.h"
+#include "Shader2D_CurveVertex.h"
+#include "Shader2D_CurvePixel.h"
 #include "Shader2D_TextVertex.h"
 #include "Shader2D_TextPixel.h"
 #include "..\build\NotoSansMSDF_Compiled.h"
@@ -31,12 +33,18 @@ struct Cad2DContainerRecords {
     std::vector<Cad2DLineRecordCPU> lines;
     std::vector<Cad2DPolylineRecordCPU> polylines;
     std::vector<Cad2DPolygonRecordCPU> polygons;
+    std::vector<Cad2DCircleRecordCPU> circles;
+    std::vector<Cad2DEllipseRecordCPU> ellipses;
+    std::vector<Cad2DArcRecordCPU> arcs;
     std::vector<Cad2DTextRecordCPU> texts;
 };
 
 constexpr uint32_t kMinPolygonLineSegmentCount = 3;
 constexpr uint32_t kMaxPolygonLineSegmentCount = 16;
 constexpr double kDegreesToRadians = 3.14159265358979323846 / 180.0;
+constexpr uint32_t kCurveTypeCircle = 0;
+constexpr uint32_t kCurveTypeEllipse = 1;
+constexpr uint32_t kCurveTypeArc = 2;
 
 uint32_t TopUIHeightPx(int monitorId, const DX12ResourcesPerWindow& winRes) {
     int topUITotalHeightPx = 0;
@@ -171,6 +179,57 @@ void AppendPolygonLineRecords(const Cad2DPolygonRecordCPU& polygon,
         gpuLine.colorABGR = polygon.colorABGR;
         gpuLines.push_back(gpuLine);
     }
+}
+
+Cad2DCurveGPURecord ToGpuCircleRecord(const Cad2DCircleRecordCPU& circle) {
+    Cad2DCurveGPURecord gpuCurve{};
+    gpuCurve.centerX = static_cast<float>(circle.centerX);
+    gpuCurve.centerY = static_cast<float>(circle.centerY);
+    gpuCurve.radiusX = static_cast<float>(circle.radius);
+    gpuCurve.radiusY = static_cast<float>(circle.radius);
+    gpuCurve.startX = gpuCurve.centerX + gpuCurve.radiusX;
+    gpuCurve.startY = gpuCurve.centerY;
+    gpuCurve.endX = gpuCurve.startX;
+    gpuCurve.endY = gpuCurve.startY;
+    gpuCurve.lineWeight = circle.lineWeight;
+    gpuCurve.lineWeightMode = static_cast<uint32_t>(circle.lineWeightMode);
+    gpuCurve.colorABGR = circle.colorABGR;
+    gpuCurve.curveType = kCurveTypeCircle;
+    return gpuCurve;
+}
+
+Cad2DCurveGPURecord ToGpuEllipseRecord(const Cad2DEllipseRecordCPU& ellipse) {
+    Cad2DCurveGPURecord gpuCurve{};
+    gpuCurve.centerX = static_cast<float>(ellipse.centerX);
+    gpuCurve.centerY = static_cast<float>(ellipse.centerY);
+    gpuCurve.radiusX = static_cast<float>(ellipse.radiusX);
+    gpuCurve.radiusY = static_cast<float>(ellipse.radiusY);
+    gpuCurve.startX = gpuCurve.centerX + gpuCurve.radiusX;
+    gpuCurve.startY = gpuCurve.centerY;
+    gpuCurve.endX = gpuCurve.startX;
+    gpuCurve.endY = gpuCurve.startY;
+    gpuCurve.lineWeight = ellipse.lineWeight;
+    gpuCurve.lineWeightMode = static_cast<uint32_t>(ellipse.lineWeightMode);
+    gpuCurve.colorABGR = ellipse.colorABGR;
+    gpuCurve.curveType = kCurveTypeEllipse;
+    return gpuCurve;
+}
+
+Cad2DCurveGPURecord ToGpuArcRecord(const Cad2DArcRecordCPU& arc) {
+    Cad2DCurveGPURecord gpuCurve{};
+    gpuCurve.centerX = static_cast<float>(arc.centerX);
+    gpuCurve.centerY = static_cast<float>(arc.centerY);
+    gpuCurve.radiusX = static_cast<float>(arc.radiusX);
+    gpuCurve.radiusY = static_cast<float>(arc.radiusY);
+    gpuCurve.startX = static_cast<float>(arc.startX);
+    gpuCurve.startY = static_cast<float>(arc.startY);
+    gpuCurve.endX = static_cast<float>(arc.endX);
+    gpuCurve.endY = static_cast<float>(arc.endY);
+    gpuCurve.lineWeight = arc.lineWeight;
+    gpuCurve.lineWeightMode = static_cast<uint32_t>(arc.lineWeightMode);
+    gpuCurve.colorABGR = arc.colorABGR;
+    gpuCurve.curveType = kCurveTypeArc;
+    return gpuCurve;
 }
 
 struct PendingGlyphQuad {
@@ -319,7 +378,7 @@ void PublishCad2DPages(TabCad2DStorage& storage, std::vector<std::unique_ptr<Cad
 }
 
 void InitCad2DTabResources(TabCad2DStorage& storage) {
-    if (storage.dx.lineRootSignature) return;
+    if (storage.dx.lineRootSignature && storage.dx.curveRootSignature && storage.dx.textRootSignature) return;
 
     {
         CD3DX12_ROOT_PARAMETER1 rootParams[2] = {};
@@ -370,6 +429,57 @@ void InitCad2DTabResources(TabCad2DStorage& storage) {
         sigDesc.ByteStride = sizeof(D3D12_DRAW_ARGUMENTS);
         ThrowIfFailed(gpu.device->CreateCommandSignature(&sigDesc, nullptr,
             IID_PPV_ARGS(&storage.dx.lineCommandSignature)));
+    }
+
+    {
+        CD3DX12_ROOT_PARAMETER1 rootParams[2] = {};
+        rootParams[0].InitAsConstantBufferView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE,
+            D3D12_SHADER_VISIBILITY_ALL);
+        rootParams[1].InitAsShaderResourceView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE,
+            D3D12_SHADER_VISIBILITY_VERTEX);
+
+        CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootDesc;
+        rootDesc.Init_1_1(_countof(rootParams), rootParams, 0, nullptr,
+            D3D12_ROOT_SIGNATURE_FLAG_NONE);
+
+        ComPtr<ID3DBlob> signature;
+        SerializeRootSignature(rootDesc, signature);
+        ThrowIfFailed(gpu.device->CreateRootSignature(0, signature->GetBufferPointer(),
+            signature->GetBufferSize(), IID_PPV_ARGS(&storage.dx.curveRootSignature)));
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+        psoDesc.InputLayout = { nullptr, 0 };
+        psoDesc.pRootSignature = storage.dx.curveRootSignature.Get();
+        psoDesc.VS = CD3DX12_SHADER_BYTECODE(g_2dCurveVertexShader, sizeof(g_2dCurveVertexShader));
+        psoDesc.PS = CD3DX12_SHADER_BYTECODE(g_2dCurvePixelShader, sizeof(g_2dCurvePixelShader));
+        psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+        psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+        psoDesc.BlendState.RenderTarget[0].BlendEnable = TRUE;
+        psoDesc.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        psoDesc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        psoDesc.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+        psoDesc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+        psoDesc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        psoDesc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        psoDesc.DepthStencilState.DepthEnable = FALSE;
+        psoDesc.DepthStencilState.StencilEnable = FALSE;
+        psoDesc.SampleMask = UINT_MAX;
+        psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        psoDesc.NumRenderTargets = 1;
+        psoDesc.RTVFormats[0] = gpu.rttFormat;
+        psoDesc.SampleDesc.Count = 1;
+        ThrowIfFailed(gpu.device->CreateGraphicsPipelineState(&psoDesc,
+            IID_PPV_ARGS(&storage.dx.curvePSO)));
+
+        D3D12_INDIRECT_ARGUMENT_DESC arg = {};
+        arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW;
+        D3D12_COMMAND_SIGNATURE_DESC sigDesc = {};
+        sigDesc.pArgumentDescs = &arg;
+        sigDesc.NumArgumentDescs = 1;
+        sigDesc.ByteStride = sizeof(D3D12_DRAW_ARGUMENTS);
+        ThrowIfFailed(gpu.device->CreateCommandSignature(&sigDesc, nullptr,
+            IID_PPV_ARGS(&storage.dx.curveCommandSignature)));
     }
 
     {
@@ -455,6 +565,9 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage) {
     storage.dx.lineCommandSignature.Reset();
     storage.dx.linePSO.Reset();
     storage.dx.lineRootSignature.Reset();
+    storage.dx.curveCommandSignature.Reset();
+    storage.dx.curvePSO.Reset();
+    storage.dx.curveRootSignature.Reset();
     storage.dx.textPSO.Reset();
     storage.dx.textRootSignature.Reset();
     storage.dx.viewConstantBuffer.Reset();
@@ -463,6 +576,9 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage) {
     storage.lineRecords.clear();
     storage.polylineRecords.clear();
     storage.polygonRecords.clear();
+    storage.circleRecords.clear();
+    storage.ellipseRecords.clear();
+    storage.arcRecords.clear();
     storage.textRecords.clear();
     storage.demoLineCounter.store(0, std::memory_order_release);
     storage.demoTextQueued.store(false, std::memory_order_release);
@@ -475,6 +591,21 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage) {
     storage.polygonCreationHasCenter.store(false, std::memory_order_release);
     storage.polygonCreationCenterXCU.store(0.0, std::memory_order_release);
     storage.polygonCreationCenterYCU.store(0.0, std::memory_order_release);
+    storage.circleCreationMode.store(false, std::memory_order_release);
+    storage.circleCreationHasCenter.store(false, std::memory_order_release);
+    storage.circleCreationCenterXCU.store(0.0, std::memory_order_release);
+    storage.circleCreationCenterYCU.store(0.0, std::memory_order_release);
+    storage.ellipseCreationMode.store(false, std::memory_order_release);
+    storage.ellipseCreationStep.store(0, std::memory_order_release);
+    storage.ellipseCreationCenterXCU.store(0.0, std::memory_order_release);
+    storage.ellipseCreationCenterYCU.store(0.0, std::memory_order_release);
+    storage.ellipseCreationRadiusXCU.store(0.0, std::memory_order_release);
+    storage.arcCreationMode.store(false, std::memory_order_release);
+    storage.arcCreationStep.store(0, std::memory_order_release);
+    storage.arcCreationCenterXCU.store(0.0, std::memory_order_release);
+    storage.arcCreationCenterYCU.store(0.0, std::memory_order_release);
+    storage.arcCreationStartXCU.store(0.0, std::memory_order_release);
+    storage.arcCreationStartYCU.store(0.0, std::memory_order_release);
     storage.textCreationMode.store(false, std::memory_order_release);
     storage.textCreationHasAnchor.store(false, std::memory_order_release);
     storage.textCreationXCU.store(0.0, std::memory_order_release);
@@ -539,6 +670,23 @@ void RenderCad2DPage(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWin
         }
     }
 
+    if (storage.dx.curveRootSignature && storage.dx.curvePSO && storage.dx.curveCommandSignature) {
+        commandList->SetGraphicsRootSignature(storage.dx.curveRootSignature.Get());
+        commandList->SetPipelineState(storage.dx.curvePSO.Get());
+        commandList->SetGraphicsRootConstantBufferView(0,
+            storage.dx.viewConstantBuffer->GetGPUVirtualAddress());
+        commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        for (Cad2DPageGPU* page : snapshot->pages) {
+            if (!page || page->containerMemoryId != activeContainerMemoryId) continue;
+            if (page->curveCount > 0 && page->curveBuffer && page->curveIndirectBuffer) {
+                commandList->SetGraphicsRootShaderResourceView(1, page->curveBuffer->GetGPUVirtualAddress());
+                commandList->ExecuteIndirect(storage.dx.curveCommandSignature.Get(), 1,
+                    page->curveIndirectBuffer.Get(), 0, nullptr, 0);
+            }
+        }
+    }
+
     const bool textAtlasReady = atlasFence.load(std::memory_order_acquire) != 0 &&
         gpu.copyFence && gpu.copyFence->GetCompletedValue() >= atlasFence.load(std::memory_order_acquire);
     if (!textAtlasReady || !storage.dx.textRootSignature || !storage.dx.textPSO) return;
@@ -590,6 +738,9 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
         std::vector<Cad2DLineRecordCPU> lines;
         std::vector<Cad2DPolylineRecordCPU> polylines;
         std::vector<Cad2DPolygonRecordCPU> polygons;
+        std::vector<Cad2DCircleRecordCPU> circles;
+        std::vector<Cad2DEllipseRecordCPU> ellipses;
+        std::vector<Cad2DArcRecordCPU> arcs;
         std::vector<Cad2DTextRecordCPU> texts;
         {
             std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
@@ -649,6 +800,63 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
                         *existing = updated;
                     }
                 }
+                else if (command.type == CommandToCopyThread2DType::AddCircle) {
+                    auto existing = std::find_if(storage.circleRecords.begin(), storage.circleRecords.end(),
+                        [&](const Cad2DCircleRecordCPU& circle) {
+                            return circle.objectId == command.circle.objectId;
+                        });
+                    if (existing == storage.circleRecords.end()) {
+                        storage.circleRecords.push_back(command.circle);
+                        if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(),
+                            command.circle.objectId) == tab.allIDsInThisTab.end()) {
+                            tab.allIDsInThisTab.push_back(command.circle.objectId);
+                        }
+                    }
+                    else {
+                        Cad2DCircleRecordCPU updated = command.circle;
+                        if (updated.persistedId == 0) updated.persistedId = existing->persistedId;
+                        if (updated.persistedParentId == 0) updated.persistedParentId = existing->persistedParentId;
+                        *existing = updated;
+                    }
+                }
+                else if (command.type == CommandToCopyThread2DType::AddEllipse) {
+                    auto existing = std::find_if(storage.ellipseRecords.begin(), storage.ellipseRecords.end(),
+                        [&](const Cad2DEllipseRecordCPU& ellipse) {
+                            return ellipse.objectId == command.ellipse.objectId;
+                        });
+                    if (existing == storage.ellipseRecords.end()) {
+                        storage.ellipseRecords.push_back(command.ellipse);
+                        if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(),
+                            command.ellipse.objectId) == tab.allIDsInThisTab.end()) {
+                            tab.allIDsInThisTab.push_back(command.ellipse.objectId);
+                        }
+                    }
+                    else {
+                        Cad2DEllipseRecordCPU updated = command.ellipse;
+                        if (updated.persistedId == 0) updated.persistedId = existing->persistedId;
+                        if (updated.persistedParentId == 0) updated.persistedParentId = existing->persistedParentId;
+                        *existing = updated;
+                    }
+                }
+                else if (command.type == CommandToCopyThread2DType::AddArc) {
+                    auto existing = std::find_if(storage.arcRecords.begin(), storage.arcRecords.end(),
+                        [&](const Cad2DArcRecordCPU& arc) {
+                            return arc.objectId == command.arc.objectId;
+                        });
+                    if (existing == storage.arcRecords.end()) {
+                        storage.arcRecords.push_back(command.arc);
+                        if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(),
+                            command.arc.objectId) == tab.allIDsInThisTab.end()) {
+                            tab.allIDsInThisTab.push_back(command.arc.objectId);
+                        }
+                    }
+                    else {
+                        Cad2DArcRecordCPU updated = command.arc;
+                        if (updated.persistedId == 0) updated.persistedId = existing->persistedId;
+                        if (updated.persistedParentId == 0) updated.persistedParentId = existing->persistedParentId;
+                        *existing = updated;
+                    }
+                }
                 else if (command.type == CommandToCopyThread2DType::AddText) {
                     auto existing = std::find_if(storage.textRecords.begin(), storage.textRecords.end(),
                         [&](const Cad2DTextRecordCPU& text) {
@@ -672,6 +880,9 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
             lines = storage.lineRecords;
             polylines = storage.polylineRecords;
             polygons = storage.polygonRecords;
+            circles = storage.circleRecords;
+            ellipses = storage.ellipseRecords;
+            arcs = storage.arcRecords;
             texts = storage.textRecords;
         }
 
@@ -684,6 +895,15 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
         }
         for (const Cad2DPolygonRecordCPU& polygon : polygons) {
             if (polygon.containerMemoryId != 0) containers[polygon.containerMemoryId].polygons.push_back(polygon);
+        }
+        for (const Cad2DCircleRecordCPU& circle : circles) {
+            if (circle.containerMemoryId != 0) containers[circle.containerMemoryId].circles.push_back(circle);
+        }
+        for (const Cad2DEllipseRecordCPU& ellipse : ellipses) {
+            if (ellipse.containerMemoryId != 0) containers[ellipse.containerMemoryId].ellipses.push_back(ellipse);
+        }
+        for (const Cad2DArcRecordCPU& arc : arcs) {
+            if (arc.containerMemoryId != 0) containers[arc.containerMemoryId].arcs.push_back(arc);
         }
         for (const Cad2DTextRecordCPU& text : texts) {
             if (text.containerMemoryId != 0) containers[text.containerMemoryId].texts.push_back(text);
@@ -732,6 +952,31 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
                 drawArgs[0].StartVertexLocation = 0;
                 drawArgs[0].StartInstanceLocation = 0;
                 UploadVector(commandList.Get(), page->lineIndirectBuffer, drawArgs, uploads);
+            }
+
+            std::vector<Cad2DCurveGPURecord> gpuCurves;
+            gpuCurves.reserve(records.circles.size() + records.ellipses.size() + records.arcs.size());
+            for (const Cad2DCircleRecordCPU& circle : records.circles) {
+                if (circle.radius > 0.0) gpuCurves.push_back(ToGpuCircleRecord(circle));
+            }
+            for (const Cad2DEllipseRecordCPU& ellipse : records.ellipses) {
+                if (ellipse.radiusX > 0.0 && ellipse.radiusY > 0.0) {
+                    gpuCurves.push_back(ToGpuEllipseRecord(ellipse));
+                }
+            }
+            for (const Cad2DArcRecordCPU& arc : records.arcs) {
+                if (arc.radiusX > 0.0 && arc.radiusY > 0.0) gpuCurves.push_back(ToGpuArcRecord(arc));
+            }
+            UploadVector(commandList.Get(), page->curveBuffer, gpuCurves, uploads);
+            page->curveCount = static_cast<uint32_t>(gpuCurves.size());
+
+            if (!gpuCurves.empty()) {
+                std::vector<D3D12_DRAW_ARGUMENTS> drawArgs(1);
+                drawArgs[0].VertexCountPerInstance = 6;
+                drawArgs[0].InstanceCount = page->curveCount;
+                drawArgs[0].StartVertexLocation = 0;
+                drawArgs[0].StartInstanceLocation = 0;
+                UploadVector(commandList.Get(), page->curveIndirectBuffer, drawArgs, uploads);
             }
 
             std::vector<Cad2DTextVertex> textVertices;

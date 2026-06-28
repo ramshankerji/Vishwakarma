@@ -380,6 +380,12 @@ void ProcessPendingUIActions() {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_POLYLINE_CREATION2D);
         } else if (action.id == static_cast<uint32_t>(Commands::CREATE_POLYGON)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_POLYGON_CREATION2D);
+        } else if (action.id == static_cast<uint32_t>(Commands::CREATE_CIRCLE)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_CIRCLE_CREATION2D);
+        } else if (action.id == static_cast<uint32_t>(Commands::CREATE_ELLIPSE)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_ELLIPSE_CREATION2D);
+        } else if (action.id == static_cast<uint32_t>(Commands::CREATE_ARC)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_ARC_CREATION2D);
         } else if (action.id == static_cast<uint32_t>(Commands::CREATE_TEXT)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_TEXT_CREATION2D);
         }

@@ -136,10 +136,13 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
   <ItemGroup>
     <ClCompile Include="DataTreeView.cpp" />
     <ClCompile Include="DataStorage.cpp" />
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_ARC2D.pb.cc" />
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CIRCLE2D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_Common3D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CONE.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CUBOID.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CYLINDER.pb.cc" />
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_ELLIPSE2D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FOLDER.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FRUSTUM_OF_CONE.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FRUSTUM_OF_PYRAMID.pb.cc" />
@@ -210,10 +213,13 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ResourceCompile Include="Vishwakarma.rc" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="DataStorage_ARC2D.proto" />
+    <None Include="DataStorage_CIRCLE2D.proto" />
     <None Include="DataStorage_Common3D.proto" />
     <None Include="DataStorage_CUBOID.proto" />
     <None Include="DataStorage_CONE.proto" />
     <None Include="DataStorage_CYLINDER.proto" />
+    <None Include="DataStorage_ELLIPSE2D.proto" />
     <None Include="DataStorage_FOLDER.proto" />
     <None Include="DataStorage_FRUSTUM_OF_CONE.proto" />
     <None Include="DataStorage_FRUSTUM_OF_PYRAMID.proto" />
@@ -314,6 +320,26 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.0</ShaderModel>
       <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(IntDir)Shader2D_LinePixel.h</HeaderFileOutput>
       <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_2dLinePixelShader</VariableName>
+    </FxCompile>
+    <FxCompile Include="Shader2D_CurveVertex.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Vertex</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(IntDir)Shader2D_CurveVertex.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">g_2dCurveVertexShader</VariableName>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Vertex</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(IntDir)Shader2D_CurveVertex.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_2dCurveVertexShader</VariableName>
+    </FxCompile>
+    <FxCompile Include="Shader2D_CurvePixel.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(IntDir)Shader2D_CurvePixel.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">g_2dCurvePixelShader</VariableName>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(IntDir)Shader2D_CurvePixel.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_2dCurvePixelShader</VariableName>
     </FxCompile>
     <FxCompile Include="Shader2D_TextVertex.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Vertex</ShaderType>

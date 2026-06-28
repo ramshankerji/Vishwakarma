@@ -17,6 +17,7 @@ std::queue<CommandToCopyThread2D> gCad2DCopyQueue;
 constexpr uint32_t kDefaultPolygonLineSegmentCount = 4;
 constexpr double kDefaultPolygonRotationDegrees = 45.0;
 constexpr double kMinPolygonRadiusCU = 1.0e-9;
+constexpr double kMinCurveRadiusCU = 1.0e-9;
 constexpr float kDefaultTextHeightCU = 9.0f;
 
 StoredLogicalObject* FindLogicalObjectByIdLocked(DATASETTAB& tab, uint64_t memoryId) {
@@ -34,6 +35,21 @@ void ClearLineCreationState(TabCad2DStorage& storage) {
     storage.polygonCreationHasCenter.store(false, std::memory_order_release);
     storage.polygonCreationCenterXCU.store(0.0, std::memory_order_release);
     storage.polygonCreationCenterYCU.store(0.0, std::memory_order_release);
+    storage.circleCreationMode.store(false, std::memory_order_release);
+    storage.circleCreationHasCenter.store(false, std::memory_order_release);
+    storage.circleCreationCenterXCU.store(0.0, std::memory_order_release);
+    storage.circleCreationCenterYCU.store(0.0, std::memory_order_release);
+    storage.ellipseCreationMode.store(false, std::memory_order_release);
+    storage.ellipseCreationStep.store(0, std::memory_order_release);
+    storage.ellipseCreationCenterXCU.store(0.0, std::memory_order_release);
+    storage.ellipseCreationCenterYCU.store(0.0, std::memory_order_release);
+    storage.ellipseCreationRadiusXCU.store(0.0, std::memory_order_release);
+    storage.arcCreationMode.store(false, std::memory_order_release);
+    storage.arcCreationStep.store(0, std::memory_order_release);
+    storage.arcCreationCenterXCU.store(0.0, std::memory_order_release);
+    storage.arcCreationCenterYCU.store(0.0, std::memory_order_release);
+    storage.arcCreationStartXCU.store(0.0, std::memory_order_release);
+    storage.arcCreationStartYCU.store(0.0, std::memory_order_release);
     storage.textCreationMode.store(false, std::memory_order_release);
     storage.textCreationHasAnchor.store(false, std::memory_order_release);
     storage.textCreationXCU.store(0.0, std::memory_order_release);
@@ -160,6 +176,133 @@ void HandlePolygonCreationClick(DATASETTAB& tab, double xCU, double yCU) {
     EnqueueCad2DPolygon(tab.tabID, page2DMemoryId, polygon);
 
     storage.polygonCreationHasCenter.store(false, std::memory_order_release);
+}
+
+void HandleCircleCreationClick(DATASETTAB& tab, double xCU, double yCU) {
+    TabCad2DStorage& storage = *tab.cad2d;
+    if (!storage.circleCreationHasCenter.load(std::memory_order_acquire)) {
+        storage.circleCreationCenterXCU.store(xCU, std::memory_order_release);
+        storage.circleCreationCenterYCU.store(yCU, std::memory_order_release);
+        storage.circleCreationHasCenter.store(true, std::memory_order_release);
+        return;
+    }
+
+    const uint64_t page2DMemoryId = Cad2DFindTargetPage2DMemoryId(tab);
+    if (page2DMemoryId == 0) return;
+
+    const double centerX = storage.circleCreationCenterXCU.load(std::memory_order_acquire);
+    const double centerY = storage.circleCreationCenterYCU.load(std::memory_order_acquire);
+    const double radius = std::hypot(xCU - centerX, yCU - centerY);
+    if (radius <= kMinCurveRadiusCU) return;
+
+    Cad2DCircleRecordCPU circle{};
+    circle.containerMemoryId = page2DMemoryId;
+    circle.centerX = centerX;
+    circle.centerY = centerY;
+    circle.radius = radius;
+    circle.lineWeight = 1.0f;
+    circle.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+    circle.colorABGR = 0xFF000000u;
+    circle.schemaVersion = VishwakarmaStorage::kGeometry2DCircleSchemaVersion;
+    EnqueueCad2DCircle(tab.tabID, page2DMemoryId, circle);
+
+    storage.circleCreationHasCenter.store(false, std::memory_order_release);
+}
+
+void HandleEllipseCreationClick(DATASETTAB& tab, double xCU, double yCU) {
+    TabCad2DStorage& storage = *tab.cad2d;
+    const uint32_t step = storage.ellipseCreationStep.load(std::memory_order_acquire);
+    if (step == 0) {
+        storage.ellipseCreationCenterXCU.store(xCU, std::memory_order_release);
+        storage.ellipseCreationCenterYCU.store(yCU, std::memory_order_release);
+        storage.ellipseCreationRadiusXCU.store(0.0, std::memory_order_release);
+        storage.ellipseCreationStep.store(1, std::memory_order_release);
+        return;
+    }
+
+    const double centerX = storage.ellipseCreationCenterXCU.load(std::memory_order_acquire);
+    const double centerY = storage.ellipseCreationCenterYCU.load(std::memory_order_acquire);
+    if (step == 1) {
+        double radiusX = std::abs(xCU - centerX);
+        if (radiusX <= kMinCurveRadiusCU) radiusX = std::hypot(xCU - centerX, yCU - centerY);
+        if (radiusX <= kMinCurveRadiusCU) return;
+        storage.ellipseCreationRadiusXCU.store(radiusX, std::memory_order_release);
+        storage.ellipseCreationStep.store(2, std::memory_order_release);
+        return;
+    }
+
+    double radiusY = std::abs(yCU - centerY);
+    if (radiusY <= kMinCurveRadiusCU) radiusY = std::hypot(xCU - centerX, yCU - centerY);
+    const double radiusX = storage.ellipseCreationRadiusXCU.load(std::memory_order_acquire);
+    if (radiusX <= kMinCurveRadiusCU || radiusY <= kMinCurveRadiusCU) return;
+
+    const uint64_t page2DMemoryId = Cad2DFindTargetPage2DMemoryId(tab);
+    if (page2DMemoryId == 0) return;
+
+    Cad2DEllipseRecordCPU ellipse{};
+    ellipse.containerMemoryId = page2DMemoryId;
+    ellipse.centerX = centerX;
+    ellipse.centerY = centerY;
+    ellipse.radiusX = radiusX;
+    ellipse.radiusY = radiusY;
+    ellipse.lineWeight = 1.0f;
+    ellipse.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+    ellipse.colorABGR = 0xFF000000u;
+    ellipse.schemaVersion = VishwakarmaStorage::kGeometry2DEllipseSchemaVersion;
+    EnqueueCad2DEllipse(tab.tabID, page2DMemoryId, ellipse);
+
+    storage.ellipseCreationStep.store(0, std::memory_order_release);
+    storage.ellipseCreationRadiusXCU.store(0.0, std::memory_order_release);
+}
+
+void HandleArcCreationClick(DATASETTAB& tab, double xCU, double yCU) {
+    TabCad2DStorage& storage = *tab.cad2d;
+    const uint32_t step = storage.arcCreationStep.load(std::memory_order_acquire);
+    if (step == 0) {
+        storage.arcCreationCenterXCU.store(xCU, std::memory_order_release);
+        storage.arcCreationCenterYCU.store(yCU, std::memory_order_release);
+        storage.arcCreationStep.store(1, std::memory_order_release);
+        return;
+    }
+
+    const double centerX = storage.arcCreationCenterXCU.load(std::memory_order_acquire);
+    const double centerY = storage.arcCreationCenterYCU.load(std::memory_order_acquire);
+    if (step == 1) {
+        if (std::hypot(xCU - centerX, yCU - centerY) <= kMinCurveRadiusCU) return;
+        storage.arcCreationStartXCU.store(xCU, std::memory_order_release);
+        storage.arcCreationStartYCU.store(yCU, std::memory_order_release);
+        storage.arcCreationStep.store(2, std::memory_order_release);
+        return;
+    }
+
+    const double startX = storage.arcCreationStartXCU.load(std::memory_order_acquire);
+    const double startY = storage.arcCreationStartYCU.load(std::memory_order_acquire);
+    const double radius = std::hypot(startX - centerX, startY - centerY);
+    const double endDistance = std::hypot(xCU - centerX, yCU - centerY);
+    if (radius <= kMinCurveRadiusCU || endDistance <= kMinCurveRadiusCU) return;
+
+    const double startAngle = std::atan2(startY - centerY, startX - centerX);
+    const double endAngle = std::atan2(yCU - centerY, xCU - centerX);
+    if (std::abs(std::sin((endAngle - startAngle) * 0.5)) <= 1.0e-7) return;
+
+    Cad2DArcRecordCPU arc{};
+    arc.containerMemoryId = Cad2DFindTargetPage2DMemoryId(tab);
+    if (arc.containerMemoryId == 0) return;
+    arc.centerX = centerX;
+    arc.centerY = centerY;
+    arc.radiusX = radius;
+    arc.radiusY = radius;
+    arc.startX = startX;
+    arc.startY = startY;
+    arc.endX = centerX + std::cos(endAngle) * radius;
+    arc.endY = centerY + std::sin(endAngle) * radius;
+    arc.lineWeight = 1.0f;
+    arc.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+    arc.colorABGR = 0xFF000000u;
+    arc.schemaVersion = VishwakarmaStorage::kGeometry2DArcSchemaVersion;
+    EnqueueCad2DArc(tab.tabID, arc.containerMemoryId, arc);
+
+    storage.arcCreationStep.store(0, std::memory_order_release);
 }
 
 void HandleTextCreationClick(DATASETTAB& tab, double xCU, double yCU) {
@@ -301,6 +444,60 @@ void EnqueueCad2DPolygon(uint64_t tabID, uint64_t containerMemoryId, Cad2DPolygo
     toCopyThreadCV.notify_one();
 }
 
+void EnqueueCad2DCircle(uint64_t tabID, uint64_t containerMemoryId, Cad2DCircleRecordCPU circle) {
+    if (circle.objectId == 0) circle.objectId = MemoryID::next();
+    circle.containerMemoryId = containerMemoryId;
+
+    CommandToCopyThread2D command{};
+    command.type = CommandToCopyThread2DType::AddCircle;
+    command.id = circle.objectId;
+    command.tabID = tabID;
+    command.containerMemoryId = containerMemoryId;
+    command.circle = circle;
+
+    {
+        std::lock_guard<std::mutex> lock(gCad2DCopyQueueMutex);
+        gCad2DCopyQueue.push(std::move(command));
+    }
+    toCopyThreadCV.notify_one();
+}
+
+void EnqueueCad2DEllipse(uint64_t tabID, uint64_t containerMemoryId, Cad2DEllipseRecordCPU ellipse) {
+    if (ellipse.objectId == 0) ellipse.objectId = MemoryID::next();
+    ellipse.containerMemoryId = containerMemoryId;
+
+    CommandToCopyThread2D command{};
+    command.type = CommandToCopyThread2DType::AddEllipse;
+    command.id = ellipse.objectId;
+    command.tabID = tabID;
+    command.containerMemoryId = containerMemoryId;
+    command.ellipse = ellipse;
+
+    {
+        std::lock_guard<std::mutex> lock(gCad2DCopyQueueMutex);
+        gCad2DCopyQueue.push(std::move(command));
+    }
+    toCopyThreadCV.notify_one();
+}
+
+void EnqueueCad2DArc(uint64_t tabID, uint64_t containerMemoryId, Cad2DArcRecordCPU arc) {
+    if (arc.objectId == 0) arc.objectId = MemoryID::next();
+    arc.containerMemoryId = containerMemoryId;
+
+    CommandToCopyThread2D command{};
+    command.type = CommandToCopyThread2DType::AddArc;
+    command.id = arc.objectId;
+    command.tabID = tabID;
+    command.containerMemoryId = containerMemoryId;
+    command.arc = arc;
+
+    {
+        std::lock_guard<std::mutex> lock(gCad2DCopyQueueMutex);
+        gCad2DCopyQueue.push(std::move(command));
+    }
+    toCopyThreadCV.notify_one();
+}
+
 void EnqueueCad2DText(uint64_t tabID, uint64_t containerMemoryId, Cad2DTextRecordCPU text) {
     if (text.objectId == 0) text.objectId = MemoryID::next();
     text.containerMemoryId = containerMemoryId;
@@ -383,6 +580,30 @@ void Cad2DBeginPolygonCreation(DATASETTAB& tab) {
     tab.cad2d->polygonCreationHasCenter.store(false, std::memory_order_release);
 }
 
+void Cad2DBeginCircleCreation(DATASETTAB& tab) {
+    if (!tab.cad2d || !Cad2DIsActivePage2D(tab)) return;
+
+    ClearLineCreationState(*tab.cad2d);
+    tab.cad2d->circleCreationMode.store(true, std::memory_order_release);
+    tab.cad2d->circleCreationHasCenter.store(false, std::memory_order_release);
+}
+
+void Cad2DBeginEllipseCreation(DATASETTAB& tab) {
+    if (!tab.cad2d || !Cad2DIsActivePage2D(tab)) return;
+
+    ClearLineCreationState(*tab.cad2d);
+    tab.cad2d->ellipseCreationMode.store(true, std::memory_order_release);
+    tab.cad2d->ellipseCreationStep.store(0, std::memory_order_release);
+}
+
+void Cad2DBeginArcCreation(DATASETTAB& tab) {
+    if (!tab.cad2d || !Cad2DIsActivePage2D(tab)) return;
+
+    ClearLineCreationState(*tab.cad2d);
+    tab.cad2d->arcCreationMode.store(true, std::memory_order_release);
+    tab.cad2d->arcCreationStep.store(0, std::memory_order_release);
+}
+
 void Cad2DBeginTextCreation(DATASETTAB& tab) {
     if (!tab.cad2d || !Cad2DIsActivePage2D(tab)) return;
 
@@ -398,6 +619,9 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
             tab.cad2d->lineCreationMode.load(std::memory_order_acquire) ||
             tab.cad2d->polylineCreationMode.load(std::memory_order_acquire) ||
             tab.cad2d->polygonCreationMode.load(std::memory_order_acquire) ||
+            tab.cad2d->circleCreationMode.load(std::memory_order_acquire) ||
+            tab.cad2d->ellipseCreationMode.load(std::memory_order_acquire) ||
+            tab.cad2d->arcCreationMode.load(std::memory_order_acquire) ||
             tab.cad2d->textCreationMode.load(std::memory_order_acquire);
         if (input.actionType == ACTION_TYPE::KEYDOWN && input.x == VK_ESCAPE && anyCreationMode) {
             ClearLineCreationState(*tab.cad2d);
@@ -412,6 +636,9 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
             (tab.cad2d->lineCreationMode.load(std::memory_order_acquire) ||
                 tab.cad2d->polylineCreationMode.load(std::memory_order_acquire) ||
                 tab.cad2d->polygonCreationMode.load(std::memory_order_acquire) ||
+                tab.cad2d->circleCreationMode.load(std::memory_order_acquire) ||
+                tab.cad2d->ellipseCreationMode.load(std::memory_order_acquire) ||
+                tab.cad2d->arcCreationMode.load(std::memory_order_acquire) ||
                 tab.cad2d->textCreationMode.load(std::memory_order_acquire))) {
             ClearLineCreationState(*tab.cad2d);
             return true;
@@ -495,6 +722,24 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
             double xCU = 0.0, yCU = 0.0;
             if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
                 HandlePolygonCreationClick(tab, xCU, yCU);
+            }
+        }
+        else if (tab.cad2d->circleCreationMode.load(std::memory_order_acquire)) {
+            double xCU = 0.0, yCU = 0.0;
+            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+                HandleCircleCreationClick(tab, xCU, yCU);
+            }
+        }
+        else if (tab.cad2d->ellipseCreationMode.load(std::memory_order_acquire)) {
+            double xCU = 0.0, yCU = 0.0;
+            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+                HandleEllipseCreationClick(tab, xCU, yCU);
+            }
+        }
+        else if (tab.cad2d->arcCreationMode.load(std::memory_order_acquire)) {
+            double xCU = 0.0, yCU = 0.0;
+            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+                HandleArcCreationClick(tab, xCU, yCU);
             }
         }
         else if (tab.cad2d->textCreationMode.load(std::memory_order_acquire)) {

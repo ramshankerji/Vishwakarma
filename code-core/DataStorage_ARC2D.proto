@@ -1,0 +1,21 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+option optimize_for = LITE_RUNTIME;
+
+message Arc2D {
+  double center_x = 1;
+  double center_y = 2;
+  double radius_x = 3;
+  double radius_y = 4;
+  double start_x = 5;
+  double start_y = 6;
+  double end_x = 7;
+  double end_y = 8;
+  float line_weight = 9;
+  uint32 line_weight_mode = 10;
+  uint32 color_abgr = 11;
+}

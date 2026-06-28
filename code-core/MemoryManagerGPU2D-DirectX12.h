@@ -34,6 +34,26 @@ struct Cad2DLineGPURecord {
 };
 static_assert(sizeof(Cad2DLineGPURecord) == 32, "Cad2DLineGPURecord must be 32 bytes.");
 
+struct Cad2DCurveGPURecord {
+    float centerX;
+    float centerY;
+    float radiusX;
+    float radiusY;
+    float startX;
+    float startY;
+    float endX;
+    float endY;
+    float lineWeight;
+    uint32_t lineWeightMode;
+    uint32_t colorABGR;
+    uint32_t curveType;
+    uint32_t flags;
+    uint32_t padding0;
+    uint32_t padding1;
+    uint32_t padding2;
+};
+static_assert(sizeof(Cad2DCurveGPURecord) == 64, "Cad2DCurveGPURecord must be 64 bytes.");
+
 struct Cad2DTextVertex {
     float x;
     float y;
@@ -67,6 +87,10 @@ struct Cad2DPageGPU {
     ComPtr<ID3D12Resource> lineIndirectBuffer;
     uint32_t lineCount = 0;
 
+    ComPtr<ID3D12Resource> curveBuffer;
+    ComPtr<ID3D12Resource> curveIndirectBuffer;
+    uint32_t curveCount = 0;
+
     ComPtr<ID3D12Resource> textVertexBuffer;
     ComPtr<ID3D12Resource> textIndexBuffer;
     uint32_t textVertexCount = 0;
@@ -81,6 +105,10 @@ struct DX12Resources2DPerTab {
     ComPtr<ID3D12RootSignature> lineRootSignature;
     ComPtr<ID3D12PipelineState> linePSO;
     ComPtr<ID3D12CommandSignature> lineCommandSignature;
+
+    ComPtr<ID3D12RootSignature> curveRootSignature;
+    ComPtr<ID3D12PipelineState> curvePSO;
+    ComPtr<ID3D12CommandSignature> curveCommandSignature;
 
     ComPtr<ID3D12RootSignature> textRootSignature;
     ComPtr<ID3D12PipelineState> textPSO;
@@ -97,6 +125,9 @@ struct TabCad2DStorage {
     std::vector<Cad2DLineRecordCPU> lineRecords;
     std::vector<Cad2DPolylineRecordCPU> polylineRecords;
     std::vector<Cad2DPolygonRecordCPU> polygonRecords;
+    std::vector<Cad2DCircleRecordCPU> circleRecords;
+    std::vector<Cad2DEllipseRecordCPU> ellipseRecords;
+    std::vector<Cad2DArcRecordCPU> arcRecords;
     std::vector<Cad2DTextRecordCPU> textRecords;
 
     std::atomic<Cad2DPageSnapshot*> activeSnapshot{ nullptr };
@@ -123,6 +154,24 @@ struct TabCad2DStorage {
     std::atomic<bool> polygonCreationHasCenter{ false };
     std::atomic<double> polygonCreationCenterXCU{ 0.0 };
     std::atomic<double> polygonCreationCenterYCU{ 0.0 };
+
+    std::atomic<bool> circleCreationMode{ false };
+    std::atomic<bool> circleCreationHasCenter{ false };
+    std::atomic<double> circleCreationCenterXCU{ 0.0 };
+    std::atomic<double> circleCreationCenterYCU{ 0.0 };
+
+    std::atomic<bool> ellipseCreationMode{ false };
+    std::atomic<uint32_t> ellipseCreationStep{ 0 };
+    std::atomic<double> ellipseCreationCenterXCU{ 0.0 };
+    std::atomic<double> ellipseCreationCenterYCU{ 0.0 };
+    std::atomic<double> ellipseCreationRadiusXCU{ 0.0 };
+
+    std::atomic<bool> arcCreationMode{ false };
+    std::atomic<uint32_t> arcCreationStep{ 0 };
+    std::atomic<double> arcCreationCenterXCU{ 0.0 };
+    std::atomic<double> arcCreationCenterYCU{ 0.0 };
+    std::atomic<double> arcCreationStartXCU{ 0.0 };
+    std::atomic<double> arcCreationStartYCU{ 0.0 };
 
     std::atomic<bool> textCreationMode{ false };
     std::atomic<bool> textCreationHasAnchor{ false };

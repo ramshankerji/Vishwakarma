@@ -26,6 +26,9 @@ enum class ObjectType : uint32_t {
     Polyline2D = 14,
     Polygon2D = 15,
     Text2D = 16,
+    Circle2D = 17,
+    Ellipse2D = 18,
+    Arc2D = 19,
 };
 
 enum class LifecycleState : uint32_t {
@@ -41,6 +44,9 @@ constexpr uint16_t kGeometry2DLineSchemaVersion = 1;
 constexpr uint16_t kGeometry2DPolylineSchemaVersion = 1;
 constexpr uint16_t kGeometry2DPolygonSchemaVersion = 1;
 constexpr uint16_t kGeometry2DTextSchemaVersion = 1;
+constexpr uint16_t kGeometry2DCircleSchemaVersion = 1;
+constexpr uint16_t kGeometry2DEllipseSchemaVersion = 1;
+constexpr uint16_t kGeometry2DArcSchemaVersion = 1;
 constexpr uint64_t kMaxLocalObjectId = (1ULL << 40) - 1ULL;
 
 constexpr uint32_t ToNumber(ObjectType value) {
@@ -65,7 +71,10 @@ constexpr bool IsGeometry2DObjectType(ObjectType value) {
     return value == ObjectType::Line2D ||
         value == ObjectType::Polyline2D ||
         value == ObjectType::Polygon2D ||
-        value == ObjectType::Text2D;
+        value == ObjectType::Text2D ||
+        value == ObjectType::Circle2D ||
+        value == ObjectType::Ellipse2D ||
+        value == ObjectType::Arc2D;
 }
 
 inline const char* ObjectTypeDisplayName(ObjectType value) {
@@ -86,6 +95,9 @@ inline const char* ObjectTypeDisplayName(ObjectType value) {
     case ObjectType::Polyline2D: return "Polyline2D";
     case ObjectType::Polygon2D: return "Polygon2D";
     case ObjectType::Text2D: return "Text2D";
+    case ObjectType::Circle2D: return "Circle2D";
+    case ObjectType::Ellipse2D: return "Ellipse2D";
+    case ObjectType::Arc2D: return "Arc2D";
     default: return "Unknown";
     }
 }

@@ -17,9 +17,12 @@
 #include <vector>
 
 #include "CommonNamedNumbers.h"
+#include "DataStorage_ARC2D.pb.h"
+#include "DataStorage_CIRCLE2D.pb.h"
 #include "DataStorage_CONE.pb.h"
 #include "DataStorage_CUBOID.pb.h"
 #include "DataStorage_CYLINDER.pb.h"
+#include "DataStorage_ELLIPSE2D.pb.h"
 #include "DataStorage_FOLDER.pb.h"
 #include "DataStorage_FRUSTUM_OF_CONE.pb.h"
 #include "DataStorage_FRUSTUM_OF_PYRAMID.pb.h"
@@ -191,9 +194,9 @@ bool EnsureFileInfo(sqlite3* db, uint64_t objectCounterNext, std::string* errorM
         UpsertFileInfoText(db, "last_saved_by_application", "Vishwakarma", errorMessage) &&
         UpsertFileInfoText(db, "last_saved_time_utc", now, errorMessage) &&
         UpsertFileInfoText(db, "schema_catalog_hash",
-            "logical-hierarchy-geometry3d-page2d-line2d-polyline2d-polygon2d-text2d-mvp-schema-v1",
+            "logical-hierarchy-geometry3d-page2d-line2d-polyline2d-polygon2d-circle2d-ellipse2d-arc2d-text2d-mvp-schema-v1",
             errorMessage) &&
-        UpsertFileInfoText(db, "schema_catalog_version", "6", errorMessage) &&
+        UpsertFileInfoText(db, "schema_catalog_version", "7", errorMessage) &&
         UpsertFileInfoText(db, "object_counter_next", std::to_string(objectCounterNext), errorMessage);
 }
 
@@ -424,6 +427,48 @@ bool EncodePolygon2D(const Cad2DPolygonRecordCPU& polygon,
     message.set_line_weight(polygon.lineWeight);
     message.set_line_weight_mode(static_cast<uint32_t>(polygon.lineWeightMode));
     message.set_color_abgr(polygon.colorABGR);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
+bool EncodeCircle2D(const Cad2DCircleRecordCPU& circle,
+    std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Circle2D message;
+    message.set_center_x(circle.centerX);
+    message.set_center_y(circle.centerY);
+    message.set_radius(circle.radius);
+    message.set_line_weight(circle.lineWeight);
+    message.set_line_weight_mode(static_cast<uint32_t>(circle.lineWeightMode));
+    message.set_color_abgr(circle.colorABGR);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
+bool EncodeEllipse2D(const Cad2DEllipseRecordCPU& ellipse,
+    std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Ellipse2D message;
+    message.set_center_x(ellipse.centerX);
+    message.set_center_y(ellipse.centerY);
+    message.set_radius_x(ellipse.radiusX);
+    message.set_radius_y(ellipse.radiusY);
+    message.set_line_weight(ellipse.lineWeight);
+    message.set_line_weight_mode(static_cast<uint32_t>(ellipse.lineWeightMode));
+    message.set_color_abgr(ellipse.colorABGR);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
+bool EncodeArc2D(const Cad2DArcRecordCPU& arc,
+    std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Arc2D message;
+    message.set_center_x(arc.centerX);
+    message.set_center_y(arc.centerY);
+    message.set_radius_x(arc.radiusX);
+    message.set_radius_y(arc.radiusY);
+    message.set_start_x(arc.startX);
+    message.set_start_y(arc.startY);
+    message.set_end_x(arc.endX);
+    message.set_end_y(arc.endY);
+    message.set_line_weight(arc.lineWeight);
+    message.set_line_weight_mode(static_cast<uint32_t>(arc.lineWeightMode));
+    message.set_color_abgr(arc.colorABGR);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -683,6 +728,51 @@ bool DecodePolygon2D(const std::vector<uint8_t>& payload, Cad2DPolygonRecordCPU&
     return polygon.radius > 0.0;
 }
 
+bool DecodeCircle2D(const std::vector<uint8_t>& payload, Cad2DCircleRecordCPU& circle) {
+    pb::Circle2D message;
+    if (!ParseMessage(payload, message)) return false;
+
+    circle.centerX = message.center_x();
+    circle.centerY = message.center_y();
+    circle.radius = message.radius();
+    circle.lineWeight = message.line_weight() > 0.0f ? message.line_weight() : 0.25f;
+    circle.lineWeightMode = ReadLineWeightMode(message.line_weight_mode());
+    circle.colorABGR = message.color_abgr();
+    return circle.radius > 0.0;
+}
+
+bool DecodeEllipse2D(const std::vector<uint8_t>& payload, Cad2DEllipseRecordCPU& ellipse) {
+    pb::Ellipse2D message;
+    if (!ParseMessage(payload, message)) return false;
+
+    ellipse.centerX = message.center_x();
+    ellipse.centerY = message.center_y();
+    ellipse.radiusX = message.radius_x();
+    ellipse.radiusY = message.radius_y();
+    ellipse.lineWeight = message.line_weight() > 0.0f ? message.line_weight() : 0.25f;
+    ellipse.lineWeightMode = ReadLineWeightMode(message.line_weight_mode());
+    ellipse.colorABGR = message.color_abgr();
+    return ellipse.radiusX > 0.0 && ellipse.radiusY > 0.0;
+}
+
+bool DecodeArc2D(const std::vector<uint8_t>& payload, Cad2DArcRecordCPU& arc) {
+    pb::Arc2D message;
+    if (!ParseMessage(payload, message)) return false;
+
+    arc.centerX = message.center_x();
+    arc.centerY = message.center_y();
+    arc.radiusX = message.radius_x();
+    arc.radiusY = message.radius_y();
+    arc.startX = message.start_x();
+    arc.startY = message.start_y();
+    arc.endX = message.end_x();
+    arc.endY = message.end_y();
+    arc.lineWeight = message.line_weight() > 0.0f ? message.line_weight() : 0.25f;
+    arc.lineWeightMode = ReadLineWeightMode(message.line_weight_mode());
+    arc.colorABGR = message.color_abgr();
+    return arc.radiusX > 0.0 && arc.radiusY > 0.0;
+}
+
 bool DecodeText2D(const std::vector<uint8_t>& payload, Cad2DTextRecordCPU& text) {
     pb::Text2D message;
     if (!ParseMessage(payload, message)) return false;
@@ -718,6 +808,9 @@ std::string ObjectTypeName(ObjectType objectType) {
     case ObjectType::Polyline2D: return "Polyline2D";
     case ObjectType::Polygon2D: return "Polygon2D";
     case ObjectType::Text2D: return "Text2D";
+    case ObjectType::Circle2D: return "Circle2D";
+    case ObjectType::Ellipse2D: return "Ellipse2D";
+    case ObjectType::Arc2D: return "Arc2D";
     default: return "Unknown";
     }
 }
@@ -740,6 +833,9 @@ bool ObjectTypeFromNumber(uint32_t value, ObjectType& objectType) {
     case 14: objectType = ObjectType::Polyline2D; return true;
     case 15: objectType = ObjectType::Polygon2D; return true;
     case 16: objectType = ObjectType::Text2D; return true;
+    case 17: objectType = ObjectType::Circle2D; return true;
+    case 18: objectType = ObjectType::Ellipse2D; return true;
+    case 19: objectType = ObjectType::Arc2D; return true;
     default: objectType = ObjectType::Unknown; return false;
     }
 }
@@ -756,6 +852,12 @@ uint16_t DefaultSchemaVersionForObjectType(ObjectType objectType) {
             return VishwakarmaStorage::kGeometry2DPolygonSchemaVersion;
         case ObjectType::Text2D:
             return VishwakarmaStorage::kGeometry2DTextSchemaVersion;
+        case ObjectType::Circle2D:
+            return VishwakarmaStorage::kGeometry2DCircleSchemaVersion;
+        case ObjectType::Ellipse2D:
+            return VishwakarmaStorage::kGeometry2DEllipseSchemaVersion;
+        case ObjectType::Arc2D:
+            return VishwakarmaStorage::kGeometry2DArcSchemaVersion;
         default:
             return VishwakarmaStorage::kGeometry2DLineSchemaVersion;
         }
@@ -1092,6 +1194,93 @@ void AppendPolygon2DToTab(DATASETTAB& tab, Cad2DPolygonRecordCPU polygon) {
     EnqueueCad2DPolygon(tab.tabID, polygon.containerMemoryId, polygon);
 }
 
+void AppendCircle2DToTab(DATASETTAB& tab, Cad2DCircleRecordCPU circle) {
+    if (!tab.cad2d) tab.cad2d = std::make_unique<TabCad2DStorage>();
+    if (circle.objectId == 0) circle.objectId = MemoryID::next();
+    if (circle.schemaVersion == 0) {
+        circle.schemaVersion = VishwakarmaStorage::kGeometry2DCircleSchemaVersion;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
+        auto existing = std::find_if(tab.cad2d->circleRecords.begin(), tab.cad2d->circleRecords.end(),
+            [&](const Cad2DCircleRecordCPU& existingCircle) {
+                return existingCircle.objectId == circle.objectId;
+            });
+        if (existing == tab.cad2d->circleRecords.end()) {
+            tab.cad2d->circleRecords.push_back(circle);
+        }
+        else {
+            *existing = circle;
+        }
+    }
+
+    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), circle.objectId) ==
+        tab.allIDsInThisTab.end()) {
+        tab.allIDsInThisTab.push_back(circle.objectId);
+    }
+
+    EnqueueCad2DCircle(tab.tabID, circle.containerMemoryId, circle);
+}
+
+void AppendEllipse2DToTab(DATASETTAB& tab, Cad2DEllipseRecordCPU ellipse) {
+    if (!tab.cad2d) tab.cad2d = std::make_unique<TabCad2DStorage>();
+    if (ellipse.objectId == 0) ellipse.objectId = MemoryID::next();
+    if (ellipse.schemaVersion == 0) {
+        ellipse.schemaVersion = VishwakarmaStorage::kGeometry2DEllipseSchemaVersion;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
+        auto existing = std::find_if(tab.cad2d->ellipseRecords.begin(), tab.cad2d->ellipseRecords.end(),
+            [&](const Cad2DEllipseRecordCPU& existingEllipse) {
+                return existingEllipse.objectId == ellipse.objectId;
+            });
+        if (existing == tab.cad2d->ellipseRecords.end()) {
+            tab.cad2d->ellipseRecords.push_back(ellipse);
+        }
+        else {
+            *existing = ellipse;
+        }
+    }
+
+    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), ellipse.objectId) ==
+        tab.allIDsInThisTab.end()) {
+        tab.allIDsInThisTab.push_back(ellipse.objectId);
+    }
+
+    EnqueueCad2DEllipse(tab.tabID, ellipse.containerMemoryId, ellipse);
+}
+
+void AppendArc2DToTab(DATASETTAB& tab, Cad2DArcRecordCPU arc) {
+    if (!tab.cad2d) tab.cad2d = std::make_unique<TabCad2DStorage>();
+    if (arc.objectId == 0) arc.objectId = MemoryID::next();
+    if (arc.schemaVersion == 0) {
+        arc.schemaVersion = VishwakarmaStorage::kGeometry2DArcSchemaVersion;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
+        auto existing = std::find_if(tab.cad2d->arcRecords.begin(), tab.cad2d->arcRecords.end(),
+            [&](const Cad2DArcRecordCPU& existingArc) {
+                return existingArc.objectId == arc.objectId;
+            });
+        if (existing == tab.cad2d->arcRecords.end()) {
+            tab.cad2d->arcRecords.push_back(arc);
+        }
+        else {
+            *existing = arc;
+        }
+    }
+
+    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), arc.objectId) ==
+        tab.allIDsInThisTab.end()) {
+        tab.allIDsInThisTab.push_back(arc.objectId);
+    }
+
+    EnqueueCad2DArc(tab.tabID, arc.containerMemoryId, arc);
+}
+
 void AppendText2DToTab(DATASETTAB& tab, Cad2DTextRecordCPU text) {
     if (!tab.cad2d) tab.cad2d = std::make_unique<TabCad2DStorage>();
     if (text.objectId == 0) text.objectId = MemoryID::next();
@@ -1170,6 +1359,21 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         for (const Cad2DPolygonRecordCPU& polygon : cad2d->polygonRecords) {
             if (polygon.persistedId > maxExistingId) {
                 maxExistingId = polygon.persistedId;
+            }
+        }
+        for (const Cad2DCircleRecordCPU& circle : cad2d->circleRecords) {
+            if (circle.persistedId > maxExistingId) {
+                maxExistingId = circle.persistedId;
+            }
+        }
+        for (const Cad2DEllipseRecordCPU& ellipse : cad2d->ellipseRecords) {
+            if (ellipse.persistedId > maxExistingId) {
+                maxExistingId = ellipse.persistedId;
+            }
+        }
+        for (const Cad2DArcRecordCPU& arc : cad2d->arcRecords) {
+            if (arc.persistedId > maxExistingId) {
+                maxExistingId = arc.persistedId;
             }
         }
         for (const Cad2DTextRecordCPU& text : cad2d->textRecords) {
@@ -1253,6 +1457,51 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
                 polygon.schemaVersion = VishwakarmaStorage::kGeometry2DPolygonSchemaVersion;
             }
         }
+        for (Cad2DCircleRecordCPU& circle : cad2d->circleRecords) {
+            if (circle.objectId == 0) {
+                circle.objectId = MemoryID::next();
+            }
+            if (circle.persistedId == 0) {
+                if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
+                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    return false;
+                }
+                circle.persistedId = assignNextId++;
+            }
+            if (circle.schemaVersion == 0) {
+                circle.schemaVersion = VishwakarmaStorage::kGeometry2DCircleSchemaVersion;
+            }
+        }
+        for (Cad2DEllipseRecordCPU& ellipse : cad2d->ellipseRecords) {
+            if (ellipse.objectId == 0) {
+                ellipse.objectId = MemoryID::next();
+            }
+            if (ellipse.persistedId == 0) {
+                if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
+                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    return false;
+                }
+                ellipse.persistedId = assignNextId++;
+            }
+            if (ellipse.schemaVersion == 0) {
+                ellipse.schemaVersion = VishwakarmaStorage::kGeometry2DEllipseSchemaVersion;
+            }
+        }
+        for (Cad2DArcRecordCPU& arc : cad2d->arcRecords) {
+            if (arc.objectId == 0) {
+                arc.objectId = MemoryID::next();
+            }
+            if (arc.persistedId == 0) {
+                if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
+                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    return false;
+                }
+                arc.persistedId = assignNextId++;
+            }
+            if (arc.schemaVersion == 0) {
+                arc.schemaVersion = VishwakarmaStorage::kGeometry2DArcSchemaVersion;
+            }
+        }
         for (Cad2DTextRecordCPU& text : cad2d->textRecords) {
             if (text.objectId == 0) {
                 text.objectId = MemoryID::next();
@@ -1273,7 +1522,9 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
     std::unordered_map<uint64_t, uint64_t> memoryIdToPersistedId;
     memoryIdToPersistedId.reserve(tab.storageLogicalObjects.size() + tab.storageObjects3D.size() +
         (cad2d ? cad2d->lineRecords.size() + cad2d->polylineRecords.size() +
-            cad2d->polygonRecords.size() + cad2d->textRecords.size() : 0));
+            cad2d->polygonRecords.size() + cad2d->circleRecords.size() +
+            cad2d->ellipseRecords.size() + cad2d->arcRecords.size() +
+            cad2d->textRecords.size() : 0));
 
     for (const StoredLogicalObject& entry : tab.storageLogicalObjects) {
         if (entry.object && entry.object->persistedId != 0) {
@@ -1299,6 +1550,21 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         for (const Cad2DPolygonRecordCPU& polygon : cad2d->polygonRecords) {
             if (polygon.objectId != 0 && polygon.persistedId != 0) {
                 memoryIdToPersistedId[polygon.objectId] = polygon.persistedId;
+            }
+        }
+        for (const Cad2DCircleRecordCPU& circle : cad2d->circleRecords) {
+            if (circle.objectId != 0 && circle.persistedId != 0) {
+                memoryIdToPersistedId[circle.objectId] = circle.persistedId;
+            }
+        }
+        for (const Cad2DEllipseRecordCPU& ellipse : cad2d->ellipseRecords) {
+            if (ellipse.objectId != 0 && ellipse.persistedId != 0) {
+                memoryIdToPersistedId[ellipse.objectId] = ellipse.persistedId;
+            }
+        }
+        for (const Cad2DArcRecordCPU& arc : cad2d->arcRecords) {
+            if (arc.objectId != 0 && arc.persistedId != 0) {
+                memoryIdToPersistedId[arc.objectId] = arc.persistedId;
             }
         }
         for (const Cad2DTextRecordCPU& text : cad2d->textRecords) {
@@ -1351,6 +1617,39 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
             }
         }
         return polygon.persistedParentId;
+    };
+
+    auto resolveCircleParentId = [&](Cad2DCircleRecordCPU& circle) {
+        if (circle.containerMemoryId != 0) {
+            auto parentIt = memoryIdToPersistedId.find(circle.containerMemoryId);
+            if (parentIt != memoryIdToPersistedId.end()) {
+                circle.persistedParentId = parentIt->second;
+                return parentIt->second;
+            }
+        }
+        return circle.persistedParentId;
+    };
+
+    auto resolveEllipseParentId = [&](Cad2DEllipseRecordCPU& ellipse) {
+        if (ellipse.containerMemoryId != 0) {
+            auto parentIt = memoryIdToPersistedId.find(ellipse.containerMemoryId);
+            if (parentIt != memoryIdToPersistedId.end()) {
+                ellipse.persistedParentId = parentIt->second;
+                return parentIt->second;
+            }
+        }
+        return ellipse.persistedParentId;
+    };
+
+    auto resolveArcParentId = [&](Cad2DArcRecordCPU& arc) {
+        if (arc.containerMemoryId != 0) {
+            auto parentIt = memoryIdToPersistedId.find(arc.containerMemoryId);
+            if (parentIt != memoryIdToPersistedId.end()) {
+                arc.persistedParentId = parentIt->second;
+                return parentIt->second;
+            }
+        }
+        return arc.persistedParentId;
     };
 
     auto resolveTextParentId = [&](Cad2DTextRecordCPU& text) {
@@ -1434,6 +1733,60 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
                 ? polygon.schemaVersion
                 : VishwakarmaStorage::kGeometry2DPolygonSchemaVersion;
             row.lifecycleState = polygon.isDeleted ? LifecycleState::SoftDeleted : LifecycleState::Live;
+            row.payload = std::move(payload);
+            rows.push_back(std::move(row));
+        }
+
+        for (Cad2DCircleRecordCPU& circle : cad2d->circleRecords) {
+            if (circle.objectId == 0 || circle.radius <= 0.0) continue;
+
+            std::vector<uint8_t> payload;
+            if (!EncodeCircle2D(circle, payload, errorMessage)) return false;
+
+            ObjectStoreRow row;
+            row.objectId = circle.persistedId;
+            row.parentId = resolveCircleParentId(circle);
+            row.objectType = ObjectType::Circle2D;
+            row.schemaVersion = circle.schemaVersion != 0
+                ? circle.schemaVersion
+                : VishwakarmaStorage::kGeometry2DCircleSchemaVersion;
+            row.lifecycleState = circle.isDeleted ? LifecycleState::SoftDeleted : LifecycleState::Live;
+            row.payload = std::move(payload);
+            rows.push_back(std::move(row));
+        }
+
+        for (Cad2DEllipseRecordCPU& ellipse : cad2d->ellipseRecords) {
+            if (ellipse.objectId == 0 || ellipse.radiusX <= 0.0 || ellipse.radiusY <= 0.0) continue;
+
+            std::vector<uint8_t> payload;
+            if (!EncodeEllipse2D(ellipse, payload, errorMessage)) return false;
+
+            ObjectStoreRow row;
+            row.objectId = ellipse.persistedId;
+            row.parentId = resolveEllipseParentId(ellipse);
+            row.objectType = ObjectType::Ellipse2D;
+            row.schemaVersion = ellipse.schemaVersion != 0
+                ? ellipse.schemaVersion
+                : VishwakarmaStorage::kGeometry2DEllipseSchemaVersion;
+            row.lifecycleState = ellipse.isDeleted ? LifecycleState::SoftDeleted : LifecycleState::Live;
+            row.payload = std::move(payload);
+            rows.push_back(std::move(row));
+        }
+
+        for (Cad2DArcRecordCPU& arc : cad2d->arcRecords) {
+            if (arc.objectId == 0 || arc.radiusX <= 0.0 || arc.radiusY <= 0.0) continue;
+
+            std::vector<uint8_t> payload;
+            if (!EncodeArc2D(arc, payload, errorMessage)) return false;
+
+            ObjectStoreRow row;
+            row.objectId = arc.persistedId;
+            row.parentId = resolveArcParentId(arc);
+            row.objectType = ObjectType::Arc2D;
+            row.schemaVersion = arc.schemaVersion != 0
+                ? arc.schemaVersion
+                : VishwakarmaStorage::kGeometry2DArcSchemaVersion;
+            row.lifecycleState = arc.isDeleted ? LifecycleState::SoftDeleted : LifecycleState::Live;
             row.payload = std::move(payload);
             rows.push_back(std::move(row));
         }
@@ -1604,6 +1957,9 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         tab.cad2d->lineRecords.clear();
         tab.cad2d->polylineRecords.clear();
         tab.cad2d->polygonRecords.clear();
+        tab.cad2d->circleRecords.clear();
+        tab.cad2d->ellipseRecords.clear();
+        tab.cad2d->arcRecords.clear();
         tab.cad2d->textRecords.clear();
         tab.cad2d->demoLineCounter.store(0, std::memory_order_release);
         tab.cad2d->demoTextQueued.store(false, std::memory_order_release);
@@ -1616,6 +1972,21 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         tab.cad2d->polygonCreationHasCenter.store(false, std::memory_order_release);
         tab.cad2d->polygonCreationCenterXCU.store(0.0, std::memory_order_release);
         tab.cad2d->polygonCreationCenterYCU.store(0.0, std::memory_order_release);
+        tab.cad2d->circleCreationMode.store(false, std::memory_order_release);
+        tab.cad2d->circleCreationHasCenter.store(false, std::memory_order_release);
+        tab.cad2d->circleCreationCenterXCU.store(0.0, std::memory_order_release);
+        tab.cad2d->circleCreationCenterYCU.store(0.0, std::memory_order_release);
+        tab.cad2d->ellipseCreationMode.store(false, std::memory_order_release);
+        tab.cad2d->ellipseCreationStep.store(0, std::memory_order_release);
+        tab.cad2d->ellipseCreationCenterXCU.store(0.0, std::memory_order_release);
+        tab.cad2d->ellipseCreationCenterYCU.store(0.0, std::memory_order_release);
+        tab.cad2d->ellipseCreationRadiusXCU.store(0.0, std::memory_order_release);
+        tab.cad2d->arcCreationMode.store(false, std::memory_order_release);
+        tab.cad2d->arcCreationStep.store(0, std::memory_order_release);
+        tab.cad2d->arcCreationCenterXCU.store(0.0, std::memory_order_release);
+        tab.cad2d->arcCreationCenterYCU.store(0.0, std::memory_order_release);
+        tab.cad2d->arcCreationStartXCU.store(0.0, std::memory_order_release);
+        tab.cad2d->arcCreationStartYCU.store(0.0, std::memory_order_release);
         tab.cad2d->textCreationMode.store(false, std::memory_order_release);
         tab.cad2d->textCreationHasAnchor.store(false, std::memory_order_release);
         tab.cad2d->textCreationXCU.store(0.0, std::memory_order_release);
@@ -1721,6 +2092,81 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
 
                 const uint64_t runtimeObjectId = polygon.objectId;
                 AppendPolygon2DToTab(tab, polygon);
+                persistedIdToMemoryId[objectId] = runtimeObjectId;
+            }
+            else if (objectType == ObjectType::Circle2D) {
+                Cad2DCircleRecordCPU circle;
+                if (!DecodeCircle2D(payload, circle)) {
+                    SetError(errorMessage, "Could not decode " + ObjectTypeName(objectType) + " protobuf payload.");
+                    return false;
+                }
+
+                circle.objectId = MemoryID::next();
+                circle.persistedId = objectId;
+                circle.persistedParentId = parentId;
+                circle.schemaVersion = schemaVersion != 0
+                    ? schemaVersion
+                    : DefaultSchemaVersionForObjectType(objectType);
+                circle.isDeleted = false;
+                if (parentId != 0) {
+                    auto parentIt = persistedIdToMemoryId.find(parentId);
+                    if (parentIt != persistedIdToMemoryId.end()) {
+                        circle.containerMemoryId = parentIt->second;
+                    }
+                }
+
+                const uint64_t runtimeObjectId = circle.objectId;
+                AppendCircle2DToTab(tab, circle);
+                persistedIdToMemoryId[objectId] = runtimeObjectId;
+            }
+            else if (objectType == ObjectType::Ellipse2D) {
+                Cad2DEllipseRecordCPU ellipse;
+                if (!DecodeEllipse2D(payload, ellipse)) {
+                    SetError(errorMessage, "Could not decode " + ObjectTypeName(objectType) + " protobuf payload.");
+                    return false;
+                }
+
+                ellipse.objectId = MemoryID::next();
+                ellipse.persistedId = objectId;
+                ellipse.persistedParentId = parentId;
+                ellipse.schemaVersion = schemaVersion != 0
+                    ? schemaVersion
+                    : DefaultSchemaVersionForObjectType(objectType);
+                ellipse.isDeleted = false;
+                if (parentId != 0) {
+                    auto parentIt = persistedIdToMemoryId.find(parentId);
+                    if (parentIt != persistedIdToMemoryId.end()) {
+                        ellipse.containerMemoryId = parentIt->second;
+                    }
+                }
+
+                const uint64_t runtimeObjectId = ellipse.objectId;
+                AppendEllipse2DToTab(tab, ellipse);
+                persistedIdToMemoryId[objectId] = runtimeObjectId;
+            }
+            else if (objectType == ObjectType::Arc2D) {
+                Cad2DArcRecordCPU arc;
+                if (!DecodeArc2D(payload, arc)) {
+                    SetError(errorMessage, "Could not decode " + ObjectTypeName(objectType) + " protobuf payload.");
+                    return false;
+                }
+
+                arc.objectId = MemoryID::next();
+                arc.persistedId = objectId;
+                arc.persistedParentId = parentId;
+                arc.schemaVersion = schemaVersion != 0
+                    ? schemaVersion
+                    : DefaultSchemaVersionForObjectType(objectType);
+                arc.isDeleted = false;
+                if (parentId != 0) {
+                    auto parentIt = persistedIdToMemoryId.find(parentId);
+                    if (parentIt != persistedIdToMemoryId.end()) {
+                        arc.containerMemoryId = parentIt->second;
+                    }
+                }
+
+                const uint64_t runtimeObjectId = arc.objectId;
+                AppendArc2DToTab(tab, arc);
                 persistedIdToMemoryId[objectId] = runtimeObjectId;
             }
             else if (objectType == ObjectType::Text2D) {

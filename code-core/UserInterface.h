@@ -454,9 +454,9 @@ constexpr UIControlDefinition AllUIControls[] = {
     { Commands::CREATE_POLYLINE,       UITextID::CREATE_POLYLINE, UIIconForCommand(Commands::CREATE_POLYLINE), 1, 3, 1, 0, true, true, 1 , 5 },
     //Polygon Dropdown: Triangle, Rectangle, Pentagon, Hexagon, Heptagon, Octagon.
     { Commands::CREATE_POLYGON,        UITextID::CREATE_POLYGON, U'x', 1, 3, 2, 0, true, true, 1 , 5 },
-    { Commands::CREATE_CIRCLE,         UITextID::CREATE_CIRCLE, U'x', 1, 3, 0, 0, true, true, 1 , 5 },
-    { Commands::CREATE_ARC,            UITextID::CREATE_ARC, U'x', 1, 3, 1, 0, true, true, 1 , 5 },
-    { Commands::CREATE_ELLIPSE,        UITextID::CREATE_ELLIPSE, U'x', 1, 3, 2, 0, true, true, 1 , 5 },
+    { Commands::CREATE_CIRCLE,         UITextID::CREATE_CIRCLE, UIIconForCommand(Commands::CREATE_CIRCLE), 1, 3, 0, 0, true, true, 1 , 5 },
+    { Commands::CREATE_ARC,            UITextID::CREATE_ARC, UIIconForCommand(Commands::CREATE_ARC), 1, 3, 1, 0, true, true, 1 , 5 },
+    { Commands::CREATE_ELLIPSE,        UITextID::CREATE_ELLIPSE, UIIconForCommand(Commands::CREATE_ELLIPSE), 1, 3, 2, 0, true, true, 1 , 5 },
     // Nurbs are very powerfull!
     // They generalize Bezier Curves, B-Splines, Conic Sections (Circle/ellipses/parabola/hyperbola)
     { Commands::CREATE_NURBS,           UITextID::CREATE_NURBS, U'x', 1, 3, 0, 0, true, true, 1 , 5 },

@@ -1754,14 +1754,24 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             tab.cad2d && tab.cad2d->polylineCreationMode.load(std::memory_order_acquire);
         const bool polygonCreationMode =
             tab.cad2d && tab.cad2d->polygonCreationMode.load(std::memory_order_acquire);
+        const bool circleCreationMode =
+            tab.cad2d && tab.cad2d->circleCreationMode.load(std::memory_order_acquire);
+        const bool ellipseCreationMode =
+            tab.cad2d && tab.cad2d->ellipseCreationMode.load(std::memory_order_acquire);
+        const bool arcCreationMode =
+            tab.cad2d && tab.cad2d->arcCreationMode.load(std::memory_order_acquire);
         const bool textCreationMode =
             tab.cad2d && tab.cad2d->textCreationMode.load(std::memory_order_acquire);
-        if (lineCreationMode || polylineCreationMode || polygonCreationMode) {
+        if (lineCreationMode || polylineCreationMode || polygonCreationMode ||
+            circleCreationMode || ellipseCreationMode || arcCreationMode) {
             const float cursorIconSize = iconSizePx;
             const float cursorIconGap = 6.0f;
-            const Commands cursorCommand = polygonCreationMode
-                ? Commands::CREATE_POLYGON
-                : (polylineCreationMode ? Commands::CREATE_POLYLINE : Commands::CREATE_LINE);
+            Commands cursorCommand = Commands::CREATE_LINE;
+            if (polygonCreationMode) cursorCommand = Commands::CREATE_POLYGON;
+            else if (polylineCreationMode) cursorCommand = Commands::CREATE_POLYLINE;
+            else if (circleCreationMode) cursorCommand = Commands::CREATE_CIRCLE;
+            else if (ellipseCreationMode) cursorCommand = Commands::CREATE_ELLIPSE;
+            else if (arcCreationMode) cursorCommand = Commands::CREATE_ARC;
             const char32_t cursorIcon =
                 SVGIconRenderer::IconForID(static_cast<uint32_t>(cursorCommand));
             const float iconX = std::clamp(

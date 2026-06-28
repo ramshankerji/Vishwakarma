@@ -1,0 +1,16 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+option optimize_for = LITE_RUNTIME;
+
+message Circle2D {
+  double center_x = 1;
+  double center_y = 2;
+  double radius = 3;
+  float line_weight = 4;
+  uint32 line_weight_mode = 5;
+  uint32 color_abgr = 6;
+}

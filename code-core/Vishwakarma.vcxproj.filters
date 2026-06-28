@@ -16,6 +16,12 @@
     <ClCompile Include="DataStorage.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_ARC2D.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CIRCLE2D.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_Common3D.pb.cc">
       <Filter>code-core</Filter>
     </ClCompile>
@@ -26,6 +32,9 @@
       <Filter>code-core</Filter>
     </ClCompile>
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CYLINDER.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_ELLIPSE2D.pb.cc">
       <Filter>code-core</Filter>
     </ClCompile>
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FOLDER.pb.cc">
@@ -229,10 +238,18 @@
     <FxCompile Include="ShaderUIVertex.hlsl" />
     <FxCompile Include="Shader2D_LineVertex.hlsl" />
     <FxCompile Include="Shader2D_LinePixel.hlsl" />
+    <FxCompile Include="Shader2D_CurveVertex.hlsl" />
+    <FxCompile Include="Shader2D_CurvePixel.hlsl" />
     <FxCompile Include="Shader2D_TextVertex.hlsl" />
     <FxCompile Include="Shader2D_TextPixel.hlsl" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="DataStorage_ARC2D.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_CIRCLE2D.proto">
+      <Filter>code-core</Filter>
+    </None>
     <None Include="DataStorage_Common3D.proto">
       <Filter>code-core</Filter>
     </None>
@@ -243,6 +260,9 @@
       <Filter>code-core</Filter>
     </None>
     <None Include="DataStorage_CYLINDER.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_ELLIPSE2D.proto">
       <Filter>code-core</Filter>
     </None>
     <None Include="DataStorage_FOLDER.proto">

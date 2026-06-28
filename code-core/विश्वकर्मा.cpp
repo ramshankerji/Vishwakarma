@@ -924,6 +924,12 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 Cad2DBeginPolylineCreation(*myTab);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_POLYGON_CREATION2D) {
                 Cad2DBeginPolygonCreation(*myTab);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_CIRCLE_CREATION2D) {
+                Cad2DBeginCircleCreation(*myTab);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_ELLIPSE_CREATION2D) {
+                Cad2DBeginEllipseCreation(*myTab);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_ARC_CREATION2D) {
+                Cad2DBeginArcCreation(*myTab);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_TEXT_CREATION2D) {
                 Cad2DBeginTextCreation(*myTab);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::CREATE_LINE2D) {
