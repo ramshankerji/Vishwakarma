@@ -557,6 +557,11 @@ bool Cad2DIsActivePage2D(DATASETTAB& tab) {
     return active && active->objectType == VishwakarmaStorage::ObjectType::Page2D;
 }
 
+void Cad2DCancelCreation(DATASETTAB& tab) {
+    if (!tab.cad2d) return;
+    ClearLineCreationState(*tab.cad2d);
+}
+
 void Cad2DBeginLineCreation(DATASETTAB& tab) {
     if (!tab.cad2d || !Cad2DIsActivePage2D(tab)) return;
 

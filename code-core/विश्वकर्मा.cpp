@@ -512,6 +512,237 @@ static void RegisterGeneratedGeometryElement(DATASETTAB* targetTab, VishwakarmaS
     toCopyThreadCV.notify_one();
 }
 
+static XMFLOAT3 AddPoint(const XMFLOAT3& a, const XMFLOAT3& b) {
+    return { a.x + b.x, a.y + b.y, a.z + b.z };
+}
+
+static XMFLOAT3 OffsetTo(const XMFLOAT3& from, const XMFLOAT3& to) {
+    return { to.x - from.x, to.y - from.y, to.z - from.z };
+}
+
+static XMFLOAT3 MidPoint(const XMFLOAT3& a, const XMFLOAT3& b) {
+    return { (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f, (a.z + b.z) * 0.5f };
+}
+
+static XMFLOAT3 AveragePoint(const std::vector<XMFLOAT3>& points) {
+    if (points.empty()) return {};
+
+    XMFLOAT3 sum{};
+    for (const XMFLOAT3& point : points) {
+        sum = AddPoint(sum, point);
+    }
+    const float scale = 1.0f / static_cast<float>(points.size());
+    return { sum.x * scale, sum.y * scale, sum.z * scale };
+}
+
+static void TranslatePoint(XMFLOAT3& point, const XMFLOAT3& offset) {
+    point.x += offset.x;
+    point.y += offset.y;
+    point.z += offset.z;
+}
+
+static void TranslatePoints(std::vector<XMFLOAT3>& points, const XMFLOAT3& offset) {
+    for (XMFLOAT3& point : points) {
+        TranslatePoint(point, offset);
+    }
+}
+
+static bool Scene3DPlacementPointFromInput(DATASETTAB& tab, const ACTION_DETAILS& input, XMFLOAT3& outPoint) {
+    int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
+    if (!GetVisibleSceneViewportForTab(tab, viewportWidth, viewportHeight, viewportTop)) {
+        return false;
+    }
+    if (input.x < 0 || input.x >= viewportWidth ||
+        input.y < viewportTop || input.y >= viewportTop + viewportHeight) {
+        return false;
+    }
+
+    const float mouseX = std::clamp(static_cast<float>(input.x), 0.0f, static_cast<float>(viewportWidth));
+    const float mouseY = std::clamp(static_cast<float>(input.y - viewportTop), 0.0f, static_cast<float>(viewportHeight));
+    const float ndcX = mouseX / static_cast<float>(viewportWidth) * 2.0f - 1.0f;
+    const float ndcY = 1.0f - mouseY / static_cast<float>(viewportHeight) * 2.0f;
+    const float aspect = static_cast<float>(viewportWidth) / static_cast<float>(viewportHeight);
+    const float tanHalfFov = std::tan(tab.camera.fov * 0.5f);
+
+    DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&tab.camera.position);
+    DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&tab.camera.target);
+    DirectX::XMVECTOR worldUp = DirectX::XMLoadFloat3(&tab.camera.up);
+    DirectX::XMVECTOR forward = DirectX::XMVector3Normalize(DirectX::XMVectorSubtract(target, eye));
+    DirectX::XMVECTOR right = DirectX::XMVector3Cross(worldUp, forward);
+    if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(right)) <= 0.000001f) {
+        return false;
+    }
+    right = DirectX::XMVector3Normalize(right);
+    DirectX::XMVECTOR viewUp = DirectX::XMVector3Cross(forward, right);
+    DirectX::XMVECTOR ray = DirectX::XMVectorAdd(forward,
+        DirectX::XMVectorAdd(
+            DirectX::XMVectorScale(right, ndcX * tanHalfFov * aspect),
+            DirectX::XMVectorScale(viewUp, ndcY * tanHalfFov)));
+    ray = DirectX::XMVector3Normalize(ray);
+
+    const float distance = DirectX::XMVectorGetX(DirectX::XMVector3Length(DirectX::XMVectorSubtract(target, eye)));
+    const float denom = DirectX::XMVectorGetX(DirectX::XMVector3Dot(ray, forward));
+    if (distance <= 0.0001f || std::abs(denom) <= 0.000001f) {
+        return false;
+    }
+
+    DirectX::XMStoreFloat3(&outPoint, DirectX::XMVectorAdd(eye, DirectX::XMVectorScale(ray, distance / denom)));
+    return true;
+}
+
+static bool CreatePrimitiveGeometryElement(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType,
+    const XMFLOAT3& placementPoint) {
+    if (!targetTab || !VishwakarmaStorage::IsGeometry3DObjectType(objectType)) return false;
+
+    GeometryData geometry;
+    META_DATA* object = nullptr;
+
+    switch (objectType) {
+    case VishwakarmaStorage::ObjectType::Pyramid: {
+        PYRAMID* shape = new (targetTab->tabNo) PYRAMID();
+        shape->Randomize();
+        TranslatePoints(shape->vertices, OffsetTo(AveragePoint(shape->vertices), placementPoint));
+        geometry = shape->GetGeometry();
+        object = shape;
+        break;
+    }
+    case VishwakarmaStorage::ObjectType::Cuboid: {
+        CUBOID* shape = new (targetTab->tabNo) CUBOID();
+        shape->Randomize();
+        TranslatePoints(shape->vertices, OffsetTo(AveragePoint(shape->vertices), placementPoint));
+        geometry = shape->GetGeometry();
+        object = shape;
+        break;
+    }
+    case VishwakarmaStorage::ObjectType::Cone: {
+        CONE* shape = new (targetTab->tabNo) CONE();
+        shape->Randomize();
+        const XMFLOAT3 offset = OffsetTo(MidPoint(shape->apex, shape->baseCenter), placementPoint);
+        TranslatePoint(shape->apex, offset);
+        TranslatePoint(shape->baseCenter, offset);
+        geometry = shape->GetGeometry();
+        object = shape;
+        break;
+    }
+    case VishwakarmaStorage::ObjectType::Cylinder: {
+        CYLINDER* shape = new (targetTab->tabNo) CYLINDER();
+        shape->Randomize();
+        const XMFLOAT3 offset = OffsetTo(MidPoint(shape->p1, shape->p2), placementPoint);
+        TranslatePoint(shape->p1, offset);
+        TranslatePoint(shape->p2, offset);
+        geometry = shape->GetGeometry();
+        object = shape;
+        break;
+    }
+    case VishwakarmaStorage::ObjectType::Parallelepiped: {
+        PARALLELEPIPED* shape = new (targetTab->tabNo) PARALLELEPIPED();
+        shape->Randomize();
+        TranslatePoints(shape->vertices, OffsetTo(AveragePoint(shape->vertices), placementPoint));
+        geometry = shape->GetGeometry();
+        object = shape;
+        break;
+    }
+    case VishwakarmaStorage::ObjectType::Sphere: {
+        SPHERE* shape = new (targetTab->tabNo) SPHERE();
+        shape->Randomize();
+        shape->center = placementPoint;
+        geometry = shape->GetGeometry();
+        object = shape;
+        break;
+    }
+    case VishwakarmaStorage::ObjectType::FrustumOfPyramid: {
+        FRUSTUM_OF_PYRAMID* shape = new (targetTab->tabNo) FRUSTUM_OF_PYRAMID();
+        shape->Randomize();
+        TranslatePoints(shape->vertices, OffsetTo(AveragePoint(shape->vertices), placementPoint));
+        geometry = shape->GetGeometry();
+        object = shape;
+        break;
+    }
+    case VishwakarmaStorage::ObjectType::FrustumOfCone: {
+        FRUSTUM_OF_CONE* shape = new (targetTab->tabNo) FRUSTUM_OF_CONE();
+        shape->Randomize();
+        const XMFLOAT3 offset = OffsetTo(MidPoint(shape->bottomCenter, shape->topCenter), placementPoint);
+        TranslatePoint(shape->bottomCenter, offset);
+        TranslatePoint(shape->topCenter, offset);
+        geometry = shape->GetGeometry();
+        object = shape;
+        break;
+    }
+    case VishwakarmaStorage::ObjectType::Pipe: {
+        PIPE* shape = new (targetTab->tabNo) PIPE();
+        shape->Randomize();
+        const XMFLOAT3 offset = OffsetTo(MidPoint(shape->center1, shape->center2), placementPoint);
+        TranslatePoint(shape->center1, offset);
+        TranslatePoint(shape->center2, offset);
+        geometry = shape->GetGeometry();
+        object = shape;
+        break;
+    }
+    case VishwakarmaStorage::ObjectType::Torus: {
+        TORUS* shape = new (targetTab->tabNo) TORUS();
+        shape->Randomize();
+        shape->center = placementPoint;
+        geometry = shape->GetGeometry();
+        object = shape;
+        break;
+    }
+    case VishwakarmaStorage::ObjectType::Ellipsoid: {
+        ELLIPSOID* shape = new (targetTab->tabNo) ELLIPSOID();
+        shape->Randomize();
+        shape->center = placementPoint;
+        geometry = shape->GetGeometry();
+        object = shape;
+        break;
+    }
+    default:
+        return false;
+    }
+
+    RegisterGeneratedGeometryElement(targetTab, objectType, object, std::move(geometry));
+    return true;
+}
+
+static void BeginPrimitive3DPlacement(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType) {
+    if (!targetTab || !VishwakarmaStorage::IsGeometry3DObjectType(objectType)) return;
+
+    Cad2DCancelCreation(*targetTab);
+    const uint64_t sceneMemoryId = EnsureActiveScene3D(targetTab);
+    if (sceneMemoryId != 0) {
+        OpenInternalSubTab(targetTab, sceneMemoryId);
+    }
+    targetTab->activePrimitive3DPlacementType.store(
+        VishwakarmaStorage::ToNumber(objectType), std::memory_order_release);
+}
+
+static void CancelPrimitive3DPlacement(DATASETTAB& tab) {
+    tab.activePrimitive3DPlacementType.store(
+        VishwakarmaStorage::ToNumber(VishwakarmaStorage::ObjectType::Unknown),
+        std::memory_order_release);
+}
+
+static bool HandlePrimitive3DPlacementInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
+    const auto objectType = static_cast<VishwakarmaStorage::ObjectType>(
+        tab.activePrimitive3DPlacementType.load(std::memory_order_acquire));
+    if (objectType == VishwakarmaStorage::ObjectType::Unknown) return false;
+    if (!VishwakarmaStorage::IsGeometry3DObjectType(objectType)) {
+        CancelPrimitive3DPlacement(tab);
+        return false;
+    }
+
+    if (input.actionType == ACTION_TYPE::KEYDOWN && input.x == VK_ESCAPE) {
+        CancelPrimitive3DPlacement(tab);
+        return true;
+    }
+
+    if (input.actionType != ACTION_TYPE::LBUTTONDOWN || tab.isAltDown) return false;
+
+    XMFLOAT3 placementPoint{};
+    if (Scene3DPlacementPointFromInput(tab, input, placementPoint)) {
+        CreatePrimitiveGeometryElement(&tab, objectType, placementPoint);
+    }
+    return true;
+}
+
 inline void addRandomGeometryElement(DATASETTAB* targetTab) {
 	if (!targetTab) return; //Safety against NULL pointer dereference.
     GeometryData geometry;// These will hold the data of the randomly created shape.
@@ -665,6 +896,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
             if (input.actionType == ACTION_TYPE::MOUSEMOVE && inputCount > 200) { continue; }  // Simple rate limit
 
             if (Cad2DHandleInput(*myTab, input)) { continue; }
+            if (HandlePrimitive3DPlacementInput(*myTab, input)) { continue; }
 
             // Handle based on type
             switch (input.actionType) {
@@ -918,19 +1150,28 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 ActivateInternalSubTab(myTab, nextWorkTODO.objectId);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::CLOSE_INTERNAL_SUB_TAB) {
                 CloseInternalSubTab(myTab, nextWorkTODO.objectId);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_PRIMITIVE_CREATION3D) {
+                BeginPrimitive3DPlacement(myTab, static_cast<VishwakarmaStorage::ObjectType>(nextWorkTODO.x));
             } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_LINE_CREATION2D) {
+                CancelPrimitive3DPlacement(*myTab);
                 Cad2DBeginLineCreation(*myTab);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_POLYLINE_CREATION2D) {
+                CancelPrimitive3DPlacement(*myTab);
                 Cad2DBeginPolylineCreation(*myTab);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_POLYGON_CREATION2D) {
+                CancelPrimitive3DPlacement(*myTab);
                 Cad2DBeginPolygonCreation(*myTab);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_CIRCLE_CREATION2D) {
+                CancelPrimitive3DPlacement(*myTab);
                 Cad2DBeginCircleCreation(*myTab);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_ELLIPSE_CREATION2D) {
+                CancelPrimitive3DPlacement(*myTab);
                 Cad2DBeginEllipseCreation(*myTab);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_ARC_CREATION2D) {
+                CancelPrimitive3DPlacement(*myTab);
                 Cad2DBeginArcCreation(*myTab);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_TEXT_CREATION2D) {
+                CancelPrimitive3DPlacement(*myTab);
                 Cad2DBeginTextCreation(*myTab);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::CREATE_LINE2D) {
                 Cad2DAutoGenerateDemoContent(*myTab);
@@ -957,6 +1198,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         myTab->activeInternalSubTabMemoryId = 0;
         myTab->defaultScene3DMemoryId = 0;
         myTab->activeScene3DMemoryId = 0;
+        CancelPrimitive3DPlacement(*myTab);
     }
     DataTreeView::ResetScroll(myTab->dataTreeView);
     myTab->engineeringReleased.store(true, std::memory_order_release);

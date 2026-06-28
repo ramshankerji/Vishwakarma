@@ -1,0 +1,17 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+import "DataStorage_Common3D.proto";
+
+option optimize_for = LITE_RUNTIME;
+
+message Ellipsoid {
+  Point3F center = 1;
+  float radius_x = 2;
+  float radius_y = 3;
+  float radius_z = 4;
+  Color4F color = 5;
+}

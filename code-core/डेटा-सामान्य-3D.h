@@ -124,6 +124,39 @@ struct SPHERE :public META_DATA {
     GeometryData GetGeometry();
 };
 
+struct TORUS :public META_DATA {
+    static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::Torus;
+    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
+    XMFLOAT3 center = {};
+    float majorRadius = 1;
+    float minorRadius = 0.25f;
+    XMHALF4 color = {};
+
+    uint64_t optionalFieldsFlags = 0;
+    uint32_t systemFlags = 0;
+    uint32_t objectLifeCycleFlags = 0;
+    c_string name;
+    void Randomize();
+    GeometryData GetGeometry();
+};
+
+struct ELLIPSOID :public META_DATA {
+    static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::Ellipsoid;
+    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
+    XMFLOAT3 center = {};
+    float radiusX = 1;
+    float radiusY = 1;
+    float radiusZ = 1;
+    XMHALF4 color = {};
+
+    uint64_t optionalFieldsFlags = 0;
+    uint32_t systemFlags = 0;
+    uint32_t objectLifeCycleFlags = 0;
+    c_string name;
+    void Randomize();
+    GeometryData GetGeometry();
+};
+
 struct FRUSTUM_OF_PYRAMID :public META_DATA {
     static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::FrustumOfPyramid;
     static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
@@ -667,6 +700,129 @@ inline GeometryData SPHERE::GetGeometry() {
             geometry.indices.push_back(r1 + next_j);
         }
     }
+    return geometry;
+}
+
+// TORUS
+inline void TORUS::Randomize() {
+    std::uniform_real_distribution<float> posDist(-5.0f, 5.0f);
+    std::uniform_real_distribution<float> majorDist(0.15f, 0.5f);
+    std::uniform_real_distribution<float> minorRatioDist(0.2f, 0.4f);
+    std::uniform_real_distribution<float> colorDist(0.0f, 1.0f);
+    auto& rng = GetRNG();
+
+    center = { posDist(rng), posDist(rng), posDist(rng) };
+    majorRadius = majorDist(rng);
+    minorRadius = majorRadius * minorRatioDist(rng);
+    color = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+}
+
+inline GeometryData TORUS::GetGeometry() {
+    GeometryData geometry;
+    geometry.id = memoryID;
+    const int majorSegments = 36;
+    const int minorSegments = 18;
+    geometry.vertices.clear();
+    geometry.indices.clear();
+    geometry.vertices.reserve(majorSegments * minorSegments);
+    geometry.indices.reserve(majorSegments * minorSegments * 6);
+
+    for (int i = 0; i < majorSegments; ++i) {
+        const float theta = XM_2PI * i / majorSegments;
+        const float cosTheta = cosf(theta);
+        const float sinTheta = sinf(theta);
+
+        for (int j = 0; j < minorSegments; ++j) {
+            const float phi = XM_2PI * j / minorSegments;
+            const float cosPhi = cosf(phi);
+            const float sinPhi = sinf(phi);
+            const float ringRadius = majorRadius + minorRadius * cosPhi;
+            XMFLOAT3 position = {
+                center.x + ringRadius * cosTheta,
+                center.y + minorRadius * sinPhi,
+                center.z + ringRadius * sinTheta
+            };
+            XMFLOAT3 normal = { cosTheta * cosPhi, sinPhi, sinTheta * cosPhi };
+            geometry.vertices.push_back(Vertex{ position, PackNormal(normal), color });
+        }
+    }
+
+    for (int i = 0; i < majorSegments; ++i) {
+        const int nextI = (i + 1) % majorSegments;
+        for (int j = 0; j < minorSegments; ++j) {
+            const int nextJ = (j + 1) % minorSegments;
+            const uint16_t a = static_cast<uint16_t>(i * minorSegments + j);
+            const uint16_t b = static_cast<uint16_t>(nextI * minorSegments + j);
+            const uint16_t c = static_cast<uint16_t>(nextI * minorSegments + nextJ);
+            const uint16_t d = static_cast<uint16_t>(i * minorSegments + nextJ);
+            geometry.indices.insert(geometry.indices.end(), { a, b, d, d, b, c });
+        }
+    }
+
+    return geometry;
+}
+
+// ELLIPSOID
+inline void ELLIPSOID::Randomize() {
+    std::uniform_real_distribution<float> posDist(-5.0f, 5.0f);
+    std::uniform_real_distribution<float> sizeDist(0.1f, 0.5f);
+    std::uniform_real_distribution<float> colorDist(0.0f, 1.0f);
+    auto& rng = GetRNG();
+
+    center = { posDist(rng), posDist(rng), posDist(rng) };
+    radiusX = sizeDist(rng);
+    radiusY = sizeDist(rng);
+    radiusZ = sizeDist(rng);
+    color = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
+}
+
+inline GeometryData ELLIPSOID::GetGeometry() {
+    GeometryData geometry;
+    geometry.id = memoryID;
+    const int sliceCount = 36;
+    const int stackCount = 18;
+    geometry.vertices.clear();
+    geometry.indices.clear();
+    geometry.vertices.reserve((stackCount + 1) * sliceCount);
+    geometry.indices.reserve(stackCount * sliceCount * 6);
+
+    for (int i = 0; i <= stackCount; ++i) {
+        const float phi = XM_PI * i / stackCount;
+        const float sinPhi = sinf(phi);
+        const float cosPhi = cosf(phi);
+
+        for (int j = 0; j < sliceCount; ++j) {
+            const float theta = XM_2PI * j / sliceCount;
+            const float cosTheta = cosf(theta);
+            const float sinTheta = sinf(theta);
+            XMFLOAT3 position = {
+                center.x + radiusX * sinPhi * cosTheta,
+                center.y + radiusY * cosPhi,
+                center.z + radiusZ * sinPhi * sinTheta
+            };
+            XMFLOAT3 normal = {
+                (position.x - center.x) / (radiusX * radiusX),
+                (position.y - center.y) / (radiusY * radiusY),
+                (position.z - center.z) / (radiusZ * radiusZ)
+            };
+            geometry.vertices.push_back(Vertex{ position, PackNormal(normal), color });
+        }
+    }
+
+    for (int i = 0; i < stackCount; ++i) {
+        for (int j = 0; j < sliceCount; ++j) {
+            const int nextJ = (j + 1) % sliceCount;
+            const int r0 = i * sliceCount;
+            const int r1 = (i + 1) * sliceCount;
+            geometry.indices.push_back(static_cast<uint16_t>(r0 + j));
+            geometry.indices.push_back(static_cast<uint16_t>(r1 + j));
+            geometry.indices.push_back(static_cast<uint16_t>(r0 + nextJ));
+            geometry.indices.push_back(static_cast<uint16_t>(r0 + nextJ));
+            geometry.indices.push_back(static_cast<uint16_t>(r1 + j));
+            geometry.indices.push_back(static_cast<uint16_t>(r1 + nextJ));
+        }
+    }
+
     return geometry;
 }
 

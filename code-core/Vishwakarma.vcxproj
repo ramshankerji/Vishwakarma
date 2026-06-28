@@ -142,6 +142,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CONE.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CUBOID.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CYLINDER.pb.cc" />
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_ELLIPSOID.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_ELLIPSE2D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FOLDER.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FRUSTUM_OF_CONE.pb.cc" />
@@ -156,6 +157,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PYRAMID.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_SCENE3D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_SPHERE.pb.cc" />
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_TORUS.pb.cc" />
     <ClCompile Include="..\code-core\विश्वकर्मा.cpp" />
     <ClCompile Include="FontManager.cpp" />
     <ClCompile Include="FontManager.h" />
@@ -219,6 +221,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <None Include="DataStorage_CUBOID.proto" />
     <None Include="DataStorage_CONE.proto" />
     <None Include="DataStorage_CYLINDER.proto" />
+    <None Include="DataStorage_ELLIPSOID.proto" />
     <None Include="DataStorage_ELLIPSE2D.proto" />
     <None Include="DataStorage_FOLDER.proto" />
     <None Include="DataStorage_FRUSTUM_OF_CONE.proto" />
@@ -233,6 +236,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <None Include="DataStorage_PYRAMID.proto" />
     <None Include="DataStorage_SCENE3D.proto" />
     <None Include="DataStorage_SPHERE.proto" />
+    <None Include="DataStorage_TORUS.proto" />
     <None Include="..\code-miscellaneous\GenerateDataStorageProtobuf.ps1" />
     <None Include="..\code-miscellaneous\msdf_charset_exporter.py" />
     <None Include="..\code-miscellaneous\svg_icon_embedder.py" />

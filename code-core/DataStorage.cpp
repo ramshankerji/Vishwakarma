@@ -22,6 +22,7 @@
 #include "DataStorage_CONE.pb.h"
 #include "DataStorage_CUBOID.pb.h"
 #include "DataStorage_CYLINDER.pb.h"
+#include "DataStorage_ELLIPSOID.pb.h"
 #include "DataStorage_ELLIPSE2D.pb.h"
 #include "DataStorage_FOLDER.pb.h"
 #include "DataStorage_FRUSTUM_OF_CONE.pb.h"
@@ -36,6 +37,7 @@
 #include "DataStorage_SCENE3D.pb.h"
 #include "DataStorage_SPHERE.pb.h"
 #include "DataStorage_TEXT2D.pb.h"
+#include "DataStorage_TORUS.pb.h"
 #include "ID.h"
 #include "MemoryManagerGPU-DirectX12.h"
 #include "sqlite3.h"
@@ -326,6 +328,25 @@ bool EncodeSphere(const SPHERE& object, std::vector<uint8_t>& payload, std::stri
     return SerializeMessage(message, payload, errorMessage);
 }
 
+bool EncodeTorus(const TORUS& object, std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Torus message;
+    WritePoint3(message.mutable_center(), object.center);
+    message.set_major_radius(object.majorRadius);
+    message.set_minor_radius(object.minorRadius);
+    WriteColor4(message.mutable_color(), object.color);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
+bool EncodeEllipsoid(const ELLIPSOID& object, std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Ellipsoid message;
+    WritePoint3(message.mutable_center(), object.center);
+    message.set_radius_x(object.radiusX);
+    message.set_radius_y(object.radiusY);
+    message.set_radius_z(object.radiusZ);
+    WriteColor4(message.mutable_color(), object.color);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
 bool EncodeFrustumOfPyramid(const FRUSTUM_OF_PYRAMID& object, std::vector<uint8_t>& payload,
     std::string* errorMessage) {
     pb::FrustumOfPyramid message;
@@ -569,6 +590,29 @@ bool DecodeSphere(const std::vector<uint8_t>& payload, SPHERE& object) {
     return true;
 }
 
+bool DecodeTorus(const std::vector<uint8_t>& payload, TORUS& object) {
+    pb::Torus message;
+    if (!ParseMessage(payload, message)) return false;
+
+    object.center = message.has_center() ? ReadPoint3(message.center()) : XMFLOAT3{};
+    object.majorRadius = message.major_radius() > 0.0f ? message.major_radius() : 0.5f;
+    object.minorRadius = message.minor_radius() > 0.0f ? message.minor_radius() : 0.125f;
+    object.color = message.has_color() ? ReadColor4(message.color()) : DefaultColor4();
+    return true;
+}
+
+bool DecodeEllipsoid(const std::vector<uint8_t>& payload, ELLIPSOID& object) {
+    pb::Ellipsoid message;
+    if (!ParseMessage(payload, message)) return false;
+
+    object.center = message.has_center() ? ReadPoint3(message.center()) : XMFLOAT3{};
+    object.radiusX = message.radius_x() > 0.0f ? message.radius_x() : 0.5f;
+    object.radiusY = message.radius_y() > 0.0f ? message.radius_y() : 0.5f;
+    object.radiusZ = message.radius_z() > 0.0f ? message.radius_z() : 0.5f;
+    object.color = message.has_color() ? ReadColor4(message.color()) : DefaultColor4();
+    return true;
+}
+
 bool DecodeFrustumOfPyramid(const std::vector<uint8_t>& payload, FRUSTUM_OF_PYRAMID& object) {
     pb::FrustumOfPyramid message;
     if (!ParseMessage(payload, message)) return false;
@@ -801,6 +845,8 @@ std::string ObjectTypeName(ObjectType objectType) {
     case ObjectType::FrustumOfPyramid: return "FrustumOfPyramid";
     case ObjectType::FrustumOfCone: return "FrustumOfCone";
     case ObjectType::Pipe: return "Pipe";
+    case ObjectType::Torus: return "Torus";
+    case ObjectType::Ellipsoid: return "Ellipsoid";
     case ObjectType::Folder: return "Folder";
     case ObjectType::Page2D: return "Page2D";
     case ObjectType::Scene3D: return "Scene3D";
@@ -836,6 +882,8 @@ bool ObjectTypeFromNumber(uint32_t value, ObjectType& objectType) {
     case 17: objectType = ObjectType::Circle2D; return true;
     case 18: objectType = ObjectType::Ellipse2D; return true;
     case 19: objectType = ObjectType::Arc2D; return true;
+    case 20: objectType = ObjectType::Torus; return true;
+    case 21: objectType = ObjectType::Ellipsoid; return true;
     default: objectType = ObjectType::Unknown; return false;
     }
 }
@@ -891,6 +939,10 @@ bool SerializeGeometryObject(const StoredGeometryObject3D& entry, std::vector<ui
         return EncodeFrustumOfCone(*static_cast<const FRUSTUM_OF_CONE*>(entry.object), payload, errorMessage);
     case ObjectType::Pipe:
         return EncodePipe(*static_cast<const PIPE*>(entry.object), payload, errorMessage);
+    case ObjectType::Torus:
+        return EncodeTorus(*static_cast<const TORUS*>(entry.object), payload, errorMessage);
+    case ObjectType::Ellipsoid:
+        return EncodeEllipsoid(*static_cast<const ELLIPSOID*>(entry.object), payload, errorMessage);
     default:
         SetError(errorMessage, "Unsupported object type during save.");
         return false;
@@ -1013,6 +1065,18 @@ bool DeserializeGeometryObject(ObjectType objectType, const std::vector<uint8_t>
         object = shape;
         break;
     }
+    case ObjectType::Torus: {
+        TORUS* shape = new (memoryGroupNo) TORUS();
+        ok = DecodeTorus(payload, *shape);
+        object = shape;
+        break;
+    }
+    case ObjectType::Ellipsoid: {
+        ELLIPSOID* shape = new (memoryGroupNo) ELLIPSOID();
+        ok = DecodeEllipsoid(payload, *shape);
+        object = shape;
+        break;
+    }
     default:
         SetError(errorMessage, "Unsupported object type during load.");
         return false;
@@ -1055,6 +1119,12 @@ bool GeometryForObject(ObjectType objectType, META_DATA* object, GeometryData& g
         return true;
     case ObjectType::Pipe:
         geometry = static_cast<PIPE*>(object)->GetGeometry();
+        return true;
+    case ObjectType::Torus:
+        geometry = static_cast<TORUS*>(object)->GetGeometry();
+        return true;
+    case ObjectType::Ellipsoid:
+        geometry = static_cast<ELLIPSOID*>(object)->GetGeometry();
         return true;
     default:
         return false;

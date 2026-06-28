@@ -1848,6 +1848,51 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         }
     }
 
+    if (activeTabIndex >= 0 && activeTabIndex < MV_MAX_TABS &&
+        activeInternalSubTabType == VishwakarmaStorage::ObjectType::Scene3D) {
+        DATASETTAB& tab = allTabs[activeTabIndex];
+        const auto primitiveType = static_cast<VishwakarmaStorage::ObjectType>(
+            tab.activePrimitive3DPlacementType.load(std::memory_order_acquire));
+        Commands cursorCommand = Commands::INVALID;
+        switch (primitiveType) {
+        case VishwakarmaStorage::ObjectType::Cuboid:
+            cursorCommand = Commands::CREATE_CUBOID;
+            break;
+        case VishwakarmaStorage::ObjectType::Cylinder:
+            cursorCommand = Commands::CREATE_CYLINDER;
+            break;
+        case VishwakarmaStorage::ObjectType::Sphere:
+            cursorCommand = Commands::CREATE_SPHERE;
+            break;
+        case VishwakarmaStorage::ObjectType::Pyramid:
+            cursorCommand = Commands::CREATE_PYRAMID;
+            break;
+        case VishwakarmaStorage::ObjectType::Cone:
+            cursorCommand = Commands::CREATE_CONE;
+            break;
+        case VishwakarmaStorage::ObjectType::Torus:
+            cursorCommand = Commands::CREATE_TORUS;
+            break;
+        case VishwakarmaStorage::ObjectType::Ellipsoid:
+            cursorCommand = Commands::CREATE_ELLIPSOID;
+            break;
+        default:
+            break;
+        }
+
+        if (cursorCommand != Commands::INVALID) {
+            const float cursorIconSize = iconSizePx;
+            const float cursorIconGap = 6.0f;
+            const char32_t cursorIcon =
+                SVGIconRenderer::IconForID(static_cast<uint32_t>(cursorCommand));
+            const float iconX = std::clamp(
+                input.mouseX - cursorIconSize * 0.5f, 0.0f, std::max(0.0f, W - cursorIconSize));
+            const float iconY = std::clamp(
+                input.mouseY + cursorIconGap, 0.0f, std::max(0.0f, H - cursorIconSize));
+            PushIcon(ctx, iconX, iconY, cursorIconSize, cursorIconSize, cursorIcon, 0xFF000000u, uiRes);
+        }
+    }
+
     // DRAW ALL UI GEOMETRY
     if (ctx.indexCount == 0) return;
 

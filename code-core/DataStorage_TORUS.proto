@@ -1,0 +1,16 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+import "DataStorage_Common3D.proto";
+
+option optimize_for = LITE_RUNTIME;
+
+message Torus {
+  Point3F center = 1;
+  float major_radius = 2;
+  float minor_radius = 3;
+  Color4F color = 4;
+}

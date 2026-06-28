@@ -186,6 +186,7 @@ void PopAllCad2DCopyCommands(std::vector<CommandToCopyThread2D>& outCommands);
 
 uint64_t Cad2DFindTargetPage2DMemoryId(DATASETTAB& tab);
 bool Cad2DIsActivePage2D(DATASETTAB& tab);
+void Cad2DCancelCreation(DATASETTAB& tab);
 void Cad2DBeginLineCreation(DATASETTAB& tab);
 void Cad2DBeginPolylineCreation(DATASETTAB& tab);
 void Cad2DBeginPolygonCreation(DATASETTAB& tab);

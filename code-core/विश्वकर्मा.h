@@ -138,6 +138,8 @@ struct DATASETTAB {
     uint64_t activeInternalSubTabMemoryId = 0; // Zero means no high-level container is currently visible.
     uint64_t defaultScene3DMemoryId = 0;
     uint64_t activeScene3DMemoryId = 0; // Organizational parent for newly generated 3D objects.
+    std::atomic<uint32_t> activePrimitive3DPlacementType{
+        VishwakarmaStorage::ToNumber(VishwakarmaStorage::ObjectType::Unknown) };
     std::unique_ptr<std::mutex> storageObjectsMutex;
 
 	DX12ResourcesPerTab dx; // DirectX12 resources specific to this tab.
