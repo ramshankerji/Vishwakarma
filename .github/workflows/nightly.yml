@@ -116,20 +116,26 @@ jobs:
         name: generated-font
         path: Fonts/*.ttf
 
-    - name: Build Main Project in Release Mode
-      #run: msbuild Vishwakarma.sln /p:Configuration=Release /p:Platform=x64
-      # We are forcing to downgrade to v143 since this is what is available on GitHub Actions runners.
-      # run: msbuild Vishwakarma.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /m
-      run: msbuild Vishwakarma.sln /p:Configuration=Release /p:Platform=x64 /m
+    # Builds Vishwakarma.exe + VishwakarmaSetup.exe, signs both with MV-CodeSigner-01.pfx,
+    # and produces Vishwakarma_UserSetup_win10_win11_x64_v<N>.exe + Vishwakarma_release_details.json
+    # + .sig (Ed25519). Without the RELEASE_SIGN_PASSWORD secret everything is built unsigned.
+    - name: Build, Sign and Package Release
+      env:
+        RELEASE_SIGN_PASSWORD: ${{ secrets.RELEASE_SIGN_PASSWORD }}
+        RELEASE_SIGN_PFX_B64: ${{ secrets.RELEASE_SIGN_PFX_B64 }}
+      shell: pwsh
+      run: powershell -NoProfile -ExecutionPolicy Bypass -File code-miscellaneous/GenerateRelease.ps1 -Mode Package -Configuration Release
 
-    # DEBUG STEP: Verify the file actually exists
-    - name: Verify Executable Exists
+    # DEBUG STEP: Verify the files actually exist
+    - name: Verify Release Files Exist
+      shell: pwsh
       run: |
-        if (Test-Path "build/Release/Vishwakarma.exe") {
-            Write-Host "File found!"
+        $setup = Get-ChildItem "build/Release/Vishwakarma_UserSetup_win10_win11_x64_v*.exe"
+        if ($setup -and (Test-Path "build/Release/Vishwakarma_release_details.json")) {
+            Write-Host "Release files found: $($setup.Name)"
         } else {
-            Write-Error "File NOT found at build/Release/Vishwakarma.exe"
-            Get-ChildItem -Recurse *.exe # List all .exes so we can see where it went
+            Write-Error "Setup exe or release manifest NOT found in build/Release/"
+            Get-ChildItem build/Release
             exit 1
         }
 
@@ -205,9 +211,19 @@ jobs:
       shell: pwsh
       run: |
         gh release delete nightly --cleanup-tag -y || echo "No existing nightly release to delete"
-        # Create the new release and upload the file
+        # Create the new release and upload the setup exe (versioned + stable-named alias for
+        # the website Download button), the signed manifest and its Ed25519 signature.
+        $versionedSetup = (Get-ChildItem "build/Release/Vishwakarma_UserSetup_win10_win11_x64_v*.exe").FullName
+        $assets = @(
+          $versionedSetup,
+          "build/Release/Vishwakarma_UserSetup_win10_win11_x64.exe",
+          "build/Release/Vishwakarma_release_details.json"
+        )
+        if (Test-Path "build/Release/Vishwakarma_release_details.json.sig") {
+          $assets += "build/Release/Vishwakarma_release_details.json.sig"
+        }
         gh release create nightly `
-          build/Release/Vishwakarma.exe `
+          @assets `
           --title "Nightly Build" `
           --notes "Latest development build, automatically generated." `
           --prerelease

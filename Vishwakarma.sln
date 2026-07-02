@@ -10,6 +10,11 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Vishwakarma", "code-core\Vi
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "VishwakarmaExternal", "code-external\VishwakarmaExternal.vcxproj", "{4AF7E5DE-34F4-4F63-B34B-02966188D3E1}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "VishwakarmaSetup", "code-core\VishwakarmaSetup.vcxproj", "{B7A61C57-2A9E-4B7D-9A66-3D4E8F2C1A90}"
+	ProjectSection(ProjectDependencies) = postProject
+		{15843AF6-EF3F-46D5-9321-BAB4770DB14C} = {15843AF6-EF3F-46D5-9321-BAB4770DB14C}
+	EndProjectSection
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "code-miscellaneous", "code-miscellaneous", "{7E3F2B31-D7C2-49F7-8E40-8F8B7F8D56E6}"
 	ProjectSection(SolutionItems) = preProject
 		code-miscellaneous\GenerateDataStorageProtobuf.ps1 = code-miscellaneous\GenerateDataStorageProtobuf.ps1
@@ -29,6 +34,10 @@ Global
 		{4AF7E5DE-34F4-4F63-B34B-02966188D3E1}.Debug|x64.Build.0 = Debug|x64
 		{4AF7E5DE-34F4-4F63-B34B-02966188D3E1}.Release|x64.ActiveCfg = Release|x64
 		{4AF7E5DE-34F4-4F63-B34B-02966188D3E1}.Release|x64.Build.0 = Release|x64
+		{B7A61C57-2A9E-4B7D-9A66-3D4E8F2C1A90}.Debug|x64.ActiveCfg = Debug|x64
+		{B7A61C57-2A9E-4B7D-9A66-3D4E8F2C1A90}.Debug|x64.Build.0 = Debug|x64
+		{B7A61C57-2A9E-4B7D-9A66-3D4E8F2C1A90}.Release|x64.ActiveCfg = Release|x64
+		{B7A61C57-2A9E-4B7D-9A66-3D4E8F2C1A90}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

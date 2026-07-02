@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "appId": "MissionVishwakarma",
+  "manifestSequence": "20260702-175714-f0c671b9",
+  "generatedAt": "2026-07-02T17:57:14Z",
+  "validUntil": "2026-08-01T17:57:14Z",
+  "signatureScheme": "Ed25519",
+  "signingKeyId": "ManifestSigner-01",
+  "releases": [
+    {
+      "name": "Vishwakarma",
+      "channel": "stable",
+      "platform": "windows",
+      "osMinVersion": "10.0",
+      "osMaxVersion": null,
+      "instructionSet": "x64",
+      "version": 190,
+      "minUpdateFromVersion": 1,
+      "packageKind": "full-user-setup-exe",
+      "fileName": "Vishwakarma_UserSetup_win10_win11_x64_v190.exe",
+      "url": "https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma_UserSetup_win10_win11_x64_v190.exe",
+      "size": 16955184,
+      "sha256": "bbacf85ceae0bda9b642bda6fab3edde7e413b66437300ae2183107dbb7b92bc",
+      "authenticodeRequired": false
+    }
+  ],
+  "blockedVersions": [],
+  "minimumAllowedVersion": 1
+}

@@ -168,6 +168,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClCompile Include="MemoryManagerGPU2D.cpp" />
     <ClCompile Include="MemoryManagerGPU2D-DirectX12.cpp" />
     <ClCompile Include="preCompiledHeadersWindows.cpp" />
+    <ClCompile Include="SoftwareUpdate.cpp" />
     <ClCompile Include="SVGIconRenderer.cpp" />
     <ClCompile Include="UserInterface-DirectX12.cpp" />
     <ClCompile Include="UserInterfaceTranslationCompiled.cpp" />
@@ -202,6 +203,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClInclude Include="MemoryManagerGPU-Vulkan1.1.h" />
     <ClInclude Include="preCompiledHeadersWindows.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="SoftwareUpdate.h" />
     <ClInclude Include="SVGIconManifest.h" />
     <ClInclude Include="SVGIconRenderer.h" />
     <ClInclude Include="TextureSaver.h" />

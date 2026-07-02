@@ -44,6 +44,7 @@
 
 #include "UserInputProcessing.h"
 #include "Input_UI_Network_File.h"
+#include "SoftwareUpdate.h"
 
 #include <windows.h>
 #include <windowsx.h> // For some macros like GET_X_LPARAM, GET_Y_LPARAM etc.
@@ -905,6 +906,11 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     #ifdef _DEBUG
         AllocateConsoleWindow();// Only allocate console in debug builds
     #endif
+
+    // If a newer verified setup was staged by the update thread, apply it and exit:
+    // the installer replaces our exe and relaunches the new version.
+    if (SoftwareUpdateOnAppLaunch()) return 0;
+    StartSoftwareUpdateThread();
 
     // Enable per Monitor DPI Awareness. Requires Windows 10 version 1703+.
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);

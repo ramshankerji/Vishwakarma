@@ -1,0 +1,604 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+// Release / install / update machinery of Vishwakarma. Design: website/content/software/release.md
+// This single file is compiled into two different binaries:
+// 1. Vishwakarma.exe (the application). Provides SoftwareUpdateOnAppLaunch() which applies a
+//    previously staged update, and StartSoftwareUpdateThread() which periodically downloads a
+//    newer signed setup into a staging folder.
+// 2. VishwakarmaSetup.exe (the installer, VISHWAKARMA_INSTALLER defined). Has Vishwakarma.exe
+//    and the release json embedded as RCDATA resources (IDs 201 / 202 in VishwakarmaSetup.rc)
+//    and provides its own wWinMain. No admin privilege needed for the default per-user install.
+//
+// Phase 1 scope only: signed manifest, SHA-256 verification, full setup exe, manual/automatic
+// check. No chunking, no peer-to-peer, no delta updates yet.
+
+#include "SoftwareUpdate.h"
+
+#include <windows.h>
+#include <shellapi.h>
+#include <shlobj.h>
+#include <shobjidl.h>
+#include <knownfolders.h>
+
+#include <atomic>
+#include <cstdint>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <random>
+#include <string>
+#include <thread>
+#include <vector>
+
+#ifndef VISHWAKARMA_INSTALLER
+#include <winhttp.h>
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/bio.h>
+#pragma comment(lib, "Winhttp.lib")
+#endif
+
+namespace fs = std::filesystem;
+
+// ------------------------------------------------------------------ Constants
+static const wchar_t* kCompanyFolder = L"Mission Vishwakarma";
+static const wchar_t* kAppExeName = L"Vishwakarma.exe";
+static const wchar_t* kReleaseJsonName = L"Vishwakarma_release_details.json";
+static const wchar_t* kManifestUrl =
+    L"https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma_release_details.json";
+static const wchar_t* kManifestSigUrl =
+    L"https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma_release_details.json.sig";
+
+// Ed25519 public key matching code-miscellaneous/ManifestSigner-01.key (signingKeyId ManifestSigner-01).
+static const char* kManifestPublicKeyPem =
+    "-----BEGIN PUBLIC KEY-----\n"
+    "MCowBQYDK2VwAyEAn6g084etWA+9uyagwgiI4sc757rwx2tDMI+RwMXWKzo=\n"
+    "-----END PUBLIC KEY-----\n";
+
+// Resource IDs inside VishwakarmaSetup.exe. Must match VishwakarmaSetup.rc.
+#define IDR_VW_PAYLOAD_EXE 201
+#define IDR_VW_RELEASE_JSON 202
+
+// ------------------------------------------------------------------ Small helpers
+static std::wstring Utf8ToWide(const std::string& s) {
+    if (s.empty()) return L"";
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    std::wstring w(n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), w.data(), n);
+    return w;
+}
+
+static fs::path KnownFolder(REFKNOWNFOLDERID id) {
+    PWSTR p = nullptr;
+    fs::path result;
+    if (SUCCEEDED(SHGetKnownFolderPath(id, 0, nullptr, &p))) result = p;
+    if (p) CoTaskMemFree(p);
+    return result;
+}
+
+// %LOCALAPPDATA%\Mission Vishwakarma : updater state + staging area (not the install folder).
+static fs::path DataDir() { return KnownFolder(FOLDERID_LocalAppData) / kCompanyFolder; }
+static fs::path StagingDir() { return DataDir() / L"Updates"; }
+static fs::path StagedMarkerPath() { return StagingDir() / L"staged.json"; }
+static fs::path UpdateStatePath() { return DataDir() / L"UpdateState.json"; }
+
+static fs::path CurrentExeDir() {
+    wchar_t buf[MAX_PATH];
+    GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    return fs::path(buf).parent_path();
+}
+
+static bool ReadFileBytes(const fs::path& p, std::string& out) {
+    std::ifstream f(p, std::ios::binary);
+    if (!f) return false;
+    out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    return true;
+}
+
+static bool WriteFileBytes(const fs::path& p, const void* data, size_t size) {
+    std::ofstream f(p, std::ios::binary | std::ios::trunc);
+    if (!f) return false;
+    f.write((const char*)data, (std::streamsize)size);
+    return f.good();
+}
+
+// ------------------------------------------------------------------ Minimal JSON reading
+// The release json is machine generated with a fixed schema, so simple key scanning suffices.
+static std::string JsonString(const std::string& json, const std::string& key) {
+    std::string pattern = "\"" + key + "\"";
+    size_t k = json.find(pattern);
+    if (k == std::string::npos) return "";
+    size_t colon = json.find(':', k + pattern.size());
+    if (colon == std::string::npos) return "";
+    size_t q1 = json.find('"', colon + 1);
+    if (q1 == std::string::npos) return "";
+    size_t q2 = json.find('"', q1 + 1);
+    if (q2 == std::string::npos) return "";
+    return json.substr(q1 + 1, q2 - q1 - 1);
+}
+
+static long long JsonInt(const std::string& json, const std::string& key, long long fallback = -1) {
+    std::string pattern = "\"" + key + "\"";
+    size_t k = json.find(pattern);
+    if (k == std::string::npos) return fallback;
+    size_t colon = json.find(':', k + pattern.size());
+    if (colon == std::string::npos) return fallback;
+    size_t i = colon + 1;
+    while (i < json.size() && (json[i] == ' ' || json[i] == '\t')) i++;
+    if (i >= json.size() || (!isdigit((unsigned char)json[i]) && json[i] != '-')) return fallback;
+    return _strtoi64(json.c_str() + i, nullptr, 10);
+}
+
+// Version of the installation this exe belongs to: read from the json placed next to the exe
+// by the installer. 0 means developer / unpackaged build: updater stays fully inactive.
+static long long InstalledVersion() {
+    std::string json;
+    if (!ReadFileBytes(CurrentExeDir() / kReleaseJsonName, json)) return 0;
+    long long v = JsonInt(json, "version", 0);
+    return v > 0 ? v : 0;
+}
+
+// ------------------------------------------------------------------ Updater state persistence
+// Spec: persist lastAcceptedManifestSequence, lastInstalledVersion, lastSuccessfulLaunchVersion,
+// lastRejectedBadVersion.
+struct UpdateState {
+    std::string lastAcceptedManifestSequence;
+    long long lastInstalledVersion = 0;
+    long long lastSuccessfulLaunchVersion = 0;
+    long long lastRejectedBadVersion = 0;
+};
+
+static UpdateState LoadUpdateState() {
+    UpdateState s;
+    std::string json;
+    if (ReadFileBytes(UpdateStatePath(), json)) {
+        s.lastAcceptedManifestSequence = JsonString(json, "lastAcceptedManifestSequence");
+        s.lastInstalledVersion = JsonInt(json, "lastInstalledVersion", 0);
+        s.lastSuccessfulLaunchVersion = JsonInt(json, "lastSuccessfulLaunchVersion", 0);
+        s.lastRejectedBadVersion = JsonInt(json, "lastRejectedBadVersion", 0);
+    }
+    return s;
+}
+
+static void SaveUpdateState(const UpdateState& s) {
+    std::error_code ec;
+    fs::create_directories(DataDir(), ec);
+    char buf[512];
+    snprintf(buf, sizeof(buf),
+        "{\n"
+        "  \"lastAcceptedManifestSequence\": \"%s\",\n"
+        "  \"lastInstalledVersion\": %lld,\n"
+        "  \"lastSuccessfulLaunchVersion\": %lld,\n"
+        "  \"lastRejectedBadVersion\": %lld\n"
+        "}\n",
+        s.lastAcceptedManifestSequence.c_str(), s.lastInstalledVersion,
+        s.lastSuccessfulLaunchVersion, s.lastRejectedBadVersion);
+    WriteFileBytes(UpdateStatePath(), buf, strlen(buf));
+}
+
+static bool LaunchProcess(const fs::path& exe, const std::wstring& args) {
+    std::wstring cmd = L"\"" + exe.wstring() + L"\"";
+    if (!args.empty()) cmd += L" " + args;
+    STARTUPINFOW si{ sizeof(si) };
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr,
+                        exe.parent_path().c_str(), &si, &pi)) return false;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
+}
+
+#ifdef VISHWAKARMA_INSTALLER
+// =================================================================================
+// INSTALLER : compiled only into VishwakarmaSetup.exe
+// =================================================================================
+
+static std::string LoadResourceBytes(int id) {
+    HRSRC res = FindResourceW(nullptr, MAKEINTRESOURCEW(id), RT_RCDATA);
+    if (!res) return "";
+    HGLOBAL h = LoadResource(nullptr, res);
+    if (!h) return "";
+    DWORD size = SizeofResource(nullptr, res);
+    const char* data = (const char*)LockResource(h);
+    if (!data || size == 0) return "";
+    return std::string(data, size);
+}
+
+// Rules from release.md: default per-user, no admin needed. --allUsers tries Program Files
+// and silently falls back to the per-user location when permission is denied.
+static fs::path PickInstallDir(bool allUsers) {
+    if (allUsers) {
+        fs::path pf = KnownFolder(FOLDERID_ProgramFiles) / kCompanyFolder;
+        std::error_code ec;
+        fs::create_directories(pf, ec);
+        if (!ec) {
+            // Confirm we can actually write there before committing to it.
+            fs::path probe = pf / L"write_probe.tmp";
+            if (WriteFileBytes(probe, "x", 1)) {
+                fs::remove(probe, ec);
+                return pf;
+            }
+        }
+    }
+    return KnownFolder(FOLDERID_LocalAppData) / L"Programs" / kCompanyFolder;
+}
+
+// Replace targetExe with the payload even while the old exe is running: a running exe cannot
+// be overwritten but CAN be renamed. Old file is parked as Vishwakarma.exe.old and removed
+// opportunistically on the next run.
+static bool InstallPayload(const fs::path& dir, const std::string& payload, const std::string& json,
+                           std::wstring& error) {
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    fs::path exe = dir / kAppExeName;
+    fs::path exeNew = dir / L"Vishwakarma.exe.new";
+    fs::path exeOld = dir / L"Vishwakarma.exe.old";
+
+    fs::remove(exeOld, ec); // Leftover from a previous update; may fail if still running.
+    if (!WriteFileBytes(exeNew, payload.data(), payload.size())) {
+        error = L"Could not write to installation folder:\n" + dir.wstring();
+        return false;
+    }
+    if (fs::exists(exe)) {
+        if (!MoveFileExW(exe.c_str(), exeOld.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+            error = L"Could not replace the existing Vishwakarma.exe. Close the application and retry.";
+            fs::remove(exeNew, ec);
+            return false;
+        }
+    }
+    if (!MoveFileExW(exeNew.c_str(), exe.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        MoveFileExW(exeOld.c_str(), exe.c_str(), 0); // Roll the old version back.
+        error = L"Could not activate the new Vishwakarma.exe.";
+        return false;
+    }
+    WriteFileBytes(dir / kReleaseJsonName, json.data(), json.size());
+    return true;
+}
+
+static void CreateDesktopShortcut(const fs::path& targetExe) {
+    fs::path desktop = KnownFolder(FOLDERID_Desktop);
+    if (desktop.empty()) return;
+    IShellLinkW* link = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_IShellLinkW, (void**)&link))) return;
+    link->SetPath(targetExe.c_str());
+    link->SetWorkingDirectory(targetExe.parent_path().c_str());
+    link->SetIconLocation(targetExe.c_str(), 0);
+    link->SetDescription(L"Mission Vishwakarma - CAD / CAM / Engineering");
+    IPersistFile* file = nullptr;
+    if (SUCCEEDED(link->QueryInterface(IID_IPersistFile, (void**)&file))) {
+        file->Save((desktop / L"Vishwakarma.lnk").c_str(), TRUE);
+        file->Release();
+    }
+    link->Release();
+}
+
+int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
+    bool allUsers = false, updateMode = false, noLaunch = false;
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    for (int i = 1; argv && i < argc; i++) {
+        if (_wcsicmp(argv[i], L"--allUsers") == 0) allUsers = true;
+        else if (_wcsicmp(argv[i], L"--update") == 0) updateMode = true;
+        else if (_wcsicmp(argv[i], L"--no-launch") == 0) noLaunch = true;
+    }
+    if (argv) LocalFree(argv);
+
+    // Rule: only one installer runs at a time. Global\ covers the all-users case too; fall
+    // back to the per-session Local\ namespace if the Global one cannot be created.
+    HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Global\\MissionVishwakarmaInstallerLock");
+    if (!mutex) mutex = CreateMutexW(nullptr, TRUE, L"Local\\MissionVishwakarmaInstallerLock");
+    if (mutex && GetLastError() == ERROR_ALREADY_EXISTS) {
+        if (!updateMode)
+            MessageBoxW(nullptr, L"Another Vishwakarma installer is already running.",
+                        L"Vishwakarma Setup", MB_OK | MB_ICONINFORMATION);
+        return 1;
+    }
+
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
+    std::string payload = LoadResourceBytes(IDR_VW_PAYLOAD_EXE);
+    std::string json = LoadResourceBytes(IDR_VW_RELEASE_JSON);
+    if (payload.empty() || json.empty()) {
+        MessageBoxW(nullptr, L"Setup file is corrupted (embedded payload missing). Please download again.",
+                    L"Vishwakarma Setup", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    long long newVersion = JsonInt(json, "version", 0);
+
+    fs::path dir = PickInstallDir(allUsers);
+    fs::path exe = dir / kAppExeName;
+
+    // Overwrite only when the embedded version is newer than whatever is already installed.
+    std::string existingJson;
+    long long existingVersion = 0;
+    if (ReadFileBytes(dir / kReleaseJsonName, existingJson))
+        existingVersion = JsonInt(existingJson, "version", 0);
+
+    bool installed = true;
+    if (newVersion > existingVersion || !fs::exists(exe)) {
+        std::wstring error;
+        installed = InstallPayload(dir, payload, json, error);
+        if (!installed && !updateMode)
+            MessageBoxW(nullptr, error.c_str(), L"Vishwakarma Setup", MB_OK | MB_ICONERROR);
+    }
+
+    if (installed) {
+        CreateDesktopShortcut(exe);
+        UpdateState st = LoadUpdateState();
+        st.lastInstalledVersion = newVersion;
+        SaveUpdateState(st);
+    }
+
+    if (updateMode) {
+        // Consume the staging marker so the application does not re-trigger this update.
+        std::error_code ec;
+        fs::remove(StagedMarkerPath(), ec);
+    }
+
+    if (!noLaunch && fs::exists(exe)) LaunchProcess(exe, L"");
+
+    CoUninitialize();
+    if (mutex) { ReleaseMutex(mutex); CloseHandle(mutex); }
+    return installed ? 0 : 1;
+}
+
+#else
+// =================================================================================
+// APPLICATION SIDE : compiled only into Vishwakarma.exe
+// =================================================================================
+
+extern std::atomic<bool> shutdownSignal; // Defined in Main.cpp
+
+// ------------------------------------------------------------------ Crypto (OpenSSL, static)
+static std::string Sha256HexOfFile(const fs::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    if (!f) return "";
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) return "";
+    std::string result;
+    if (EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr) == 1) {
+        char buf[65536];
+        while (f.read(buf, sizeof(buf)) || f.gcount() > 0)
+            EVP_DigestUpdate(ctx, buf, (size_t)f.gcount());
+        unsigned char digest[EVP_MAX_MD_SIZE];
+        unsigned int len = 0;
+        if (EVP_DigestFinal_ex(ctx, digest, &len) == 1) {
+            char hex[2 * EVP_MAX_MD_SIZE + 1];
+            for (unsigned int i = 0; i < len; i++) snprintf(hex + 2 * i, 3, "%02x", digest[i]);
+            result.assign(hex, 2 * len);
+        }
+    }
+    EVP_MD_CTX_free(ctx);
+    return result;
+}
+
+static bool VerifyManifestSignature(const std::string& manifest, const std::string& signature) {
+    BIO* bio = BIO_new_mem_buf(kManifestPublicKeyPem, -1);
+    if (!bio) return false;
+    EVP_PKEY* key = PEM_read_bio_PUBKEY(bio, nullptr, nullptr, nullptr);
+    BIO_free(bio);
+    if (!key) return false;
+    bool ok = false;
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (ctx) {
+        // Pure Ed25519: no separate digest, EVP_DigestVerify over the whole message.
+        if (EVP_DigestVerifyInit(ctx, nullptr, nullptr, nullptr, key) == 1)
+            ok = EVP_DigestVerify(ctx, (const unsigned char*)signature.data(), signature.size(),
+                                  (const unsigned char*)manifest.data(), manifest.size()) == 1;
+        EVP_MD_CTX_free(ctx);
+    }
+    EVP_PKEY_free(key);
+    return ok;
+}
+
+// ------------------------------------------------------------------ HTTPS download (WinHTTP)
+static bool HttpGet(const std::wstring& url, std::string& out, const fs::path* toFile) {
+    out.clear();
+    URL_COMPONENTS uc{ sizeof(uc) };
+    wchar_t host[256]{}, path[2048]{};
+    uc.lpszHostName = host; uc.dwHostNameLength = 255;
+    uc.lpszUrlPath = path; uc.dwUrlPathLength = 2047;
+    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &uc)) return false;
+
+    bool ok = false;
+    HINTERNET session = WinHttpOpen(L"VishwakarmaUpdater/1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                    WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET connect = session ? WinHttpConnect(session, host, uc.nPort, 0) : nullptr;
+    HINTERNET request = connect ? WinHttpOpenRequest(connect, L"GET", path, nullptr,
+                                      WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                      (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0)
+                                : nullptr;
+    if (request && WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                      WINHTTP_NO_REQUEST_DATA, 0, 0, 0)
+                && WinHttpReceiveResponse(request, nullptr)) {
+        DWORD status = 0, statusSize = sizeof(status);
+        WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize, WINHTTP_NO_HEADER_INDEX);
+        if (status == 200) {
+            std::ofstream file;
+            if (toFile) {
+                file.open(*toFile, std::ios::binary | std::ios::trunc);
+                if (!file) status = 0;
+            }
+            std::vector<char> buf(65536);
+            DWORD read = 0;
+            ok = (status == 200);
+            while (ok && WinHttpReadData(request, buf.data(), (DWORD)buf.size(), &read) && read > 0) {
+                if (toFile) { file.write(buf.data(), read); ok = file.good(); }
+                else out.append(buf.data(), read);
+            }
+        }
+    }
+    if (request) WinHttpCloseHandle(request);
+    if (connect) WinHttpCloseHandle(connect);
+    if (session) WinHttpCloseHandle(session);
+    return ok;
+}
+
+// ------------------------------------------------------------------ Manifest evaluation
+static long long ParseIso8601Utc(const std::string& s) {
+    int y, mo, d, h, mi, se;
+    if (sscanf_s(s.c_str(), "%d-%d-%dT%d:%d:%d", &y, &mo, &d, &h, &mi, &se) != 6) return 0;
+    tm t{};
+    t.tm_year = y - 1900; t.tm_mon = mo - 1; t.tm_mday = d;
+    t.tm_hour = h; t.tm_min = mi; t.tm_sec = se;
+    return _mkgmtime64(&t);
+}
+
+// Extract the json object of the first release matching windows / x64 / stable channel.
+static std::string FindWindowsX64Release(const std::string& manifest) {
+    size_t arr = manifest.find("\"releases\"");
+    if (arr == std::string::npos) return "";
+    size_t pos = manifest.find('[', arr);
+    size_t end = manifest.find(']', arr);
+    if (pos == std::string::npos || end == std::string::npos) return "";
+    while (true) {
+        size_t open = manifest.find('{', pos);
+        if (open == std::string::npos || open > end) return "";
+        size_t close = manifest.find('}', open);
+        if (close == std::string::npos) return "";
+        std::string obj = manifest.substr(open, close - open + 1);
+        if (JsonString(obj, "platform") == "windows" && JsonString(obj, "instructionSet") == "x64" &&
+            JsonString(obj, "channel") == "stable")
+            return obj;
+        pos = close + 1;
+    }
+}
+
+static bool IsVersionBlocked(const std::string& manifest, long long version) {
+    size_t arr = manifest.find("\"blockedVersions\"");
+    if (arr == std::string::npos) return false;
+    size_t open = manifest.find('[', arr);
+    size_t close = manifest.find(']', arr);
+    if (open == std::string::npos || close == std::string::npos) return false;
+    std::string list = manifest.substr(open + 1, close - open - 1);
+    const char* p = list.c_str();
+    while (*p) {
+        if (isdigit((unsigned char)*p)) {
+            char* next = nullptr;
+            if (_strtoi64(p, &next, 10) == version) return true;
+            p = next;
+        } else p++;
+    }
+    return false;
+}
+
+// One full check-and-stage cycle. Every failure silently aborts: next cycle retries.
+static void RunUpdateCheckOnce(long long currentVersion) {
+    // Rule: only one updater downloads at a time per user.
+    HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\MissionVishwakarmaUpdaterLock");
+    if (!mutex) return;
+    if (GetLastError() == ERROR_ALREADY_EXISTS) { CloseHandle(mutex); return; }
+
+    do {
+        std::string manifest, signature;
+        if (!HttpGet(kManifestUrl, manifest, nullptr)) break;
+        if (!HttpGet(kManifestSigUrl, signature, nullptr)) break;
+        if (!VerifyManifestSignature(manifest, signature)) break;
+
+        long long now = _time64(nullptr);
+        long long validUntil = ParseIso8601Utc(JsonString(manifest, "validUntil"));
+        if (validUntil == 0 || now > validUntil) break; // Expired or malformed manifest.
+        if (JsonString(manifest, "appId") != "MissionVishwakarma") break;
+
+        UpdateState state = LoadUpdateState();
+        std::string sequence = JsonString(manifest, "manifestSequence");
+        if (sequence.empty() || sequence < state.lastAcceptedManifestSequence) break; // Rollback guard.
+
+        std::string release = FindWindowsX64Release(manifest);
+        if (release.empty()) break;
+        long long newVersion = JsonInt(release, "version", 0);
+        long long minFrom = JsonInt(release, "minUpdateFromVersion", 1);
+        long long size = JsonInt(release, "size", 0);
+        std::string sha256 = JsonString(release, "sha256");
+        std::string fileName = JsonString(release, "fileName");
+        std::string url = JsonString(release, "url");
+        if (newVersion <= currentVersion || currentVersion < minFrom) break;
+        if (newVersion == state.lastRejectedBadVersion) break;
+        if (IsVersionBlocked(manifest, newVersion)) break;
+        if (sha256.empty() || url.empty() || fileName.empty() || size <= 0) break;
+
+        state.lastAcceptedManifestSequence = sequence;
+        SaveUpdateState(state);
+
+        // Already staged and intact? Nothing to download.
+        std::string marker;
+        if (ReadFileBytes(StagedMarkerPath(), marker) && JsonInt(marker, "version", 0) == newVersion &&
+            fs::exists(StagingDir() / Utf8ToWide(fileName)))
+            break;
+
+        std::error_code ec;
+        fs::create_directories(StagingDir(), ec);
+        fs::path setupPath = StagingDir() / Utf8ToWide(fileName);
+        std::string unused;
+        if (!HttpGet(Utf8ToWide(url), unused, &setupPath)) break;
+        if ((long long)fs::file_size(setupPath, ec) != size || Sha256HexOfFile(setupPath) != sha256) {
+            fs::remove(setupPath, ec);
+            break;
+        }
+
+        char markerJson[512];
+        snprintf(markerJson, sizeof(markerJson),
+                 "{\n  \"version\": %lld,\n  \"fileName\": \"%s\",\n  \"sha256\": \"%s\"\n}\n",
+                 newVersion, fileName.c_str(), sha256.c_str());
+        WriteFileBytes(StagedMarkerPath(), markerJson, strlen(markerJson));
+    } while (false);
+
+    ReleaseMutex(mutex);
+    CloseHandle(mutex);
+}
+
+// ------------------------------------------------------------------ Public entry points
+bool SoftwareUpdateOnAppLaunch() {
+    long long currentVersion = InstalledVersion();
+    if (currentVersion <= 0) return false; // Developer / unpackaged build: no update handling.
+
+    UpdateState state = LoadUpdateState();
+
+    std::string marker;
+    if (ReadFileBytes(StagedMarkerPath(), marker)) {
+        long long stagedVersion = JsonInt(marker, "version", 0);
+        fs::path setupPath = StagingDir() / Utf8ToWide(JsonString(marker, "fileName"));
+        std::error_code ec;
+        if (stagedVersion > currentVersion && fs::exists(setupPath) &&
+            Sha256HexOfFile(setupPath) == JsonString(marker, "sha256")) {
+            // Rule: no two apply-update operations concurrently.
+            HANDLE applyLock = CreateMutexW(nullptr, TRUE, L"Local\\MissionVishwakarmaAppLaunchLock");
+            bool alreadyApplying = applyLock && GetLastError() == ERROR_ALREADY_EXISTS;
+            if (!alreadyApplying && LaunchProcess(setupPath, L"--update")) {
+                // Installer overwrites us, deletes the marker and relaunches the new version.
+                if (applyLock) CloseHandle(applyLock);
+                return true;
+            }
+            if (applyLock) CloseHandle(applyLock);
+        } else {
+            // Stale, superseded or corrupted staging: throw it away.
+            fs::remove_all(StagingDir(), ec);
+        }
+    }
+
+    state.lastSuccessfulLaunchVersion = currentVersion;
+    SaveUpdateState(state);
+    return false;
+}
+
+void StartSoftwareUpdateThread() {
+    long long currentVersion = InstalledVersion();
+    if (currentVersion <= 0) return; // Developer / unpackaged build.
+    std::thread([currentVersion]() {
+        std::mt19937 rng{ std::random_device{}() };
+        std::uniform_int_distribution<int> minutes(10, 600); // Spec: 10 minutes to 10 hours.
+        while (!shutdownSignal.load(std::memory_order_relaxed)) {
+            long long remainingSeconds = (long long)minutes(rng) * 60;
+            while (remainingSeconds > 0 && !shutdownSignal.load(std::memory_order_relaxed)) {
+                Sleep(5000);
+                remainingSeconds -= 5;
+            }
+            if (shutdownSignal.load(std::memory_order_relaxed)) return;
+            RunUpdateCheckOnce(currentVersion);
+        }
+    }).detach();
+}
+
+#endif // VISHWAKARMA_INSTALLER

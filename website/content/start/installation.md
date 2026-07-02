@@ -2,11 +2,20 @@
 title: "Installation / System Requirement"
 weight: 11101
 ---
-If download didn't start automatically, click the link : [Download Vishwakarma.exe directly](https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma.exe)  
+If download didn't start automatically, click the link : [Download Vishwakarma Setup directly](https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma_UserSetup_win10_win11_x64.exe)  
+
+# Installation on Windows
+Double click the downloaded `Vishwakarma_UserSetup_win10_win11_x64.exe`. No administrator privilege is needed. The setup installs the application to:
+
+`C:\Users\<UserID>\AppData\Local\Programs\Mission Vishwakarma\Vishwakarma.exe`
+
+A shortcut named **Vishwakarma** is created on your Desktop and the application launches automatically once installation completes. Running the setup again simply updates the existing installation if it is older.  
+To install for all users of the machine instead, run the setup from a command prompt with the `--allUsers` option (installs to `C:\Program Files\Mission Vishwakarma\` when permitted, otherwise falls back to the per-user location above).  
+Once installed, the application keeps itself up to date automatically by downloading the latest signed release in the background and applying it on the next launch.
 
 # Windows SmartScreen Notice
-Windows may show this SmartScreen prompt when you run `Vishwakarma.exe`. This happens because Mission Vishwakarma is free and open source software and our executable is not yet code signed. Just click "**More Info**" and "**Run Anyway**".  
-We are waiting for about INR 50k in funding so we can purchase a code signing certificate and remove this annoying warning for users. Until then, please download the executable only from our official release link:
+Windows may show this SmartScreen prompt when you run the setup. This happens because Mission Vishwakarma is free and open source software and our executable is not yet signed with a certificate chaining to the Microsoft trust store. Just click "**More Info**" and "**Run Anyway**".  
+We are waiting for about INR 50k in funding so we can purchase a code signing certificate and remove this annoying warning for users. Until then, please download the setup only from our official release link:
 
 ![Windows SmartScreen warning More Info](/windows_protected_pc.svg)  
 ![Windows SmartScreen warning Run Anyway](/windows_smartscreen_vishwakarma.svg)  
