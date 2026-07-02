@@ -4,7 +4,9 @@ TO-DO: Auto-build and test latest upstream release commit and check-in in our so
 
 **Build integration**
 
-The Visual Studio solution includes `VishwakarmaExternal.vcxproj`, a static-library project for source-based dependencies that are stable between normal app edits: SQLite, LunaSVG/PlutoVG, libpng, and zlib. The main app links `build\<Configuration>\External\VishwakarmaExternal.lib` instead of compiling those source files inside `code-core\Vishwakarma.vcxproj`.
+The Visual Studio solution includes `VishwakarmaExternal.vcxproj`, a static-library project for source-based dependencies that are stable between normal app edits: SQLite, LunaSVG/PlutoVG, libpng, zlib, and OpenSSL.
+
+The main app links `build\<Configuration>\External\VishwakarmaExternal.lib` instead of compiling those source files inside `code-core\Vishwakarma.vcxproj`.
 
 The first Debug or Release build may compile this external static library. Later builds should only check that it is up to date unless files under those dependency folders change.
 
@@ -61,3 +63,6 @@ cmake -S code-external\protobuf  -B build\protobuf-x64-release -A x64 -Dprotobuf
 cmake --build build\protobuf-x64-release --config Release --target libprotobuf-lite  
 cmake -S code-external\protobuf -B build\protobuf-x64-debug -A x64 -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_MSVC_STATIC_RUNTIME=ON -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDebug  
 cmake --build build\protobuf-x64-debug --config Debug --target libprotobuf-lite  
+
+**OpenSSL**
+OpenSSL is built automatically by `VishwakarmaExternal.vcxproj` into `build\openssl-x64-debug` or `build\openssl-x64-release`, then `libssl.lib` and `libcrypto.lib` are merged into `VishwakarmaExternal.lib`. The OpenSSL build uses `no-shared`, `no-pinshared`, `no-asm`, and `build_libs`, so it creates static libraries without requiring NASM. Perl is required locally for OpenSSL configuration; GitHub Actions `windows-latest` runners include Perl by default.

@@ -45,16 +45,19 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
     <VishwakarmaRoot>$(MSBuildThisFileDirectory)..\</VishwakarmaRoot>
+    <OpenSSLSourceDir>$(MSBuildThisFileDirectory)openssl</OpenSSLSourceDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(VishwakarmaRoot)build\$(Configuration)\External\</OutDir>
     <IntDir>$(VishwakarmaRoot)build\$(Configuration)\External\Intermediate\</IntDir>
     <TargetName>VishwakarmaExternal</TargetName>
+    <OpenSSLBuildDir>$(VishwakarmaRoot)build\openssl-x64-debug</OpenSSLBuildDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(VishwakarmaRoot)build\$(Configuration)\External\</OutDir>
     <IntDir>$(VishwakarmaRoot)build\$(Configuration)\External\Intermediate\</IntDir>
     <TargetName>VishwakarmaExternal</TargetName>
+    <OpenSSLBuildDir>$(VishwakarmaRoot)build\openssl-x64-release</OpenSSLBuildDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
@@ -67,8 +70,11 @@
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <PreprocessorDefinitions>FT_STATIC;LUNASVG_BUILD_STATIC;PLUTOVG_BUILD_STATIC;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>zlib;sqlite;libpng-code;freetype\include;lunasvg\include;lunasvg\source;lunasvg\plutovg\include;lunasvg\plutovg\source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(OpenSSLBuildDir)\include;$(OpenSSLSourceDir)\include;zlib;sqlite;libpng-code;freetype\include;lunasvg\include;lunasvg\source;lunasvg\plutovg\include;lunasvg\plutovg\source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
+    <Lib>
+      <AdditionalDependencies>$(OpenSSLBuildDir)\libssl.lib;$(OpenSSLBuildDir)\libcrypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Lib>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -83,9 +89,24 @@
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <PreprocessorDefinitions>FT_STATIC;LUNASVG_BUILD_STATIC;PLUTOVG_BUILD_STATIC;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>zlib;sqlite;libpng-code;freetype\include;lunasvg\include;lunasvg\source;lunasvg\plutovg\include;lunasvg\plutovg\source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(OpenSSLBuildDir)\include;$(OpenSSLSourceDir)\include;zlib;sqlite;libpng-code;freetype\include;lunasvg\include;lunasvg\source;lunasvg\plutovg\include;lunasvg\plutovg\source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
+    <Lib>
+      <AdditionalDependencies>$(OpenSSLBuildDir)\libssl.lib;$(OpenSSLBuildDir)\libcrypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Lib>
   </ItemDefinitionGroup>
+  <ItemGroup>
+    <OpenSSLBuildInput Include="$(MSBuildProjectFullPath)" />
+    <OpenSSLBuildInput Include="$(VishwakarmaRoot)code-miscellaneous\BuildOpenSSL.ps1" />
+    <OpenSSLBuildInput Include="$(OpenSSLSourceDir)\Configure" />
+    <OpenSSLBuildInput Include="$(OpenSSLSourceDir)\VERSION.dat" />
+    <OpenSSLBuildInput Include="$(OpenSSLSourceDir)\build.info" />
+    <OpenSSLBuildInput Include="$(OpenSSLSourceDir)\Configurations\**\*" />
+    <OpenSSLBuildInput Include="$(OpenSSLSourceDir)\include\**\*" />
+    <OpenSSLBuildInput Include="$(OpenSSLSourceDir)\crypto\**\*" />
+    <OpenSSLBuildInput Include="$(OpenSSLSourceDir)\ssl\**\*" />
+    <OpenSSLBuildInput Include="$(OpenSSLSourceDir)\providers\**\*" />
+  </ItemGroup>
   <ItemGroup>
     <ClCompile Include="sqlite\sqlite3.c" />
     <ClCompile Include="lunasvg\source\graphics.cpp" />
@@ -135,6 +156,10 @@
     <ClCompile Include="zlib\uncompr.c" />
     <ClCompile Include="zlib\zutil.c" />
   </ItemGroup>
+  <Target Name="BuildOpenSSL" BeforeTargets="ClCompile" Inputs="@(OpenSSLBuildInput)" Outputs="$(OpenSSLBuildDir)\libcrypto.lib;$(OpenSSLBuildDir)\libssl.lib">
+    <Message Importance="high" Text="Building static OpenSSL $(Configuration)|$(Platform) libraries into $(OpenSSLBuildDir)" />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(VishwakarmaRoot)code-miscellaneous\BuildOpenSSL.ps1&quot; -SourceDir &quot;$(OpenSSLSourceDir)&quot; -BuildDir &quot;$(OpenSSLBuildDir)&quot; -Configuration &quot;$(Configuration)&quot; -VcVarsAll &quot;$(VCInstallDir)Auxiliary\Build\vcvarsall.bat&quot;" />
+  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
