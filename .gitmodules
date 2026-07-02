@@ -19,3 +19,6 @@
 [submodule "code-external/lunasvg"]
 	path = code-external/lunasvg
 	url = https://github.com/sammycage/lunasvg.git
+[submodule "code-external/openssl"]
+	path = code-external/openssl
+	url = https://github.com/openssl/openssl.git
