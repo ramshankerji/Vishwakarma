@@ -106,6 +106,7 @@
     VISHWAKARMA_SVG_ICON(3207100675u, "icon_3207100675_select_templates.svg") \
     VISHWAKARMA_SVG_ICON(3217166961u, "icon_3217166961_code_civil_is13920.svg") \
     VISHWAKARMA_SVG_ICON(3234551993u, "icon_3234551993_create_reports.svg") \
+    VISHWAKARMA_SVG_ICON(3244059276u, "icon_3244059276_project_print.svg") \
     VISHWAKARMA_SVG_ICON(3265605728u, "icon_3265605728_edit_explode.svg") \
     VISHWAKARMA_SVG_ICON(3276532146u, "icon_3276532146_support_fixed.svg") \
     VISHWAKARMA_SVG_ICON(3320946139u, "icon_3320946139_edit_parameter.svg") \

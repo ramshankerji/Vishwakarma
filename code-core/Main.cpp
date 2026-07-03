@@ -45,6 +45,7 @@
 #include "UserInputProcessing.h"
 #include "Input_UI_Network_File.h"
 #include "SoftwareUpdate.h"
+#include "PrinterController.h"
 
 #include <windows.h>
 #include <windowsx.h> // For some macros like GET_X_LPARAM, GET_Y_LPARAM etc.
@@ -364,6 +365,8 @@ void ProcessPendingUIActions() {
             SaveActiveTabToStorage();
         } else if (action.id == static_cast<uint32_t>(Commands::PROJECT_OPEN)) {
             OpenStorageFileInNewTab();
+        } else if (action.id == static_cast<uint32_t>(Commands::PROJECT_PRINT)) {
+            PrintActiveTab();
         } else if (action.id == static_cast<uint32_t>(Commands::FOLDER_VISIBILITY)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::DATA_TREE_TOGGLE_VISIBILITY);
         } else if (action.id == static_cast<uint32_t>(Commands::CREATE_FOLDER)) {

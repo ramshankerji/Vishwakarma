@@ -94,6 +94,7 @@ WordID,ShortWordName,English,Comments
 1055,ExportDWG,Export DWG,Export DWG file
 2974120935,PROJECT_OPEN,Project Open,Project Open
 3662721928,PROJECT_SAVE,Project Save,Project Save
+3244059276,PROJECT_PRINT,Print,Print visible 2D page or 3D scene image to printer
 2769288455,PROJECT_CLOSE,Project Close,Project Close
 3583994253,CREATE_FOLDER,Create Folder,Create Folder
 3534410448,CREATE_PAGE2D,Create Page2d,Create Page2d

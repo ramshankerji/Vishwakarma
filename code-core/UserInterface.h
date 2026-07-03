@@ -425,10 +425,11 @@ constexpr UIControlDefinition AllUIControls[] = {
     // Subgroup : Organize
     { Commands::PROJECT_OPEN,          UITextID::PROJECT_OPEN, UIIconForCommand(Commands::PROJECT_OPEN), 1, 3, 0, 0, true, true, 0 , 0 },
     { Commands::PROJECT_SAVE,          UITextID::PROJECT_SAVE, UIIconForCommand(Commands::PROJECT_SAVE), 1, 3, 1, 0, true, true, 0 , 0 },
-    { Commands::PROJECT_CLOSE,         UITextID::PROJECT_CLOSE, UIIconForCommand(Commands::PROJECT_CLOSE), 1, 3, 2, 0, true, true, 0 , 0 },
-    { Commands::CREATE_FOLDER,         UITextID::CREATE_FOLDER, UIIconForCommand(Commands::CREATE_FOLDER), 1, 3, 0, 0, true, true, 0 , 0 }, //Dropdown: Copy/Delete/Duplicate Folder
-    { Commands::CREATE_PAGE2D,         UITextID::CREATE_PAGE2D, UIIconForCommand(Commands::CREATE_PAGE2D), 1, 3, 1, 0, true, true, 0 , 0 }, //Represents a 2D sheet.
-    { Commands::CREATE_SCENE3D,        UITextID::CREATE_SCENE3D, UIIconForCommand(Commands::CREATE_SCENE3D), 1, 3, 2, 0, true, true, 0 , 0 }, //Represents a 3D world.
+    { Commands::PROJECT_PRINT,         UITextID::PROJECT_PRINT, UIIconForCommand(Commands::PROJECT_PRINT), 1, 3, 2, 0, true, true, 0 , 0 }, //Print visible Page2D / 3D scene.
+    { Commands::PROJECT_CLOSE,         UITextID::PROJECT_CLOSE, UIIconForCommand(Commands::PROJECT_CLOSE), 1, 3, 0, 0, true, true, 0 , 0 },
+    { Commands::CREATE_FOLDER,         UITextID::CREATE_FOLDER, UIIconForCommand(Commands::CREATE_FOLDER), 1, 3, 1, 0, true, true, 0 , 0 }, //Dropdown: Copy/Delete/Duplicate Folder
+    { Commands::CREATE_PAGE2D,         UITextID::CREATE_PAGE2D, UIIconForCommand(Commands::CREATE_PAGE2D), 1, 3, 2, 0, true, true, 0 , 0 }, //Represents a 2D sheet.
+    { Commands::CREATE_SCENE3D,        UITextID::CREATE_SCENE3D, UIIconForCommand(Commands::CREATE_SCENE3D), 1, 3, 0, 0, true, true, 0 , 0 }, //Represents a 3D world.
     { Commands::FOLDER_VISIBILITY,     UITextID::FOLDER_VISIBILITY, UIIconForCommand(Commands::FOLDER_VISIBILITY), 1, 1, 0, 0, true, true, 0 , 0 }, //Toggle Heirarchy ON/OFF
 
     // Subgroup : Search
