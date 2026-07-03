@@ -20,8 +20,11 @@ Current coverage includes:
     - member property/profile assignments
     - constants/material assignments
     - supports
-    - member releases and truss/tension/compression lists
-    - load cases, reference loads, load combinations and combination entries
+    - member releases, offsets, fireproofing and truss/tension/compression lists
+    - plane-stress element lists and inactive member commands
+    - wind definition blocks (raw records retained)
+    - load cases (incl. floor/oneway/reference load items), reference loads,
+      load combinations and combination entries
     - steel/concrete design parameter blocks
 
 Example:
@@ -33,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,6 +47,9 @@ LoadId = Union[int, str]
 
 _INT_RE = re.compile(r"^[+-]?\d+$")
 _FLOAT_RE = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?$")
+
+# A malformed "1 TO 999999999" range would otherwise exhaust memory on expansion.
+_MAX_RANGE_SPAN = 1_000_000
 
 _FORCE_COMPONENTS = {"FX", "FY", "FZ", "MX", "MY", "MZ"}
 _DIRECTIONS = {"X", "Y", "Z", "GX", "GY", "GZ"}
@@ -204,9 +211,13 @@ class STDModel:
     supports: List[Dict[str, Any]] = field(default_factory=list)
     support_nodes: List[int] = field(default_factory=list)
     member_releases: List[Dict[str, Any]] = field(default_factory=list)
+    member_offsets: List[Dict[str, Any]] = field(default_factory=list)
+    member_fireproofing: List[Dict[str, Any]] = field(default_factory=list)
     member_truss: List[Dict[str, Any]] = field(default_factory=list)
     member_tension: List[Dict[str, Any]] = field(default_factory=list)
     member_compression: List[Dict[str, Any]] = field(default_factory=list)
+    element_plane_stress: List[Dict[str, Any]] = field(default_factory=list)
+    wind_definitions: List[Dict[str, Any]] = field(default_factory=list)
     loads: Dict[LoadId, Dict[str, Any]] = field(default_factory=dict)
     reference_loads: Dict[LoadId, Dict[str, Any]] = field(default_factory=dict)
     load_case_order: List[LoadId] = field(default_factory=list)
@@ -254,9 +265,13 @@ class STDModel:
             "supports": self.supports,
             "support_nodes": self.support_nodes,
             "member_releases": self.member_releases,
+            "member_offsets": self.member_offsets,
+            "member_fireproofing": self.member_fireproofing,
             "member_truss": self.member_truss,
             "member_tension": self.member_tension,
             "member_compression": self.member_compression,
+            "element_plane_stress": self.element_plane_stress,
+            "wind_definitions": self.wind_definitions,
             "loads": self.loads,
             "reference_loads": self.reference_loads,
             "load_case_order": self.load_case_order,
@@ -313,11 +328,6 @@ def _parse_load_id(token: str) -> LoadId:
     return cleaned
 
 
-def _append_unique(values: List[int], value: int) -> None:
-    if value not in values:
-        values.append(value)
-
-
 def _expand_range(start: int, end: int) -> Iterable[int]:
     if end >= start:
         return range(start, end + 1)
@@ -327,6 +337,7 @@ def _expand_range(start: int, end: int) -> Iterable[int]:
 def parse_id_spec(tokens: Iterable[str]) -> Dict[str, Any]:
     cleaned_tokens = [_clean_token(token) for token in tokens if _clean_token(token)]
     ids: List[int] = []
+    seen_ids: set = set()
     ranges: List[Tuple[int, int]] = []
     groups: List[str] = []
     unparsed: List[str] = []
@@ -360,11 +371,16 @@ def parse_id_spec(tokens: Iterable[str]) -> Dict[str, Any]:
             ):
                 end = int(cleaned_tokens[i + 2])
                 ranges.append((start, end))
-                for value in _expand_range(start, end):
-                    _append_unique(ids, value)
+                if abs(end - start) <= _MAX_RANGE_SPAN:
+                    for value in _expand_range(start, end):
+                        if value not in seen_ids:
+                            seen_ids.add(value)
+                            ids.append(value)
                 i += 3
             else:
-                _append_unique(ids, start)
+                if start not in seen_ids:
+                    seen_ids.add(start)
+                    ids.append(start)
                 i += 1
             continue
 
@@ -426,7 +442,8 @@ def _logical_records_from_text(text: str) -> Tuple[List[LogicalRecord], List[Dic
         if not stripped:
             continue
 
-        if stripped.startswith("*"):
+        # "*" starts a comment; "<!" / "!>" bracket GUI-generated data blocks.
+        if stripped.startswith(("*", "<!", "!>")):
             comments.append({"line": line_number, "text": stripped})
             continue
 
@@ -647,6 +664,12 @@ def _parse_parameter_record(
     elif upper_tokens[:4] == ["STEEL", "MEMBER", "TAKE", "OFF"]:
         name = "STEEL MEMBER TAKE OFF"
         rest = tokens[4:]
+    elif upper_tokens[:3] == ["STEEL", "TAKE", "OFF"]:
+        name = "STEEL TAKE OFF"
+        rest = tokens[3:]
+    elif upper_tokens[:3] == ["CONCRETE", "TAKE", "OFF"]:
+        name = "CONCRETE TAKE OFF"
+        rest = tokens[3:]
     elif upper_tokens[:2] == ["LOAD", "LIST"]:
         name = "LOAD LIST"
         rest = tokens[2:]
@@ -776,6 +799,51 @@ def _parse_member_release_record(text: str, line: int) -> Dict[str, Any]:
     }
 
 
+def _parse_member_offset_record(text: str, line: int) -> Optional[Dict[str, Any]]:
+    tokens = text.split()
+    end_index = None
+    for index, token in enumerate(tokens):
+        if token.upper() in {"START", "END"}:
+            end_index = index
+            break
+
+    if end_index is None:
+        return None
+
+    rest = tokens[end_index + 1 :]
+    local = bool(rest) and rest[0].upper() == "LOCAL"
+    offsets = [_to_number(token) for token in (rest[1:] if local else rest)]
+    return {
+        "line": line,
+        "raw": text,
+        "members": parse_id_spec(tokens[:end_index]),
+        "end": tokens[end_index].upper(),
+        "local": local,
+        "offsets": offsets,
+    }
+
+
+def _parse_member_fireproofing_record(text: str, line: int) -> Optional[Dict[str, Any]]:
+    tokens = text.split()
+    fire_index = None
+    for index, token in enumerate(tokens):
+        if token.upper() == "FIRE":
+            fire_index = index
+            break
+
+    if fire_index is None:
+        return None
+
+    rest = tokens[fire_index + 1 :]
+    return {
+        "line": line,
+        "raw": text,
+        "members": parse_id_spec(tokens[:fire_index]),
+        "type": rest[0].upper() if rest else None,
+        "parameters": _parse_key_value_pairs(rest[1:]),
+    }
+
+
 def _parse_member_property_record(
     text: str, line: int, source: str, sequence: int
 ) -> Optional[Dict[str, Any]]:
@@ -887,10 +955,16 @@ def _parse_load_header(text: str, line: int) -> Dict[str, Any]:
         index = upper_rest.index("TITLE")
         title = " ".join(rest[index + 1 :]).strip()
 
-    for token in rest:
-        upper = token.upper()
-        if upper not in {"LOADTYPE", "TITLE"} and token != load_type:
-            attributes.append(token)
+    index = 0
+    while index < len(rest):
+        upper = rest[index].upper()
+        if upper == "TITLE":
+            break
+        if upper == "LOADTYPE":
+            index += 2
+            continue
+        attributes.append(rest[index])
+        index += 1
 
     return {
         "id": load_id,
@@ -906,7 +980,9 @@ def _parse_load_header(text: str, line: int) -> Dict[str, Any]:
 
 def _parse_load_combination_header(text: str, line: int) -> Dict[str, Any]:
     tokens = text.split()
-    combination_id = int(tokens[2])
+    combination_id: Optional[int] = None
+    if len(tokens) > 2 and _is_int_token(tokens[2]):
+        combination_id = int(tokens[2])
     title = " ".join(tokens[3:]).strip()
     return {
         "id": combination_id,
@@ -971,6 +1047,40 @@ def _parse_component_pairs(tokens: List[str]) -> Dict[str, Any]:
     return components
 
 
+def _parse_floor_load_details(tokens: List[str]) -> Dict[str, Any]:
+    """Parse FLOOR/ONEWAY load records: group form ("_GROUP FLOAD 3.75 GX")
+    and range form ("YRANGE 128 128 FLOAD 1 XRANGE 0 8 ZRANGE -69.3 -47 GX")."""
+    upper_tokens = [token.upper() for token in tokens]
+    details: Dict[str, Any] = {"tokens": [_to_number(token) for token in tokens]}
+    ranges: Dict[str, List[Any]] = {}
+    index = 0
+    while index < len(tokens):
+        upper = upper_tokens[index]
+        if (
+            upper.endswith("RANGE")
+            and index + 2 < len(tokens)
+            and _is_float_token(tokens[index + 1])
+            and _is_float_token(tokens[index + 2])
+        ):
+            ranges[upper[0]] = [_to_number(tokens[index + 1]), _to_number(tokens[index + 2])]
+            index += 3
+        elif upper in {"FLOAD", "ONE", "ONEWAY"} and index + 1 < len(tokens):
+            details["load_type"] = upper
+            details["magnitude"] = _to_number(tokens[index + 1])
+            index += 2
+        elif upper in _DIRECTIONS:
+            details["direction"] = upper
+            index += 1
+        elif tokens[index].startswith("_"):
+            details["group"] = tokens[index]
+            index += 1
+        else:
+            index += 1
+    if ranges:
+        details["ranges"] = ranges
+    return details
+
+
 def _parse_load_item(kind: str, text: str, line: int) -> Dict[str, Any]:
     tokens = text.split()
     upper_tokens = [token.upper() for token in tokens]
@@ -1033,18 +1143,24 @@ def _parse_load_item(kind: str, text: str, line: int) -> Dict[str, Any]:
             "values": values,
         }
 
-    if kind == "FLOOR LOAD":
-        values = [_to_number(token) for token in tokens]
-        details: Dict[str, Any] = {"tokens": values}
-        if len(upper_tokens) >= 5 and upper_tokens[0].endswith("RANGE"):
-            details = {
-                "range_axis": upper_tokens[0][0],
-                "range": [_to_number(tokens[1]), _to_number(tokens[2])],
-                "load_type": upper_tokens[3],
-                "magnitude": _to_number(tokens[4]),
-                "direction": upper_tokens[5] if len(upper_tokens) > 5 else None,
-            }
-        return {"kind": kind, "line": line, "raw": text, "details": details}
+    if kind in {"FLOOR LOAD", "ONEWAY LOAD"}:
+        return {
+            "kind": kind,
+            "line": line,
+            "raw": text,
+            "details": _parse_floor_load_details(tokens),
+        }
+
+    if kind == "REFERENCE LOAD":
+        if len(tokens) >= 2 and len(tokens) % 2 == 0 and all(
+            _is_float_token(tokens[index]) for index in range(1, len(tokens), 2)
+        ):
+            references = [
+                {"load": _parse_load_id(tokens[index]), "factor": float(tokens[index + 1])}
+                for index in range(0, len(tokens), 2)
+            ]
+            return {"kind": kind, "line": line, "raw": text, "references": references}
+        return {"kind": kind, "line": line, "raw": text, "tokens": tokens}
 
     if kind in {"ELEMENT LOAD", "PLATE LOAD", "AREA LOAD"}:
         marker_index = None
@@ -1224,7 +1340,7 @@ def _normalize_load_item(item: Dict[str, Any], unit_context: Optional[Dict[str, 
             item["si_units"] = value_units
         return
 
-    if kind == "FLOOR LOAD":
+    if kind in {"FLOOR LOAD", "ONEWAY LOAD"}:
         details = item.get("details", {})
         details_si = dict(details)
         if "magnitude" in details_si:
@@ -1232,10 +1348,12 @@ def _normalize_load_item(item: Dict[str, Any], unit_context: Optional[Dict[str, 
                 details_si["magnitude"], _quantity_factor(unit_context, "pressure")
             )
             item["si_unit"] = "Pa"
-        if "range" in details_si:
-            details_si["range"] = _numeric_to_si(
-                details_si["range"], _quantity_factor(unit_context, "length")
-            )
+        if "ranges" in details_si:
+            length_factor = _quantity_factor(unit_context, "length")
+            details_si["ranges"] = {
+                axis: _numeric_to_si(bounds, length_factor)
+                for axis, bounds in details_si["ranges"].items()
+            }
         item["details_si"] = details_si
         return
 
@@ -1355,8 +1473,18 @@ class STDFileReader:
             if upper.startswith("LOAD COMB "):
                 current_combination = _parse_load_combination_header(text, record.start_line)
                 combination_id = current_combination["id"]
-                model.load_combinations[combination_id] = current_combination
-                model.load_combination_order.append(combination_id)
+                if combination_id is None:
+                    model.unparsed_records.append(
+                        {
+                            "section": "LOAD COMBINATION",
+                            "line": record.start_line,
+                            "raw": text,
+                        }
+                    )
+                    current_combination = None
+                else:
+                    model.load_combinations[combination_id] = current_combination
+                    model.load_combination_order.append(combination_id)
                 current_section = "LOAD COMBINATION"
                 current_load = None
                 current_load_collection = None
@@ -1451,6 +1579,42 @@ class STDFileReader:
                     model.member_releases.append(
                         _parse_member_release_record(rest, record.start_line)
                     )
+                continue
+
+            if upper.startswith("MEMBER OFFSET"):
+                current_section = "MEMBER OFFSET"
+                rest = text[len("MEMBER OFFSET") :].strip()
+                if rest:
+                    self._add_member_offset_record(model, rest, record.start_line)
+                continue
+
+            if upper.startswith("MEMBER FIREPROOFING"):
+                current_section = "MEMBER FIREPROOFING"
+                rest = text[len("MEMBER FIREPROOFING") :].strip()
+                if rest:
+                    self._add_member_fireproofing_record(model, rest, record.start_line)
+                continue
+
+            if upper.startswith("ELEMENT PLANE"):
+                current_section = "ELEMENT PLANE STRESS"
+                continue
+
+            if upper.startswith("INACTIVE "):
+                model.analysis_commands.append(
+                    {
+                        "line": record.start_line,
+                        "raw": text,
+                        "kind": "INACTIVE",
+                        "target": parse_id_spec(tokens[1:]),
+                    }
+                )
+                continue
+
+            if upper.startswith("DEFINE WIND"):
+                model.wind_definitions.append(
+                    {"line": record.start_line, "raw": text, "records": []}
+                )
+                current_section = "DEFINE WIND"
                 continue
 
             if upper.startswith("MEMBER TRUSS"):
@@ -1552,137 +1716,165 @@ class STDFileReader:
                         model.design_parameters.append(parameter)
                 continue
 
-            if current_section == "JOINT COORDINATES":
-                self._parse_joint_coordinate_record(model, record)
-            elif current_section == "MEMBER INCIDENCES":
-                self._parse_member_incidence_record(model, record)
-            elif current_section == "ELEMENT INCIDENCES":
-                self._parse_element_incidence_record(model, record)
-            elif current_section == "DEFINE PMEMBER":
-                self._add_pmember_record(model, record)
-            elif current_section == "GROUP DEFINITION":
-                current_group_kind = self._parse_group_record(
-                    model, record, current_group_kind
-                )
-            elif current_section == "DEFINE MATERIAL":
-                current_material = self._parse_material_record(
-                    model, record, current_material
-                )
-            elif current_section == "USER TABLE":
-                if model.user_tables:
-                    model.user_tables[-1]["records"].append(
-                        {"line": record.start_line, "raw": text}
+            try:
+                if current_section == "JOINT COORDINATES":
+                    self._parse_joint_coordinate_record(model, record)
+                elif current_section == "MEMBER INCIDENCES":
+                    self._parse_member_incidence_record(model, record)
+                elif current_section == "ELEMENT INCIDENCES":
+                    self._parse_element_incidence_record(model, record)
+                elif current_section == "DEFINE PMEMBER":
+                    self._add_pmember_record(model, record)
+                elif current_section == "GROUP DEFINITION":
+                    current_group_kind = self._parse_group_record(
+                        model, record, current_group_kind
                     )
-            elif current_section == "MEMBER PROPERTY":
-                property_record = _parse_member_property_record(
-                    text,
-                    record.start_line,
-                    current_property_source,
-                    len(model.member_properties),
-                )
-                if property_record is None:
-                    model.unparsed_records.append(
-                        {
-                            "section": current_section,
-                            "line": record.start_line,
-                            "raw": text,
-                        }
+                elif current_section == "DEFINE MATERIAL":
+                    current_material = self._parse_material_record(
+                        model, record, current_material
                     )
-                else:
-                    model.member_properties.append(property_record)
-                    for member_id in property_record["members"]["ids"]:
-                        model.member_profile_by_member[member_id] = {
-                            "profile": property_record["profile"],
-                            "profile_type": property_record["profile_type"],
-                            "profile_name": property_record["profile_name"],
-                            "property_index": property_record["sequence"],
-                            "line": property_record["line"],
-                            "source": property_record["source"],
-                        }
-            elif current_section == "ELEMENT PROPERTY":
-                self._add_element_property_record(model, text, record.start_line)
-            elif current_section == "CONSTANTS":
-                parameter = _parse_parameter_record(
-                    text,
-                    record.start_line,
-                    "CONSTANTS",
-                    "CONSTANTS",
-                    default_target_kind="MEMBER",
-                )
-                model.constants.append(parameter)
-            elif current_section == "SUPPORTS":
-                support = _parse_support_record(text, record.start_line)
-                model.supports.append(support)
-                for node_id in support.get("nodes", {}).get("ids", []):
-                    _append_unique(model.support_nodes, node_id)
-            elif current_section == "MEMBER RELEASE":
-                model.member_releases.append(
-                    _parse_member_release_record(text, record.start_line)
-                )
-            elif current_section == "MEMBER TRUSS":
-                model.member_truss.append(
-                    {
-                        "line": record.start_line,
-                        "raw": text,
-                        "members": parse_id_spec(tokens),
-                    }
-                )
-            elif current_section == "MEMBER TENSION":
-                model.member_tension.append(
-                    {
-                        "line": record.start_line,
-                        "raw": text,
-                        "members": parse_id_spec(tokens),
-                    }
-                )
-            elif current_section == "MEMBER COMPRESSION":
-                model.member_compression.append(
-                    {
-                        "line": record.start_line,
-                        "raw": text,
-                        "members": parse_id_spec(tokens),
-                    }
-                )
-            elif current_section == "LOAD" and current_load is not None:
-                current_load_subtype = self._parse_load_record(
-                    current_load, record, current_load_subtype
-                )
-            elif current_section == "LOAD COMBINATION" and current_combination is not None:
-                components = _parse_combination_components(text)
-                current_combination["raw_component_lines"].append(
-                    {"line": record.start_line, "raw": text}
-                )
-                if components is not None:
-                    current_combination["components"].extend(components)
-                else:
-                    model.unparsed_records.append(
-                        {
-                            "section": current_section,
-                            "line": record.start_line,
-                            "raw": text,
-                        }
+                elif current_section == "USER TABLE":
+                    if model.user_tables:
+                        model.user_tables[-1]["records"].append(
+                            {"line": record.start_line, "raw": text}
+                        )
+                elif current_section == "MEMBER PROPERTY":
+                    property_record = _parse_member_property_record(
+                        text,
+                        record.start_line,
+                        current_property_source,
+                        len(model.member_properties),
                     )
-            elif current_section == "DEFINE ENVELOPE":
-                model.load_envelopes.append(_parse_envelope_record(text, record.start_line))
-            elif current_section in {"DESIGN PARAMETERS", "CONCRETE DESIGN"}:
-                if current_design_block is not None:
+                    if property_record is None:
+                        model.unparsed_records.append(
+                            {
+                                "section": current_section,
+                                "line": record.start_line,
+                                "raw": text,
+                            }
+                        )
+                    else:
+                        model.member_properties.append(property_record)
+                        for member_id in property_record["members"]["ids"]:
+                            model.member_profile_by_member[member_id] = {
+                                "profile": property_record["profile"],
+                                "profile_type": property_record["profile_type"],
+                                "profile_name": property_record["profile_name"],
+                                "property_index": property_record["sequence"],
+                                "line": property_record["line"],
+                                "source": property_record["source"],
+                            }
+                elif current_section == "ELEMENT PROPERTY":
+                    self._add_element_property_record(model, text, record.start_line)
+                elif current_section == "CONSTANTS":
                     parameter = _parse_parameter_record(
                         text,
                         record.start_line,
-                        current_design_block["id"],
-                        current_design_block["context"],
+                        "CONSTANTS",
+                        "CONSTANTS",
                         default_target_kind="MEMBER",
                     )
-                    current_design_block["parameters"].append(parameter)
-                    model.design_parameters.append(parameter)
-            else:
+                    model.constants.append(parameter)
+                elif current_section == "SUPPORTS":
+                    support = _parse_support_record(text, record.start_line)
+                    model.supports.append(support)
+                    model.support_nodes.extend(
+                        support.get("nodes", {}).get("ids", [])
+                    )
+                elif current_section == "MEMBER RELEASE":
+                    model.member_releases.append(
+                        _parse_member_release_record(text, record.start_line)
+                    )
+                elif current_section == "MEMBER OFFSET":
+                    self._add_member_offset_record(model, text, record.start_line)
+                elif current_section == "MEMBER FIREPROOFING":
+                    self._add_member_fireproofing_record(model, text, record.start_line)
+                elif current_section == "ELEMENT PLANE STRESS":
+                    model.element_plane_stress.append(
+                        {
+                            "line": record.start_line,
+                            "raw": text,
+                            "elements": parse_id_spec(tokens),
+                        }
+                    )
+                elif current_section == "DEFINE WIND":
+                    model.wind_definitions[-1]["records"].append(
+                        {"line": record.start_line, "raw": text}
+                    )
+                elif current_section == "MEMBER TRUSS":
+                    model.member_truss.append(
+                        {
+                            "line": record.start_line,
+                            "raw": text,
+                            "members": parse_id_spec(tokens),
+                        }
+                    )
+                elif current_section == "MEMBER TENSION":
+                    model.member_tension.append(
+                        {
+                            "line": record.start_line,
+                            "raw": text,
+                            "members": parse_id_spec(tokens),
+                        }
+                    )
+                elif current_section == "MEMBER COMPRESSION":
+                    model.member_compression.append(
+                        {
+                            "line": record.start_line,
+                            "raw": text,
+                            "members": parse_id_spec(tokens),
+                        }
+                    )
+                elif current_section == "LOAD" and current_load is not None:
+                    current_load_subtype = self._parse_load_record(
+                        current_load, record, current_load_subtype
+                    )
+                elif current_section == "LOAD COMBINATION" and current_combination is not None:
+                    components = _parse_combination_components(text)
+                    current_combination["raw_component_lines"].append(
+                        {"line": record.start_line, "raw": text}
+                    )
+                    if components is not None:
+                        current_combination["components"].extend(components)
+                    else:
+                        model.unparsed_records.append(
+                            {
+                                "section": current_section,
+                                "line": record.start_line,
+                                "raw": text,
+                            }
+                        )
+                elif current_section == "DEFINE ENVELOPE":
+                    model.load_envelopes.append(_parse_envelope_record(text, record.start_line))
+                elif current_section in {"DESIGN PARAMETERS", "CONCRETE DESIGN"}:
+                    if current_design_block is not None:
+                        parameter = _parse_parameter_record(
+                            text,
+                            record.start_line,
+                            current_design_block["id"],
+                            current_design_block["context"],
+                            default_target_kind="MEMBER",
+                        )
+                        current_design_block["parameters"].append(parameter)
+                        model.design_parameters.append(parameter)
+                else:
+                    model.unparsed_records.append(
+                        {"section": current_section, "line": record.start_line, "raw": text}
+                    )
+            except Exception as exc:
+                # A malformed record must never crash the reader; retain it instead.
                 model.unparsed_records.append(
-                    {"section": current_section, "line": record.start_line, "raw": text}
+                    {
+                        "section": current_section,
+                        "line": record.start_line,
+                        "raw": text,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
                 )
 
         self._normalize_model_units(model)
         self._build_design_indexes(model)
-        model.support_nodes.sort()
+        model.support_nodes = sorted(set(model.support_nodes))
         return model
 
     @staticmethod
@@ -1711,7 +1903,6 @@ class STDFileReader:
             "PRINT ",
             "LOAD LIST",
             "CUT OFF ",
-            "DEFINE WIND",
             "DEFINE 1893",
             "PDELTA",
             "CHANGE",
@@ -1734,8 +1925,17 @@ class STDFileReader:
             return
 
         for index in range(0, len(tokens), 4):
-            if not _is_int_token(tokens[index]):
-                continue
+            if not _is_int_token(tokens[index]) or not all(
+                _is_float_token(token) for token in tokens[index + 1 : index + 4]
+            ):
+                model.unparsed_records.append(
+                    {
+                        "section": "JOINT COORDINATES",
+                        "line": record.start_line,
+                        "raw": record.text,
+                    }
+                )
+                return
             node_id = int(tokens[index])
             model.nodes[node_id] = (
                 float(tokens[index + 1]),
@@ -1758,8 +1958,15 @@ class STDFileReader:
             return
 
         for index in range(0, len(tokens), 3):
-            if not _is_int_token(tokens[index]):
-                continue
+            if not all(_is_int_token(token) for token in tokens[index : index + 3]):
+                model.unparsed_records.append(
+                    {
+                        "section": "MEMBER INCIDENCES",
+                        "line": record.start_line,
+                        "raw": record.text,
+                    }
+                )
+                return
             member_id = int(tokens[index])
             model.members[member_id] = (int(tokens[index + 1]), int(tokens[index + 2]))
 
@@ -1842,6 +2049,26 @@ class STDFileReader:
             }
 
     @staticmethod
+    def _add_member_offset_record(model: STDModel, text: str, line: int) -> None:
+        offset_record = _parse_member_offset_record(text, line)
+        if offset_record is None:
+            model.unparsed_records.append(
+                {"section": "MEMBER OFFSET", "line": line, "raw": text}
+            )
+        else:
+            model.member_offsets.append(offset_record)
+
+    @staticmethod
+    def _add_member_fireproofing_record(model: STDModel, text: str, line: int) -> None:
+        fireproofing_record = _parse_member_fireproofing_record(text, line)
+        if fireproofing_record is None:
+            model.unparsed_records.append(
+                {"section": "MEMBER FIREPROOFING", "line": line, "raw": text}
+            )
+        else:
+            model.member_fireproofing.append(fireproofing_record)
+
+    @staticmethod
     def _add_pmember_record(model: STDModel, record: LogicalRecord) -> None:
         pmember_record = _parse_pmember_record(record.text, record.start_line)
         if pmember_record is None:
@@ -1903,7 +2130,9 @@ class STDFileReader:
             "ELEMENT LOAD",
             "PLATE LOAD",
             "FLOOR LOAD",
+            "ONEWAY LOAD",
             "AREA LOAD",
+            "REFERENCE LOAD",
         }
         if upper in load_subtypes:
             return upper
@@ -2039,11 +2268,22 @@ class STDFileReader:
         for support in model.supports:
             _with_unit_context(support, cls._unit_for_line(model, support.get("line")))
 
+        for offset in model.member_offsets:
+            unit_context = cls._unit_for_line(model, offset.get("line"))
+            _with_unit_context(offset, unit_context)
+            offset["offsets_si"] = _normalize_keyed_number_tokens(
+                offset.get("offsets", []), unit_context, "length"
+            )
+            offset["si_unit"] = "m"
+
         for collection in (
             model.member_releases,
+            model.member_fireproofing,
             model.member_truss,
             model.member_tension,
             model.member_compression,
+            model.element_plane_stress,
+            model.wind_definitions,
         ):
             for item in collection:
                 _with_unit_context(item, cls._unit_for_line(model, item.get("line")))
@@ -2177,6 +2417,9 @@ def print_statistics(
     print(f"  Top profiles: {_counter_text(profile_counter)}")
     print(f"  Element property assignments: {len(model.element_properties)}")
     print(f"  Physical member definitions: {len(model.pmembers)}")
+    print(f"  Member offset records: {len(model.member_offsets)}")
+    print(f"  Member fireproofing records: {len(model.member_fireproofing)}")
+    print(f"  Plane-stress element records: {len(model.element_plane_stress)}")
 
     support_counter = Counter(support.get("support", "UNKNOWN") for support in model.supports)
     print("")
@@ -2196,6 +2439,7 @@ def print_statistics(
     print(f"  Reference loads: {len(model.reference_loads)}")
     print(f"  Load combinations: {len(model.load_combinations)}")
     print(f"  Load envelopes: {len(model.load_envelopes)}")
+    print(f"  Wind definitions: {len(model.wind_definitions)}")
     print(f"  Load item types: {_counter_text(load_item_counter)}")
 
     if model.load_combinations:
@@ -2279,7 +2523,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    model = read_std_file(args.file)
+    try:
+        model = read_std_file(args.file)
+    except OSError as exc:
+        print(f"Error: cannot read '{args.file}': {exc}", file=sys.stderr)
+        return 1
     if args.dump_json:
         print(json.dumps(model.to_dict(include_records=args.include_records), indent=2, default=str))
     else:
