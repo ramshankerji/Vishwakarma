@@ -105,7 +105,7 @@ Responsibilities:
 
 ### Extension Package Layout & In-Worker Imports
 
-Each extension is a plain Python package: an entry module (`main.py`) plus any number of sibling modules. Inside the worker, sibling modules are imported normally (e.g. `import std_reader`) and exchange live Python objects in memory — no serialization exists *inside* the worker. Serialization happens only at the IPC boundary, encapsulated by `vishwakarma_api`. For importers this means the parser module exposes a bytes-in entry point (e.g. `parse(data: bytes)`) with no direct file I/O of its own; the entry module feeds it the bytes streamed from the host. (The existing `code-miscellaneous/InteroperabilityWithSTDFile.py` will be refactored to this shape — file I/O split from parsing — when this design is implemented.)
+Each extension is a plain Python package: an entry module (`main.py`) plus any number of sibling modules. Inside the worker, sibling modules are imported normally (e.g. `import std_reader`) and exchange live Python objects in memory — no serialization exists *inside* the worker. Serialization happens only at the IPC boundary, encapsulated by `vishwakarma_api`. For importers this means the parser module exposes a bytes-in entry point (e.g. `parse(data: bytes)`) with no direct file I/O of its own; the entry module feeds it the bytes streamed from the host. (Both bundled importers follow this shape: `extensions/Interoperability-STD/InteroperabilityWithSTDFile.py` and `extensions/Interoperability-DXF/InteroperabilityWithDXFFile.py` live as sibling modules of their `main.py` and expose bytes-in entry points.)
 
 ---
 

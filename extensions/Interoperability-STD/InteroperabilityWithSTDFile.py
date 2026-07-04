@@ -28,7 +28,7 @@ Current coverage includes:
     - steel/concrete design parameter blocks
 
 Example:
-    python code-miscellaneous/InteroperabilityWithSTDFile.py --file build/model.std
+    python extensions/Interoperability-STD/InteroperabilityWithSTDFile.py --file build/model.std
 """
 
 from __future__ import annotations

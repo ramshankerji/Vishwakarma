@@ -102,7 +102,7 @@ struct ImporterProfile {
 };
 
 constexpr ImporterProfile kStdImporter{
-    L"std-importer",
+    L"Interoperability-STD",
     L"vishwakarma_std_import_stderr.log",
     L"vishwakarma_std_import_result.log",
     "[std-importer]" };
