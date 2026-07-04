@@ -46,6 +46,7 @@
 #include "Input_UI_Network_File.h"
 #include "SoftwareUpdate.h"
 #include "PrinterController.h"
+#include "ExtensionCommunications.h"
 
 #include <windows.h>
 #include <windowsx.h> // For some macros like GET_X_LPARAM, GET_Y_LPARAM etc.
@@ -413,6 +414,8 @@ void ProcessPendingUIActions() {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_ARC_CREATION2D);
         } else if (action.id == static_cast<uint32_t>(Commands::CREATE_TEXT)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_TEXT_CREATION2D);
+        } else if (action.id == static_cast<uint32_t>(Commands::IMPORT_STD)) {
+            ExtensionCommunications::QueueImportStdCommand(GetActiveTabForUIAction());
         }
     }
 

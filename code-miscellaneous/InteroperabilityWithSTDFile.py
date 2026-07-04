@@ -417,17 +417,21 @@ def _target_kind_from_selector(selector: str, default: Optional[str] = None) -> 
     return default or "UNKNOWN"
 
 
-def _read_text(path: Path) -> str:
+def _decode_std_bytes(data: bytes) -> str:
     encodings = ("utf-8-sig", "utf-8", "cp1252", "latin-1")
     last_error: Optional[Exception] = None
     for encoding in encodings:
         try:
-            return path.read_text(encoding=encoding)
+            return data.decode(encoding)
         except UnicodeDecodeError as exc:
             last_error = exc
     if last_error:
         raise last_error
-    return path.read_text()
+    return data.decode()
+
+
+def _read_text(path: Path) -> str:
+    return _decode_std_bytes(path.read_bytes())
 
 
 def _logical_records_from_text(text: str) -> Tuple[List[LogicalRecord], List[Dict[str, Any]]]:
@@ -1380,7 +1384,12 @@ def _bounding_box(nodes: Dict[int, Tuple[float, float, float]]) -> Optional[Dict
 class STDFileReader:
     def read(self, path: Union[str, Path]) -> STDModel:
         input_path = Path(path)
-        text = _read_text(input_path)
+        return self.read_text(_read_text(input_path), source=input_path)
+
+    # Bytes/text entry point: used by the extension worker, which receives raw
+    # file bytes streamed over IPC and never touches the filesystem itself.
+    def read_text(self, text: str, source: Union[str, Path] = "<memory>") -> STDModel:
+        input_path = Path(source)
         records, comments = _logical_records_from_text(text)
 
         model = STDModel(path=input_path)
@@ -2336,6 +2345,14 @@ class STDFileReader:
 
 def read_std_file(path: Union[str, Path]) -> STDModel:
     return STDFileReader().read(path)
+
+
+def read_std_text(text: str, source: Union[str, Path] = "<memory>") -> STDModel:
+    return STDFileReader().read_text(text, source)
+
+
+def read_std_bytes(data: bytes, source: Union[str, Path] = "<memory>") -> STDModel:
+    return STDFileReader().read_text(_decode_std_bytes(data), source)
 
 
 def _counter_text(counter: Counter, limit: int = 8) -> str:

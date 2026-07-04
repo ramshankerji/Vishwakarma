@@ -99,6 +99,9 @@ FT_STATIC;LUNASVG_BUILD_STATIC;PLUTOVG_BUILD_STATIC;%(PreprocessorDefinitions)</
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateDataStorageProtobuf.ps1" -OutputDir "$(IntDir)GeneratedProtobuf"
 python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)SVGIconManifest.h" "$(ProjectDir)..\website\static\SVGIcons" "$(IntDir)SVGIconEmbeddedData.generated.h"</Command>
     </PreBuildEvent>
+    <PostBuildEvent>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\DeployExtensions.ps1" -OutDir "$(OutDir)."</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -132,10 +135,15 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateDataStorageProtobuf.ps1" -OutputDir "$(IntDir)GeneratedProtobuf"
 python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)SVGIconManifest.h" "$(ProjectDir)..\website\static\SVGIcons" "$(IntDir)SVGIconEmbeddedData.generated.h"</Command>
     </PreBuildEvent>
+    <PostBuildEvent>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\DeployExtensions.ps1" -OutDir "$(OutDir)."</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="DataTreeView.cpp" />
     <ClCompile Include="DataStorage.cpp" />
+    <ClCompile Include="ExtensionCommunications.cpp" />
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\ExtensionIPC.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_ARC2D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CIRCLE2D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_Common3D.pb.cc" />
@@ -196,6 +204,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClInclude Include="..\code-core\विश्वकर्मा.h" />
     <ClInclude Include="ConstantsApplication.h" />
     <ClInclude Include="ConstantsPhysics.h" />
+    <ClInclude Include="ExtensionCommunications.h" />
     <ClInclude Include="ConstantsText.h" />
     <ClInclude Include="ListOfCommands.h" />
     <ClInclude Include="MemoryManagerGPU-DirectX12.h" />
@@ -241,7 +250,9 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <None Include="DataStorage_SCENE3D.proto" />
     <None Include="DataStorage_SPHERE.proto" />
     <None Include="DataStorage_TORUS.proto" />
+    <None Include="ExtensionIPC.proto" />
     <None Include="..\code-miscellaneous\GenerateDataStorageProtobuf.ps1" />
+    <None Include="..\code-miscellaneous\DeployExtensions.ps1" />
     <None Include="..\code-miscellaneous\msdf_charset_exporter.py" />
     <None Include="..\code-miscellaneous\svg_icon_embedder.py" />
   </ItemGroup>

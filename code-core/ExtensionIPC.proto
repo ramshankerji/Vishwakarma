@@ -1,0 +1,65 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+//
+// Wire schema for host <-> extension-worker IPC (length-prefixed Protobuf Lite
+// over anonymous pipes). See website/content/software/extensions.md.
+// Schema evolution rules: never change existing tag numbers or field types;
+// only add new optional fields; never reuse deprecated tag numbers.
+
+syntax = "proto3";
+
+package vishwakarma.extension.v1;
+
+option optimize_for = LITE_RUNTIME;
+
+// ---------- Host -> Worker ----------
+
+message HostToWorker {
+  oneof msg {
+    ImportFileRequest import_file_request = 1;
+  }
+}
+
+message ImportFileRequest {
+  string file_name = 1;  // Display name only (no path); host performs all file I/O.
+  bytes file_bytes = 2;  // Raw file content streamed to the sandboxed worker.
+}
+
+// ---------- Worker -> Host ----------
+
+message WorkerToHost {
+  oneof msg {
+    CreateGeometryBatch create_geometry_batch = 1;
+    WorkerLog log = 2;
+    WorkerResult result = 3;  // Final message; worker exits after sending it.
+  }
+}
+
+// Coordinates are SI meters in the model's global axes.
+message StructuralNode {
+  uint32 node_id = 1;
+  double x = 2;
+  double y = 3;
+  double z = 4;
+}
+
+message StructuralMember {
+  uint32 member_id = 1;
+  uint32 start_node_id = 2;
+  uint32 end_node_id = 3;
+}
+
+message CreateGeometryBatch {
+  repeated StructuralNode nodes = 1;
+  repeated StructuralMember members = 2;
+}
+
+message WorkerLog {
+  string text = 1;
+}
+
+message WorkerResult {
+  bool success = 1;
+  string error = 2;
+  uint32 total_nodes = 3;
+  uint32 total_members = 4;
+}

@@ -1,38 +1,33 @@
 # Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+# Post-build step: deploy the bundled extensions next to the executable
+# ($(OutDir)extensions\...) and generate their Python protobuf bindings.
 
 param(
-    [string]$ProtocPath = "",
-    [string]$OutputDir = ""
+    [Parameter(Mandatory = $true)][string]$OutDir,
+    [string]$ProtocPath = ""
 )
 
 $ErrorActionPreference = "Stop"
 
-if ([string]::IsNullOrWhiteSpace($OutputDir)) {
-    $OutputDir = Join-Path $PSScriptRoot "..\build\GeneratedProtobuf"
-}
+# MSBuild passes $(OutDir) with a trailing backslash that can escape the
+# closing quote of the argument; strip any stray quote characters.
+$OutDir = $OutDir.Trim('"')
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $protoSourceDir = Join-Path $repoRoot "code-core"
+
 $candidateProtocPaths = @()
 if (![string]::IsNullOrWhiteSpace($ProtocPath)) {
     $candidateProtocPaths += $ProtocPath
 }
-
-# Check if protoc is installed globally (like via Chocolatey) and accessible via system PATH
 $globalProtoc = Get-Command "protoc" -CommandType Application -ErrorAction SilentlyContinue
 if ($globalProtoc) {
     $candidateProtocPaths += $globalProtoc.Source
 }
-
 $candidateProtocPaths += @(
     (Join-Path $repoRoot "build\protobuf-x64-debug\Debug\protoc.exe"),
     (Join-Path $repoRoot "build\protobuf-x64-release\Release\protoc.exe")
 )
-
-$resolvedProtocPath = $candidateProtocPaths |
-    Where-Object { ![string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) } |
-    Select-Object -First 1
-
 
 $resolvedProtocPath = $candidateProtocPaths |
     Where-Object { ![string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) } |
@@ -43,21 +38,13 @@ if ([string]::IsNullOrWhiteSpace($resolvedProtocPath)) {
     exit 1
 }
 
-$ProtocPath = $resolvedProtocPath
+$targetDir = Join-Path $OutDir "extensions\std-importer"
+New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
 
-$protoFiles = @(Get-ChildItem -LiteralPath $protoSourceDir -Filter "DataStorage_*.proto") +
-    @(Get-ChildItem -LiteralPath $protoSourceDir -Filter "ExtensionIPC.proto") |
-    Sort-Object Name |
-    ForEach-Object { $_.FullName }
+Copy-Item (Join-Path $repoRoot "extensions\std-importer\*.py") $targetDir -Force
+Copy-Item (Join-Path $repoRoot "code-miscellaneous\InteroperabilityWithSTDFile.py") $targetDir -Force
 
-if ($protoFiles.Count -eq 0) {
-    Write-Warning "No DataStorage_*.proto files found in '$protoSourceDir'."
-    exit 0
-}
-
-New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-
-& $ProtocPath "--proto_path=$protoSourceDir" "--cpp_out=$OutputDir" @protoFiles
+& $resolvedProtocPath "--proto_path=$protoSourceDir" "--python_out=$targetDir" (Join-Path $protoSourceDir "ExtensionIPC.proto")
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

@@ -7,6 +7,7 @@
 #include "विश्वकर्मा.h"
 
 #include "UserInputProcessing.h"
+#include "ExtensionCommunications.h"
 
 
 extern std::atomic<bool> shutdownSignal; // Global flag to signal all threads to shut down.
@@ -45,6 +46,22 @@ void FileInputThread() {
             ACTION_DETAILS action{};
             action.actionType = ACTION_TYPE::CREATEPYRAMID;
             tab.todoCPUQueue->push(action);
+        }
+
+    }
+
+    // Dev/testing hook: auto-import a STAAD file at startup when requested.
+    // Polls for a published tab first, since tabs may not exist yet when this
+    // thread starts.
+    wchar_t autoImportStd[MAX_PATH] = {};
+    if (GetEnvironmentVariableW(L"VISHWAKARMA_AUTO_IMPORT_STD", autoImportStd, MAX_PATH) > 0) {
+        for (int attempt = 0; attempt < 100 && !shutdownSignal; ++attempt) {
+            if (publishedTabCount.load(std::memory_order_acquire) > 0) {
+                uint16_t* list = publishedTabIndexes.load(std::memory_order_acquire);
+                ExtensionCommunications::QueueImportStdFile(&allTabs[list[0]], autoImportStd);
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
     std::cout << "FILE: Initial bulk load complete." << std::endl;

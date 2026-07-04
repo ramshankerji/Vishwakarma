@@ -13,11 +13,14 @@ This thread is also responsible for engineering calculations, consistency of Dat
 #include <cstring>
 #include <string>
 #include <random> // Required for std::uniform_int_distribution
+#include <unordered_map>
+#include <memory>
 #include "MemoryManagerCPU.h"
 #include "विश्वकर्मा.h"
 #include "डेटा.h"
 #include "डेटा-सामान्य-3D.h"
 #include "MemoryManagerGPU-DirectX12.h"
+#include "ExtensionCommunications.h"
 
 राम cpu;
 शंकर gpu;
@@ -702,6 +705,66 @@ static bool CreatePrimitiveGeometryElement(DATASETTAB* targetTab, VishwakarmaSto
     return true;
 }
 
+// Materializes a validated STAAD import (nodes as spheres, members as pipes).
+// Runs on the engineering thread — the only writer of model data. The IPC and
+// validation live in ExtensionCommunications.cpp.
+static void ImportStdFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
+    std::string error;
+    std::unique_ptr<ExtensionCommunications::ImportedStructuralModel> model(
+        ExtensionCommunications::RunQueuedStdImport(payloadId, error));
+    if (!model) {
+        std::cout << "[std-importer] " << error << "\n";
+        MessageBoxA(nullptr, error.c_str(), "STAAD import failed", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    const uint64_t sceneMemoryId = EnsureActiveScene3D(myTab);
+    if (sceneMemoryId != 0) OpenInternalSubTab(myTab, sceneMemoryId);
+
+    constexpr float kNodeRadius = 0.12f;            // Meters; import coordinates are SI.
+    constexpr float kMemberOutsideDiameter = 0.25f; // Placeholder until profiles are mapped.
+    constexpr float kMemberInsideDiameter = 0.10f;
+    const XMHALF4 nodeColor(0.85f, 0.25f, 0.15f, 1.0f);
+    const XMHALF4 memberColor(0.35f, 0.55f, 0.85f, 1.0f);
+
+    std::unordered_map<uint32_t, XMFLOAT3> nodePositions;
+    nodePositions.reserve(model->nodes.size());
+
+    for (const auto& node : model->nodes) {
+        SPHERE* shape = new (myTab->tabNo) SPHERE();
+        shape->center = { node.x, node.y, node.z };
+        shape->radius = kNodeRadius;
+        shape->color = nodeColor;
+        nodePositions.emplace(node.id, shape->center);
+        RegisterGeneratedGeometryElement(myTab, SPHERE::storageObjectType, shape, shape->GetGeometry());
+    }
+
+    size_t createdMembers = 0;
+    for (const auto& member : model->members) {
+        const auto start = nodePositions.find(member.startNodeId);
+        const auto end = nodePositions.find(member.endNodeId);
+        if (start == nodePositions.end() || end == nodePositions.end()) continue;
+        const float dx = end->second.x - start->second.x;
+        const float dy = end->second.y - start->second.y;
+        const float dz = end->second.z - start->second.z;
+        if (dx * dx + dy * dy + dz * dz < 1e-8f) continue; // Zero-length member: no axis.
+
+        PIPE* shape = new (myTab->tabNo) PIPE();
+        shape->center1 = start->second;
+        shape->center2 = end->second;
+        shape->outsideDiameter = kMemberOutsideDiameter;
+        shape->insideDiameter = kMemberInsideDiameter;
+        shape->colorOuter = memberColor;
+        shape->colorInner = memberColor;
+        shape->colorCap = memberColor;
+        RegisterGeneratedGeometryElement(myTab, PIPE::storageObjectType, shape, shape->GetGeometry());
+        ++createdMembers;
+    }
+
+    std::cout << "[std-importer] Created " << model->nodes.size() << " node spheres and "
+              << createdMembers << " member pipes." << std::endl; // Flush: rare event, aids diagnosis.
+}
+
 static void BeginPrimitive3DPlacement(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType) {
     if (!targetTab || !VishwakarmaStorage::IsGeometry3DObjectType(objectType)) return;
 
@@ -1180,6 +1243,8 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 if (VishwakarmaStorage::IsLogicalObjectType(objectType)) {
                     CreateLogicalElement(myTab, objectType, 0);
                 }
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::IMPORT_STD_FILE) {
+                ImportStdFileIntoTab(myTab, nextWorkTODO.objectId);
             }
         }
         

@@ -4,7 +4,7 @@ TO-DO: Auto-build and test latest upstream release commit and check-in in our so
 
 **Build integration**
 
-The Visual Studio solution includes `VishwakarmaExternal.vcxproj`, a static-library project for source-based dependencies that are stable between normal app edits: SQLite, LunaSVG/PlutoVG, libpng, zlib, and OpenSSL.
+The Visual Studio solution includes `VishwakarmaExternal.vcxproj`, a static-library project for source-based dependencies that are stable between normal app edits: SQLite, PocketPy, LunaSVG/PlutoVG, libpng, zlib, and OpenSSL.
 
 The main app links `build\<Configuration>\External\VishwakarmaExternal.lib` instead of compiling those source files inside `code-core\Vishwakarma.vcxproj`.
 
@@ -30,6 +30,13 @@ cmake ..
 cmake --build . --config Debug  
 
 Peculiarities specific to each of our dependencies are listed below.
+
+**PocketPy**  
+Unlike the other dependencies, PocketPy is **not** a git submodule. It is vendored as its single-file amalgamation (`pocketpy.c` + `pocketpy.h`), committed directly under `code-external/pocketpy`, the same way SQLite's `sqlite3.c` is vendored. This keeps CI fast and self-contained: no submodule clone of PocketPy's source tree and no Python amalgamation step during the build — the exact reviewed bytes are compiled, and the single portable C file builds on Windows/macOS/Linux.
+
+`VishwakarmaExternal.vcxproj` compiles `pocketpy\pocketpy.c` with `PK_ENABLE_OS=0` (compiles out the filesystem/OS module for capability hardening) and `PK_ENABLE_THREADS=0` (scripts run single-threaded on the engineering thread; also avoids PocketPy's C11 `<stdatomic.h>`, which MSVC gates behind an experimental flag). `/sdl` is disabled for this one file because it elevates PocketPy's intentional unsigned-negation bit tricks (C4146) to errors.
+
+To upgrade: clone upstream at the desired release tag, run `python amalgamate.py`, copy `amalgamated/pocketpy.c` and `amalgamated/pocketpy.h` over the vendored files, and update the version/commit recorded in `code-external/pocketpy/README.md`.
 
 **zlib**  
 mkdir build

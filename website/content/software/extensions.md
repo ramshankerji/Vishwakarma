@@ -11,13 +11,13 @@ This page outlines the design document for the Python-based extension, automatio
 
 **Finalized decisions:** frozen, statically linked CPython for external extensions; PocketPy strictly for internal scripting; Protobuf Lite on the IPC pipe (no JSON anywhere); Ed25519-signed store packages verified on every load.
 
-The MVP exercises the full pipeline with the `.std` (STAAD) importer as the first real extension:
+The MVP exercises the full pipeline with the `.std` importer as the first real extension:
 
 1.  **`vk_worker.exe`** — plain process for now (**no AppContainer yet**), embedded CPython, launched by the host when the `IMPORT_STD` command fires.
 2.  **Anonymous pipe pair** (handle inheritance) carrying length-prefixed Protobuf Lite messages.
 3.  **One message pair:** `ImportFileRequest` (raw `.std` file bytes, read and streamed by the host) → `CreateGeometryBatch` (nodes / members) back to the host.
 4.  **Host side lives entirely in `ExtensionCommunications.cpp/.h`:** file-open dialog, spawn worker, stream bytes, validate every response (count caps, finite floats), translate into `ACTION_DETAILS`, push to the owning tab's `todoCPUQueue`.
-5.  **Worker side:** `main.py` (IPC communicator built on `vishwakarma_api`) imports the refactored STAAD parser module (bytes-in entry point) and exchanges live Python objects with it in memory.
+5.  **Worker side:** `main.py` (IPC communicator built on `vishwakarma_api`) imports the refactored .std parser module (bytes-in entry point) and exchanges live Python objects with it in memory.
 
 Immediate follow-ups after the MVP, in order: AppContainer + Job Object + child-process ban; signed-manifest loading and verification; capability enforcement.
 
@@ -64,12 +64,12 @@ The scripting and automation model divides scripting into two isolated systems b
 
 ## Build Dependencies (Git Submodules)
 
-Both Python runtimes are vendored as pinned git submodules in `code-external`, alongside the existing ones (`protobuf`, `openssl`, `freetype`, ...), and built statically by the **VishwakarmaExternal** static-library project (recompiled only when external dependencies change):
+Both Python runtimes live in `code-external` and are built statically by the **VishwakarmaExternal** static-library project (recompiled only when external dependencies change), but they are vendored differently:
 
-*   `code-external/cpython` — https://github.com/python/cpython — pinned to a 3.11+ release tag; statically linked (`/MT`) into `vk_worker.exe` with the curated frozen stdlib set.
-*   `code-external/pocketpy` — https://github.com/pocketpy/pocketpy — pinned to a release tag; statically linked into the main executable for in-process scripting.
+*   `code-external/cpython` — https://github.com/python/cpython — a **pinned git submodule** at a 3.11+ release tag; statically linked (`/MT`) into `vk_worker.exe` with the curated frozen stdlib set. CPython is a genuine multi-file build, so it stays a submodule (like `protobuf` and `openssl`).
+*   `code-external/pocketpy` — https://github.com/pocketpy/pocketpy — vendored as its **committed single-file amalgamation** (`pocketpy.c` + `pocketpy.h`), not a submodule. PocketPy ships an `amalgamate.py` for exactly this embedding style (the same approach SQLite uses). Committing the amalgamation keeps CI fast and self-contained — no submodule clone, no Python amalgamation step in the build — and compiles the exact reviewed bytes. The amalgamated source is portable C: one file builds on Windows/macOS/Linux via compile-time `#ifdef`s. Provenance (upstream version + commit) and the regenerate-on-upgrade procedure are recorded in `code-external/pocketpy/README.md`. It is compiled with `PK_ENABLE_OS=0` (no filesystem/OS module) and `PK_ENABLE_THREADS=0` (single-threaded, runs on the engineering thread).
 
-Pinning to exact commits gives reproducible builds and an auditable upgrade trail — runtime upgrades are deliberate, reviewed submodule bumps, never silent.
+For CPython, pinning to an exact submodule commit gives reproducible builds and an auditable upgrade trail. For PocketPy, the committed amalgamation gives the same reproducibility, and upgrades are a deliberate regenerate-and-commit step rather than a submodule bump.
 
 ---
 
@@ -78,7 +78,7 @@ Pinning to exact commits gives reproducible builds and an auditable upgrade trai
 External extensions are authored by third-party developers, package creators, and interoperability engineers. These extensions run on a frozen, statically linked CPython but must be isolated from the host OS for security.
 
 ### Sandboxing & Process Architecture
-*   **Worker Executable (Frozen CPython — finalized):** CPython is statically linked into a separate, lightweight wrapper process (`vk_worker.exe`) distributed in the installation folder (same `/MT` static-build approach as OpenSSL). CPython 3.11+ already freezes its bootstrap modules into the binary; we extend that frozen set to a curated stdlib allowlist (`re`, `json`, `dataclasses`, `typing`, `collections`, `math`, ...) so the worker is a single self-contained file — no `python3xx.dll`, no loose stdlib files on disk. The frozen set doubles as the stdlib allowlist: a module that is not frozen in simply does not exist, so anything outside the curated set fails at `import` inside the worker.
+*   **Worker Executable (Frozen CPython — finalized):** CPython is statically linked into a separate, lightweight wrapper process (`vk_worker.exe`) distributed in the installation folder (same `/MT` static-build approach as OpenSSL). CPython 3.11+ already freezes its bootstrap modules into the binary; we extend that frozen set to a curated stdlib allowlist (`re`, `json`, `databases`, `typing`, `collections`, `math`, ...) so the worker is a single self-contained file — no `python3xx.dll`, no loose stdlib files on disk. The frozen set doubles as the stdlib allowlist: a module that is not frozen in simply does not exist, so anything outside the curated set fails at `import` inside the worker.
 *   **Sandbox Boundary (AppContainer):** AppContainer is a **per-process** mechanism: the host creates `vk_worker.exe` with an AppContainer token (`CreateProcess` + `STARTUPINFOEX` / `SECURITY_CAPABILITIES`). A restricted token is NOT an acceptable substitute — it does not block network access. No capabilities are granted (specifically not `internetClient` or `privateNetworkClientServer`), so all network access is denied at the kernel level.
 *   **Filesystem Reality:** An AppContainer process can still read paths ACL'd to `ALL APPLICATION PACKAGES` (most of the OS and the installation directory). This is required — the worker must load the Python runtime — and acceptable: the guarantee is *no access to user data*, not "no filesystem access". Future hardening option: LPAC (Less Privileged AppContainer).
 *   **No Child Processes:** The worker is created with `PROC_THREAD_ATTRIBUTE_CHILD_PROCESS_POLICY = PROCESS_CREATION_CHILD_PROCESS_RESTRICTED`, and the Job Object additionally enforces `JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 1` with kill-on-job-close, so a compromised worker cannot spawn helper processes to escape the sandbox or its resource limits.
@@ -124,7 +124,7 @@ To prevent user scripts from hanging, leaking memory, or crashing the host:
 
 ### Provenance Gating for Embedded Scripts
 
-The budgets above stop resource abuse; they do not stop a memory-safety bug in the VM itself, where opening a hostile model file could become code execution. Model files that carry embedded scripts and originate from an untrusted source (Mark-of-the-Web on downloaded files) trigger a **one-time trust prompt** before any embedded script executes; the user's decision is remembered per file. This is the lesson Office (default macro blocking for internet-sourced files) and AutoCAD (`SECURELOAD` / `TRUSTEDPATHS` after the `acad.lsp` worms) each learned retroactively — Vishwakarma bakes it in from the start.
+The budgets above stop resource abuse; they do not stop a memory-safety bug in the VM itself, where opening a hostile model file could become code execution. Model files that carry embedded scripts and originate from an untrusted source (Mark-of-the-Web on downloaded files) trigger a **one-time trust prompt** before any embedded script executes; the user's decision is remembered per file. This is the lesson Office (default macro blocking for internet-sourced files) and Professional CAD Software (`SECURELOAD` / `TRUSTEDPATHS` after the `acad.lsp` worms) each learned retroactively — Vishwakarma bakes it in from the start.
 
 ### Performance & Caching
 *   **Compile-Once:** Parse and compile PocketPy scripts to bytecode (AST/IR) once at load time, rather than parsing string scripts repeatedly.
@@ -196,4 +196,4 @@ To insulate extension developers from the binary wire layout (whether Protobuf, 
 *   During development, extensions live in an `extensions` folder beside the executable (portable/dev builds) or any user-configured folder — one subfolder per extension, same package layout as store extensions, no signature required.
 *   Loading unsigned extensions requires an explicit **developer-mode opt-in** (per machine, off by default) and shows a persistent warning badge in the UI. Without opt-in, an auto-loading unsigned-code folder would be a drop-point for any malware able to write files as the user.
 *   **Explicit load, explicit reload:** the Dev folder is never scanned or auto-loaded — the user explicitly loads each dev extension, and must explicitly reload it after every change (no file watching, no hot reload, not remembered across sessions). This friction is deliberate: it prevents "just install it as a developer extension" from becoming a bypass of the signed store for distributing extensions to end users.
-*   Extensions are **never** auto-loaded from document/model directories — auto-loading code that travels alongside documents is exactly how the AutoCAD `acad.lsp` worms (e.g. ACAD/Medre.A, which mass-exfiltrated drawings) spread.
+*   Extensions are **never** auto-loaded from document/model directories — auto-loading code that travels alongside documents is exactly how the `acad.lsp` worms (e.g. ACAD/Medre.A, which mass-exfiltrated drawings) spread.

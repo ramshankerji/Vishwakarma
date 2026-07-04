@@ -46,6 +46,7 @@
   <PropertyGroup>
     <VishwakarmaRoot>$(MSBuildThisFileDirectory)..\</VishwakarmaRoot>
     <OpenSSLSourceDir>$(MSBuildThisFileDirectory)openssl</OpenSSLSourceDir>
+    <PocketPyDir>$(MSBuildThisFileDirectory)pocketpy</PocketPyDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(VishwakarmaRoot)build\$(Configuration)\External\</OutDir>
@@ -108,6 +109,17 @@
     <OpenSSLBuildInput Include="$(OpenSSLSourceDir)\providers\**\*" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="pocketpy\pocketpy.c">
+      <!-- PK_ENABLE_OS=0 compiles out PocketPy's filesystem/OS module (hardening).
+           PK_ENABLE_THREADS=0: scripts run single-threaded on the engineering
+           thread, and it drops PocketPy's C11 <stdatomic.h> dependency (MSVC
+           gates C11 atomics behind an experimental flag). -->
+      <PreprocessorDefinitions>PK_ENABLE_OS=0;PK_ENABLE_THREADS=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(PocketPyDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- Vendored third-party amalgamation we don't modify: /sdl elevates
+           PocketPy's intentional unsigned-negation bit tricks (C4146) to errors. -->
+      <SDLCheck>false</SDLCheck>
+    </ClCompile>
     <ClCompile Include="sqlite\sqlite3.c" />
     <ClCompile Include="lunasvg\source\graphics.cpp" />
     <ClCompile Include="lunasvg\source\lunasvg.cpp" />
