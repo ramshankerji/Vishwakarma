@@ -19,6 +19,8 @@ The MVP exercises the full pipeline with the `.std` importer as the first real e
 4.  **Host side lives entirely in `ExtensionCommunications.cpp/.h`:** file-open dialog, spawn worker, stream bytes, validate every response (count caps, finite floats), translate into `ACTION_DETAILS`, push to the owning tab's `todoCPUQueue`.
 5.  **Worker side:** `main.py` (IPC communicator built on `vishwakarma_api`) imports the refactored .std parser module (bytes-in entry point) and exchanges live Python objects with it in memory.
 
+**Second extension (`Interoperability-DXF`):** the same pipeline imports AutoCAD `.dxf` drawings into the *currently open* Page2D container (the `IMPORT_DXF` ribbon command refuses when no Page2D sub-tab is active). The worker parses model space with the pure-Python DXF reader and streams `CreatePage2DBatch` messages: LINE and (LW)POLYLINE become Page2D lines (bulge arcs tessellated in the worker), CIRCLE becomes a high-segment-count polygon, TEXT/MTEXT become plain-content text rendered with the embedded MSDF font, and DIMENSION is decomposed into lines + measurement text. Blocks, OLE objects, paper-space layouts and layers are discarded by design.
+
 Immediate follow-ups after the MVP, in order: AppContainer + Job Object + child-process ban; signed-manifest loading and verification; capability enforcement.
 
 ---

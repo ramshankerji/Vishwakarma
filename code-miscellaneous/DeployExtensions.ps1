@@ -38,13 +38,20 @@ if ([string]::IsNullOrWhiteSpace($resolvedProtocPath)) {
     exit 1
 }
 
-$targetDir = Join-Path $OutDir "extensions\std-importer"
-New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+$extensionNames = @("std-importer", "Interoperability-DXF")
 
-Copy-Item (Join-Path $repoRoot "extensions\std-importer\*.py") $targetDir -Force
-Copy-Item (Join-Path $repoRoot "code-miscellaneous\InteroperabilityWithSTDFile.py") $targetDir -Force
+foreach ($extensionName in $extensionNames) {
+    $targetDir = Join-Path $OutDir "extensions\$extensionName"
+    New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
 
-& $resolvedProtocPath "--proto_path=$protoSourceDir" "--python_out=$targetDir" (Join-Path $protoSourceDir "ExtensionIPC.proto")
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+    Copy-Item (Join-Path $repoRoot "extensions\$extensionName\*.py") $targetDir -Force
+    if ($extensionName -eq "std-importer") {
+        # The .std parser lives outside the extension folder.
+        Copy-Item (Join-Path $repoRoot "code-miscellaneous\InteroperabilityWithSTDFile.py") $targetDir -Force
+    }
+
+    & $resolvedProtocPath "--proto_path=$protoSourceDir" "--python_out=$targetDir" (Join-Path $protoSourceDir "ExtensionIPC.proto")
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
 }

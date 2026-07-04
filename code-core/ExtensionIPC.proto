@@ -31,6 +31,7 @@ message WorkerToHost {
     CreateGeometryBatch create_geometry_batch = 1;
     WorkerLog log = 2;
     WorkerResult result = 3;  // Final message; worker exits after sending it.
+    CreatePage2DBatch create_page2d_batch = 4;
   }
 }
 
@@ -53,6 +54,42 @@ message CreateGeometryBatch {
   repeated StructuralMember members = 2;
 }
 
+// 2D drawing elements imported into the currently open Page2D container.
+// Coordinates and sizes are Page2D ComputerUnits (source drawing units are
+// passed through unscaled by the DXF importer).
+
+message Page2DLine {
+  double x1 = 1;
+  double y1 = 2;
+  double x2 = 3;
+  double y2 = 4;
+}
+
+message Page2DText {
+  double x = 1;
+  double y = 2;
+  double height = 3;            // Text height in ComputerUnits.
+  double rotation_radians = 4;
+  uint32 justification = 5;     // Cad2DTextJustification numeric value (0..8).
+  string text = 6;              // UTF-8 plain text; no inline formatting codes.
+}
+
+// Regular polygon (Vishwakarma's canonical closed round shape); a DXF circle
+// arrives as a polygon with a high segment count.
+message Page2DPolygon {
+  double center_x = 1;
+  double center_y = 2;
+  double radius = 3;
+  uint32 segment_count = 4;
+  double rotation_degrees = 5;
+}
+
+message CreatePage2DBatch {
+  repeated Page2DLine lines = 1;
+  repeated Page2DText texts = 2;
+  repeated Page2DPolygon polygons = 3;
+}
+
 message WorkerLog {
   string text = 1;
 }
@@ -62,4 +99,5 @@ message WorkerResult {
   string error = 2;
   uint32 total_nodes = 3;
   uint32 total_members = 4;
+  uint32 total_elements = 5;  // 2D imports: total Page2D elements sent.
 }

@@ -765,6 +765,82 @@ static void ImportStdFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
               << createdMembers << " member pipes." << std::endl; // Flush: rare event, aids diagnosis.
 }
 
+// Materializes a validated DXF import into the currently open Page2D through
+// the same copy-thread queue interactive 2D creation uses. Import policy: the
+// content goes into the *active* Page2D sub-tab only; abort when none is open
+// (the UI pre-checks too, but the state can change while the action is queued).
+static void ImportDxfFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
+    uint64_t pageMemoryId = 0;
+    if (Cad2DIsActivePage2D(*myTab)) {
+        // The active sub-tab is a Page2D, so the lookup returns exactly it.
+        pageMemoryId = Cad2DFindTargetPage2DMemoryId(*myTab);
+    }
+    if (pageMemoryId == 0) {
+        ExtensionCommunications::ReleaseQueuedImportPath(payloadId);
+        const char* message = "DXF import aborted: no Page2D is currently open.";
+        std::cout << "[dxf-importer] " << message << std::endl;
+        MessageBoxA(nullptr, message, "DXF import", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    std::string error;
+    std::unique_ptr<ExtensionCommunications::ImportedPage2DContent> content(
+        ExtensionCommunications::RunQueuedDxfImport(payloadId, error));
+    if (!content) {
+        std::cout << "[dxf-importer] " << error << "\n";
+        MessageBoxA(nullptr, error.c_str(), "DXF import failed", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    for (const auto& line : content->lines) {
+        Cad2DLineRecordCPU record{};
+        record.containerMemoryId = pageMemoryId;
+        record.x1 = line.x1;
+        record.y1 = line.y1;
+        record.x2 = line.x2;
+        record.y2 = line.y2;
+        record.lineWeight = 1.0f;
+        record.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+        record.colorABGR = 0xFF000000u;
+        record.schemaVersion = VishwakarmaStorage::kGeometry2DLineSchemaVersion;
+        EnqueueCad2DLine(myTab->tabID, pageMemoryId, record);
+    }
+
+    for (const auto& text : content->texts) {
+        Cad2DTextRecordCPU record{};
+        record.containerMemoryId = pageMemoryId;
+        record.x = text.x;
+        record.y = text.y;
+        record.textHeightCU = text.heightCU;
+        record.rotationRadians = text.rotationRadians;
+        record.colorABGR = 0xFF000000u;
+        record.font = 0; // Imported text always renders with the embedded MSDF font.
+        record.justification = static_cast<Cad2DTextJustification>(text.justification);
+        record.text = text.textUtf8;
+        record.schemaVersion = VishwakarmaStorage::kGeometry2DTextSchemaVersion;
+        EnqueueCad2DText(myTab->tabID, pageMemoryId, std::move(record));
+    }
+
+    for (const auto& polygon : content->polygons) {
+        Cad2DPolygonRecordCPU record{};
+        record.containerMemoryId = pageMemoryId;
+        record.lineSegmentCount = polygon.segmentCount;
+        record.centerX = polygon.centerX;
+        record.centerY = polygon.centerY;
+        record.radius = polygon.radius;
+        record.rotationDegrees = polygon.rotationDegrees;
+        record.lineWeight = 1.0f;
+        record.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+        record.colorABGR = 0xFF000000u;
+        record.schemaVersion = VishwakarmaStorage::kGeometry2DPolygonSchemaVersion;
+        EnqueueCad2DPolygon(myTab->tabID, pageMemoryId, record);
+    }
+
+    std::cout << "[dxf-importer] Created " << content->lines.size() << " lines, "
+              << content->texts.size() << " texts and " << content->polygons.size()
+              << " polygons in the open Page2D." << std::endl; // Flush: rare event, aids diagnosis.
+}
+
 static void BeginPrimitive3DPlacement(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType) {
     if (!targetTab || !VishwakarmaStorage::IsGeometry3DObjectType(objectType)) return;
 
@@ -1245,6 +1321,8 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 }
             } else if (nextWorkTODO.actionType == ACTION_TYPE::IMPORT_STD_FILE) {
                 ImportStdFileIntoTab(myTab, nextWorkTODO.objectId);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::IMPORT_DXF_FILE) {
+                ImportDxfFileIntoTab(myTab, nextWorkTODO.objectId);
             }
         }
         

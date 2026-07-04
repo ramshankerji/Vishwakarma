@@ -416,6 +416,8 @@ void ProcessPendingUIActions() {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_TEXT_CREATION2D);
         } else if (action.id == static_cast<uint32_t>(Commands::IMPORT_STD)) {
             ExtensionCommunications::QueueImportStdCommand(GetActiveTabForUIAction());
+        } else if (action.id == static_cast<uint32_t>(Commands::IMPORT_DXF)) {
+            ExtensionCommunications::QueueImportDxfCommand(GetActiveTabForUIAction());
         }
     }
 

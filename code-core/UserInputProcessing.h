@@ -118,7 +118,8 @@ enum class ACTION_TYPE : uint16_t { // Specifying uint16_t ensures that it is of
     BEGIN_ELLIPSE_CREATION2D = 30017,
     BEGIN_ARC_CREATION2D = 30018,
     BEGIN_PRIMITIVE_CREATION3D = 30019,
-    IMPORT_STD_FILE = 30020 // objectId owns a heap std::wstring* with the chosen file path.
+    IMPORT_STD_FILE = 30020, // objectId owns a heap std::wstring* with the chosen file path.
+    IMPORT_DXF_FILE = 30021  // objectId owns a heap std::wstring* with the chosen file path.
 };
 
 struct ACTION_DETAILS_OLD {

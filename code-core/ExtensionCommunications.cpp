@@ -21,6 +21,7 @@
 #include "विश्वकर्मा.h"
 #include "ExtensionCommunications.h"
 #include "ExtensionIPC.pb.h"
+#include "MemoryManagerGPU2D.h" // Cad2DIsActivePage2D: DXF imports need an open Page2D.
 
 #include <windows.h>
 #include <commdlg.h>
@@ -34,6 +35,11 @@ constexpr uint64_t  kMaxStdFileBytes   = 512ull * 1024 * 1024; // Host refuses l
 constexpr uint32_t  kMaxMessageBytes   = 64u * 1024 * 1024;    // Per worker->host message.
 constexpr size_t    kMaxImportedNodes  = 2'000'000;
 constexpr size_t    kMaxImportedMembers= 4'000'000;
+constexpr size_t    kMaxImported2DLines    = 4'000'000;
+constexpr size_t    kMaxImported2DTexts    = 500'000;
+constexpr size_t    kMaxImported2DPolygons = 500'000;
+constexpr size_t    kMaxImported2DTextBytes = 4096;            // Per text element.
+constexpr uint32_t  kMaxPolygonSegments = 512;
 constexpr ULONGLONG kImportTimeoutMs   = 180'000;              // Whole import, wall clock.
 
 HWND FirstWindowHandleForDialogs() {
@@ -42,20 +48,28 @@ HWND FirstWindowHandleForDialogs() {
     return windowCount > 0 ? allWindows[windowList[0]].hWnd : nullptr;
 }
 
-std::wstring ShowOpenStdDialog() {
+std::wstring ShowOpenFileDialog(const wchar_t* filter, const wchar_t* defaultExtension) {
     wchar_t fileName[MAX_PATH] = {};
 
     OPENFILENAMEW ofn{};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = FirstWindowHandleForDialogs();
-    ofn.lpstrFilter = L"STAAD input files (*.std)\0*.std\0All files (*.*)\0*.*\0";
+    ofn.lpstrFilter = filter;
     ofn.lpstrFile = fileName;
     ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrDefExt = L"std";
+    ofn.lpstrDefExt = defaultExtension;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
 
     if (!GetOpenFileNameW(&ofn)) return {};
     return fileName;
+}
+
+std::wstring ShowOpenStdDialog() {
+    return ShowOpenFileDialog(L"STAAD input files (*.std)\0*.std\0All files (*.*)\0*.*\0", L"std");
+}
+
+std::wstring ShowOpenDxfDialog() {
+    return ShowOpenFileDialog(L"AutoCAD DXF files (*.dxf)\0*.dxf\0All files (*.*)\0*.*\0", L"dxf");
 }
 
 std::string Utf8FromWide(const std::wstring& wide) {
@@ -78,14 +92,31 @@ std::wstring StdImportTempPath(const wchar_t* leaf) {
     return std::wstring(tempDir) + leaf;
 }
 
-std::wstring StdImportStderrLogPath() {
-    return StdImportTempPath(L"vishwakarma_std_import_stderr.log");
-}
+// Per-importer constants: which bundled extension to launch and where its
+// diagnostics land. Every importer worker speaks the same wire protocol.
+struct ImporterProfile {
+    const wchar_t* extensionSubdir;  // Folder under "<exe dir>\extensions"
+    const wchar_t* stderrLogLeaf;
+    const wchar_t* resultMarkerLeaf;
+    const char*    logTag;           // Console prefix.
+};
+
+constexpr ImporterProfile kStdImporter{
+    L"std-importer",
+    L"vishwakarma_std_import_stderr.log",
+    L"vishwakarma_std_import_result.log",
+    "[std-importer]" };
+
+constexpr ImporterProfile kDxfImporter{
+    L"Interoperability-DXF",
+    L"vishwakarma_dxf_import_stderr.log",
+    L"vishwakarma_dxf_import_result.log",
+    "[dxf-importer]" };
 
 // Writes a one-line outcome marker so an import can be verified independently
 // of the app's console (which is redirected to its own window via AllocConsole).
-void WriteImportResultMarker(const std::string& line) {
-    std::ofstream marker(std::filesystem::path(StdImportTempPath(L"vishwakarma_std_import_result.log")),
+void WriteImportResultMarker(const ImporterProfile& profile, const std::string& line) {
+    std::ofstream marker(std::filesystem::path(StdImportTempPath(profile.resultMarkerLeaf)),
         std::ios::binary | std::ios::trunc);
     if (marker) marker << line << "\n";
 }
@@ -121,8 +152,8 @@ struct WorkerProcess {
     }
 };
 
-bool SpawnImportWorker(WorkerProcess& worker, std::string& error) {
-    const std::wstring extensionDir = ExecutableDirectory() + L"\\extensions\\std-importer";
+bool SpawnImportWorker(WorkerProcess& worker, const ImporterProfile& profile, std::string& error) {
+    const std::wstring extensionDir = ExecutableDirectory() + L"\\extensions\\" + profile.extensionSubdir;
     if (!std::filesystem::exists(std::filesystem::path(extensionDir) / L"main.py")) {
         error = "Extension not found: " + Utf8FromWide(extensionDir) +
                 "\\main.py (was the post-build extension deploy step run?)";
@@ -145,7 +176,7 @@ bool SpawnImportWorker(WorkerProcess& worker, std::string& error) {
     SetHandleInformation(stdoutRead, HANDLE_FLAG_INHERIT, 0);
 
     // Worker stderr goes to a log file so parse tracebacks are diagnosable.
-    HANDLE stderrLog = CreateFileW(StdImportStderrLogPath().c_str(), GENERIC_WRITE, FILE_SHARE_READ,
+    HANDLE stderrLog = CreateFileW(StdImportTempPath(profile.stderrLogLeaf).c_str(), GENERIC_WRITE, FILE_SHARE_READ,
         &inheritable, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 
     STARTUPINFOW startup{};
@@ -294,6 +325,53 @@ bool AppendValidatedBatch(const vishwakarma::extension::v1::CreateGeometryBatch&
     return true;
 }
 
+bool AppendValidatedPage2DBatch(const vishwakarma::extension::v1::CreatePage2DBatch& batch,
+    ImportedPage2DContent& content, std::string& error) {
+    if (content.lines.size() + batch.lines_size() > kMaxImported2DLines) {
+        error = "Worker exceeded the 2D line cap";
+        return false;
+    }
+    if (content.texts.size() + batch.texts_size() > kMaxImported2DTexts) {
+        error = "Worker exceeded the 2D text cap";
+        return false;
+    }
+    if (content.polygons.size() + batch.polygons_size() > kMaxImported2DPolygons) {
+        error = "Worker exceeded the 2D polygon cap";
+        return false;
+    }
+    for (const auto& line : batch.lines()) {
+        if (!std::isfinite(line.x1()) || !std::isfinite(line.y1()) ||
+            !std::isfinite(line.x2()) || !std::isfinite(line.y2())) {
+            error = "Worker sent a 2D line with non-finite coordinates";
+            return false;
+        }
+        content.lines.push_back({ line.x1(), line.y1(), line.x2(), line.y2() });
+    }
+    for (const auto& text : batch.texts()) {
+        if (!std::isfinite(text.x()) || !std::isfinite(text.y()) ||
+            !std::isfinite(text.height()) || !std::isfinite(text.rotation_radians()) ||
+            text.height() <= 0.0 || text.justification() > 8 ||
+            text.text().empty() || text.text().size() > kMaxImported2DTextBytes) {
+            error = "Worker sent an invalid 2D text element";
+            return false;
+        }
+        content.texts.push_back({ text.x(), text.y(), (float)text.height(),
+            (float)text.rotation_radians(), text.justification(), text.text() });
+    }
+    for (const auto& polygon : batch.polygons()) {
+        if (!std::isfinite(polygon.center_x()) || !std::isfinite(polygon.center_y()) ||
+            !std::isfinite(polygon.radius()) || !std::isfinite(polygon.rotation_degrees()) ||
+            polygon.radius() <= 0.0 ||
+            polygon.segment_count() < 3 || polygon.segment_count() > kMaxPolygonSegments) {
+            error = "Worker sent an invalid 2D polygon";
+            return false;
+        }
+        content.polygons.push_back({ polygon.center_x(), polygon.center_y(),
+            polygon.radius(), polygon.segment_count(), polygon.rotation_degrees() });
+    }
+    return true;
+}
+
 } // anonymous namespace
 
 bool QueueImportStdCommand(DATASETTAB* tab) {
@@ -316,6 +394,40 @@ bool QueueImportStdFile(DATASETTAB* tab, const std::wstring& stdFilePath) {
     return true;
 }
 
+bool QueueImportDxfCommand(DATASETTAB* tab) {
+    if (!tab || !tab->todoCPUQueue) return false;
+
+    // Import policy: DXF content lands in the currently open Page2D only.
+    // Refuse before showing the file dialog when none is open. The
+    // engineering thread re-checks at materialization time.
+    if (!Cad2DIsActivePage2D(*tab)) {
+        MessageBoxW(FirstWindowHandleForDialogs(),
+            L"Open a Page2D first: the DXF content is imported into the currently open Page2D.",
+            L"DXF import", MB_OK | MB_ICONINFORMATION);
+        return false;
+    }
+
+    const std::wstring path = ShowOpenDxfDialog();
+    if (path.empty()) return false;
+    return QueueImportDxfFile(tab, path);
+}
+
+bool QueueImportDxfFile(DATASETTAB* tab, const std::wstring& dxfFilePath) {
+    if (!tab || !tab->todoCPUQueue || dxfFilePath.empty()) return false;
+
+    ACTION_DETAILS request{};
+    request.actionType = ACTION_TYPE::IMPORT_DXF_FILE;
+    request.source = INPUT_SOURCE::SYSTEM;
+    request.objectId = reinterpret_cast<uint64_t>(new std::wstring(dxfFilePath));
+    request.timestamp = GetTickCount64();
+    tab->todoCPUQueue->push(request);
+    return true;
+}
+
+void ReleaseQueuedImportPath(uint64_t payloadId) {
+    delete reinterpret_cast<std::wstring*>(payloadId);
+}
+
 ImportedStructuralModel* RunQueuedStdImport(uint64_t payloadId, std::string& error) {
     std::unique_ptr<std::wstring> path(reinterpret_cast<std::wstring*>(payloadId));
     if (!path || path->empty()) {
@@ -324,7 +436,7 @@ ImportedStructuralModel* RunQueuedStdImport(uint64_t payloadId, std::string& err
     }
 
     WorkerProcess worker;
-    if (!SpawnImportWorker(worker, error)) return nullptr;
+    if (!SpawnImportWorker(worker, kStdImporter, error)) return nullptr;
     if (!SendImportRequest(worker, *path, error)) return nullptr;
 
     auto model = std::make_unique<ImportedStructuralModel>();
@@ -379,9 +491,9 @@ ImportedStructuralModel* RunQueuedStdImport(uint64_t payloadId, std::string& err
     }
 
     if (!resultReceived) {
-        const std::string stderrTail = TailOfStderrLog(StdImportStderrLogPath());
+        const std::string stderrTail = TailOfStderrLog(StdImportTempPath(kStdImporter.stderrLogLeaf));
         if (!stderrTail.empty()) error += "\n\nWorker stderr:\n" + stderrTail;
-        WriteImportResultMarker("FAILED: " + error.substr(0, 500));
+        WriteImportResultMarker(kStdImporter, "FAILED: " + error.substr(0, 500));
         return nullptr; // WorkerProcess destructor terminates the worker.
     }
 
@@ -396,11 +508,86 @@ ImportedStructuralModel* RunQueuedStdImport(uint64_t payloadId, std::string& err
     }
     model->members = std::move(validMembers);
 
-    WriteImportResultMarker("OK: " + std::to_string(model->nodes.size()) + " nodes, " +
+    WriteImportResultMarker(kStdImporter, "OK: " + std::to_string(model->nodes.size()) + " nodes, " +
                             std::to_string(model->members.size()) + " members from " + Utf8FromWide(*path));
     std::cout << "[std-importer] Validated " << model->nodes.size() << " nodes and "
               << model->members.size() << " members from " << Utf8FromWide(*path) << std::endl;
     return model.release();
+}
+
+ImportedPage2DContent* RunQueuedDxfImport(uint64_t payloadId, std::string& error) {
+    std::unique_ptr<std::wstring> path(reinterpret_cast<std::wstring*>(payloadId));
+    if (!path || path->empty()) {
+        error = "Import request carried no file path";
+        return nullptr;
+    }
+
+    WorkerProcess worker;
+    if (!SpawnImportWorker(worker, kDxfImporter, error)) return nullptr;
+    if (!SendImportRequest(worker, *path, error)) return nullptr;
+
+    auto content = std::make_unique<ImportedPage2DContent>();
+    content->sourceFile = *path;
+    const ULONGLONG deadlineTick = GetTickCount64() + kImportTimeoutMs;
+
+    bool resultReceived = false;
+    std::vector<uint8_t> payload;
+    while (!resultReceived) {
+        uint8_t prefix[4] = {};
+        if (!ReadExact(worker, prefix, sizeof(prefix), deadlineTick, error)) break;
+        const uint32_t length = (uint32_t)prefix[0] | ((uint32_t)prefix[1] << 8) |
+                                ((uint32_t)prefix[2] << 16) | ((uint32_t)prefix[3] << 24);
+        if (length == 0 || length > kMaxMessageBytes) {
+            error = "Worker sent an out-of-range message length";
+            break;
+        }
+        payload.resize(length);
+        if (!ReadExact(worker, payload.data(), length, deadlineTick, error)) break;
+
+        vishwakarma::extension::v1::WorkerToHost message;
+        if (!message.ParseFromArray(payload.data(), (int)length)) {
+            error = "Worker sent an unparseable message";
+            break;
+        }
+
+        switch (message.msg_case()) {
+        case vishwakarma::extension::v1::WorkerToHost::kCreatePage2DBatch:
+            if (AppendValidatedPage2DBatch(message.create_page2d_batch(), *content, error)) {
+                continue;
+            }
+            break;
+        case vishwakarma::extension::v1::WorkerToHost::kLog:
+            std::cout << kDxfImporter.logTag << " "
+                      << message.log().text().substr(0, 2000) << "\n";
+            continue;
+        case vishwakarma::extension::v1::WorkerToHost::kResult:
+            if (!message.result().success()) {
+                error = "Import failed: " + message.result().error().substr(0, 2000);
+            } else {
+                resultReceived = true;
+            }
+            break;
+        default:
+            error = "Worker sent an unknown message type";
+            break;
+        }
+        if (!resultReceived) break; // Any validation failure or worker-reported error.
+    }
+
+    if (!resultReceived) {
+        const std::string stderrTail = TailOfStderrLog(StdImportTempPath(kDxfImporter.stderrLogLeaf));
+        if (!stderrTail.empty()) error += "\n\nWorker stderr:\n" + stderrTail;
+        WriteImportResultMarker(kDxfImporter, "FAILED: " + error.substr(0, 500));
+        return nullptr; // WorkerProcess destructor terminates the worker.
+    }
+
+    const size_t total = content->lines.size() + content->texts.size() + content->polygons.size();
+    WriteImportResultMarker(kDxfImporter, "OK: " + std::to_string(content->lines.size()) + " lines, " +
+                            std::to_string(content->texts.size()) + " texts, " +
+                            std::to_string(content->polygons.size()) + " polygons from " + Utf8FromWide(*path));
+    std::cout << kDxfImporter.logTag << " Validated " << total << " Page2D elements from "
+              << Utf8FromWide(*path) << std::endl;
+    return content.release();
 }
 
 } // namespace ExtensionCommunications
