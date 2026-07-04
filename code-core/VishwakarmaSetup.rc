@@ -13,3 +13,8 @@
 201 RCDATA "..\\build\\Release\\Vishwakarma.exe"
 202 RCDATA "..\\build\\Release\\EmbeddedReleaseDetails.json"
 #endif
+
+// License texts shown by the installer before installation. Single source of truth is the
+// website content; IDs 203/204 must match SoftwareUpdate.cpp.
+203 RCDATA "..\\website\\content\\start\\End User License Agreement.md"
+204 RCDATA "..\\website\\content\\start\\Privacy Policy.md"

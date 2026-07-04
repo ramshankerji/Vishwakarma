@@ -58,6 +58,8 @@ static const char* kManifestPublicKeyPem =
 // Resource IDs inside VishwakarmaSetup.exe. Must match VishwakarmaSetup.rc.
 #define IDR_VW_PAYLOAD_EXE 201
 #define IDR_VW_RELEASE_JSON 202
+#define IDR_VW_EULA_MD 203
+#define IDR_VW_PRIVACY_MD 204
 
 // ------------------------------------------------------------------ Small helpers
 static std::wstring Utf8ToWide(const std::string& s) {
@@ -193,6 +195,8 @@ static bool LaunchProcess(const fs::path& exe, const std::wstring& args) {
 // INSTALLER : compiled only into VishwakarmaSetup.exe
 // =================================================================================
 
+#include "AccountManager.h"
+
 static std::string LoadResourceBytes(int id) {
     HRSRC res = FindResourceW(nullptr, MAKEINTRESOURCEW(id), RT_RCDATA);
     if (!res) return "";
@@ -202,6 +206,116 @@ static std::string LoadResourceBytes(int id) {
     const char* data = (const char*)LockResource(h);
     if (!data || size == 0) return "";
     return std::string(data, size);
+}
+
+// ------------------------------------------------------------------ License agreement dialog
+// Shows the EULA + Privacy Policy (embedded from website/content/start) with Accept / Reject.
+// Accept proceeds with the installation, Reject aborts it. Skipped in --update mode: the
+// user already accepted at first install and updates must stay silent.
+
+// Strips the leading hugo front matter block (--- ... ---) from a markdown file.
+static std::string StripFrontMatter(const std::string& md) {
+    if (md.rfind("---", 0) != 0) return md;
+    size_t end = md.find("\n---", 3);
+    if (end == std::string::npos) return md;
+    size_t newline = md.find('\n', end + 1);
+    return newline == std::string::npos ? "" : md.substr(newline + 1);
+}
+
+static std::atomic<int> g_licenseDecision = 0; // 0 = undecided, 1 = accept, -1 = reject.
+#define IDC_VW_ACCEPT 301
+#define IDC_VW_REJECT 302
+
+static LRESULT CALLBACK LicenseWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    switch (message) {
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDC_VW_ACCEPT) { g_licenseDecision = 1; DestroyWindow(hWnd); return 0; }
+        if (LOWORD(wParam) == IDC_VW_REJECT) { g_licenseDecision = -1; DestroyWindow(hWnd); return 0; }
+        break;
+    case WM_CLOSE: // Closing the window counts as Reject.
+        g_licenseDecision = -1;
+        DestroyWindow(hWnd);
+        return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(hWnd, message, wParam, lParam);
+}
+
+static bool ShowLicenseAgreementDialog() {
+    std::string text = "END USER LICENSE AGREEMENT\r\n\r\n"
+        + StripFrontMatter(LoadResourceBytes(IDR_VW_EULA_MD))
+        + "\r\n\r\n========================================\r\n\r\nPRIVACY POLICY\r\n\r\n"
+        + StripFrontMatter(LoadResourceBytes(IDR_VW_PRIVACY_MD));
+    // EDIT controls need \r\n line breaks; the markdown sources use \n.
+    std::string normalized;
+    normalized.reserve(text.size() + 256);
+    for (size_t i = 0; i < text.size(); i++) {
+        if (text[i] == '\n' && (i == 0 || text[i - 1] != '\r')) normalized += '\r';
+        normalized += text[i];
+    }
+    std::wstring wide = Utf8ToWide(normalized);
+
+    WNDCLASSEXW wc{ sizeof(wc) };
+    wc.lpfnWndProc = LicenseWndProc;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.lpszClassName = L"VishwakarmaSetupLicense";
+    wc.hIcon = LoadIconW(wc.hInstance, MAKEINTRESOURCEW(1));
+    RegisterClassExW(&wc);
+
+    const int dpi = GetDpiForSystem();
+    const int scale = dpi > 0 ? dpi : 96;
+    auto px = [scale](int logical) { return logical * scale / 96; };
+    const int width = px(720), height = px(640);
+    RECT work{};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+    HWND hWnd = CreateWindowExW(0, wc.lpszClassName,
+        L"Vishwakarma Setup - License Agreement and Privacy Policy",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+        (work.right - width) / 2, (work.bottom - height) / 2, width, height,
+        nullptr, nullptr, wc.hInstance, nullptr);
+    if (!hWnd) return false;
+
+    RECT client{};
+    GetClientRect(hWnd, &client);
+    const int margin = px(12), buttonWidth = px(120), buttonHeight = px(32);
+    HWND label = CreateWindowExW(0, L"STATIC",
+        L"Please review the End User License Agreement and Privacy Policy below. "
+        L"Click Accept to proceed with the installation, or Reject to abort.",
+        WS_CHILD | WS_VISIBLE, margin, margin, client.right - 2 * margin, px(34),
+        hWnd, nullptr, wc.hInstance, nullptr);
+    HWND edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", wide.c_str(),
+        WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY,
+        margin, margin + px(38), client.right - 2 * margin,
+        client.bottom - 3 * margin - px(38) - buttonHeight,
+        hWnd, nullptr, wc.hInstance, nullptr);
+    HWND accept = CreateWindowExW(0, L"BUTTON", L"Accept",
+        WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+        client.right - margin - 2 * buttonWidth - px(8), client.bottom - margin - buttonHeight,
+        buttonWidth, buttonHeight, hWnd, (HMENU)IDC_VW_ACCEPT, wc.hInstance, nullptr);
+    HWND reject = CreateWindowExW(0, L"BUTTON", L"Reject",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        client.right - margin - buttonWidth, client.bottom - margin - buttonHeight,
+        buttonWidth, buttonHeight, hWnd, (HMENU)IDC_VW_REJECT, wc.hInstance, nullptr);
+
+    HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    for (HWND child : { label, edit, accept, reject })
+        if (child) SendMessageW(child, WM_SETFONT, (WPARAM)font, TRUE);
+
+    g_licenseDecision = 0;
+    ShowWindow(hWnd, SW_SHOW);
+    UpdateWindow(hWnd);
+    MSG msg{};
+    while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        if (!IsDialogMessageW(hWnd, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+    return g_licenseDecision == 1;
 }
 
 // Rules from release.md: default per-user, no admin needed. --allUsers tries Program Files
@@ -306,6 +420,15 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
     }
     long long newVersion = JsonInt(json, "version", 0);
 
+    // First-install (and manual reinstall) runs must present the EULA + Privacy Policy.
+    // Reject aborts before anything touches the disk. --update stays silent: the user
+    // already accepted when installing the version that staged this update.
+    if (!updateMode && !ShowLicenseAgreementDialog()) {
+        if (mutex) { ReleaseMutex(mutex); CloseHandle(mutex); }
+        CoUninitialize();
+        return 1;
+    }
+
     fs::path dir = PickInstallDir(allUsers);
     fs::path exe = dir / kAppExeName;
 
@@ -328,6 +451,9 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
         UpdateState st = LoadUpdateState();
         st.lastInstalledVersion = newVersion;
         SaveUpdateState(st);
+        // Ed25519 installation identity key pair: created here at install time; the
+        // application re-creates it on launch if it ever goes missing.
+        AccountManager::EnsureInstallationKey();
     }
 
     if (updateMode) {

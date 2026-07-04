@@ -10,6 +10,12 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="AccountManager.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="ImprovementData.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
     <ClCompile Include="DataTreeView.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
@@ -123,6 +129,12 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AccountManager.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="ImprovementData.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
     <ClInclude Include="DataTreeView.h">
       <Filter>code-core</Filter>
     </ClInclude>

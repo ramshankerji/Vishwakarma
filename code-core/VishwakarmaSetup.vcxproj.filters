@@ -15,11 +15,17 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="AccountManager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="SoftwareUpdate.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AccountManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="SoftwareUpdate.h">
       <Filter>Header Files</Filter>
     </ClInclude>

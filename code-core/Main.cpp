@@ -47,6 +47,8 @@
 #include "SoftwareUpdate.h"
 #include "PrinterController.h"
 #include "ExtensionCommunications.h"
+#include "AccountManager.h"
+#include "ImprovementData.h"
 
 #include <windows.h>
 #include <windowsx.h> // For some macros like GET_X_LPARAM, GET_Y_LPARAM etc.
@@ -920,6 +922,10 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     if (SoftwareUpdateOnAppLaunch()) return 0;
     StartSoftwareUpdateThread();
 
+    // Installation identity (created by the installer; re-created here when missing) and
+    // the per-launch ephemeral session key pair.
+    AccountManager::InitializeOnLaunch();
+
     // Enable per Monitor DPI Awareness. Requires Windows 10 version 1703+.
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     FetchAllMonitorDetails();
@@ -1059,6 +1065,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     threads.emplace_back(NetworkInputThread);
     threads.emplace_back(FileInputThread);
     threads.emplace_back(GpuCopyThread);
+    threads.emplace_back(ImprovementDataThread); // Usage statistics collection (5 min interval).
 
     InitUIResources(gpu.uiResources, gpu.device.Get()); //Prepare and upload UI resources (e.g. fonts, icons) to GPU.
     //Above function depends on GpuCopyThread, hence it can't be done earlier.
@@ -1279,7 +1286,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     // ******* LIFECYCLE messages ******
     
     
-    case WM_KEYDOWN: 
+    case WM_KEYDOWN:
+        g_statKeyPresses.fetch_add(1, std::memory_order_relaxed); // Usage statistics.
         if (tab) {
             ad.actionType = ACTION_TYPE::KEYDOWN;
             ad.source = INPUT_SOURCE::KEYBOARD;
@@ -1320,6 +1328,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
 
     case WM_SYSKEYDOWN:
+        g_statKeyPresses.fetch_add(1, std::memory_order_relaxed); // Usage statistics.
         if (tab) {
             ad.actionType = ACTION_TYPE::KEYDOWN;
             ad.source = INPUT_SOURCE::KEYBOARD;
@@ -1353,6 +1362,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_LBUTTONDOWN:
     {
         const bool isDoubleClick = message == WM_LBUTTONDBLCLK;
+        g_statLeftClicks.fetch_add(1, std::memory_order_relaxed); // Usage statistics.
         if (currentWindow) {
             UpdateUIMousePosition(currentWindow, lParam);
             currentWindow->uiInput.leftButtonDown = true;
@@ -1407,6 +1417,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
     
     case WM_RBUTTONDOWN:
+        g_statRightClicks.fetch_add(1, std::memory_order_relaxed); // Usage statistics.
         if (currentWindow) {
             UpdateUIMousePosition(currentWindow, lParam);
             currentWindow->uiInput.rightButtonDown = true;
@@ -1442,6 +1453,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     
     case WM_MBUTTONDOWN:
+        g_statMiddleClicks.fetch_add(1, std::memory_order_relaxed); // Usage statistics.
         if (currentWindow) {
             UpdateUIMousePosition(currentWindow, lParam);
             currentWindow->uiInput.middleButtonDown = true;

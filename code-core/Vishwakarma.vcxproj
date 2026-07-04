@@ -140,6 +140,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="AccountManager.cpp" />
     <ClCompile Include="DataTreeView.cpp" />
     <ClCompile Include="DataStorage.cpp" />
     <ClCompile Include="ExtensionCommunications.cpp" />
@@ -171,6 +172,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClCompile Include="FontManager.h" />
     <ClCompile Include="GlobalVariables.cpp" />
     <ClCompile Include="ImageHandling.cpp" />
+    <ClCompile Include="ImprovementData.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="MemoryManagerGPU-DirectX12.cpp" />
     <ClCompile Include="MemoryManagerGPU2D.cpp" />
@@ -183,6 +185,8 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClCompile Include="UserInterfaceTranslationCompiled.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AccountManager.h" />
+    <ClInclude Include="ImprovementData.h" />
     <ClInclude Include="..\code-core\CommonNamedNumbers.h" />
     <ClInclude Include="DataTreeView.h" />
     <ClInclude Include="DataStorage.h" />

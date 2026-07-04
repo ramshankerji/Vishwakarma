@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mission Vishwakarma - Global Usage Statistics</title>
+<style>
+  :root {
+    --saffron: #FF9933;
+    --green: #138808;
+    --ink: #1c2321;
+    --paper: #f6f8f7;
+    --card: #ffffff;
+    --muted: #6b7671;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    background: var(--paper); color: var(--ink);
+    padding: 24px 16px 48px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 28px; }
+  header h1 { font-size: 1.9rem; font-weight: 600; }
+  header h1 span { color: var(--saffron); }
+  header p { color: var(--muted); margin-top: 6px; font-size: .9rem; }
+  .cards {
+    display: grid; gap: 14px;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    margin-bottom: 30px;
+  }
+  .card {
+    background: var(--card); border-radius: 12px; padding: 18px 16px;
+    box-shadow: 0 1px 4px rgba(28,35,33,.08); text-align: center;
+    border-top: 3px solid var(--saffron);
+  }
+  .card:nth-child(even) { border-top-color: var(--green); }
+  .card .value { font-size: 1.7rem; font-weight: 700; }
+  .card .label { color: var(--muted); font-size: .82rem; margin-top: 4px; }
+  .panels { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .panel {
+    background: var(--card); border-radius: 12px; padding: 20px;
+    box-shadow: 0 1px 4px rgba(28,35,33,.08);
+  }
+  .panel h2 { font-size: 1.05rem; margin-bottom: 14px; font-weight: 600; }
+  .row { margin-bottom: 10px; }
+  .row .name {
+    display: flex; justify-content: space-between; font-size: .85rem; margin-bottom: 3px;
+  }
+  .row .name b { font-weight: 500; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; max-width: 75%; }
+  .row .name span { color: var(--muted); }
+  .bar { background: #e7ecea; border-radius: 5px; height: 10px; overflow: hidden; }
+  .bar i {
+    display: block; height: 100%; border-radius: 5px;
+    background: linear-gradient(90deg, var(--saffron), var(--green));
+  }
+  .empty { color: var(--muted); font-size: .88rem; }
+  footer { text-align: center; color: var(--muted); font-size: .8rem; margin-top: 32px; }
+  footer a { color: var(--green); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Mission <span>Vishwakarma</span> &mdash; Global Usage Statistics</h1>
+    <p>Anonymous, aggregated telemetry from all installations. Generated {{ generated_utc }}.</p>
+  </header>
+
+  <div class="cards">
+    <div class="card"><div class="value">{{ installations }}</div><div class="label">Installations</div></div>
+    <div class="card"><div class="value">{{ active_30d }}</div><div class="label">Active (30 days)</div></div>
+    <div class="card"><div class="value">{{ open_hours }}</div><div class="label">Hours Open</div></div>
+    <div class="card"><div class="value">{{ focus_hours }}</div><div class="label">Hours In Focus</div></div>
+    <div class="card"><div class="value">{{ clicks }}</div><div class="label">Mouse Clicks</div></div>
+    <div class="card"><div class="value">{{ keys }}</div><div class="label">Key Presses</div></div>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <h2>Most Used Commands</h2>
+      {% for item in commands %}
+      <div class="row">
+        <div class="name"><b>{{ item.label }}</b><span>{{ item.count }}</span></div>
+        <div class="bar"><i style="width: {{ item.percent }}%"></i></div>
+      </div>
+      {% empty %}<p class="empty">No usage data received yet.</p>{% endfor %}
+    </div>
+
+    <div class="panel">
+      <h2>Operating Systems</h2>
+      {% for item in os_list %}
+      <div class="row">
+        <div class="name"><b>{{ item.label }}</b><span>{{ item.count }}</span></div>
+        <div class="bar"><i style="width: {{ item.percent }}%"></i></div>
+      </div>
+      {% empty %}<p class="empty">No hardware reports received yet.</p>{% endfor %}
+    </div>
+
+    <div class="panel">
+      <h2>Processors</h2>
+      {% for item in cpu_list %}
+      <div class="row">
+        <div class="name"><b>{{ item.label }}</b><span>{{ item.count }}</span></div>
+        <div class="bar"><i style="width: {{ item.percent }}%"></i></div>
+      </div>
+      {% empty %}<p class="empty">No hardware reports received yet.</p>{% endfor %}
+    </div>
+
+    <div class="panel">
+      <h2>Graphics Cards</h2>
+      {% for item in gpu_list %}
+      <div class="row">
+        <div class="name"><b>{{ item.label }}</b><span>{{ item.count }}</span></div>
+        <div class="bar"><i style="width: {{ item.percent }}%"></i></div>
+      </div>
+      {% empty %}<p class="empty">No hardware reports received yet.</p>{% endfor %}
+    </div>
+  </div>
+
+  <footer>
+    {{ records }} five-minute usage intervals aggregated &middot;
+    <a href="https://mv.ramshanker.in">mv.ramshanker.in</a> &middot;
+    <a href="https://mv.ramshanker.in/start/privacy-policy/">Privacy Policy</a>
+  </footer>
+</div>
+</body>
+</html>

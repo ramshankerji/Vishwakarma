@@ -49,10 +49,12 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(VishwakarmaRoot)build\$(Configuration)\</OutDir>
     <IntDir>$(VishwakarmaRoot)build\$(Configuration)\SetupIntermediate\</IntDir>
+    <OpenSSLBuildDir>$(VishwakarmaRoot)build\openssl-x64-debug</OpenSSLBuildDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(VishwakarmaRoot)build\$(Configuration)\</OutDir>
     <IntDir>$(VishwakarmaRoot)build\$(Configuration)\SetupIntermediate\</IntDir>
+    <OpenSSLBuildDir>$(VishwakarmaRoot)build\openssl-x64-release</OpenSSLBuildDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
@@ -60,6 +62,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>VISHWAKARMA_INSTALLER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(OpenSSLBuildDir)\include;$(VishwakarmaRoot)code-external\openssl\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/FS /utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
@@ -68,7 +71,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>User32.lib;Shell32.lib;Ole32.lib;Uuid.lib;Advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>User32.lib;Shell32.lib;Ole32.lib;Uuid.lib;Advapi32.lib;Ws2_32.lib;Crypt32.lib;$(OpenSSLBuildDir)\libcrypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <ResourceCompile>
       <PreprocessorDefinitions>VW_DEBUG_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -85,6 +88,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>VISHWAKARMA_INSTALLER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(OpenSSLBuildDir)\include;$(VishwakarmaRoot)code-external\openssl\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>/FS /utf-8 %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
@@ -95,7 +99,7 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>User32.lib;Shell32.lib;Ole32.lib;Uuid.lib;Advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>User32.lib;Shell32.lib;Ole32.lib;Uuid.lib;Advapi32.lib;Ws2_32.lib;Crypt32.lib;$(OpenSSLBuildDir)\libcrypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <ResourceCompile>
     </ResourceCompile>
@@ -104,9 +108,11 @@
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="AccountManager.cpp" />
     <ClCompile Include="SoftwareUpdate.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AccountManager.h" />
     <ClInclude Include="SoftwareUpdate.h" />
   </ItemGroup>
   <ItemGroup>

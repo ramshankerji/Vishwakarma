@@ -1,0 +1,4 @@
+Django>=5.2,<6.0
+django-cors-headers>=4.4
+cryptography>=43.0
+gunicorn>=23.0

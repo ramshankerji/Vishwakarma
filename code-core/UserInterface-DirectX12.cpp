@@ -13,6 +13,7 @@
 #include "DataTreeView.h"
 #include "UserInterfaceTranslationCompiled.h"
 #include "SVGIconRenderer.h"
+#include "ImprovementData.h"
 #include <array>
 #include <cfloat>
 #include <cmath>
@@ -1429,6 +1430,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             bool clicked = hovered && input.leftButtonPressedThisFrame;
 
             if (clicked && ctrl.isEnabled) {
+                ImprovementData::RecordRibbonAction((uint32_t)ctrl.action); // Usage statistics.
                 PushUIAction((uint32_t)ctrl.action);
                 if (ctrl.zIndex == 1) { // Dropdown trigger
                     window.activeDropdownAction = ctrl.action;
