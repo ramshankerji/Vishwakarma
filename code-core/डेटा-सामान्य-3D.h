@@ -21,6 +21,10 @@ inline std::mt19937& GetRNG() {
     return rng;
 }
 
+// Regenerates the render geometry for a stored object (switch over all 11 supported 3D types).
+// Defined once in DataStorage.cpp; reused by object creation and property-edit MODIFY paths.
+bool GeometryForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* object, GeometryData& geometry);
+
 // The most basic 3D Shapes.: Pyramid, Cuboid, Cone, Cylinder, Parallelepiped, Sphere
 struct PYRAMID :public META_DATA{
     static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::Pyramid;

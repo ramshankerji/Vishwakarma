@@ -287,3 +287,37 @@ WordID,ShortWordName,English,Comments
 2858667348,EXPORT_DWG,Export Dwg,Export Dwg
 4099564531,SCRIPT_PANNEL,Script Pannel,Script Pannel
 4294967295,INVALID,Invalid,Invalid
+1400,Properties,Properties,Right-side object properties pane.
+1401,PropObjectType,Object Type,Properties pane row label.
+1402,PropObjectId,Object ID,Properties pane row label.
+1403,PropCenterX,Center X,Properties pane field label.
+1404,PropCenterY,Center Y,Properties pane field label.
+1405,PropCenterZ,Center Z,Properties pane field label.
+1406,PropRadius,Radius,Properties pane field label.
+1407,PropPoint1X,Point 1 X,Properties pane field label.
+1408,PropPoint1Y,Point 1 Y,Properties pane field label.
+1409,PropPoint1Z,Point 1 Z,Properties pane field label.
+1410,PropPoint2X,Point 2 X,Properties pane field label.
+1411,PropPoint2Y,Point 2 Y,Properties pane field label.
+1412,PropPoint2Z,Point 2 Z,Properties pane field label.
+1413,PropApexX,Apex X,Properties pane field label.
+1414,PropApexY,Apex Y,Properties pane field label.
+1415,PropApexZ,Apex Z,Properties pane field label.
+1416,PropBaseCenterX,Base Center X,Properties pane field label.
+1417,PropBaseCenterY,Base Center Y,Properties pane field label.
+1418,PropBaseCenterZ,Base Center Z,Properties pane field label.
+1419,PropMajorRadius,Major Radius,Properties pane field label.
+1420,PropMinorRadius,Minor Radius,Properties pane field label.
+1421,PropRadiusX,Radius X,Properties pane field label.
+1422,PropRadiusY,Radius Y,Properties pane field label.
+1423,PropRadiusZ,Radius Z,Properties pane field label.
+1424,PropBottomCenterX,Bottom Center X,Properties pane field label.
+1425,PropBottomCenterY,Bottom Center Y,Properties pane field label.
+1426,PropBottomCenterZ,Bottom Center Z,Properties pane field label.
+1427,PropTopCenterX,Top Center X,Properties pane field label.
+1428,PropTopCenterY,Top Center Y,Properties pane field label.
+1429,PropTopCenterZ,Top Center Z,Properties pane field label.
+1430,PropBottomRadius,Bottom Radius,Properties pane field label.
+1431,PropTopRadius,Top Radius,Properties pane field label.
+1432,PropOutsideDiameter,Outside Diameter,Properties pane field label.
+1433,PropInsideDiameter,Inside Diameter,Properties pane field label.

@@ -144,6 +144,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
   <ItemGroup>
     <ClCompile Include="AccountManager.cpp" />
     <ClCompile Include="DataTreeView.cpp" />
+    <ClCompile Include="PropertyPane.cpp" />
     <ClCompile Include="DataStorage.cpp" />
     <ClCompile Include="ExtensionCommunications.cpp" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\ExtensionIPC.pb.cc" />
@@ -192,6 +193,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClInclude Include="ImprovementData.h" />
     <ClInclude Include="..\code-core\CommonNamedNumbers.h" />
     <ClInclude Include="DataTreeView.h" />
+    <ClInclude Include="PropertyPane.h" />
     <ClInclude Include="DataStorage.h" />
     <ClInclude Include="..\code-core\ID.h" />
     <ClInclude Include="..\code-core\MemoryManagerCPU.h" />

@@ -19,6 +19,9 @@
     <ClCompile Include="DataTreeView.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
+    <ClCompile Include="PropertyPane.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
     <ClCompile Include="DataStorage.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
@@ -139,6 +142,9 @@
       <Filter>code-core</Filter>
     </ClInclude>
     <ClInclude Include="DataTreeView.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="PropertyPane.h">
       <Filter>code-core</Filter>
     </ClInclude>
     <ClInclude Include="DataStorage.h">

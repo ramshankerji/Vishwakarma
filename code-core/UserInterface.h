@@ -166,6 +166,10 @@ constexpr float UI_ICON_SIZE_MM = 4.0f;
 constexpr float UI_GROUP_GAP_MM = 5.0f; // We would rather keep it 2 pixel fixed width.
 constexpr float UI_BUTTON_CORNER_RADIUS_MM = 2.0f;
 
+// Right-side icon bar + object properties pane (website/content/software/propertiesPane.md).
+constexpr float UI_RIGHT_ICONBAR_WIDTH_MM = 8.0f;
+constexpr float UI_RIGHT_PANE_WIDTH_MM = 64.0f;
+
 constexpr uint32_t UI_MAX_ATLAS_TEXTURES = 10;
 constexpr uint32_t UI_ENGLISH_ATLAS_SLOT = 0;
 constexpr uint32_t UI_ICON_ATLAS_SLOT = 1;
@@ -290,6 +294,16 @@ struct UIInput {
     // Optional hotkey raw keys this frame (can be added later as a small bitset)
 };
 
+// Editable text-field state (UI/render thread owned). One in-progress edit per window.
+// Keystrokes mutate this buffer only; the committed value reaches the engineering thread on Enter.
+struct UITextEditState {
+    uint64_t focusedFieldKey = 0; // 0 = none. Key = hash(objectId, fieldIndex).
+    char32_t buffer[32] = {};     // Numeric entry never needs more.
+    uint8_t  length = 0;
+    uint8_t  caret = 0;
+    uint64_t editingObjectId = 0; // Guard: commit only to the object the edit started on.
+};
+
 struct UIColors { // Standard UI Colours (ABGR format for DX12)
     // The default values specified here are for theme "Light". 
     // These can be overridden by other themes (e.g. Dark) or by user customizations.
@@ -317,7 +331,13 @@ struct UIActionEntry {
     uint32_t id;
     uint64_t p1;
     uint64_t p2;
+    uint64_t p3 = 0; // Third payload word (property commits need tab+field, id and value all together).
 };
+
+// Property edit commit: UI (render thread) -> engineering thread. Payload packing documented at
+// website/content/software/propertiesPane.md §5. p1 = (tabIndex << 8) | fieldIndex,
+// p2 = objectMemoryId, p3 = std::bit_cast<uint64_t>(double value).
+constexpr uint32_t kPropertyCommitUIAction = 0xE0000020u;
 
 namespace InternalSubTabs {
 constexpr uint32_t kOpenUIAction = 0xE0000010u;
@@ -334,9 +354,9 @@ constexpr char32_t UIIconForCommand(Commands command) noexcept {
 }
 
 // Call from UI thread: push an action into the global action queue
-inline void PushUIAction(uint32_t id, uint64_t p1 = 0, uint64_t p2 = 0) {
+inline void PushUIAction(uint32_t id, uint64_t p1 = 0, uint64_t p2 = 0, uint64_t p3 = 0) {
     std::lock_guard<std::mutex> lk(g_actionQueueMutex);
-    g_actionQueue.push_back({ id, p1, p2 });
+    g_actionQueue.push_back({ id, p1, p2, p3 });
     // actionRing[idx] = { id, p1, p2, /*timestamp*/ };
     // Engineering thread reads with its own readIndex (standard ring-buffer)
 }

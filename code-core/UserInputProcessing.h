@@ -119,7 +119,9 @@ enum class ACTION_TYPE : uint16_t { // Specifying uint16_t ensures that it is of
     BEGIN_ARC_CREATION2D = 30018,
     BEGIN_PRIMITIVE_CREATION3D = 30019,
     IMPORT_STD_FILE = 30020, // objectId owns a heap std::wstring* with the chosen file path.
-    IMPORT_DXF_FILE = 30021  // objectId owns a heap std::wstring* with the chosen file path.
+    IMPORT_DXF_FILE = 30021, // objectId owns a heap std::wstring* with the chosen file path.
+    MODIFY_OBJECT_PROPERTY = 30022 // objectId = memoryID, x = fieldIndex,
+                                   // auxValue = std::bit_cast<uint64_t>(double value).
 };
 
 struct ACTION_DETAILS_OLD {
@@ -145,6 +147,7 @@ struct ACTION_DETAILS {
     int y;       // Mouse Y or Modifier Flags
     int delta;   // Scroll wheel delta
     uint64_t objectId = 0; // Optional engineering object ID for system actions.
+    uint64_t auxValue = 0; // Optional extra payload (e.g. property value bits for MODIFY_OBJECT_PROPERTY).
     uint64_t timestamp; // Time of event (crucial for accurate physics/throttling)
     
     // Window/View context (if needed by logic)

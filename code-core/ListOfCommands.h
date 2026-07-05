@@ -246,6 +246,8 @@ enum class Commands : uint32_t {
 
     SCRIPT_PANNEL = 4099564531,
 
+    PROPERTIES_PANE = 3150246791, // Right-side icon bar toggle for the object properties pane.
+
     // Add more future actions here with gaps if needed (e.g. 0x0000E000+)
 
     INVALID = 0xFFFFFFFF

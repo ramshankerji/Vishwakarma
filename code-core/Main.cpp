@@ -118,7 +118,7 @@ DATASETTAB* GetActiveTabForUIAction() {
 }
 
 void PushSystemTodoToTab(DATASETTAB* tab, ACTION_TYPE actionType, int x = 0,
-    int y = 0, int delta = 0, uint64_t objectId = 0) {
+    int y = 0, int delta = 0, uint64_t objectId = 0, uint64_t auxValue = 0) {
     if (!tab || !tab->todoCPUQueue) return;
 
     ACTION_DETAILS request{};
@@ -128,6 +128,7 @@ void PushSystemTodoToTab(DATASETTAB* tab, ACTION_TYPE actionType, int x = 0,
     request.y = y;
     request.delta = delta;
     request.objectId = objectId;
+    request.auxValue = auxValue;
     request.timestamp = GetTickCount64();
     tab->todoCPUQueue->push(request);
 }
@@ -420,6 +421,16 @@ void ProcessPendingUIActions() {
             ExtensionCommunications::QueueImportStdCommand(GetActiveTabForUIAction());
         } else if (action.id == static_cast<uint32_t>(Commands::IMPORT_DXF)) {
             ExtensionCommunications::QueueImportDxfCommand(GetActiveTabForUIAction());
+        } else if (action.id == kPropertyCommitUIAction) {
+            // p1 = (tabIndex << 8) | fieldIndex, p2 = objectMemoryId, p3 = double value bits.
+            const uint32_t tabIndex = static_cast<uint32_t>(action.p1 >> 8);
+            const uint8_t fieldIndex = static_cast<uint8_t>(action.p1 & 0xFFu);
+            if (tabIndex < MV_MAX_TABS) {
+                // fieldIndex is forwarded as-is; the engineering thread bounds-checks it against the
+                // resolved type's fieldCount (the object type is unknown until resolution there).
+                PushSystemTodoToTab(&allTabs[tabIndex], ACTION_TYPE::MODIFY_OBJECT_PROPERTY,
+                    static_cast<int>(fieldIndex), 0, 0, action.p2, action.p3);
+            }
         }
     }
 
@@ -1223,6 +1234,20 @@ static bool IsClientPointOverDataTreeScrollbar(
         pt.y >= layout.scrollbarY && pt.y < layout.scrollbarY + layout.scrollbarHeight;
 }
 
+// Right icon bar + properties pane overlay hit test. Width is published by the render thread each
+// frame (0 when nothing is drawn there). Primary click-through guard (propertiesPane.md §6).
+static bool IsClientPointOverRightOverlay(const SingleUIWindow* window, const POINT& pt) {
+    if (!window) return false;
+    const uint32_t overlayWidth = window->rightOverlayWidthPx.load(std::memory_order_acquire);
+    if (overlayWidth == 0) return false;
+
+    RECT clientRect{};
+    if (!GetClientRect(window->hWnd, &clientRect)) return false;
+    const float ribbonHeight = GetTopRibbonHeightPxForWindow(window);
+    return static_cast<float>(pt.y) >= ribbonHeight &&
+        pt.x >= clientRect.right - static_cast<int>(overlayWidth);
+}
+
 // PURPOSE:  Processes messages for the main window.
 // This is the function which runs whenever something changes from Operating System and we are expected to update ourselves.
 // Even the user input such as keyboard presses, mouse clicks, open/close are notified to this function.
@@ -1289,17 +1314,23 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_KEYDOWN:
         g_statKeyPresses.fetch_add(1, std::memory_order_relaxed); // Usage statistics.
         if (tab) {
-            ad.actionType = ACTION_TYPE::KEYDOWN;
-            ad.source = INPUT_SOURCE::KEYBOARD;
-            ad.x = static_cast<int>(wParam); //Virtual key code
-            ad.y = static_cast<int>(lParam); //Repeat count, scan code, flags
-            ad.delta = 0;
-            ad.timestamp = GetTickCount64();
-            tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+            // A focused UI text field swallows shortcut keys so e.g. 'P' does not spawn a pyramid
+            // while the user types a value (propertiesPane.md §4).
+            const bool uiFieldFocused = currentWindow &&
+                currentWindow->uiKeyboardCaptureCount.load(std::memory_order_acquire) != 0;
+            if (!uiFieldFocused) {
+                ad.actionType = ACTION_TYPE::KEYDOWN;
+                ad.source = INPUT_SOURCE::KEYBOARD;
+                ad.x = static_cast<int>(wParam); //Virtual key code
+                ad.y = static_cast<int>(lParam); //Repeat count, scan code, flags
+                ad.delta = 0;
+                ad.timestamp = GetTickCount64();
+                tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
+            }
             SyncModifiersForWindow(currentWindow);
         }
         return 0;
-    
+
     case WM_KEYUP:
         if (tab) {
             ad.actionType = ACTION_TYPE::KEYUP;
@@ -1315,7 +1346,19 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_CHAR: // This is different from WM_KEYDOWN / UP because it accounts for keyboard layout,
     // modifiers, etc. It gives you the actual character that should be input, rather than the physical key.
-        if (tab) {
+    {
+        // Feed the character to the per-frame UI text buffer (consumed by the focused text field in
+        // the render thread). The buffer is reset each frame by the render thread (propertiesPane.md §4).
+        if (currentWindow) {
+            const uint8_t count = currentWindow->uiInput.textInputCount;
+            if (count < 32) {
+                currentWindow->uiInput.textInputThisFrame[count] = static_cast<char32_t>(wParam);
+                currentWindow->uiInput.textInputCount = static_cast<uint8_t>(count + 1);
+            }
+        }
+        const bool uiFieldFocused = currentWindow &&
+            currentWindow->uiKeyboardCaptureCount.load(std::memory_order_acquire) != 0;
+        if (tab && !uiFieldFocused) { // Suppress text reaching the tab while a UI field has focus.
             ad.actionType = ACTION_TYPE::CHAR;
             ad.source = INPUT_SOURCE::KEYBOARD;
             ad.x = static_cast<int>(wParam); //Virtual key code
@@ -1323,9 +1366,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             ad.delta = 0;
             ad.timestamp = GetTickCount64();
             tab->userInputQueue->push(ad); //userInputQueue is threadsafe.
-            SyncModifiersForWindow(currentWindow);
         }
+        if (currentWindow) SyncModifiersForWindow(currentWindow);
         return 0;
+    }
 
     case WM_SYSKEYDOWN:
         g_statKeyPresses.fetch_add(1, std::memory_order_relaxed); // Usage statistics.
@@ -1373,6 +1417,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             POINT clientPoint = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             if (IsClientPointOverDataTreeScrollbar(currentWindow, tab, clientPoint)) {
                 SetCapture(hWnd);
+                SyncModifiersForWindow(currentWindow);
+                return 0;
+            }
+        }
+        if (currentWindow) {
+            // Clicks on the right icon bar / properties pane are handled by the immediate-mode UI
+            // (via uiInput set above); never forward them to the scene (propertiesPane.md §6).
+            POINT overlayPoint = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (IsClientPointOverRightOverlay(currentWindow, overlayPoint)) {
                 SyncModifiersForWindow(currentWindow);
                 return 0;
             }
@@ -1495,6 +1548,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         const bool handledByTopRibbon = currentWindow && IsClientPointOverTopRibbon(currentWindow, uiPoint);
         const bool handledByDataTree =
             currentWindow && tab && IsClientPointOverDataTree(currentWindow, tab, uiPoint);
+        // Wheel over the right icon bar / properties pane is swallowed (no scene zoom). The pane
+        // does not scroll in the MVP, so we do not accumulate the delta (propertiesPane.md §6).
+        const bool handledByRightOverlay =
+            currentWindow && IsClientPointOverRightOverlay(currentWindow, uiPoint);
 
         if (currentWindow) {
             currentWindow->uiInput.mouseX = static_cast<float>(uiPoint.x);
@@ -1504,7 +1561,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                 SyncModifiersForWindow(currentWindow);
             }
         }
-        if (handledByTopRibbon || handledByDataTree) return 0;
+        if (handledByTopRibbon || handledByDataTree || handledByRightOverlay) return 0;
 
         if (tab) {
             ad.actionType = ACTION_TYPE::MOUSEWHEEL;

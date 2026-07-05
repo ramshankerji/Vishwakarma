@@ -15,10 +15,12 @@ This thread is also responsible for engineering calculations, consistency of Dat
 #include <random> // Required for std::uniform_int_distribution
 #include <unordered_map>
 #include <memory>
+#include <bit> // std::bit_cast for the property-edit value payload.
 #include "MemoryManagerCPU.h"
 #include "विश्वकर्मा.h"
 #include "डेटा.h"
 #include "डेटा-सामान्य-3D.h"
+#include "PropertyPane.h"
 #include "MemoryManagerGPU-DirectX12.h"
 #include "ExtensionCommunications.h"
 
@@ -157,6 +159,24 @@ bool GetVisibleSceneViewportForTab(const DATASETTAB& tab, int& widthPx, int& hei
         return heightPx > 0;
     }
 
+    return false;
+}
+
+// True when client-space x falls inside the right icon bar / properties pane overlay of the window
+// hosting this tab. Backup guard for scene interaction (see propertiesPane.md §6); the WndProc side
+// is the primary guard, this covers events already queued when the pane opens.
+static bool IsOverRightOverlay(const DATASETTAB& tab, int x) {
+    uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
+    const uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+    for (uint16_t i = 0; i < windowCount; ++i) {
+        const SingleUIWindow& window = allWindows[windowList[i]];
+        if (window.activeTabIndex != static_cast<int>(tab.tabID)) continue;
+
+        const int windowWidth = window.dx.WindowWidth > 0 ? window.dx.WindowWidth : window.currentWidth;
+        const uint32_t overlayWidth = window.rightOverlayWidthPx.load(std::memory_order_acquire);
+        if (overlayWidth == 0 || windowWidth <= 0) return false;
+        return x >= windowWidth - static_cast<int>(overlayWidth);
+    }
     return false;
 }
 
@@ -512,6 +532,55 @@ static void RegisterGeneratedGeometryElement(DATASETTAB* targetTab, VishwakarmaS
     }
 
     targetTab->allIDsInThisTab.push_back(object->memoryID);
+    toCopyThreadCV.notify_one();
+}
+
+// Applies one committed property edit: validate against live values (authoritative gate), store the
+// field, bump dataVersion, regenerate geometry and push a MODIFY to the copy thread. The two mutexes
+// are taken strictly one after the other, never nested (matching AppendObjectToTab /
+// RegisterGeneratedGeometryElement). See propertiesPane.md §5.
+static void ModifyObjectProperty(DATASETTAB* myTab, uint64_t objectId, uint8_t fieldIndex, double value) {
+    if (!myTab || !myTab->storageObjectsMutex) return;
+
+    // The engineering thread is the sole writer of storageObjects3D, so the lookup needs no lock.
+    META_DATA* object = nullptr;
+    VishwakarmaStorage::ObjectType objectType = VishwakarmaStorage::ObjectType::Unknown;
+    for (const StoredGeometryObject3D& stored : myTab->storageObjects3D) {
+        if (stored.memoryId == objectId) {
+            object = stored.object;
+            objectType = stored.objectType;
+            break;
+        }
+    }
+    if (!object) return;
+
+    const PropertyTypeDescriptor* table = FindPropertyTable(objectType);
+    if (!table || fieldIndex >= table->fieldCount) return;
+
+    // Re-run the MVP validator against live values. The UI pre-validated, so this only fires on
+    // races or bugs; on rejection we simply drop the commit.
+    float values[16] = {};
+    const uint8_t count = table->fieldCount;
+    for (uint8_t i = 0; i < count; ++i) values[i] = table->fields[i].get(object);
+    const float newValue = static_cast<float>(value);
+    if (!ValidatePropertyEdit(*table, values, count, fieldIndex, newValue)) return;
+
+    {
+        // Hold storageObjectsMutex only for the store, so the render thread (which takes it every
+        // frame) is not stalled by geometry generation.
+        std::lock_guard<std::mutex> lock(*myTab->storageObjectsMutex);
+        table->fields[fieldIndex].set(object, newValue);
+        object->dataVersion++;
+    }
+
+    GeometryData geo; // Regenerate with no lock held.
+    if (!GeometryForObject(objectType, object, geo)) return;
+
+    {
+        std::lock_guard<std::mutex> lock(toCopyThreadMutex);
+        commandToCopyThreadQueue.push({ CommandToCopyThreadType::MODIFY, std::move(geo), object->memoryID,
+            myTab->tabID, object->memoryIDParent });
+    }
     toCopyThreadCV.notify_one();
 }
 
@@ -1198,6 +1267,8 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 break;
             case ACTION_TYPE::MOUSEWHEEL:
             {
+                // Wheel over the right icon bar / properties pane must not zoom the scene camera.
+                if (IsOverRightOverlay(*myTab, input.x)) break;
                 float wheelSteps = input.delta / (float)WHEEL_DELTA; // Since new mouse send lots of events ?
 
                 // Calculate the vector from Target to Position
@@ -1272,8 +1343,11 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
             }
             case ACTION_TYPE::LBUTTONDOWN:
                 myTab->mouseLeftDown = true;
-                // Plain left click selects the object under the cursor (Alt+Left is orbit).
-                if (!myTab->isAltDown) RequestScenePick(*myTab, input.x, input.y, PickPurpose::Select);
+                // Plain left click selects the object under the cursor (Alt+Left is orbit). Clicks over
+                // the right icon bar / properties pane never touch the scene (propertiesPane.md §6).
+                if (!myTab->isAltDown && !IsOverRightOverlay(*myTab, input.x)) {
+                    RequestScenePick(*myTab, input.x, input.y, PickPurpose::Select);
+                }
                 break;
             case ACTION_TYPE::LBUTTONUP:
                 myTab->mouseLeftDown = false;
@@ -1393,6 +1467,9 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 ImportStdFileIntoTab(myTab, nextWorkTODO.objectId);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::IMPORT_DXF_FILE) {
                 ImportDxfFileIntoTab(myTab, nextWorkTODO.objectId);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::MODIFY_OBJECT_PROPERTY) {
+                ModifyObjectProperty(myTab, nextWorkTODO.objectId, static_cast<uint8_t>(nextWorkTODO.x),
+                    std::bit_cast<double>(nextWorkTODO.auxValue));
             }
         }
         

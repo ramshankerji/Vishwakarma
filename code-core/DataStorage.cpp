@@ -1089,7 +1089,11 @@ bool DeserializeGeometryObject(ObjectType objectType, const std::vector<uint8_t>
     return true;
 }
 
-bool GeometryForObject(ObjectType objectType, META_DATA* object, GeometryData& geometry) {
+} // anonymous namespace — GeometryForObject is lifted to external linkage so the engineering thread
+  // can reuse it for property-edit MODIFY (propertiesPane.md §5); declared in डेटा-सामान्य-3D.h.
+
+bool GeometryForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* object, GeometryData& geometry) {
+    using VishwakarmaStorage::ObjectType;
     if (!object) return false;
 
     switch (objectType) {
@@ -1130,6 +1134,8 @@ bool GeometryForObject(ObjectType objectType, META_DATA* object, GeometryData& g
         return false;
     }
 }
+
+namespace { // Reopen the anonymous namespace for the remaining internal helpers.
 
 void AppendObjectToTab(DATASETTAB& tab, ObjectType objectType, META_DATA* object) {
     if (!tab.storageObjectsMutex) tab.storageObjectsMutex = std::make_unique<std::mutex>();

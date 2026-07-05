@@ -215,6 +215,13 @@ struct SingleUIWindow {
     UIInput uiInput; // per-window input snapshot
     Commands activeDropdownAction = Commands::INVALID;
 
+    // Right-side object properties pane (website/content/software/propertiesPane.md). UI-only state,
+    // same class as activeDropdownAction: toggled directly in the immediate-mode hit test.
+    bool rightPaneOpen = false;
+    UITextEditState textEditState;                    // In-progress property-field edit (render thread owned).
+    std::atomic<uint64_t> uiKeyboardCaptureCount{ 0 }; // != 0 while a UI text field has focus (WndProc suppresses shortcuts).
+    std::atomic<uint32_t> rightOverlayWidthPx{ 0 };    // Icon bar (+ pane) width in px; input guards read it.
+
     DX12ResourcesPerWindow dx;
 
     // BOILERPLATE TO FIX C2672 ERROR

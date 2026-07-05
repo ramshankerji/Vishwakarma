@@ -14,8 +14,13 @@
 #include "UserInterfaceTranslationCompiled.h"
 #include "SVGIconRenderer.h"
 #include "ImprovementData.h"
+#include "PropertyPane.h"
+#include "CrockfordBase32.h"
+#include "fast_float/fast_float.h"
 #include <array>
+#include <bit>
 #include <cfloat>
+#include <charconv>
 #include <cmath>
 #include <mutex>
 #include <utility>
@@ -1737,6 +1742,257 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
                     labelColor, uiTextScale, row.isActiveBranch);
             }
         }
+    }
+
+    // ---- Right icon bar + object properties pane (website/content/software/propertiesPane.md) ----
+    {
+        const float rightIconBarWidthPx = std::round(UI_RIGHT_ICONBAR_WIDTH_MM * pixelsPerMMx);
+        const float rightPaneWidthPx = std::round(UI_RIGHT_PANE_WIDTH_MM * pixelsPerMMx);
+        const float overlayTop = topUITotalHeightPx;
+        const float overlayHeight = std::max(0.0f, H - overlayTop);
+        const float iconBarX = W - rightIconBarWidthPx;
+
+        // Icon bar background + left separator.
+        pushRect(iconBarX, overlayTop, rightIconBarWidthPx, overlayHeight, uiActiveColors.actionGroupBackground);
+        pushRect(iconBarX, overlayTop, 1.0f, overlayHeight, uiActiveColors.actionGroupSeperator);
+
+        // Properties toggle button (square, at the top of the bar). Toggles UI-only state directly.
+        const float btnSize = rightIconBarWidthPx;
+        const bool btnHovered = input.mouseX >= iconBarX && input.mouseX < iconBarX + btnSize &&
+            input.mouseY >= overlayTop && input.mouseY < overlayTop + btnSize;
+        uint32_t btnColor = window.rightPaneOpen ? dataTreeActiveColor : uiActiveColors.actionGroupBackground;
+        if (btnHovered) btnColor = uiActiveColors.actionGroupHoverBackground;
+        pushRect(iconBarX, overlayTop, btnSize, btnSize, btnColor);
+        const float iconInset = std::max(1.0f, std::round(1.0f * pixelsPerMMx));
+        PushIcon(ctx, iconBarX + iconInset, overlayTop + iconInset, btnSize - 2.0f * iconInset,
+            btnSize - 2.0f * iconInset, UIIconForCommand(Commands::PROPERTIES_PANE), 0xFF333333u, uiRes);
+        if (btnHovered && input.leftButtonPressedThisFrame) {
+            window.rightPaneOpen = !window.rightPaneOpen;
+            ImprovementData::RecordRibbonAction(static_cast<uint32_t>(Commands::PROPERTIES_PANE));
+        }
+
+        UITextEditState& edit = window.textEditState;
+        float paneWidthPx = 0.0f;
+
+        if (window.rightPaneOpen) {
+            paneWidthPx = rightPaneWidthPx;
+            const float paneX = W - rightIconBarWidthPx - rightPaneWidthPx;
+            pushRect(paneX, overlayTop, rightPaneWidthPx, overlayHeight, uiActiveColors.actionGroupBackground);
+            pushRect(paneX, overlayTop, 1.0f, overlayHeight, uiActiveColors.actionGroupSeperator);
+
+            // Snapshot the selection + copy the selected object's raw fields under the tab locks.
+            VishwakarmaStorage::ObjectType selType = VishwakarmaStorage::ObjectType::Unknown;
+            uint64_t selId = 0;
+            size_t selectionCount = 0;
+            const PropertyTypeDescriptor* table = nullptr;
+            float fieldValues[16] = {};
+            uint8_t fieldValueCount = 0;
+
+            if (activeTabIndex >= 0 && activeTabIndex < MV_MAX_TABS) {
+                DATASETTAB& tab = allTabs[activeTabIndex];
+                uint64_t singleSelectedId = 0;
+                {
+                    std::lock_guard<std::mutex> lock(tab.selection.selectedMutex);
+                    selectionCount = tab.selection.selectedObjectIds.size();
+                    if (selectionCount == 1) singleSelectedId = tab.selection.selectedObjectIds[0];
+                }
+                if (selectionCount == 1 && tab.storageObjectsMutex) {
+                    std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
+                    for (const StoredGeometryObject3D& stored : tab.storageObjects3D) {
+                        if (stored.memoryId == singleSelectedId && stored.object) {
+                            selType = stored.objectType;
+                            selId = stored.object->memoryID;
+                            table = FindPropertyTable(selType);
+                            if (table) {
+                                fieldValueCount = table->fieldCount;
+                                for (uint8_t i = 0; i < fieldValueCount; ++i) {
+                                    fieldValues[i] = table->fields[i].get(stored.object);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Selection change (different memoryID than the edit started on) cancels any edit.
+            if (edit.focusedFieldKey != 0 && edit.editingObjectId != selId) edit.focusedFieldKey = 0;
+
+            // Row layout: label on the left ~24mm, value field on the right ~36mm, 2mm padding.
+            const float pad = std::round(2.0f * pixelsPerMMx);
+            const float rowH = buttonHeightPx;
+            const float rowGap = std::max(1.0f, std::round(0.6f * pixelsPerMMy));
+            const float labelW = std::round(24.0f * pixelsPerMMx);
+            const float fieldW = std::round(36.0f * pixelsPerMMx);
+            const float contentX = paneX + pad;
+            const float fieldX = contentX + labelW;
+            const float textPad = std::max(1.0f, std::round(0.5f * pixelsPerMMx));
+            float rowY = overlayTop + pad;
+
+            auto asciiToU32 = [](const char* s, char32_t* out, size_t cap) {
+                size_t i = 0;
+                for (; s && s[i] && i + 1 < cap; ++i) out[i] = static_cast<char32_t>(static_cast<unsigned char>(s[i]));
+                out[i] = 0;
+            };
+            auto measureU32 = [&](const char32_t* s, uint8_t len) {
+                float w = 0.0f;
+                for (uint8_t i = 0; i < len; ++i) {
+                    auto it = glyphLookup.find(s[i]);
+                    if (it != glyphLookup.end()) w += static_cast<float>(it->second.advanceX) * uiTextScale;
+                }
+                return w;
+            };
+            auto drawStaticRow = [&](const char32_t* label, const char* value) {
+                pushTextClipped(contentX, textBaselineY(rowY, rowH, uiTextScale), label, labelW,
+                    uiActiveColors.actionText, uiTextScale);
+                char32_t valueU32[64];
+                asciiToU32(value, valueU32, 64);
+                pushTextClipped(fieldX, textBaselineY(rowY, rowH, uiTextScale), valueU32, fieldW,
+                    uiActiveColors.actionText, uiTextScale);
+                rowY += rowH + rowGap;
+            };
+
+            if (selectionCount == 1) {
+                drawStaticRow(LocalizedUIString(UITextID::PropObjectType),
+                    VishwakarmaStorage::ObjectTypeDisplayName(selType));
+                char idText[vishwakarma::crockford_base32::kEncodedUInt64LengthWithNull];
+                vishwakarma::crockford_base32::EncodeUInt64ToCString(selId, idText);
+                drawStaticRow(LocalizedUIString(UITextID::PropObjectId), idText);
+
+                bool fieldClicked = false;
+                for (uint8_t i = 0; table && i < fieldValueCount; ++i) {
+                    const PropertyFieldDescriptor& fd = table->fields[i];
+                    const uint64_t key = (selId << 8) | (static_cast<uint64_t>(i) + 1);
+                    bool focused = (edit.focusedFieldKey == key && edit.editingObjectId == selId);
+
+                    const float fy = rowY;
+                    const bool fieldHovered = input.mouseX >= fieldX && input.mouseX < fieldX + fieldW &&
+                        input.mouseY >= fy && input.mouseY < fy + rowH;
+
+                    // Live value in shortest round-trip form (also used to seed the buffer on focus).
+                    char liveText[32];
+                    { auto r = std::to_chars(liveText, liveText + sizeof(liveText) - 1, fieldValues[i]);
+                      *r.ptr = '\0'; }
+
+                    if (input.leftButtonPressedThisFrame && fieldHovered) {
+                        fieldClicked = true;
+                        if (!focused) { // Focus + seed from the currently displayed value (caret at end).
+                            edit.length = 0;
+                            for (const char* p = liveText; *p && edit.length < 31; ++p) {
+                                edit.buffer[edit.length++] = static_cast<char32_t>(static_cast<unsigned char>(*p));
+                            }
+                            edit.buffer[edit.length] = 0;
+                            edit.caret = edit.length;
+                            edit.focusedFieldKey = key;
+                            edit.editingObjectId = selId;
+                            focused = true;
+                        }
+                    }
+
+                    // Parse the buffer (fully consumed) and run the shared MVP validator.
+                    auto evaluateBuffer = [&](double& outValue) -> bool {
+                        char ascii[32];
+                        size_t n = 0;
+                        for (uint8_t k = 0; k < edit.length && n + 1 < sizeof(ascii); ++k) {
+                            char32_t c = edit.buffer[k];
+                            if (c >= 128) return false;
+                            ascii[n++] = static_cast<char>(c);
+                        }
+                        if (n == 0) return false;
+                        auto res = fast_float::from_chars(ascii, ascii + n, outValue);
+                        if (res.ec != std::errc() || res.ptr != ascii + n) return false;
+                        return ValidatePropertyEdit(*table, fieldValues, fieldValueCount, i,
+                            static_cast<float>(outValue));
+                    };
+
+                    if (focused) {
+                        for (uint8_t c = 0; c < input.textInputCount; ++c) {
+                            char32_t ch = input.textInputThisFrame[c];
+                            if (ch == U'\r' || ch == U'\n') { // Enter: validate, commit, drop focus.
+                                double parsed = 0.0;
+                                if (evaluateBuffer(parsed)) {
+                                    const uint64_t p1 = (static_cast<uint64_t>(activeTabIndex) << 8) | i;
+                                    PushUIAction(kPropertyCommitUIAction, p1, selId,
+                                        std::bit_cast<uint64_t>(parsed));
+                                    edit.focusedFieldKey = 0;
+                                    focused = false;
+                                }
+                                break;
+                            } else if (ch == 0x1B) { // Escape: revert + drop focus.
+                                edit.focusedFieldKey = 0;
+                                focused = false;
+                                break;
+                            } else if (ch == U'\b') {
+                                if (edit.length > 0) { edit.buffer[--edit.length] = 0; edit.caret = edit.length; }
+                            } else if ((ch >= U'0' && ch <= U'9') || ch == U'.' || ch == U'-' ||
+                                ch == U'+' || ch == U'e' || ch == U'E') {
+                                if (edit.length < 31) {
+                                    edit.buffer[edit.length++] = ch;
+                                    edit.buffer[edit.length] = 0;
+                                    edit.caret = edit.length;
+                                }
+                            }
+                        }
+                    }
+
+                    // Field background + focus border (accent when valid, red while invalid).
+                    const uint32_t fieldBg = 0xFFF7F7F7u;
+                    if (focused) {
+                        double v = 0.0;
+                        const uint32_t border = evaluateBuffer(v) ? dataTreeActiveColor : 0xFF0000FFu;
+                        pushRect(fieldX, fy, fieldW, rowH, border);
+                        pushRect(fieldX + 1.0f, fy + 1.0f, fieldW - 2.0f, rowH - 2.0f, fieldBg);
+                    } else {
+                        pushRect(fieldX, fy, fieldW, rowH, fieldBg);
+                    }
+
+                    pushTextClipped(contentX, textBaselineY(rowY, rowH, uiTextScale),
+                        LocalizedUIString(fd.labelStringID), labelW, uiActiveColors.actionText, uiTextScale);
+
+                    if (focused) {
+                        pushTextClipped(fieldX + textPad, textBaselineY(fy, rowH, uiTextScale), edit.buffer,
+                            fieldW - 2.0f * textPad, 0xFF000000u, uiTextScale);
+                        if (((GetTickCount64() / 500ULL) % 2ULL) == 0ULL) {
+                            const float caretX = std::min(fieldX + textPad + measureU32(edit.buffer, edit.length),
+                                fieldX + fieldW - textPad);
+                            pushRect(caretX, fy + 2.0f, 1.0f, rowH - 4.0f, 0xFF000000u);
+                        }
+                    } else {
+                        char32_t liveU32[32];
+                        asciiToU32(liveText, liveU32, 32);
+                        pushTextClipped(fieldX + textPad, textBaselineY(fy, rowH, uiTextScale), liveU32,
+                            fieldW - 2.0f * textPad, 0xFF000000u, uiTextScale);
+                    }
+
+                    rowY += rowH + rowGap;
+                }
+
+                // A click anywhere that is not a field drops focus without committing (MVP UX).
+                if (input.leftButtonPressedThisFrame && !fieldClicked) edit.focusedFieldKey = 0;
+            } else {
+                // Multi-selection or empty selection: a static count line, no field editing.
+                edit.focusedFieldKey = 0;
+                char num[16];
+                { auto r = std::to_chars(num, num + sizeof(num) - 1, static_cast<unsigned long long>(selectionCount));
+                  *r.ptr = '\0'; }
+                char line[48];
+                size_t li = 0;
+                for (const char* p = num; *p && li + 1 < sizeof(line); ++p) line[li++] = *p;
+                for (const char* p = " objects selected"; *p && li + 1 < sizeof(line); ++p) line[li++] = *p;
+                line[li] = '\0';
+                char32_t lineU32[64];
+                asciiToU32(line, lineU32, 64);
+                pushTextClipped(contentX, textBaselineY(rowY, rowH, uiTextScale), lineU32,
+                    rightPaneWidthPx - 2.0f * pad, uiActiveColors.actionText, uiTextScale);
+            }
+        } else {
+            edit.focusedFieldKey = 0; // Pane closed → no active edit.
+        }
+
+        // Publish overlay width + keyboard-capture state for the WndProc / engineering input guards.
+        window.rightOverlayWidthPx.store(
+            static_cast<uint32_t>(std::lround(rightIconBarWidthPx + paneWidthPx)), std::memory_order_release);
+        window.uiKeyboardCaptureCount.store(edit.focusedFieldKey != 0 ? 1u : 0u, std::memory_order_release);
     }
 
     // ACTIVE DROPDOWN (placeholder)
