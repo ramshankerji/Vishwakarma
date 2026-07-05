@@ -22,3 +22,6 @@
 [submodule "code-external/openssl"]
 	path = code-external/openssl
 	url = https://github.com/openssl/openssl.git
+[submodule "code-external/fast_float"]
+	path = code-external/fast_float
+	url = https://github.com/fastfloat/fast_float.git

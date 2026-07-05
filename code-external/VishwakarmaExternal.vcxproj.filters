@@ -159,5 +159,6 @@
     <ClCompile Include="zlib\zutil.c">
       <Filter>zlib</Filter>
     </ClCompile>
+    <ClCompile Include="fast_float_wrapper.cpp" />
   </ItemGroup>
 </Project>

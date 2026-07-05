@@ -33,3 +33,5 @@ Mission Vishwakarma uses third-party open-source libraries. These dependencies a
 | msdf-atlas-gen | MIT | [https://github.com/Chlumsky/msdf-atlas-gen](https://github.com/Chlumsky/msdf-atlas-gen) | [Link](https://github.com/Chlumsky/msdf-atlas-gen.git) |
 | DirectX-Headers | MIT | [https://github.com/microsoft/DirectX-Headers](https://github.com/microsoft/DirectX-Headers) | [Link](https://github.com/microsoft/DirectX-Headers) |
 | LunaSVG | MIT | [https://github.com/sammycage/lunasvg](https://github.com/sammycage/lunasvg) | [Link](https://github.com/sammycage/lunasvg) |
+| fast_float | Apache-2.0 / MIT / BSL-1.0 | [https://github.com/fastfloat/fast_float](https://github.com/fastfloat/fast_float) | [Link](https://github.com/fastfloat/fast_float) |
+| OpenSSL | Apache-2.0 | [https://www.openssl.org/](https://www.openssl.org/) | [Link](https://github.com/openssl/openssl) |

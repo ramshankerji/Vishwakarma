@@ -84,7 +84,34 @@ jobs:
         path: |
           build/Release/External
           build/openssl-x64-release
-        key: ${{ runner.os }}-vishwakarma-external-release-${{ hashFiles('code-external/VishwakarmaExternal.vcxproj', 'code-miscellaneous/BuildOpenSSL.ps1', 'code-external/sqlite/sqlite3.c', 'code-external/sqlite/sqlite3.h', 'code-external/lunasvg/include/**', 'code-external/lunasvg/source/**', 'code-external/lunasvg/plutovg/include/**', 'code-external/lunasvg/plutovg/source/**', 'code-external/libpng-code/*.c', 'code-external/libpng-code/*.h', 'code-external/libpng-code/scripts/pnglibconf.h.prebuilt', 'code-external/zlib/*.c', 'code-external/zlib/*.h', 'code-external/freetype/include/**', 'code-external/openssl/Configure', 'code-external/openssl/VERSION.dat', 'code-external/openssl/build.info', 'code-external/openssl/Configurations/**', 'code-external/openssl/include/**', 'code-external/openssl/crypto/**', 'code-external/openssl/ssl/**', 'code-external/openssl/providers/**') }}
+        key: >-
+          ${{ runner.os }}-vishwakarma-external-release-${{ hashFiles(
+            'code-external/VishwakarmaExternal.vcxproj',
+            'code-miscellaneous/BuildOpenSSL.ps1',
+            'code-external/sqlite/sqlite3.c',
+            'code-external/sqlite/sqlite3.h',
+            'code-external/lunasvg/include/**',
+            'code-external/lunasvg/source/**',
+            'code-external/lunasvg/plutovg/include/**',
+            'code-external/lunasvg/plutovg/source/**',
+            'code-external/libpng-code/*.c',
+            'code-external/libpng-code/*.h',
+            'code-external/libpng-code/scripts/pnglibconf.h.prebuilt',
+            'code-external/zlib/*.c',
+            'code-external/zlib/*.h',
+            'code-external/freetype/include/**',
+            'code-external/openssl/Configure',
+            'code-external/openssl/VERSION.dat',
+            'code-external/openssl/build.info',
+            'code-external/openssl/Configurations/**',
+            'code-external/openssl/include/**',
+            'code-external/openssl/crypto/**',
+            'code-external/openssl/ssl/**',
+            'code-external/openssl/providers/**',
+            'code-external/fast_float/include/**',
+            'code-external/fast_float_wrapper.h',
+            'code-external/fast_float_wrapper.cpp'
+          ) }}
         restore-keys: |
           ${{ runner.os }}-vishwakarma-external-release-
 

@@ -71,7 +71,7 @@
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <PreprocessorDefinitions>FT_STATIC;LUNASVG_BUILD_STATIC;PLUTOVG_BUILD_STATIC;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(OpenSSLBuildDir)\include;$(OpenSSLSourceDir)\include;zlib;sqlite;libpng-code;freetype\include;lunasvg\include;lunasvg\source;lunasvg\plutovg\include;lunasvg\plutovg\source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(OpenSSLBuildDir)\include;$(OpenSSLSourceDir)\include;fast_float\include;zlib;sqlite;libpng-code;freetype\include;lunasvg\include;lunasvg\source;lunasvg\plutovg\include;lunasvg\plutovg\source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Lib>
       <AdditionalDependencies>$(OpenSSLBuildDir)\libssl.lib;$(OpenSSLBuildDir)\libcrypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -90,7 +90,7 @@
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <PreprocessorDefinitions>FT_STATIC;LUNASVG_BUILD_STATIC;PLUTOVG_BUILD_STATIC;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(OpenSSLBuildDir)\include;$(OpenSSLSourceDir)\include;zlib;sqlite;libpng-code;freetype\include;lunasvg\include;lunasvg\source;lunasvg\plutovg\include;lunasvg\plutovg\source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(OpenSSLBuildDir)\include;$(OpenSSLSourceDir)\include;fast_float\include;zlib;sqlite;libpng-code;freetype\include;lunasvg\include;lunasvg\source;lunasvg\plutovg\include;lunasvg\plutovg\source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Lib>
       <AdditionalDependencies>$(OpenSSLBuildDir)\libssl.lib;$(OpenSSLBuildDir)\libcrypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -167,6 +167,7 @@
     <ClCompile Include="zlib\trees.c" />
     <ClCompile Include="zlib\uncompr.c" />
     <ClCompile Include="zlib\zutil.c" />
+    <ClCompile Include="fast_float_wrapper.cpp" />
   </ItemGroup>
   <Target Name="BuildOpenSSL" BeforeTargets="ClCompile" Inputs="@(OpenSSLBuildInput)" Outputs="$(OpenSSLBuildDir)\libcrypto.lib;$(OpenSSLBuildDir)\libssl.lib">
     <Message Importance="high" Text="Building static OpenSSL $(Configuration)|$(Platform) libraries into $(OpenSSLBuildDir)" />
