@@ -20,25 +20,31 @@
     </script>
     
     <!-- SEO and Meta Tags -->
-    <title>{{ if .IsHome }}{{ .Site.Title }}{{ else }}{{ .Title }} | {{ .Site.Title }}{{ end }}</title>
-    <meta name="description" content="{{ if .Description }}{{ .Description }}{{ else if .Summary }}{{ .Summary }}{{ else }}{{ .Site.Params.description }}{{ end }}">
+    {{ $title := cond .IsHome .Site.Title (printf "%s | %s" .Title .Site.Title) }}
+    {{ with .Params.seotitle }}{{ $title = . }}{{ end }}
+    {{ $desc := .Site.Params.description }}
+    {{ if .Description }}{{ $desc = .Description }}{{ else if .Summary }}{{ $desc = .Summary | plainify | chomp }}{{ end }}
+    {{ $image := .Params.image | default .Site.Params.image }}
+    {{ $locale := replace (.Site.LanguageCode | default "en") "-" "_" }}
+    <title>{{ $title }}</title>
+    <meta name="description" content="{{ $desc }}">
     <link rel="canonical" href="{{ .Permalink }}">
 
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="{{ if .IsPage }}article{{ else }}website{{ end }}">
     <meta property="og:url" content="{{ .Permalink }}">
-    <meta property="og:title" content="{{ if .IsHome }}{{ .Site.Title }}{{ else }}{{ .Title }} | {{ .Site.Title }}{{ end }}">
-    <meta property="og:description" content="{{ if .Description }}{{ .Description }}{{ else if .Summary }}{{ .Summary }}{{ else }}{{ .Site.Params.description }}{{ end }}">
+    <meta property="og:title" content="{{ $title }}">
+    <meta property="og:description" content="{{ $desc }}">
     <meta property="og:site_name" content="{{ .Site.Title }}">
-    <meta property="og:locale" content="{{ .Site.LanguageCode | default "en" }}">
-    {{ with .Params.image }}<meta property="og:image" content="{{ . | absURL }}">{{ end }}
+    <meta property="og:locale" content="{{ $locale }}">
+    {{ with $image }}<meta property="og:image" content="{{ . | absURL }}">{{ end }}
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:url" content="{{ .Permalink }}">
-    <meta name="twitter:title" content="{{ if .IsHome }}{{ .Site.Title }}{{ else }}{{ .Title }} | {{ .Site.Title }}{{ end }}">
-    <meta name="twitter:description" content="{{ if .Description }}{{ .Description }}{{ else if .Summary }}{{ .Summary }}{{ else }}{{ .Site.Params.description }}{{ end }}">
-    {{ with .Params.image }}<meta name="twitter:image" content="{{ . | absURL }}">{{ end }}
+    <meta name="twitter:title" content="{{ $title }}">
+    <meta name="twitter:description" content="{{ $desc }}">
+    {{ with $image }}<meta name="twitter:image" content="{{ . | absURL }}">{{ end }}
 
     <!-- JSON-LD Structured Data -->
     <script type="application/ld+json">
@@ -57,6 +63,30 @@
       {{ end }}
     }
     </script>
+    {{ if or .IsHome (eq .RelPermalink "/start/installation/") }}
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "Mission Vishwakarma",
+      "applicationCategory": "EngineeringApplication",
+      "operatingSystem": "Windows 10, Windows 11",
+      "description": "{{ .Site.Params.description }}",
+      "url": "{{ .Site.BaseURL }}",
+      "downloadUrl": "https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma_UserSetup_win10_win11_x64.exe",
+      "softwareVersion": "nightly",
+      "author": {
+        "@type": "Person",
+        "name": "Ram Shanker"
+      },
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "INR"
+      }
+    }
+    </script>
+    {{ end }}
     <style type="text/css">
         :root {
             color-scheme: light dark;

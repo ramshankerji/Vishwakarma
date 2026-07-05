@@ -1,5 +1,6 @@
 +++
 title = 'Mission Vishwakarma 2035'
+seotitle = 'Mission Vishwakarma — Free Open-Source CAD & Engineering Software, Made in India'
 date =  2024-08-24T10:30:00+05:30
 draft = false
 +++

@@ -1,10 +1,11 @@
 ---
 title: "Installation / System Requirement"
+seotitle: "Download & Install — Windows 10/11 System Requirements | Mission Vishwakarma"
 weight: 11101
 ---
 If download didn't start automatically, click the link : [Download Vishwakarma Setup directly](https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma_UserSetup_win10_win11_x64.exe)  
 
-# Installation on Windows
+## Installation on Windows
 Double click the downloaded `Vishwakarma_UserSetup_win10_win11_x64.exe`. No administrator privilege is needed. The setup installs the application to:
 
 `C:\Users\<UserID>\AppData\Local\Programs\Mission Vishwakarma\Vishwakarma.exe`
@@ -13,19 +14,19 @@ A shortcut named **Vishwakarma** is created on your Desktop and the application 
 To install for all users of the machine instead, run the setup from a command prompt with the `--allUsers` option (installs to `C:\Program Files\Mission Vishwakarma\` when permitted, otherwise falls back to the per-user location above).  
 Once installed, the application keeps itself up to date automatically by downloading the latest signed release in the background and applying it on the next launch.
 
-# Windows SmartScreen Notice
+## Windows SmartScreen Notice
 Windows may show this SmartScreen prompt when you run the setup. This happens because Mission Vishwakarma is free and open source software and our executable is not yet signed with a certificate chaining to the Microsoft trust store. Just click "**More Info**" and "**Run Anyway**".  
 We are waiting for about INR 50k in funding so we can purchase a code signing certificate and remove this annoying warning for users. Until then, please download the setup only from our official release link:
 
 ![Windows SmartScreen warning More Info](/windows_protected_pc.svg)  
 ![Windows SmartScreen warning Run Anyway](/windows_smartscreen_vishwakarma.svg)  
 
-# Basics
+## Basics
 Just build anything meeting the minimum System Requirement.  
 Keyboard & Mouse (Left+Middle+Right button) is common to all Desktops (PCs).  
 Apple Computers with M series processors will also be supported in future. Not supported as of July 2026.  
 
-# Minimum System Requirement
+## Minimum System Requirement
 These requirements are already met be all the Pre-Configured Desktop / Server systems listed further below.
 
 **Processors**  
@@ -58,7 +59,7 @@ Linux Mint ?
 Fedora ?  
 RHEL ?  
 
-# Pre-Configured Systems:  
+## Pre-Configured Systems:  
 Go to a computer shop and ask for any of the following setups.  
 
 **Low-End Desktop**  
@@ -78,7 +79,7 @@ Graphics Card: RTX5090 or RX9070XT
 Monitor : 4K 60 Hz (3 Nos)  
 Windows 11  
 
-# Server Systems  
+## Server Systems  
 **Recommended High-End Server**  
 Processor :  
 

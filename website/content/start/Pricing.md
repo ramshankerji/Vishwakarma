@@ -1,5 +1,6 @@
 ---
 title: "Pricing"
+seotitle: "Is Mission Vishwakarma Free? Pricing & Licensing | Mission Vishwakarma"
 weight: 10110
 layout: "section"
 ---

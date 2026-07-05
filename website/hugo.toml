@@ -1,9 +1,11 @@
 baseURL = 'https://mv.ramshanker.in/'
 languageCode = 'en-IN'
 title = 'Mission Vishwakarma 2035'
+enableGitInfo = true
 
 [params]
   description = "Mission Vishwakarma 2035: An open-source initiative to make India self-reliant in engineering software by 2035."
+  image = "/apple-touch-icon.png"
 
 
 [minify]
