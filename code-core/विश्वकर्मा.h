@@ -165,6 +165,7 @@ struct DATASETTAB {
     int lastMouseY = 0;
     
     CameraState camera; //Currently it is per tab. Latter we may move it to per view.
+    SelectionState selection; // 3D click-selection state (Selection3D module).
     bool autoCameraRotation = true;
     bool autoGenerateRandomGeometry = true;
     DataTreeView::State dataTreeView;

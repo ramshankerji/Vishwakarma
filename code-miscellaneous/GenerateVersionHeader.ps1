@@ -34,6 +34,9 @@ $content = @"
 #define VW_PRODUCTVERSION_STR "$version ($hash, $buildDate)"
 #define VW_COMMENTS_STR       "Version $version, commit $hash, built $buildDate UTC"
 "@
+# rc.exe fails with RC1004 "unexpected end of file" on #included files lacking a final newline,
+# and here-strings do not emit one after the last line. Always terminate the file with CRLF.
+$content += "`r`n"
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $path = Join-Path $OutDir "VersionGenerated.h"

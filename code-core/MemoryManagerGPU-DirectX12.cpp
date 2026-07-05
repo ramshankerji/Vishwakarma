@@ -6,6 +6,7 @@
 #include "ShaderSceneVertex.h"
 #include "ShaderScenePixel.h"
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include "विश्वकर्मा.h"
 #include <iomanip>
@@ -329,6 +330,10 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
     sigDesc.ByteStride = sizeof(IndirectCommand);
     ThrowIfFailed(gpu.device->CreateCommandSignature(// root signature NOT required (already bound)
         &sigDesc, tabRes.rootSignature.Get(), IID_PPV_ARGS(&tabRes.commandSignature)));
+
+    // 3D click-selection GPU resources (pick / highlight PSOs, rotation-cube pipeline).
+    // Requires tabRes.rootSignature (created above), so initialize it here.
+    InitSelection3DResources(tabRes);
 
     // Note: No Fence or Wait here. Resource creation is immediate.
     // Data upload sync happens in Copy Thread.
@@ -677,6 +682,9 @@ void शंकर::CleanupTabResources(DX12ResourcesPerTab& tabRes) {
     tabRes.worldMatrixBuffer.Reset();
     tabRes.freeMatrixSlots.clear();
     tabRes.matrixCount = 0;
+
+    CleanupSelection3DResources(tabRes);
+    CleanupPickPassContext(tabRes.pickCtx);
 
     tabRes.rootSignature.Reset();
     tabRes.pipelineState.Reset();
@@ -1142,6 +1150,19 @@ void GpuCopyThread() {
                 rec.indexSize = indexBytes;
                 rec.indexCount = static_cast<uint32_t>(geo.indices.size());
                 rec.matrixIndex = matrixIndex;
+
+                // Local-space AABB. Consumed by GPU picking / selection re-centering (Selection3D).
+                if (!geo.vertices.empty()) {
+                    float minX = FLT_MAX, minY = FLT_MAX, minZ = FLT_MAX;
+                    float maxX = -FLT_MAX, maxY = -FLT_MAX, maxZ = -FLT_MAX;
+                    for (const Vertex& v : geo.vertices) {
+                        minX = (std::min)(minX, v.position.x); maxX = (std::max)(maxX, v.position.x);
+                        minY = (std::min)(minY, v.position.y); maxY = (std::max)(maxY, v.position.y);
+                        minZ = (std::min)(minZ, v.position.z); maxZ = (std::max)(maxZ, v.position.z);
+                    }
+                    rec.minX = minX; rec.minY = minY; rec.minZ = minZ;
+                    rec.maxX = maxX; rec.maxY = maxY; rec.maxZ = maxZ;
+                }
                 return rec;
                 };
 
@@ -1569,6 +1590,8 @@ void GpuRenderThread(int monitorId, int refreshRate) {
         threadRes.commandList->Reset(allocator.Get(), nullptr); // Pass 'nullptr' for the PSO here so we don't enforce a state yet.
 
         bool didRender = false;
+        // Picks recorded this frame; promoted to in-flight (with the frame's fence) after Signal.
+        std::vector<PickPassContext*> pendingPickCtxs;
 
 		// Do not move outside the while loop since, main thread could have created new windows or moved some.
         uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
@@ -1688,6 +1711,10 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 DATASETTAB& tab = allTabs[tabIndex];
                 DX12ResourcesPerTab& tabRes = tab.dx;
                 tabRes.camera = tab.camera; // Update camera from Tab.
+                // Scene-3D selection context (populated in the 3D branch below, used after the UI).
+                bool scene3DActive = false;
+                DirectX::XMMATRIX sceneViewProj = DirectX::XMMatrixIdentity();
+                int sceneTopUI = 0, sceneVpW = 0, sceneVpH = 0;
                 std::vector<InternalSubTab> internalSubTabsSnapshot;
                 uint64_t activeInternalSubTabMemoryId = 0;
                 VishwakarmaStorage::ObjectType activeInternalSubTabType =
@@ -1714,6 +1741,27 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                     ClearSceneSkyGradient(threadRes.commandList.Get(), winRes, rttHandle, monitorId);
                     gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes, tab.geometry,
                         monitorId, activeInternalSubTabMemoryId);// Renders geometry.
+
+                    // Selection highlight + rotation-cube overlay (still inside the scene RTV/DSV +
+                    // scene viewport bound by PopulateCommandList, so this draws before the UI).
+                    scene3DActive = true;
+                    sceneTopUI = SceneTopUIHeightPx(monitorId, winRes);
+                    sceneVpW = winRes.WindowWidth;
+                    sceneVpH = winRes.WindowHeight - sceneTopUI;
+                    if (sceneVpH > 0) {
+                        DirectX::XMVECTOR eyeP = DirectX::XMLoadFloat3(&tabRes.camera.position);
+                        DirectX::XMVECTOR focusP = DirectX::XMLoadFloat3(&tabRes.camera.target);
+                        DirectX::XMVECTOR upP = DirectX::XMLoadFloat3(&tabRes.camera.up);
+                        DirectX::XMMATRIX viewM = DirectX::XMMatrixLookAtLH(eyeP, focusP, upP);
+                        const float aspect = static_cast<float>(winRes.WindowWidth) /
+                            static_cast<float>(sceneVpH);
+                        DirectX::XMMATRIX projM = DirectX::XMMatrixPerspectiveFovLH(
+                            tabRes.camera.fov, aspect, tabRes.camera.nearZ, tabRes.camera.farZ);
+                        sceneViewProj = viewM * projM; // Matches PopulateCommandList's view-proj.
+                        RecordSelectionOverlays(threadRes.commandList.Get(), winRes, tabRes,
+                            tab.geometry, tab.selection, sceneViewProj, sceneTopUI, sceneVpW,
+                            sceneVpH, activeInternalSubTabMemoryId);
+                    }
                 }
                 // Render User Interface using safe snapshot copy of current Input.
 
@@ -1729,6 +1777,17 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                         static_cast<float>(gpu.screens[monitorId].physicalDpiX),
                         static_cast<float>(gpu.screens[monitorId].physicalDpiY),
                         inputSnapshot, internalSubTabsSnapshot, activeInternalSubTabMemoryId);
+                }
+
+                // Service any pending click/scroll pick request. Runs after the UI (it renders into
+                // its own targets) and records a readback tagged with this frame's fence below.
+                if (scene3DActive && sceneVpH > 0) {
+                    ServicePick(threadRes.commandList.Get(), winRes, tabRes, tab.geometry,
+                        tab.selection, tabRes.pickCtx, monitorId, sceneViewProj, sceneTopUI,
+                        sceneVpW, sceneVpH, activeInternalSubTabMemoryId);
+                    if (tabRes.pickCtx.state == PickPassContext::State::Recorded) {
+                        pendingPickCtxs.push_back(&tabRes.pickCtx);
+                    }
                 }
             }
 
@@ -1794,6 +1853,9 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             // Mirror into the globally-visible per-monitor fence so PruneOneRetiredPage can see it.
             threadRes.commandQueue->Signal(gpu.screens[monitorId].renderFence.Get(), currentFenceValue);
             gpu.screens[monitorId].renderFenceValue = currentFenceValue; // Submitted value. Not necessarily executed.
+
+            // Tag picks recorded this frame with the fence they must wait on before readback.
+            for (PickPassContext* pctx : pendingPickCtxs) FinalizePickFence(*pctx, currentFenceValue);
 
             // WAIT: Throttle CPU (Double Buffering Logic). We need to reuse the Command Allocator for the *next* frame.
             // Store the exact fence value we just signaled for THIS allocator

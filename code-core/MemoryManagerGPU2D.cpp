@@ -516,6 +516,21 @@ void EnqueueCad2DText(uint64_t tabID, uint64_t containerMemoryId, Cad2DTextRecor
     toCopyThreadCV.notify_one();
 }
 
+void EnqueueCad2DSelectionRefresh(uint64_t tabID, uint64_t containerMemoryId) {
+    // A no-op command: it carries no geometry, but its presence forces the copy thread to rebuild
+    // and republish this tab's pages, re-applying selection flags into the GPU records.
+    CommandToCopyThread2D command{};
+    command.type = CommandToCopyThread2DType::SelectionRefresh;
+    command.tabID = tabID;
+    command.containerMemoryId = containerMemoryId;
+
+    {
+        std::lock_guard<std::mutex> lock(gCad2DCopyQueueMutex);
+        gCad2DCopyQueue.push(std::move(command));
+    }
+    toCopyThreadCV.notify_one();
+}
+
 bool HasPendingCad2DCopyCommands() {
     std::lock_guard<std::mutex> lock(gCad2DCopyQueueMutex);
     return !gCad2DCopyQueue.empty();
@@ -616,6 +631,94 @@ void Cad2DBeginTextCreation(DATASETTAB& tab) {
     tab.cad2d->textCreationMode.store(true, std::memory_order_release);
     tab.cad2d->textCreationHasAnchor.store(false, std::memory_order_release);
 }
+
+// --- 2D CPU hit-testing for click-selection (see selection.md) ----------------------------------
+namespace {
+double DistPointToSegment(double px, double py, double ax, double ay, double bx, double by) {
+    const double vx = bx - ax, vy = by - ay;
+    const double wx = px - ax, wy = py - ay;
+    const double len2 = vx * vx + vy * vy;
+    double t = len2 > 1.0e-12 ? (wx * vx + wy * vy) / len2 : 0.0;
+    t = std::clamp(t, 0.0, 1.0);
+    const double dx = px - (ax + t * vx), dy = py - (ay + t * vy);
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+double DistPointToCircle(double px, double py, double cx, double cy, double radius) {
+    return std::abs(std::sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy)) - radius);
+}
+
+// Rough distance to an (axis-aligned) ellipse boundary; adequate for pick tolerance.
+double DistPointToEllipse(double px, double py, double cx, double cy, double rx, double ry) {
+    const double sx = (std::max)(std::abs(rx), 1.0e-9);
+    const double sy = (std::max)(std::abs(ry), 1.0e-9);
+    const double nx = (px - cx) / sx, ny = (py - cy) / sy;
+    const double r = std::sqrt(nx * nx + ny * ny);
+    return std::abs(r - 1.0) * (std::min)(sx, sy);
+}
+
+void Cad2DHandleSelectionClick(DATASETTAB& tab, double xCU, double yCU) {
+    if (!tab.cad2d) return;
+    const uint64_t container = Cad2DFindTargetPage2DMemoryId(tab);
+    if (container == 0) return;
+    TabCad2DStorage& s = *tab.cad2d;
+
+    const double zoom = (std::max)(
+        (double)s.view.zoomPixelsPerCU.load(std::memory_order_acquire), 0.02);
+    const double tolCU = 6.0 / zoom; // ~6 pixel pick tolerance in CAD units.
+    uint64_t bestId = 0;
+    double bestDist = tolCU;
+
+    {
+        std::lock_guard<std::mutex> lock(s.cpuRecordsMutex);
+        auto consider = [&](double d, uint64_t id) {
+            if (d < bestDist) { bestDist = d; bestId = id; }
+        };
+        for (const Cad2DLineRecordCPU& r : s.lineRecords) {
+            if (r.isDeleted || r.containerMemoryId != container) continue;
+            consider(DistPointToSegment(xCU, yCU, r.x1, r.y1, r.x2, r.y2), r.objectId);
+        }
+        for (const Cad2DPolylineRecordCPU& r : s.polylineRecords) {
+            if (r.isDeleted || r.containerMemoryId != container) continue;
+            for (size_t i = 1; i < r.points.size(); ++i) {
+                consider(DistPointToSegment(xCU, yCU, r.points[i - 1].x, r.points[i - 1].y,
+                    r.points[i].x, r.points[i].y), r.objectId);
+            }
+        }
+        for (const Cad2DPolygonRecordCPU& r : s.polygonRecords) {
+            if (r.isDeleted || r.containerMemoryId != container || r.radius <= 0.0) continue;
+            const uint32_t n = std::clamp(r.lineSegmentCount, 3u, 16u);
+            const double step = 360.0 / (double)n;
+            for (uint32_t i = 0; i < n; ++i) {
+                const double a0 = (r.rotationDegrees + step * i) * 3.14159265358979323846 / 180.0;
+                const double a1 = (r.rotationDegrees + step * ((i + 1) % n)) * 3.14159265358979323846 / 180.0;
+                consider(DistPointToSegment(xCU, yCU,
+                    r.centerX + std::sin(a0) * r.radius, r.centerY + std::cos(a0) * r.radius,
+                    r.centerX + std::sin(a1) * r.radius, r.centerY + std::cos(a1) * r.radius), r.objectId);
+            }
+        }
+        for (const Cad2DCircleRecordCPU& r : s.circleRecords) {
+            if (r.isDeleted || r.containerMemoryId != container) continue;
+            consider(DistPointToCircle(xCU, yCU, r.centerX, r.centerY, r.radius), r.objectId);
+        }
+        for (const Cad2DEllipseRecordCPU& r : s.ellipseRecords) {
+            if (r.isDeleted || r.containerMemoryId != container) continue;
+            consider(DistPointToEllipse(xCU, yCU, r.centerX, r.centerY, r.radiusX, r.radiusY), r.objectId);
+        }
+        for (const Cad2DArcRecordCPU& r : s.arcRecords) {
+            if (r.isDeleted || r.containerMemoryId != container) continue;
+            consider(DistPointToEllipse(xCU, yCU, r.centerX, r.centerY, r.radiusX, r.radiusY), r.objectId);
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(s.selection2DMutex);
+        s.selectedObjectIds.clear();
+        if (bestId != 0) s.selectedObjectIds.insert(bestId); // Single-select; clears on empty click.
+    }
+    EnqueueCad2DSelectionRefresh(tab.tabID, container);
+}
+} // namespace
 
 bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
     if (!tab.cad2d) return false;
@@ -751,6 +854,13 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
             double xCU = 0.0, yCU = 0.0;
             if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
                 HandleTextCreationClick(tab, xCU, yCU);
+            }
+        }
+        else {
+            // No creation tool active: treat the click as a selection pick.
+            double xCU = 0.0, yCU = 0.0;
+            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+                Cad2DHandleSelectionClick(tab, xCU, yCU);
             }
         }
         return true;

@@ -99,6 +99,7 @@ PSInput main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID) {
     output.p0Px = p0;
     output.p1Px = p1;
     output.halfWidthPx = halfWidth;
-    output.colorABGR = rec.colorABGR;
+    // Selection highlight: deep blue (ABGR 0xFFA6260D) when the SELECTED flag bit is set.
+    output.colorABGR = (rec.flags & 1u) ? 0xFFA6260Du : rec.colorABGR;
     return output;
 }

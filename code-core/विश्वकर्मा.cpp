@@ -593,6 +593,52 @@ static bool Scene3DPlacementPointFromInput(DATASETTAB& tab, const ACTION_DETAILS
     return true;
 }
 
+// --- 3D click-selection glue (see website/content/software/selection.md) ------------------------
+// Ask the render thread to run a GPU pick at the given client pixel. The result arrives ~1 frame
+// later via SelectionState and is applied by ApplyPickResult below.
+static void RequestScenePick(DATASETTAB& tab, int clientX, int clientY, PickPurpose purpose) {
+    tab.selection.pickX.store(clientX, std::memory_order_relaxed);
+    tab.selection.pickY.store(clientY, std::memory_order_relaxed);
+    tab.selection.pickPurpose.store(static_cast<uint32_t>(purpose), std::memory_order_relaxed);
+    tab.selection.pickRequested.store(true, std::memory_order_release);
+}
+
+// Recenter the orbit/look target on a world point, preserving view direction and distance (the
+// image translates so the point glides to the orbit center; no rotation). Used for both the
+// selected object's CG and the scrolled-to surface point.
+static void CenterCameraOnPoint(CameraState& cam, const DirectX::XMFLOAT3& p) {
+    DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&cam.position);
+    DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&cam.target);
+    DirectX::XMVECTOR offset = DirectX::XMVectorSubtract(eye, target); // Preserve direction+distance.
+    DirectX::XMVECTOR newTarget = DirectX::XMLoadFloat3(&p);
+    DirectX::XMStoreFloat3(&cam.target, newTarget);
+    DirectX::XMStoreFloat3(&cam.position, DirectX::XMVectorAdd(newTarget, offset));
+}
+
+static void ApplyPickResult(DATASETTAB& tab, bool hit, uint64_t objectId,
+    const DirectX::XMFLOAT3& cg, const DirectX::XMFLOAT3& surface, uint32_t purposeRaw) {
+    const PickPurpose purpose = static_cast<PickPurpose>(purposeRaw);
+    if (purpose == PickPurpose::Select) {
+        {
+            std::lock_guard<std::mutex> lock(tab.selection.selectedMutex);
+            tab.selection.selectedObjectIds.clear();
+            if (objectId != 0) tab.selection.selectedObjectIds.push_back(objectId); // Single-select.
+        }
+        if (objectId != 0) CenterCameraOnPoint(tab.camera, cg); // Focus on the selected object's CG.
+    } else if (purpose == PickPurpose::Recenter && hit) {
+        // Only recenter when the surface is meaningfully off the current pivot, so a stationary
+        // cursor doesn't jitter the view every scroll notch. Tunable UX; see selection.md.
+        DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&tab.camera.target);
+        DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&tab.camera.position);
+        DirectX::XMVECTOR surf = DirectX::XMLoadFloat3(&surface);
+        const float dist = DirectX::XMVectorGetX(
+            DirectX::XMVector3Length(DirectX::XMVectorSubtract(eye, target)));
+        const float moved = DirectX::XMVectorGetX(
+            DirectX::XMVector3Length(DirectX::XMVectorSubtract(surf, target)));
+        if (moved > 0.05f * (std::max)(dist, 1.0f)) CenterCameraOnPoint(tab.camera, surface);
+    }
+}
+
 static bool CreatePrimitiveGeometryElement(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType,
     const XMFLOAT3& placementPoint) {
     if (!targetTab || !VishwakarmaStorage::IsGeometry3DObjectType(objectType)) return false;
@@ -1043,6 +1089,9 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 isPanning = myTab->mouseMiddleDown && myTab->isShiftDown;
                 // Orbit if Middle Mouse is down, but NOT panning, OR if Alt+Left Click
                 isOrbiting = (!isPanning && myTab->mouseMiddleDown) || (myTab->mouseLeftDown && myTab->isAltDown);
+                if (isOrbiting || isPanning) {
+                    myTab->selection.lastNavInteractionMs.store(GetTickCount64(), std::memory_order_release);
+                }
 
                 dx = float(input.x - myTab->lastMouseX);
                 dy = float(input.y - myTab->lastMouseY);
@@ -1216,10 +1265,15 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 }
 
                 //std::cout << "Zoom Updated. New Distance: " << newDistance << "\n";// Debug logging (Optional)
+                myTab->selection.lastNavInteractionMs.store(GetTickCount64(), std::memory_order_release);
+                // Recenter the orbit pivot on the nearest surface under the cursor (async GPU pick).
+                RequestScenePick(*myTab, input.x, input.y, PickPurpose::Recenter);
                 break;
             }
             case ACTION_TYPE::LBUTTONDOWN:
                 myTab->mouseLeftDown = true;
+                // Plain left click selects the object under the cursor (Alt+Left is orbit).
+                if (!myTab->isAltDown) RequestScenePick(*myTab, input.x, input.y, PickPurpose::Select);
                 break;
             case ACTION_TYPE::LBUTTONUP:
                 myTab->mouseLeftDown = false;
@@ -1262,6 +1316,22 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
             }
         }
         // After loop: If inputCount high, log or adjust (e.g., sleep if bursty).
+
+        // Apply any completed GPU pick result (selection highlight set + camera recentering).
+        if (myTab->selection.resultReady.load(std::memory_order_acquire)) {
+            bool hit; uint64_t objId; uint32_t purpose;
+            DirectX::XMFLOAT3 cg, surf;
+            {
+                std::lock_guard<std::mutex> lock(myTab->selection.resultMutex);
+                hit = myTab->selection.resultHit;
+                objId = myTab->selection.resultObjectId;
+                cg = myTab->selection.resultCG;
+                surf = myTab->selection.resultSurface;
+                purpose = myTab->selection.resultPurpose;
+                myTab->selection.resultReady.store(false, std::memory_order_release);
+            }
+            ApplyPickResult(*myTab, hit, objId, cg, surf, purpose);
+        }
 
         // Existing todoCPUQueue processing remains (for self-TODOs like CREATEPYRAMID).
 

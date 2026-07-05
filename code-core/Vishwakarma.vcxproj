@@ -95,7 +95,7 @@ FT_STATIC;LUNASVG_BUILD_STATIC;PLUTOVG_BUILD_STATIC;%(PreprocessorDefinitions)</
       <AdditionalIncludeDirectories>..\code-core;$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateVersionHeader.ps1" -OutDir "$(IntDir)"
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateVersionHeader.ps1" -OutDir "$(IntDir)."
 call "$(ProjectDir)..\code-miscellaneous\msdf_atlas_generator.bat"
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateDataStorageProtobuf.ps1" -OutputDir "$(IntDir)GeneratedProtobuf"
 python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)SVGIconManifest.h" "$(ProjectDir)..\website\static\SVGIcons" "$(IntDir)SVGIconEmbeddedData.generated.h"</Command>
@@ -132,7 +132,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
       <AdditionalIncludeDirectories>..\code-core;$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateVersionHeader.ps1" -OutDir "$(IntDir)"
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateVersionHeader.ps1" -OutDir "$(IntDir)."
 call "$(ProjectDir)..\code-miscellaneous\msdf_atlas_generator.bat"
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateDataStorageProtobuf.ps1" -OutputDir "$(IntDir)GeneratedProtobuf"
 python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)SVGIconManifest.h" "$(ProjectDir)..\website\static\SVGIcons" "$(IntDir)SVGIconEmbeddedData.generated.h"</Command>
@@ -177,6 +177,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClCompile Include="ImprovementData.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="MemoryManagerGPU-DirectX12.cpp" />
+    <ClCompile Include="Selection3D-DirectX12.cpp" />
     <ClCompile Include="MemoryManagerGPU2D.cpp" />
     <ClCompile Include="MemoryManagerGPU2D-DirectX12.cpp" />
     <ClCompile Include="preCompiledHeadersWindows.cpp" />
@@ -214,6 +215,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClInclude Include="ConstantsText.h" />
     <ClInclude Include="ListOfCommands.h" />
     <ClInclude Include="MemoryManagerGPU-DirectX12.h" />
+    <ClInclude Include="Selection3D-DirectX12.h" />
     <ClInclude Include="MemoryManagerGPU2D.h" />
     <ClInclude Include="MemoryManagerGPU2D-DirectX12.h" />
     <ClInclude Include="MemoryManagerGPU-Vulkan1.1.h" />
@@ -305,6 +307,56 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.0</ShaderModel>
       <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(IntDir)ShaderSceneVertex.h</HeaderFileOutput>
       <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_sceneVertexShader</VariableName>
+    </FxCompile>
+    <FxCompile Include="ShaderScenePickVertex.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Vertex</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(IntDir)ShaderScenePickVertex.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">g_scenePickVertexShader</VariableName>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Vertex</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(IntDir)ShaderScenePickVertex.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_scenePickVertexShader</VariableName>
+    </FxCompile>
+    <FxCompile Include="ShaderScenePickPixel.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(IntDir)ShaderScenePickPixel.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">g_scenePickPixelShader</VariableName>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(IntDir)ShaderScenePickPixel.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_scenePickPixelShader</VariableName>
+    </FxCompile>
+    <FxCompile Include="ShaderSceneHighlightPixel.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(IntDir)ShaderSceneHighlightPixel.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">g_sceneHighlightPixelShader</VariableName>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(IntDir)ShaderSceneHighlightPixel.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_sceneHighlightPixelShader</VariableName>
+    </FxCompile>
+    <FxCompile Include="ShaderCubeVertex.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Vertex</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(IntDir)ShaderCubeVertex.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">g_cubeVertexShader</VariableName>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Vertex</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(IntDir)ShaderCubeVertex.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_cubeVertexShader</VariableName>
+    </FxCompile>
+    <FxCompile Include="ShaderCubePixel.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(IntDir)ShaderCubePixel.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">g_cubePixelShader</VariableName>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(IntDir)ShaderCubePixel.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_cubePixelShader</VariableName>
     </FxCompile>
     <FxCompile Include="ShaderUIPixel.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>

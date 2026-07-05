@@ -886,6 +886,12 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
             texts = storage.textRecords;
         }
 
+        std::unordered_set<uint64_t> selected2D; // Objects to stamp with kCad2DSelectedFlag.
+        {
+            std::lock_guard<std::mutex> lock(storage.selection2DMutex);
+            selected2D = storage.selectedObjectIds;
+        }
+
         std::map<uint64_t, Cad2DContainerRecords> containers;
         for (const Cad2DLineRecordCPU& line : lines) {
             if (line.containerMemoryId != 0) containers[line.containerMemoryId].lines.push_back(line);
@@ -935,12 +941,26 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
                 }
             }
             gpuLines.reserve(records.lines.size() + polylineSegmentCount + polygonSegmentCount);
-            for (const Cad2DLineRecordCPU& line : records.lines) gpuLines.push_back(ToGpuLineRecord(line));
+            // Stamp kCad2DSelectedFlag on the GPU records belonging to selected objects (all the
+            // segments an object expands into), so the 2D vertex shaders draw them in deep blue.
+            auto stampSelected = [&](size_t firstIndex, uint64_t objectId) {
+                if (selected2D.find(objectId) == selected2D.end()) return;
+                for (size_t i = firstIndex; i < gpuLines.size(); ++i) gpuLines[i].flags |= kCad2DSelectedFlag;
+            };
+            for (const Cad2DLineRecordCPU& line : records.lines) {
+                const size_t before = gpuLines.size();
+                gpuLines.push_back(ToGpuLineRecord(line));
+                stampSelected(before, line.objectId);
+            }
             for (const Cad2DPolylineRecordCPU& polyline : records.polylines) {
+                const size_t before = gpuLines.size();
                 AppendPolylineLineRecords(polyline, gpuLines);
+                stampSelected(before, polyline.objectId);
             }
             for (const Cad2DPolygonRecordCPU& polygon : records.polygons) {
+                const size_t before = gpuLines.size();
                 AppendPolygonLineRecords(polygon, gpuLines);
+                stampSelected(before, polygon.objectId);
             }
             UploadVector(commandList.Get(), page->lineBuffer, gpuLines, uploads);
             page->lineCount = static_cast<uint32_t>(gpuLines.size());
@@ -956,16 +976,28 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
 
             std::vector<Cad2DCurveGPURecord> gpuCurves;
             gpuCurves.reserve(records.circles.size() + records.ellipses.size() + records.arcs.size());
+            auto stampCurveSelected = [&](uint64_t objectId) {
+                if (selected2D.find(objectId) != selected2D.end() && !gpuCurves.empty()) {
+                    gpuCurves.back().flags |= kCad2DSelectedFlag;
+                }
+            };
             for (const Cad2DCircleRecordCPU& circle : records.circles) {
-                if (circle.radius > 0.0) gpuCurves.push_back(ToGpuCircleRecord(circle));
+                if (circle.radius > 0.0) {
+                    gpuCurves.push_back(ToGpuCircleRecord(circle));
+                    stampCurveSelected(circle.objectId);
+                }
             }
             for (const Cad2DEllipseRecordCPU& ellipse : records.ellipses) {
                 if (ellipse.radiusX > 0.0 && ellipse.radiusY > 0.0) {
                     gpuCurves.push_back(ToGpuEllipseRecord(ellipse));
+                    stampCurveSelected(ellipse.objectId);
                 }
             }
             for (const Cad2DArcRecordCPU& arc : records.arcs) {
-                if (arc.radiusX > 0.0 && arc.radiusY > 0.0) gpuCurves.push_back(ToGpuArcRecord(arc));
+                if (arc.radiusX > 0.0 && arc.radiusY > 0.0) {
+                    gpuCurves.push_back(ToGpuArcRecord(arc));
+                    stampCurveSelected(arc.objectId);
+                }
             }
             UploadVector(commandList.Get(), page->curveBuffer, gpuCurves, uploads);
             page->curveCount = static_cast<uint32_t>(gpuCurves.size());

@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "MemoryManagerGPU2D.h"
@@ -120,6 +121,11 @@ struct DX12Resources2DPerTab {
 struct TabCad2DStorage {
     DX12Resources2DPerTab dx;
     Cad2DViewState view;
+
+    // 2D click-selection (CPU hit-testing). Selected object ids; the copy thread reads this while
+    // rebuilding pages and stamps kCad2DSelectedFlag into the matching GPU records.
+    std::mutex selection2DMutex;
+    std::unordered_set<uint64_t> selectedObjectIds;
 
     std::mutex cpuRecordsMutex;
     std::vector<Cad2DLineRecordCPU> lineRecords;

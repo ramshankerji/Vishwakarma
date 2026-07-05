@@ -78,7 +78,7 @@
       <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateVersionHeader.ps1" -OutDir "$(IntDir)"
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateVersionHeader.ps1" -OutDir "$(IntDir)."
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateRelease.ps1" -Mode EmbeddedJson -Configuration $(Configuration)</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
@@ -107,7 +107,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscel
       <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateVersionHeader.ps1" -OutDir "$(IntDir)"
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateVersionHeader.ps1" -OutDir "$(IntDir)."
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateRelease.ps1" -Mode EmbeddedJson -Configuration $(Configuration)</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>

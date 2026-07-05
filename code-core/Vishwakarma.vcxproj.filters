@@ -103,6 +103,9 @@
     <ClCompile Include="MemoryManagerGPU-DirectX12.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
+    <ClCompile Include="Selection3D-DirectX12.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
     <ClCompile Include="MemoryManagerGPU2D.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
@@ -201,6 +204,9 @@
     <ClInclude Include="MemoryManagerGPU-DirectX12.h">
       <Filter>code-core</Filter>
     </ClInclude>
+    <ClInclude Include="Selection3D-DirectX12.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
     <ClInclude Include="MemoryManagerGPU2D.h">
       <Filter>code-core</Filter>
     </ClInclude>
@@ -252,6 +258,11 @@
     <FxCompile Include="PixelShader.hlsl" />
     <FxCompile Include="ShaderScenePixel.hlsl" />
     <FxCompile Include="ShaderSceneVertex.hlsl" />
+    <FxCompile Include="ShaderScenePickVertex.hlsl" />
+    <FxCompile Include="ShaderScenePickPixel.hlsl" />
+    <FxCompile Include="ShaderSceneHighlightPixel.hlsl" />
+    <FxCompile Include="ShaderCubeVertex.hlsl" />
+    <FxCompile Include="ShaderCubePixel.hlsl" />
     <FxCompile Include="ShaderUIPixel.hlsl" />
     <FxCompile Include="ShaderUIVertex.hlsl" />
     <FxCompile Include="Shader2D_LineVertex.hlsl" />

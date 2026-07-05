@@ -157,8 +157,13 @@ enum class CommandToCopyThread2DType : uint8_t {
     AddPolygon = 3,
     AddCircle = 4,
     AddEllipse = 5,
-    AddArc = 6
+    AddArc = 6,
+    SelectionRefresh = 7 // No geometry; forces a page rebuild so selection flags re-apply.
 };
+
+// GPU record 'flags' bit set for the currently selected 2D objects; the 2D vertex shaders read it
+// and override the stroke color to the deep-blue selection color. See selection.md.
+constexpr uint32_t kCad2DSelectedFlag = 1u;
 
 struct CommandToCopyThread2D {
     CommandToCopyThread2DType type = CommandToCopyThread2DType::AddLine;
@@ -181,6 +186,7 @@ void EnqueueCad2DCircle(uint64_t tabID, uint64_t containerMemoryId, Cad2DCircleR
 void EnqueueCad2DEllipse(uint64_t tabID, uint64_t containerMemoryId, Cad2DEllipseRecordCPU ellipse);
 void EnqueueCad2DArc(uint64_t tabID, uint64_t containerMemoryId, Cad2DArcRecordCPU arc);
 void EnqueueCad2DText(uint64_t tabID, uint64_t containerMemoryId, Cad2DTextRecordCPU text);
+void EnqueueCad2DSelectionRefresh(uint64_t tabID, uint64_t containerMemoryId);
 bool HasPendingCad2DCopyCommands();
 void PopAllCad2DCopyCommands(std::vector<CommandToCopyThread2D>& outCommands);
 

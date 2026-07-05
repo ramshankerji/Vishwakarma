@@ -17,10 +17,17 @@ import InteroperabilityWithSTDFile as std_reader
 
 BATCH_SIZE = 5000
 UINT32_MAX = 0xFFFFFFFF
+VISHWAKARMA_UNITS_PER_METER = 1000.0
 
 
 def _valid_id(value) -> bool:
     return isinstance(value, int) and 0 < value <= UINT32_MAX
+
+
+def _std_si_to_vishwakarma_node(node_id, x_m, y_m, z_m):
+    # Reader coordinates are meters; host geometry uses millimeters.
+    scale = VISHWAKARMA_UNITS_PER_METER
+    return (node_id, float(x_m) * scale, -float(z_m) * scale, float(y_m) * scale)
 
 
 def run() -> None:
@@ -38,7 +45,7 @@ def run() -> None:
     coordinates = model.nodes_si if model.nodes_si else model.nodes
 
     nodes = [
-        (node_id, float(x), float(y), float(z))
+        _std_si_to_vishwakarma_node(node_id, x, y, z)
         for node_id, (x, y, z) in coordinates.items()
         if _valid_id(node_id)
     ]

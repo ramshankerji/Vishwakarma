@@ -34,6 +34,7 @@
 #include "MemoryManagerGPU.h"
 #include "UserInterface-DirectX12.h"
 #include "डेटा.h"
+#include "Selection3D-DirectX12.h"
 
 using namespace Microsoft::WRL;
 
@@ -232,7 +233,11 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
 
     ComPtr<ID3D12CommandSignature> commandSignature;// Indirect Drawing
 
-	CameraState camera; //Reference is updated per frame. 
+    // 3D click-selection: GPU picking + highlight + rotation-cube resources (Selection3D module).
+    Selection3DResources selection3D;
+    PickPassContext pickCtx; // Render-thread pick scratch (targets, readback, in-flight state).
+
+	CameraState camera; //Reference is updated per frame.
     //Currently per tab, but latter we will have this per view. Since each tab can have multiple views.
 };
 
