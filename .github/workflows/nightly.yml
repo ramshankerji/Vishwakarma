@@ -20,8 +20,15 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
       with:
-        # This ensures that submodules are also checked out.
-        submodules: recursive
+        # Full history for our own repo so `git rev-list --count HEAD` yields the true build
+        # number (a shallow clone reports 1). fetch-depth propagates to submodules, so we do
+        # NOT let checkout fetch them here; they are pulled shallow (pinned) in the next step.
+        fetch-depth: 0
+        submodules: false
+
+    - name: Checkout submodules (shallow, pinned)
+      # External dependencies: only the pinned commit, depth 1, to keep checkout fast.
+      run: git submodule update --init --recursive --depth 1
 
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
@@ -117,7 +124,7 @@ jobs:
         path: Fonts/*.ttf
 
     # Builds Vishwakarma.exe + VishwakarmaSetup.exe, signs both with MV-CodeSigner-01.pfx,
-    # and produces Vishwakarma_UserSetup_win10_win11_x64_v<N>.exe + Vishwakarma_release_details.json
+    # and produces Vishwakarma_UserSetup_win10_win11_x64.exe + Vishwakarma_release_details.json
     # + .sig (Ed25519). Without the RELEASE_SIGN_PASSWORD secret everything is built unsigned.
     - name: Build, Sign and Package Release
       env:
@@ -130,7 +137,7 @@ jobs:
     - name: Verify Release Files Exist
       shell: pwsh
       run: |
-        $setup = Get-ChildItem "build/Release/Vishwakarma_UserSetup_win10_win11_x64_v*.exe"
+        $setup = Get-ChildItem "build/Release/Vishwakarma_UserSetup_win10_win11_x64.exe"
         if ($setup -and (Test-Path "build/Release/Vishwakarma_release_details.json")) {
             Write-Host "Release files found: $($setup.Name)"
         } else {
@@ -211,11 +218,9 @@ jobs:
       shell: pwsh
       run: |
         gh release delete nightly --cleanup-tag -y || echo "No existing nightly release to delete"
-        # Create the new release and upload the setup exe (versioned + stable-named alias for
-        # the website Download button), the signed manifest and its Ed25519 signature.
-        $versionedSetup = (Get-ChildItem "build/Release/Vishwakarma_UserSetup_win10_win11_x64_v*.exe").FullName
+        # Create the new release and upload the setup exe (stable name, so the website Download
+        # button URL never changes), the signed manifest and its Ed25519 signature.
         $assets = @(
-          $versionedSetup,
           "build/Release/Vishwakarma_UserSetup_win10_win11_x64.exe",
           "build/Release/Vishwakarma_release_details.json"
         )

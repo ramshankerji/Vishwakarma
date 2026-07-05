@@ -75,9 +75,11 @@
     </Link>
     <ResourceCompile>
       <PreprocessorDefinitions>VW_DEBUG_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateRelease.ps1" -Mode EmbeddedJson -Configuration $(Configuration)</Command>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateVersionHeader.ps1" -OutDir "$(IntDir)"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateRelease.ps1" -Mode EmbeddedJson -Configuration $(Configuration)</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -102,9 +104,11 @@
       <AdditionalDependencies>User32.lib;Shell32.lib;Ole32.lib;Uuid.lib;Advapi32.lib;Ws2_32.lib;Crypt32.lib;$(OpenSSLBuildDir)\libcrypto.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <ResourceCompile>
+      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateRelease.ps1" -Mode EmbeddedJson -Configuration $(Configuration)</Command>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateVersionHeader.ps1" -OutDir "$(IntDir)"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateRelease.ps1" -Mode EmbeddedJson -Configuration $(Configuration)</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>

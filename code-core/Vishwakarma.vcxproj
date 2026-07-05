@@ -92,10 +92,11 @@ FT_STATIC;LUNASVG_BUILD_STATIC;PLUTOVG_BUILD_STATIC;%(PreprocessorDefinitions)</
       <AdditionalLibraryDirectories>..\code-external\freetype\build\Release;..\code-external\freetype\objs\x64\Release Static\;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <ResourceCompile>
-      <AdditionalIncludeDirectories>..\code-core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\code-core;$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <PreBuildEvent>
-      <Command>call "$(ProjectDir)..\code-miscellaneous\msdf_atlas_generator.bat"
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateVersionHeader.ps1" -OutDir "$(IntDir)"
+call "$(ProjectDir)..\code-miscellaneous\msdf_atlas_generator.bat"
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateDataStorageProtobuf.ps1" -OutputDir "$(IntDir)GeneratedProtobuf"
 python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)SVGIconManifest.h" "$(ProjectDir)..\website\static\SVGIcons" "$(IntDir)SVGIconEmbeddedData.generated.h"</Command>
     </PreBuildEvent>
@@ -128,10 +129,11 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
       <AdditionalLibraryDirectories>..\code-external\freetype\build\Release;..\code-external\freetype\objs\x64\Release Static\;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <ResourceCompile>
-      <AdditionalIncludeDirectories>..\code-core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\code-core;$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <PreBuildEvent>
-      <Command>call "$(ProjectDir)..\code-miscellaneous\msdf_atlas_generator.bat"
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateVersionHeader.ps1" -OutDir "$(IntDir)"
+call "$(ProjectDir)..\code-miscellaneous\msdf_atlas_generator.bat"
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateDataStorageProtobuf.ps1" -OutputDir "$(IntDir)GeneratedProtobuf"
 python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)SVGIconManifest.h" "$(ProjectDir)..\website\static\SVGIcons" "$(IntDir)SVGIconEmbeddedData.generated.h"</Command>
     </PreBuildEvent>

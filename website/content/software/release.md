@@ -5,15 +5,17 @@ weight: 100208
 This chapter describes our software installer and self-update mechanism. Earlier we shipped a single raw binary named Vishwakarma.exe; since July 2026 every release instead produces the following 3 files:
 
 ## Configurations
-Vishwakarma_UserSetup_win10_win11_x64_versionNo.exe  (self-contained installer, Vishwakarma.exe and its release json embedded inside)  
+Vishwakarma_UserSetup_win10_win11_x64.exe  (self-contained installer, Vishwakarma.exe and its release json embedded inside)  
 Vishwakarma_release_details.json  (the release manifest which installed clients poll for updates)  
 Vishwakarma_release_details.json.sig  (Ed25519 signature over the manifest bytes)  
 
+The setup filename carries no version suffix: the release URL stays constant so the website Download button is a static link that never breaks. The version number lives only in the manifest `version` field and inside the executable's own version resource (see below).  
+
 In future we will also have: But not now.  
-Vishwakarma_UserSetup_win10_win11_ARM64_versionNo.exe  
-Vishwakarma_UserSetup_macXY_x64_versionNo.exe  
-Vishwakarma_UserSetup_UbuntuXY_x64_versionNo.exe  
-Vishwakarma_UserSetup_UbuntuXY_ARM64_versionNo.exe  
+Vishwakarma_UserSetup_win10_win11_ARM64.exe  
+Vishwakarma_UserSetup_macXY_x64.exe  
+Vishwakarma_UserSetup_ubuntuXY_x64.exe  
+Vishwakarma_UserSetup_ubuntuXY_ARM64.exe  
 
 Content of Vishwakarma_release_details.json
 {
@@ -35,8 +37,8 @@ Content of Vishwakarma_release_details.json
       "version": 142,
       "minUpdateFromVersion": 1,
       "packageKind": "full-user-setup-exe",
-      "fileName": "Vishwakarma_UserSetup_win10_win11_x64_v142.exe",
-      "url": "https://updates.example.com/stable/windows/x64/Vishwakarma_UserSetup_win10_win11_x64_v142.exe",
+      "fileName": "Vishwakarma_UserSetup_win10_win11_x64.exe",
+      "url": "https://updates.example.com/stable/windows/x64/Vishwakarma_UserSetup_win10_win11_x64.exe",
       "size": 18423822,
       "sha256": "abcdefghijklmnopqrstuvwxyz",
       "authenticodeRequired": true
@@ -58,10 +60,10 @@ Every time an app launches, it will launch an update service thread. Update thre
 -Abort if udpate fails
 
 Running app does: Download setup EXE, Verify SHA-256, Verify Authenticode (ED25519). On app restart, launch:
-  Vishwakarma_UserSetup_win10_win11_x64_v142.exe --update --no-launch
+  Vishwakarma_UserSetup_win10_win11_x64.exe --update --no-launch
 Then launch new Vishwakarma.exe
 
-versionNo shall be in simple positive integer.
+version shall be a simple positive integer, carried in the manifest and the executable version resource (not the filename).
 Vishwakarma_release_details.json shall be a simple json file kept at root of the repository.
 
 Peer may announce:  appId, channel, platform, instructionSet, version, sha256, size
@@ -130,7 +132,9 @@ Phase 1 is implemented in `code-core/SoftwareUpdate.cpp` / `.h` (single file, co
 
 **versionNo = git commit count.** `git rev-list --count HEAD` gives the simple, monotonically increasing positive integer the spec asks for, with zero bookkeeping. Version 0 (json missing next to the exe) marks a developer build and disables the updater entirely.
 
-**Stable-named download alias.** Besides the spec-compliant versioned file, CI uploads the same setup as `Vishwakarma_UserSetup_win10_win11_x64.exe` so the website Download button can be a static link that never breaks. The manifest only ever references the versioned filename.
+**Version-free setup filename.** The setup exe ships as `Vishwakarma_UserSetup_win10_win11_x64.exe` with no version suffix, so the nightly release URL (and the website Download button that links to it) never changes. The manifest's `version` field and the executable's own version resource carry the build number; the filename does not. Earlier we uploaded both a `_v<N>` file and this stable alias — the versioned copy has been dropped.
+
+**Version resource in the executable.** `Vishwakarma.exe` and the setup exe both embed a `VS_VERSION_INFO` resource so that Right-click -> Properties -> Details shows the build metadata: the version number (`git rev-list --count HEAD`) in *File version* / *Product version*, and the 8-char commit hash plus the UTC build date in *Product version* and *Comments*. `code-miscellaneous/GenerateVersionHeader.ps1` writes `VersionGenerated.h` into the project `IntDir` during each project's pre-build event; both `.rc` files include it. The header is only rewritten when its contents change, so unchanged same-day builds don't force a resource recompile.
 
 **Signing keys.** Manifest signing uses Ed25519 key `ManifestSigner-01` (`code-miscellaneous/ManifestSigner-01.key`, password-encrypted; public key hardcoded in SoftwareUpdate.cpp). Authenticode uses `MV-CodeSigner-01.pfx`, which is NOT committed (`.gitignore` excludes `*.pfx`); CI receives it as base64 secret `RELEASE_SIGN_PFX_B64` and the shared password as secret `RELEASE_SIGN_PASSWORD`. Unsigned CI builds (secrets absent) produce no `.sig`, and clients correctly refuse to update from them.
 

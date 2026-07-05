@@ -9,7 +9,7 @@
 #                     2. Authenticode-sign Vishwakarma.exe        (MV-CodeSigner-01.pfx)
 #                     3. generate EmbeddedReleaseDetails.json
 #                     4. msbuild VishwakarmaSetup.vcxproj
-#                     5. Authenticode-sign + rename the setup exe (versioned + stable alias)
+#                     5. Authenticode-sign + rename the setup exe (stable name)
 #                     6. write Vishwakarma_release_details.json at repo root + Ed25519 .sig
 #                     Password comes from -PfxPassword or the RELEASE_SIGN_PASSWORD
 #                     environment variable. Without it, signing and the .sig are skipped.
@@ -57,7 +57,7 @@ function Get-VersionInfo {
             Hash      = $hash
             UtcNow    = $utcNow
             Sequence  = $utcNow.ToString("yyyyMMdd-HHmmss") + "-" + $hash
-            FileName  = "Vishwakarma_UserSetup_win10_win11_x64_v$version.exe"
+            FileName  = "Vishwakarma_UserSetup_win10_win11_x64.exe"
         }
     }
     finally { Pop-Location }
@@ -157,9 +157,6 @@ if ($LASTEXITCODE -ne 0) { throw "VishwakarmaSetup.vcxproj build failed." }
 $setupExe = Join-Path $buildDir $info.FileName
 Copy-Item (Join-Path $buildDir "VishwakarmaSetup.exe") $setupExe -Force
 if ($PfxPassword -and $signtool) { Invoke-Sign $signtool $setupExe }
-
-# Stable-named alias for the website Download button (nightly release URL never changes).
-Copy-Item $setupExe (Join-Path $buildDir "Vishwakarma_UserSetup_win10_win11_x64.exe") -Force
 
 # 3. Server manifest: 30 days validity maximum (release.md).
 $sha256 = (Get-FileHash $setupExe -Algorithm SHA256).Hash.ToLower()
