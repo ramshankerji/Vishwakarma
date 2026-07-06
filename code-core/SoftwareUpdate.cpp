@@ -62,6 +62,7 @@ static const char* kManifestPublicKeyPem =
 #define IDR_VW_PRIVACY_MD 204
 #define IDR_VW_EXT_STD_ZIP 205
 #define IDR_VW_EXT_DXF_ZIP 206
+#define IDR_VW_EXT_WORKER_EXE 207
 
 // ------------------------------------------------------------------ Small helpers
 static std::wstring Utf8ToWide(const std::string& s) {
@@ -371,6 +372,38 @@ static bool InstallPayload(const fs::path& dir, const std::string& payload, cons
     return true;
 }
 
+// Writes VishwakarmaExtension.exe (the embedded-CPython extension worker) next to the
+// application exe. Same rename dance as InstallPayload: a running worker cannot be
+// overwritten but can be renamed aside.
+static bool InstallExtensionWorker(const fs::path& dir, std::wstring& error) {
+    std::string payload = LoadResourceBytes(IDR_VW_EXT_WORKER_EXE);
+    if (payload.empty()) {
+        error = L"The extension worker is missing from the setup file.";
+        return false;
+    }
+    std::error_code ec;
+    fs::path exe = dir / L"VishwakarmaExtension.exe";
+    fs::path exeNew = dir / L"VishwakarmaExtension.exe.new";
+    fs::path exeOld = dir / L"VishwakarmaExtension.exe.old";
+
+    fs::remove(exeOld, ec);
+    if (!WriteFileBytes(exeNew, payload.data(), payload.size())) {
+        error = L"Could not write the extension worker to:\n" + dir.wstring();
+        return false;
+    }
+    if (fs::exists(exe) && !MoveFileExW(exe.c_str(), exeOld.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        error = L"Could not replace VishwakarmaExtension.exe. Close the application and retry.";
+        fs::remove(exeNew, ec);
+        return false;
+    }
+    if (!MoveFileExW(exeNew.c_str(), exe.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        MoveFileExW(exeOld.c_str(), exe.c_str(), 0);
+        error = L"Could not activate the new VishwakarmaExtension.exe.";
+        return false;
+    }
+    return true;
+}
+
 struct EmbeddedExtension { int resourceId; const wchar_t* folderName; };
 
 // The importer extensions bundled as zips by VishwakarmaSetup.rc; resource IDs
@@ -519,12 +552,16 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
         installed = InstallPayload(dir, payload, json, error);
         if (!installed && !updateMode)
             MessageBoxW(nullptr, error.c_str(), L"Vishwakarma Setup", MB_OK | MB_ICONERROR);
-        // Bundled Python extensions travel with the exe; unpack them alongside it. A
-        // failure here is non-fatal: the app still runs, only importers are unavailable.
+        // Bundled Python extensions and their worker travel with the exe; unpack them
+        // alongside it. A failure here is non-fatal: the app still runs, only importers
+        // are unavailable.
         if (installed) {
             std::wstring extError;
             if (!InstallBundledExtensions(dir, extError) && !updateMode)
                 MessageBoxW(nullptr, extError.c_str(), L"Vishwakarma Setup", MB_OK | MB_ICONWARNING);
+            std::wstring workerError;
+            if (!InstallExtensionWorker(dir, workerError) && !updateMode)
+                MessageBoxW(nullptr, workerError.c_str(), L"Vishwakarma Setup", MB_OK | MB_ICONWARNING);
         }
     }
 

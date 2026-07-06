@@ -62,9 +62,37 @@ jobs:
           -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DCMAKE_CXX_STANDARD=20 `
           -DCMAKE_CXX_FLAGS="/std:c++20"
 
-        # Build Protobuf so the .lib files are ready for the linker. 
+        # Build Protobuf so the .lib files are ready for the linker.
         # The /verbosity:minimal flag reduces the amount of output in the logs.
         cmake --build build/protobuf-x64-release --config Release -- /m /v:q /clp:ErrorsOnly
+
+    # Static CPython for VishwakarmaExtension.exe (the extension worker): pythoncore as a
+    # /MT static library plus the curated frozen stdlib + google.protobuf runtime. Like
+    # VishwakarmaExternal.lib it only changes when external dependencies change, so it is
+    # cached. Needs protoc from the protobuf build step above.
+    - name: Cache Static CPython
+      id: cache-cpython
+      uses: actions/cache@v4
+      with:
+        path: build/cpython-x64-release
+        key: >-
+          ${{ runner.os }}-cpython-x64-release-${{ hashFiles(
+            'code-miscellaneous/BuildCPython.ps1',
+            'code-miscellaneous/CPythonStatic.props',
+            'code-miscellaneous/CPythonStaticForceInclude.h',
+            'code-external/cpython/Include/patchlevel.h',
+            'code-external/cpython/PCbuild/pythoncore.vcxproj',
+            'code-external/cpython/PCbuild/_freeze_module.vcxproj',
+            'code-external/protobuf/version.json',
+            'code-external/protobuf/python/google/**',
+            'code-external/zlib/*.c',
+            'code-external/zlib/*.h'
+          ) }}
+
+    - name: Build Static CPython
+      if: steps.cache-cpython.outputs.cache-hit != 'true'
+      shell: pwsh
+      run: powershell -NoProfile -ExecutionPolicy Bypass -File code-miscellaneous/BuildCPython.ps1
 
     - name: Cache MSDF Build Tools
       id: cache-msdf-tools

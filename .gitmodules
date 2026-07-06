@@ -25,3 +25,6 @@
 [submodule "code-external/fast_float"]
 	path = code-external/fast_float
 	url = https://github.com/fastfloat/fast_float.git
+[submodule "code-external/cpython"]
+	path = code-external/cpython
+	url = https://github.com/python/cpython

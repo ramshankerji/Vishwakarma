@@ -147,6 +147,15 @@ if ($LASTEXITCODE -ne 0) { throw "Vishwakarma.vcxproj build failed." }
 $appExe = Join-Path $buildDir "Vishwakarma.exe"
 if ($PfxPassword -and $signtool) { Invoke-Sign $signtool $appExe }
 
+# 1b. Extension worker (embedded CPython; its static python313.lib comes from
+# BuildCPython.ps1, invoked automatically by the project when missing). Signed and then
+# embedded into the setup exe alongside the application.
+msbuild (Join-Path $repoRoot "code-core\VishwakarmaExtension.vcxproj") /p:Configuration=$Configuration /p:Platform=x64 /m
+if ($LASTEXITCODE -ne 0) { throw "VishwakarmaExtension.vcxproj build failed." }
+
+$workerExe = Join-Path $buildDir "VishwakarmaExtension.exe"
+if ($PfxPassword -and $signtool) { Invoke-Sign $signtool $workerExe }
+
 # 2. Setup exe: embeds the app exe + json written above. BuildProjectReferences=false, else
 # the app project relinks (its pre-build events always regenerate protobuf sources) and the
 # Authenticode signature applied in step 1 is lost.

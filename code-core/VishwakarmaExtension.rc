@@ -1,0 +1,35 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+// Version resource of VishwakarmaExtension.exe (the embedded-CPython extension worker).
+// Macros come from VersionGenerated.h (GenerateVersionHeader.ps1, pre-build event).
+#include <windows.h>
+#include "VersionGenerated.h"
+
+VS_VERSION_INFO VERSIONINFO
+  FILEVERSION VW_FILEVERSION
+  PRODUCTVERSION VW_FILEVERSION
+  FILEFLAGSMASK 0x3fL
+  FILEFLAGS 0x0L
+  FILEOS 0x40004L
+  FILETYPE 0x1L
+  FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "Developer: Ram Shanker"
+            VALUE "FileDescription", "Vishwakarma Extension Worker (Embedded Python)"
+            VALUE "FileVersion", VW_FILEVERSION_STR
+            VALUE "InternalName", "VishwakarmaExtension.exe"
+            VALUE "LegalCopyright", "Copyright (C) 2026, All rights reserved."
+            VALUE "OriginalFilename", "VishwakarmaExtension.exe"
+            VALUE "ProductName", "Vishwakarma"
+            VALUE "ProductVersion", VW_PRODUCTVERSION_STR
+            VALUE "Comments", VW_COMMENTS_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

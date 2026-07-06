@@ -128,6 +128,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscel
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
     </ProjectReference>
+    <ProjectReference Include="VishwakarmaExtension.vcxproj">
+      <Project>{a3d3e7c1-52b6-4e29-bb4f-7a9c63d1f5e2}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- VishwakarmaExtension.exe: out-of-process extension worker with statically linked
+     CPython. Links build\cpython-x64-release\python313.lib produced by
+     code-miscellaneous\BuildCPython.ps1 (invoked automatically below when missing).
+     Both configurations intentionally build the identical optimized /MT binary: the
+     worker always embeds the release CPython, and a Debug host talks to it over pipes,
+     never links against it. -->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>16.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{A3D3E7C1-52B6-4E29-BB4F-7A9C63D1F5E2}</ProjectGuid>
+    <RootNamespace>VishwakarmaExtension</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <VishwakarmaRoot>$(MSBuildThisFileDirectory)..\</VishwakarmaRoot>
+    <CPythonBuildDir>$(VishwakarmaRoot)build\cpython-x64-release</CPythonBuildDir>
+    <OutDir>$(VishwakarmaRoot)build\$(Configuration)\</OutDir>
+    <IntDir>$(VishwakarmaRoot)build\$(Configuration)\ExtensionWorkerIntermediate\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <Optimization>MaxSpeed</Optimization>
+      <PreprocessorDefinitions>Py_NO_ENABLE_SHARED;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(CPythonBuildDir)\include;$(VishwakarmaRoot)code-external\cpython\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/FS /utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>$(CPythonBuildDir)\python313.lib;version.lib;ws2_32.lib;pathcch.lib;bcrypt.lib;Advapi32.lib;Shell32.lib;Ole32.lib;OleAut32.lib;User32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <PreBuildEvent>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateVersionHeader.ps1" -OutDir "$(IntDir)."</Command>
+    </PreBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="VishwakarmaExtension.cpp" />
+    <ClCompile Include="$(CPythonBuildDir)\vk_frozen_modules.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="VishwakarmaExtension.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\code-miscellaneous\BuildCPython.ps1" />
+    <None Include="..\code-miscellaneous\CPythonStatic.props" />
+  </ItemGroup>
+  <!-- The static CPython is rebuilt only when external dependencies change (same policy
+       as VishwakarmaExternal / OpenSSL); build it on demand when absent. -->
+  <Target Name="BuildStaticCPythonIfMissing" BeforeTargets="PrepareForBuild" Condition="!Exists('$(CPythonBuildDir)\python313.lib') Or !Exists('$(CPythonBuildDir)\vk_frozen_modules.c')">
+    <Message Importance="high" Text="Static CPython not found - running BuildCPython.ps1 (one-time, several minutes)..." />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(VishwakarmaRoot)code-miscellaneous\BuildCPython.ps1&quot;" />
+  </Target>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

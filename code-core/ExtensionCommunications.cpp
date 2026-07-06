@@ -159,6 +159,12 @@ bool SpawnImportWorker(WorkerProcess& worker, const ImporterProfile& profile, st
                 "\\main.py (was the post-build extension deploy step run?)";
         return false;
     }
+    const std::wstring workerExe = ExecutableDirectory() + L"\\VishwakarmaExtension.exe";
+    if (!std::filesystem::exists(std::filesystem::path(workerExe))) {
+        error = "Extension worker not found: " + Utf8FromWide(workerExe) +
+                " (build VishwakarmaExtension.vcxproj / re-run the installer)";
+        return false;
+    }
 
     SECURITY_ATTRIBUTES inheritable{ sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE };
 
@@ -186,10 +192,11 @@ bool SpawnImportWorker(WorkerProcess& worker, const ImporterProfile& profile, st
     startup.hStdOutput = stdoutWrite;
     startup.hStdError = (stderrLog != INVALID_HANDLE_VALUE) ? stderrLog : GetStdHandle(STD_ERROR_HANDLE);
 
-    // MVP: plain python.exe from PATH, no sandbox yet. Becomes vk_worker.exe
-    // (frozen CPython inside an AppContainer) in the follow-up hardening step.
-    std::wstring commandLine = L"python -u main.py";
-    const BOOL created = CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr,
+    // Self-contained frozen-CPython worker shipped next to Vishwakarma.exe: no Python
+    // installation, no pip packages, no DLLs. Unbuffered pipes and the curated frozen
+    // stdlib are built in. Still no AppContainer - that is the next hardening step.
+    std::wstring commandLine = L"\"" + workerExe + L"\" main.py";
+    const BOOL created = CreateProcessW(workerExe.c_str(), commandLine.data(), nullptr, nullptr,
         TRUE /*inherit handles*/, CREATE_NO_WINDOW, nullptr, extensionDir.c_str(),
         &startup, &worker.process);
 
@@ -199,7 +206,7 @@ bool SpawnImportWorker(WorkerProcess& worker, const ImporterProfile& profile, st
     if (stderrLog != INVALID_HANDLE_VALUE) CloseHandle(stderrLog);
 
     if (!created) {
-        error = "Failed to launch the Python worker (is Python 3.12+ on PATH?). Win32 error " +
+        error = "Failed to launch VishwakarmaExtension.exe. Win32 error " +
                 std::to_string(GetLastError());
         CloseHandle(stdinWrite);
         CloseHandle(stdoutRead);
