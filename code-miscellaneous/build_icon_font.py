@@ -1,5 +1,6 @@
 # Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
-
+# This file is no longer in use since, SVG files are now directly integrated into the codebase.
+# The SVG library converts embedded SVGs into RGB textures directly.
 """
 Compiles monochrome SVG icons into a single TTF font. Project structure expected:
 Project/

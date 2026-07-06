@@ -198,12 +198,6 @@ static void CopyRenderedSVGIconToAtlas(AtlasBitmap& atlas, const SVGIconRenderer
     }
 }
 
-static bool IsPrivateUseCodepoint(char32_t codepoint) {
-    return (codepoint >= 0xE000 && codepoint <= 0xF8FF) ||
-        (codepoint >= 0xF0000 && codepoint <= 0xFFFFD) ||
-        (codepoint >= 0x100000 && codepoint <= 0x10FFFD);
-}
-
 static bool TryReserveIconCell(int iconIndex, int atlasW, int atlasH, int& outX, int& outY) {
     const int cellsPerRow = (atlasW + kIconCellGap) / (kIconCellSize + kIconCellGap);
     if (cellsPerRow <= 0) return false;
@@ -314,42 +308,6 @@ static AtlasBitmap BuildIconAtlas() {
         CopyRenderedSVGIconToAtlas(atlas, svgIcon, cellX, cellY, kIconCellSize);
         StoreIconCellGlyph(SVGIconRenderer::IconForID(svgIcon.id), cellX, cellY, atlasW, atlasH, false);
         ++nextIconIndex;
-    }
-
-    if (ftIconFace) {
-        FT_Set_Pixel_Sizes(ftIconFace, 0, proceduralIconDrawSize);
-
-        FT_UInt glyphIndex = 0;
-        FT_ULong charCode = FT_Get_First_Char(ftIconFace, &glyphIndex);
-        while (glyphIndex != 0) {
-            const char32_t codepoint = (char32_t)charCode;
-            if (IsPrivateUseCodepoint(codepoint) &&
-                std::find(gIconAtlasMetadata.dummyIconCodepoints.begin(),
-                    gIconAtlasMetadata.dummyIconCodepoints.end(), codepoint) ==
-                gIconAtlasMetadata.dummyIconCodepoints.end() &&
-                FT_Load_Char(ftIconFace, charCode, FT_LOAD_RENDER) == 0) {
-                int cellX = 0;
-                int cellY = 0;
-                if (!TryReserveIconCell(nextIconIndex, atlasW, atlasH, cellX, cellY)) break;
-
-                FT_GlyphSlot g = ftIconFace->glyph;
-                const int bitmapX = cellX + std::max(0, (kIconCellSize - (int)g->bitmap.width) / 2);
-                const int bitmapY = cellY + std::max(0, (kIconCellSize - (int)g->bitmap.rows) / 2);
-                const int copyW = std::min((int)g->bitmap.width, kIconCellSize);
-                const int copyH = std::min((int)g->bitmap.rows, kIconCellSize);
-                for (int y = 0; y < copyH; ++y) {
-                    for (int x = 0; x < copyW; ++x) {
-                        SetAtlasCoverage(atlas, bitmapX + x, bitmapY + y,
-                            g->bitmap.buffer[y * g->bitmap.pitch + x]);
-                    }
-                }
-
-                StoreIconCellGlyph(codepoint, cellX, cellY, atlasW, atlasH);
-                ++nextIconIndex;
-            }
-
-            charCode = FT_Get_Next_Char(ftIconFace, charCode, &glyphIndex);
-        }
     }
 
     return atlas;

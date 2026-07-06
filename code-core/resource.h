@@ -17,5 +17,3 @@
 
 #define IDR_LOGO_PNG  105   // Integer must be unique. Used to identify the logo.png resource in the application.
 #define IDR_NOTO_SANS_FONT 106
-// Resource ID for embedded icon font (SVG_Icons_Generated_Font.ttf)
-#define IDR_SVG_ICONS_FONT 107

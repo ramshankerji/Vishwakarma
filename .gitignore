@@ -8,7 +8,6 @@ website/Server
 website/public
 website/.hugo_build.lock
 build/
-SVG_Icons_Generated_Font.ttf
 AGENTS.override.md
 GEMINI.local.md
 CLAUDE.local.md

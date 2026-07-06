@@ -10,7 +10,6 @@
 
 FT_Library ft = nullptr;
 FT_Face    ftFace = nullptr;
-FT_Face    ftIconFace = nullptr;
 bool       fontInitialized = false;
 
 #pragma comment(lib, "freetype.lib")
@@ -45,16 +44,6 @@ bool InitFontSystem() {
     }
 
     FT_Set_Pixel_Sizes(ftFace, 0, 32); // consistent size
-
-    // Load icon font exclusively from embedded resources so the binary remains
-    // self-contained. If the resource is missing the icon pool will be smaller
-    // (that's acceptable) and we continue without loading from disk.
-    if (LoadFontFaceFromResource(IDR_SVG_ICONS_FONT, ftIconFace)) {
-        FT_Select_Charmap(ftIconFace, FT_ENCODING_UNICODE);
-    }
-    else {
-        std::cerr << "Embedded icon font resource not found; continuing with procedural UI icons only\n";
-    }
 
     fontInitialized = true;
     return true;

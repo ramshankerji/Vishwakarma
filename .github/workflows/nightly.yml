@@ -120,35 +120,10 @@ jobs:
       if: steps.cache-vishwakarma-external.outputs.cache-hit != 'true'
       run: msbuild code-external/VishwakarmaExternal.vcxproj /p:Configuration=Release /p:Platform=x64 /m
 
-    - name: Install System Dependencies (FontForge & CLOC)
+    - name: Install System Dependencies (CLOC)
       shell: pwsh
       run: |
-        # Install everything at once
-        choco install fontforge cloc -y --no-progress
-
-        # Expose FontForge to subsequent steps
-        $ffPath = "C:\Program Files\FontForgeBuilds\bin"
-        Add-Content -Path $env:GITHUB_PATH -Value $ffPath
-        $env:PATH += ";$ffPath"
-        fontforge -version
-    
-    - name: Setup Python and Install Dependencies
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.x' # This will always grab the latest stable minor release of Python 3
-        # We shall freeze version ONLY when we have a specific reason to do so. For now, we want the latest stable version of Python 3.
-        cache: 'pip' 
-    - name: Install Pip Packages
-      run: pip install fonttools svgpathtools cu2qu pillow
-
-    - name: Build icon font
-      run: |
-        python code-miscellaneous/build_icon_font.py
-    - name: Upload generated font
-      uses: actions/upload-artifact@v4
-      with:
-        name: generated-font
-        path: Fonts/*.ttf
+        choco install cloc -y --no-progress
 
     # Builds Vishwakarma.exe + VishwakarmaSetup.exe, signs both with MV-CodeSigner-01.pfx,
     # and produces Vishwakarma_UserSetup_win10_win11_x64.exe + Vishwakarma_release_details.json
