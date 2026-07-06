@@ -122,6 +122,8 @@ enum class Commands : uint32_t {
     MAX_ZOOM_WINDOW = 3588339920,
     MAX_ZOOM_HEIRARCHY = 3864312238,
     MOUSE_WINDOW_ZOOM = 3570826612,
+    ZOOM_MAX = 2914702845,   // Fit ALL objects of the active Scene3D / Page2D in the view.
+    ZOOM_FOCUS = 3690481522, // Fit the selected objects (all objects when nothing is selected).
 
     VIEW_PROJECTION = 2826420556,
     VIEW_ISOMETRIC = 2633994874,

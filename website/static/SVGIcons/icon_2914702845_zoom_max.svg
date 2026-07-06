@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Corner Brackets (view extents) -->
+    <path d="M8 18 L8 8 L18 8" />
+    <path d="M46 8 L56 8 L56 18" />
+    <path d="M56 46 L56 56 L46 56" />
+    <path d="M18 56 L8 56 L8 46" />
+    <!-- Outward Diagonal Arrows -->
+    <path d="M26 26 L15 15 M15 22 L15 15 L22 15" />
+    <path d="M38 26 L49 15 M42 15 L49 15 L49 22" />
+    <path d="M38 38 L49 49 M49 42 L49 49 L42 49" />
+    <path d="M26 38 L15 49 M22 49 L15 49 L15 42" />
+    <!-- Objects covered by the view -->
+    <rect x="27" y="27" width="10" height="10" fill="#1E7A46" stroke="none" />
+  </g>
+</svg>

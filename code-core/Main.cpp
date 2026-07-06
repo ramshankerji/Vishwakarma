@@ -417,6 +417,10 @@ void ProcessPendingUIActions() {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_ARC_CREATION2D);
         } else if (action.id == static_cast<uint32_t>(Commands::CREATE_TEXT)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_TEXT_CREATION2D);
+        } else if (action.id == static_cast<uint32_t>(Commands::ZOOM_MAX)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::ZOOM_MAX_EXTENTS);
+        } else if (action.id == static_cast<uint32_t>(Commands::ZOOM_FOCUS)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::ZOOM_FOCUS_SELECTED);
         } else if (action.id == static_cast<uint32_t>(Commands::IMPORT_STD)) {
             ExtensionCommunications::QueueImportStdCommand(GetActiveTabForUIAction());
         } else if (action.id == static_cast<uint32_t>(Commands::IMPORT_DXF)) {

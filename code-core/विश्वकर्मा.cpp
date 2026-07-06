@@ -708,6 +708,74 @@ static void ApplyPickResult(DATASETTAB& tab, bool hit, uint64_t objectId,
     }
 }
 
+// Zoom Max / Zoom Focus for the 3D scene: dolly the camera along its existing view direction so
+// the objects fit the visible frustum. The look target and view direction stay fixed; only the
+// distance between the camera and its target/projection plane changes. selectedOnly limits the
+// fit to the current selection (falls back to all objects when nothing is selected).
+static void ZoomSceneToExtents(DATASETTAB* myTab, bool selectedOnly) {
+    if (!myTab) return;
+
+    std::vector<uint64_t> selected;
+    if (selectedOnly) {
+        std::lock_guard<std::mutex> lock(myTab->selection.selectedMutex);
+        selected = myTab->selection.selectedObjectIds;
+    }
+    const bool filterBySelection = selectedOnly && !selected.empty(); // Empty selection = fit all.
+
+    DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&myTab->camera.target);
+    DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&myTab->camera.position);
+    DirectX::XMVECTOR worldUp = DirectX::XMLoadFloat3(&myTab->camera.up);
+    DirectX::XMVECTOR forward = DirectX::XMVectorSubtract(target, eye);
+    if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(forward)) <= 0.000001f) return;
+    forward = DirectX::XMVector3Normalize(forward);
+    DirectX::XMVECTOR right = DirectX::XMVector3Cross(worldUp, forward);
+    if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(right)) <= 0.000001f) return;
+    right = DirectX::XMVector3Normalize(right);
+    DirectX::XMVECTOR viewUp = DirectX::XMVector3Cross(forward, right);
+
+    float aspect = myTab->camera.aspect;
+    int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
+    if (GetVisibleSceneViewportForTab(*myTab, viewportWidth, viewportHeight, viewportTop) &&
+        viewportWidth > 0 && viewportHeight > 0) {
+        aspect = static_cast<float>(viewportWidth) / static_cast<float>(viewportHeight);
+    }
+    const float margin = 0.95f; // Keep a small breathing border around the extents.
+    const float tanHalfFovY = std::tan(myTab->camera.fov * 0.5f) * margin;
+    const float tanHalfFovX = tanHalfFovY * aspect;
+    if (tanHalfFovY <= 0.0001f || tanHalfFovX <= 0.0001f) return;
+
+    // The engineering thread is the sole writer of storageObjects3D, so iteration needs no lock.
+    float requiredDistance = 0.0f;
+    bool hasPoints = false;
+    GeometryData geometry;
+    for (const StoredGeometryObject3D& stored : myTab->storageObjects3D) {
+        if (!stored.object) continue;
+        if (filterBySelection &&
+            std::find(selected.begin(), selected.end(), stored.memoryId) == selected.end()) continue;
+        if (!GeometryForObject(stored.objectType, stored.object, geometry)) continue;
+        for (const Vertex& vertex : geometry.vertices) {
+            DirectX::XMVECTOR offset = DirectX::XMVectorSubtract(
+                DirectX::XMLoadFloat3(&vertex.position), target);
+            const float alongForward = DirectX::XMVectorGetX(DirectX::XMVector3Dot(offset, forward));
+            const float alongRight = DirectX::XMVectorGetX(DirectX::XMVector3Dot(offset, right));
+            const float alongUp = DirectX::XMVectorGetX(DirectX::XMVector3Dot(offset, viewUp));
+            // With the camera at distance d behind the target, the point's depth is d + alongForward
+            // and it is inside the frustum when |lateral| <= depth * tanHalfFov. Solve for minimum d.
+            requiredDistance = (std::max)(requiredDistance, std::abs(alongRight) / tanHalfFovX - alongForward);
+            requiredDistance = (std::max)(requiredDistance, std::abs(alongUp) / tanHalfFovY - alongForward);
+            requiredDistance = (std::max)(requiredDistance, myTab->camera.nearZ - alongForward);
+            hasPoints = true;
+        }
+    }
+    if (!hasPoints) return;
+
+    // Same distance clamping as the mouse-wheel zoom.
+    const float newDistance = std::clamp(requiredDistance, 1.0f, myTab->camera.farZ - 10.0f);
+    DirectX::XMStoreFloat3(&myTab->camera.position,
+        DirectX::XMVectorSubtract(target, DirectX::XMVectorScale(forward, newDistance)));
+    myTab->selection.lastNavInteractionMs.store(GetTickCount64(), std::memory_order_release);
+}
+
 static bool CreatePrimitiveGeometryElement(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType,
     const XMFLOAT3& placementPoint) {
     if (!targetTab || !VishwakarmaStorage::IsGeometry3DObjectType(objectType)) return false;
@@ -1470,6 +1538,14 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
             } else if (nextWorkTODO.actionType == ACTION_TYPE::MODIFY_OBJECT_PROPERTY) {
                 ModifyObjectProperty(myTab, nextWorkTODO.objectId, static_cast<uint8_t>(nextWorkTODO.x),
                     std::bit_cast<double>(nextWorkTODO.auxValue));
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::ZOOM_MAX_EXTENTS ||
+                       nextWorkTODO.actionType == ACTION_TYPE::ZOOM_FOCUS_SELECTED) {
+                const bool selectedOnly = nextWorkTODO.actionType == ACTION_TYPE::ZOOM_FOCUS_SELECTED;
+                if (Cad2DIsActivePage2D(*myTab)) {
+                    Cad2DZoomToExtents(*myTab, selectedOnly);
+                } else {
+                    ZoomSceneToExtents(myTab, selectedOnly);
+                }
             }
         }
         

@@ -120,8 +120,10 @@ enum class ACTION_TYPE : uint16_t { // Specifying uint16_t ensures that it is of
     BEGIN_PRIMITIVE_CREATION3D = 30019,
     IMPORT_STD_FILE = 30020, // objectId owns a heap std::wstring* with the chosen file path.
     IMPORT_DXF_FILE = 30021, // objectId owns a heap std::wstring* with the chosen file path.
-    MODIFY_OBJECT_PROPERTY = 30022 // objectId = memoryID, x = fieldIndex,
-                                   // auxValue = std::bit_cast<uint64_t>(double value).
+    MODIFY_OBJECT_PROPERTY = 30022, // objectId = memoryID, x = fieldIndex,
+                                    // auxValue = std::bit_cast<uint64_t>(double value).
+    ZOOM_MAX_EXTENTS = 30023,   // Fit ALL objects of the active Scene3D / Page2D in the view.
+    ZOOM_FOCUS_SELECTED = 30024 // Fit the selected objects (all objects when nothing is selected).
 };
 
 struct ACTION_DETAILS_OLD {
