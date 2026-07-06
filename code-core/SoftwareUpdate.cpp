@@ -63,6 +63,7 @@ static const char* kManifestPublicKeyPem =
 #define IDR_VW_EXT_STD_ZIP 205
 #define IDR_VW_EXT_DXF_ZIP 206
 #define IDR_VW_EXT_WORKER_EXE 207
+#define IDR_VW_LICENSES_ZIP 208
 
 // ------------------------------------------------------------------ Small helpers
 static std::wstring Utf8ToWide(const std::string& s) {
@@ -477,6 +478,21 @@ static bool InstallBundledExtensions(const fs::path& dir, std::wstring& error) {
     return allOk;
 }
 
+// Unpacks the third-party license texts (built from the repo's OpenSourceLicenses folder
+// plus LICENSE.md by GenerateRelease.ps1) into <dir>\OpenSourceLicenses, as required by
+// the licenses of the bundled libraries.
+static bool InstallOpenSourceLicenses(const fs::path& dir, std::wstring& error) {
+    std::string zip = LoadResourceBytes(IDR_VW_LICENSES_ZIP);
+    if (zip.empty()) {
+        error = L"The license texts are missing from the setup file.";
+        return false;
+    }
+    fs::path dest = dir / L"OpenSourceLicenses";
+    std::error_code ec;
+    fs::remove_all(dest, ec); // Replace any previously installed version's files.
+    return ExtractZipToDir(zip, dest, error);
+}
+
 static void CreateDesktopShortcut(const fs::path& targetExe) {
     fs::path desktop = KnownFolder(FOLDERID_Desktop);
     if (desktop.empty()) return;
@@ -562,6 +578,10 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
             std::wstring workerError;
             if (!InstallExtensionWorker(dir, workerError) && !updateMode)
                 MessageBoxW(nullptr, workerError.c_str(), L"Vishwakarma Setup", MB_OK | MB_ICONWARNING);
+            // License texts travel with the exe too; a failure is equally non-fatal.
+            std::wstring licenseError;
+            if (!InstallOpenSourceLicenses(dir, licenseError) && !updateMode)
+                MessageBoxW(nullptr, licenseError.c_str(), L"Vishwakarma Setup", MB_OK | MB_ICONWARNING);
         }
     }
 

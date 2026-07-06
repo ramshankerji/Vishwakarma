@@ -1,9 +1,10 @@
 # Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
 # Release packaging of Vishwakarma. Design: website/content/software/release.md
 #
-# Mode EmbeddedJson : writes build\<Configuration>\EmbeddedReleaseDetails.json which gets
-#                     embedded into VishwakarmaSetup.exe as a resource. Runs as the pre-build
-#                     event of VishwakarmaSetup.vcxproj.
+# Mode EmbeddedJson : writes build\<Configuration>\EmbeddedReleaseDetails.json and
+#                     build\<Configuration>\OpenSourceLicenses.zip which get embedded into
+#                     VishwakarmaSetup.exe as resources. Runs as the pre-build event of
+#                     VishwakarmaSetup.vcxproj.
 # Mode Package      : full release pipeline (default configuration Release):
 #                     1. msbuild Vishwakarma.vcxproj
 #                     2. Authenticode-sign Vishwakarma.exe        (MV-CodeSigner-01.pfx)
@@ -90,10 +91,21 @@ function Write-EmbeddedJson([object]$info) {
     Write-Host "Wrote $path (version $($info.Version))"
 }
 
+# Third-party license texts (OpenSourceLicenses folder + LICENSE.md), embedded into the
+# setup exe as one zip and extracted beside Vishwakarma.exe at install time.
+function Write-LicensesZip {
+    New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
+    $zipPath = Join-Path $buildDir "OpenSourceLicenses.zip"
+    Compress-Archive -Path (Join-Path $repoRoot "OpenSourceLicenses\*"), (Join-Path $repoRoot "LICENSE.md") `
+        -DestinationPath $zipPath -Force
+    Write-Host "Wrote $zipPath"
+}
+
 $info = Get-VersionInfo
 
 if ($Mode -eq "EmbeddedJson") {
     Write-EmbeddedJson $info
+    Write-LicensesZip
     exit 0
 }
 
@@ -160,6 +172,7 @@ if ($PfxPassword -and $signtool) { Invoke-Sign $signtool $workerExe }
 # the app project relinks (its pre-build events always regenerate protobuf sources) and the
 # Authenticode signature applied in step 1 is lost.
 Write-EmbeddedJson $info
+Write-LicensesZip
 msbuild (Join-Path $repoRoot "code-core\VishwakarmaSetup.vcxproj") /p:Configuration=$Configuration /p:Platform=x64 /p:BuildProjectReferences=false /m
 if ($LASTEXITCODE -ne 0) { throw "VishwakarmaSetup.vcxproj build failed." }
 

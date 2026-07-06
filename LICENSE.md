@@ -35,3 +35,8 @@ Mission Vishwakarma uses third-party open-source libraries. These dependencies a
 | LunaSVG | MIT | [https://github.com/sammycage/lunasvg](https://github.com/sammycage/lunasvg) | [Link](https://github.com/sammycage/lunasvg) |
 | fast_float | Apache-2.0 / MIT / BSL-1.0 | [https://github.com/fastfloat/fast_float](https://github.com/fastfloat/fast_float) | [Link](https://github.com/fastfloat/fast_float) |
 | OpenSSL | Apache-2.0 | [https://www.openssl.org/](https://www.openssl.org/) | [Link](https://github.com/openssl/openssl) |
+| CPython | PSF-2.0 | [https://www.python.org/](https://www.python.org/) | [Link](https://github.com/python/cpython) |
+| Protobuf | BSD-3-Clause | [https://protobuf.dev/](https://protobuf.dev/) | [Link](https://github.com/protocolbuffers/protobuf) |
+| PocketPy | MIT | [https://pocketpy.dev/](https://pocketpy.dev/) | [Link](https://github.com/pocketpy/pocketpy) |
+| PlutoVG | MIT | [https://github.com/sammycage/plutovg](https://github.com/sammycage/plutovg) | [Link](https://github.com/sammycage/plutovg) |
+| SQLite | Public Domain | [https://sqlite.org/](https://sqlite.org/) | [Link](https://github.com/sqlite/sqlite) |
