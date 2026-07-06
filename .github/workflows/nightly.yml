@@ -125,6 +125,17 @@ jobs:
       run: |
         choco install cloc -y --no-progress
 
+    # Python + fonttools/pillow feed the MSDF atlas pre-build event
+    # (code-miscellaneous/msdf_atlas_generator.bat), which bakes build/NotoSansMSDF_Compiled.h.
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+        cache: 'pip'
+
+    - name: Install Pip Packages (MSDF atlas generation)
+      run: pip install fonttools pillow
+
     # Builds Vishwakarma.exe + VishwakarmaSetup.exe, signs both with MV-CodeSigner-01.pfx,
     # and produces Vishwakarma_UserSetup_win10_win11_x64.exe + Vishwakarma_release_details.json
     # + .sig (Ed25519). Without the RELEASE_SIGN_PASSWORD secret everything is built unsigned.
