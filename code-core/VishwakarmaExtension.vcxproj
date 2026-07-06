@@ -47,6 +47,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <WarningLevel>Level3</WarningLevel>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>

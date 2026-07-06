@@ -28,7 +28,8 @@ jobs:
 
     - name: Checkout submodules (shallow, pinned)
       # External dependencies: only the pinned commit, depth 1, to keep checkout fast.
-      run: git submodule update --init --recursive --depth 1
+      # Fetch in parallel with --jobs 8 to speed up the network operations.
+      run: git submodule update --init --recursive --depth 1 --jobs 8
 
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1
