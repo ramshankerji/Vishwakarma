@@ -50,4 +50,11 @@ foreach ($extensionName in $extensionNames) {
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
+
+    # Package the deployed extension into a zip that VishwakarmaSetup.rc embeds as
+    # RCDATA. Only the runtime .py files are needed; selecting them explicitly keeps
+    # __pycache__ (created when the worker runs from the build output) out of the archive.
+    $zipPath = Join-Path $OutDir "extensions\$extensionName.zip"
+    $pyFiles = Get-ChildItem -Path $targetDir -File -Filter *.py
+    Compress-Archive -Path $pyFiles.FullName -DestinationPath $zipPath -Force
 }

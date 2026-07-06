@@ -60,6 +60,8 @@ static const char* kManifestPublicKeyPem =
 #define IDR_VW_RELEASE_JSON 202
 #define IDR_VW_EULA_MD 203
 #define IDR_VW_PRIVACY_MD 204
+#define IDR_VW_EXT_STD_ZIP 205
+#define IDR_VW_EXT_DXF_ZIP 206
 
 // ------------------------------------------------------------------ Small helpers
 static std::wstring Utf8ToWide(const std::string& s) {
@@ -369,6 +371,79 @@ static bool InstallPayload(const fs::path& dir, const std::string& payload, cons
     return true;
 }
 
+struct EmbeddedExtension { int resourceId; const wchar_t* folderName; };
+
+// The importer extensions bundled as zips by VishwakarmaSetup.rc; resource IDs
+// must match it.
+static const EmbeddedExtension kEmbeddedExtensions[] = {
+    { IDR_VW_EXT_STD_ZIP, L"Interoperability-STD" },
+    { IDR_VW_EXT_DXF_ZIP, L"Interoperability-DXF" },
+};
+
+// Unpacks a zip held in memory into destDir using the OS-provided bsdtar. bsdtar
+// seeks to a zip's central directory, so the archive is staged to a temp file
+// rather than piped through stdin.
+static bool ExtractZipToDir(const std::string& zipBytes, const fs::path& destDir, std::wstring& error) {
+    std::error_code ec;
+    fs::create_directories(destDir, ec);
+
+    wchar_t tempDir[MAX_PATH]{};
+    if (!GetTempPathW(MAX_PATH, tempDir)) { error = L"Could not locate the temp folder."; return false; }
+    wchar_t tempZip[MAX_PATH]{};
+    if (!GetTempFileNameW(tempDir, L"vwx", 0, tempZip)) { error = L"Could not create a temp file."; return false; }
+    fs::path zipPath = tempZip;
+    if (!WriteFileBytes(zipPath, zipBytes.data(), zipBytes.size())) {
+        fs::remove(zipPath, ec);
+        error = L"Could not stage a bundled extension for extraction.";
+        return false;
+    }
+
+    // Absolute System32 path avoids PATH hijacking; tar.exe ships with Windows 10 1803+.
+    wchar_t sysDir[MAX_PATH]{};
+    GetSystemDirectoryW(sysDir, MAX_PATH);
+    fs::path tarExe = fs::path(sysDir) / L"tar.exe";
+    std::wstring cmd = L"\"" + tarExe.wstring() + L"\" -xf \"" + zipPath.wstring() +
+                       L"\" -C \"" + destDir.wstring() + L"\"";
+
+    STARTUPINFOW si{ sizeof(si) };
+    PROCESS_INFORMATION pi{};
+    bool ok = false;
+    if (CreateProcessW(tarExe.c_str(), cmd.data(), nullptr, nullptr, FALSE,
+                       CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+        DWORD wait = WaitForSingleObject(pi.hProcess, 60000);
+        DWORD code = 1;
+        if (wait == WAIT_OBJECT_0) GetExitCodeProcess(pi.hProcess, &code);
+        else TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        ok = (wait == WAIT_OBJECT_0 && code == 0);
+        if (!ok) error = L"Could not extract a bundled extension (tar.exe failed).";
+    } else {
+        error = L"Could not launch tar.exe to extract bundled extensions.";
+    }
+    fs::remove(zipPath, ec);
+    return ok;
+}
+
+// Unpacks each bundled importer extension into <dir>\extensions\<name> so the
+// application finds it at <exe dir>\extensions\<name>\main.py.
+static bool InstallBundledExtensions(const fs::path& dir, std::wstring& error) {
+    bool allOk = true;
+    for (const EmbeddedExtension& ext : kEmbeddedExtensions) {
+        std::string zip = LoadResourceBytes(ext.resourceId);
+        if (zip.empty()) {
+            error = L"A bundled extension is missing from the setup file.";
+            allOk = false;
+            continue;
+        }
+        fs::path dest = dir / L"extensions" / ext.folderName;
+        std::error_code ec;
+        fs::remove_all(dest, ec); // Replace any previously installed version's files.
+        if (!ExtractZipToDir(zip, dest, error)) allOk = false;
+    }
+    return allOk;
+}
+
 static void CreateDesktopShortcut(const fs::path& targetExe) {
     fs::path desktop = KnownFolder(FOLDERID_Desktop);
     if (desktop.empty()) return;
@@ -444,6 +519,13 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
         installed = InstallPayload(dir, payload, json, error);
         if (!installed && !updateMode)
             MessageBoxW(nullptr, error.c_str(), L"Vishwakarma Setup", MB_OK | MB_ICONERROR);
+        // Bundled Python extensions travel with the exe; unpack them alongside it. A
+        // failure here is non-fatal: the app still runs, only importers are unavailable.
+        if (installed) {
+            std::wstring extError;
+            if (!InstallBundledExtensions(dir, extError) && !updateMode)
+                MessageBoxW(nullptr, extError.c_str(), L"Vishwakarma Setup", MB_OK | MB_ICONWARNING);
+        }
     }
 
     if (installed) {
