@@ -149,6 +149,19 @@ jobs:
       if: steps.cache-vishwakarma-external.outputs.cache-hit != 'true'
       run: msbuild code-external/VishwakarmaExternal.vcxproj /p:Configuration=Release /p:Platform=x64 /m
 
+    # actions/cache restores files with their original (old) mtimes while the submodule
+    # checkout above is brand new, so MSBuild's Inputs/Outputs check on the BuildOpenSSL
+    # target would consider the cached libraries stale and rebuild OpenSSL anyway. Touch
+    # the restored outputs so they are newer than the sources. Only on an exact cache hit:
+    # after a partial restore-keys restore the rebuild is intentional.
+    - name: Refresh Cached VishwakarmaExternal Timestamps
+      if: steps.cache-vishwakarma-external.outputs.cache-hit == 'true'
+      shell: pwsh
+      run: |
+        $now = Get-Date
+        Get-ChildItem "build/openssl-x64-release", "build/Release/External" -Recurse -File |
+          ForEach-Object { $_.LastWriteTime = $now }
+
     - name: Install System Dependencies (CLOC)
       shell: pwsh
       run: |

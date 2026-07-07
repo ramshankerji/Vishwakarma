@@ -153,7 +153,15 @@ if ($PfxPassword -and -not (Test-Path $pfxPath)) {
 }
 
 # 1. Build the application first, so the setup exe embeds the final (signed) binary.
-msbuild (Join-Path $repoRoot "code-core\Vishwakarma.vcxproj") /p:Configuration=$Configuration /p:Platform=x64 /m
+# When VishwakarmaExternal.lib already exists (local incremental build, or restored from
+# the CI cache), BuildProjectReferences=false keeps MSBuild out of VishwakarmaExternal
+# entirely - otherwise its BuildOpenSSL timestamp check rebuilds OpenSSL on CI, where
+# freshly checked-out submodule sources are always newer than the cached libraries.
+$appBuildArgs = @((Join-Path $repoRoot "code-core\Vishwakarma.vcxproj"), "/p:Configuration=$Configuration", "/p:Platform=x64", "/m")
+if (Test-Path (Join-Path $buildDir "External\VishwakarmaExternal.lib")) {
+    $appBuildArgs += "/p:BuildProjectReferences=false"
+}
+msbuild @appBuildArgs
 if ($LASTEXITCODE -ne 0) { throw "Vishwakarma.vcxproj build failed." }
 
 $appExe = Join-Path $buildDir "Vishwakarma.exe"
