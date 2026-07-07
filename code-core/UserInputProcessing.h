@@ -123,7 +123,8 @@ enum class ACTION_TYPE : uint16_t { // Specifying uint16_t ensures that it is of
     MODIFY_OBJECT_PROPERTY = 30022, // objectId = memoryID, x = fieldIndex,
                                     // auxValue = std::bit_cast<uint64_t>(double value).
     ZOOM_MAX_EXTENTS = 30023,   // Fit ALL objects of the active Scene3D / Page2D in the view.
-    ZOOM_FOCUS_SELECTED = 30024 // Fit the selected objects (all objects when nothing is selected).
+    ZOOM_FOCUS_SELECTED = 30024, // Fit the selected objects (all objects when nothing is selected).
+    ZOOM_WINDOW_BEGIN = 30025   // Arm zoom-window mode; the next 2 scene clicks define the rectangle.
 };
 
 struct ACTION_DETAILS_OLD {

@@ -124,6 +124,7 @@ enum class Commands : uint32_t {
     MOUSE_WINDOW_ZOOM = 3570826612,
     ZOOM_MAX = 2914702845,   // Fit ALL objects of the active Scene3D / Page2D in the view.
     ZOOM_FOCUS = 3690481522, // Fit the selected objects (all objects when nothing is selected).
+    ZOOM_WINDOW = 3213983172, // Arm zoom-window mode; the next 2 clicks define the rectangle to zoom onto.
 
     VIEW_PROJECTION = 2826420556,
     VIEW_ISOMETRIC = 2633994874,

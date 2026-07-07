@@ -140,6 +140,13 @@ struct DATASETTAB {
     uint64_t activeScene3DMemoryId = 0; // Organizational parent for newly generated 3D objects.
     std::atomic<uint32_t> activePrimitive3DPlacementType{
         VishwakarmaStorage::ToNumber(VishwakarmaStorage::ObjectType::Unknown) };
+    // Zoom Window mode: armed by Commands::ZOOM_WINDOW, the next 2 clicks define the rectangle to
+    // zoom onto. The atomic is also read by the render thread to trail the cursor icon; the corner
+    // fields are engineering-thread only.
+    std::atomic<bool> zoomWindowMode{ false };
+    bool zoomWindowHasFirstCorner = false;
+    int zoomWindowFirstX = 0;
+    int zoomWindowFirstY = 0;
     std::unique_ptr<std::mutex> storageObjectsMutex;
 
 	DX12ResourcesPerTab dx; // DirectX12 resources specific to this tab.

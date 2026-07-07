@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Rectangular Selection Window -->
+    <rect x="8" y="8" width="34" height="26" stroke-dasharray="6 5" />
+    <!-- The 2 Clicked Corner Points -->
+    <circle cx="8" cy="8" r="3.5" fill="#1E7A46" stroke="none" />
+    <circle cx="42" cy="34" r="3.5" fill="#1E7A46" stroke="none" />
+    <!-- Magnifier Lens Centered on the Second Click -->
+    <circle cx="42" cy="34" r="12" />
+    <line x1="51" y1="43" x2="58" y2="50" />
+  </g>
+</svg>

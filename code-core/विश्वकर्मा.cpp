@@ -776,6 +776,44 @@ static void ZoomSceneToExtents(DATASETTAB* myTab, bool selectedOnly) {
     myTab->selection.lastNavInteractionMs.store(GetTickCount64(), std::memory_order_release);
 }
 
+// Zoom Window for the 3D scene: the two clicked pixels define a rectangle on the screen. The view
+// direction stays fixed; the look target glides to the rectangle center on the focal plane and the
+// camera dollies in so the rectangle fills the viewport.
+static void ZoomSceneToWindow(DATASETTAB& tab, int x0, int y0, int x1, int y1) {
+    int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
+    if (!GetVisibleSceneViewportForTab(tab, viewportWidth, viewportHeight, viewportTop)) return;
+    if (viewportWidth <= 0 || viewportHeight <= 0) return;
+
+    const float rectWidth = static_cast<float>(std::abs(x1 - x0));
+    const float rectHeight = static_cast<float>(std::abs(y1 - y0));
+    if (rectWidth < 3.0f && rectHeight < 3.0f) return; // Degenerate window; ignore.
+
+    ACTION_DETAILS centerPixel{};
+    centerPixel.x = (x0 + x1) / 2;
+    centerPixel.y = (y0 + y1) / 2;
+    XMFLOAT3 focus{};
+    if (!Scene3DPlacementPointFromInput(tab, centerPixel, focus)) return;
+
+    DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&tab.camera.position);
+    DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&tab.camera.target);
+    DirectX::XMVECTOR forward = DirectX::XMVectorSubtract(target, eye);
+    const float distance = DirectX::XMVectorGetX(DirectX::XMVector3Length(forward));
+    if (distance <= 0.0001f) return;
+    forward = DirectX::XMVector3Normalize(forward);
+
+    // Dollying to scale * distance shrinks the visible focal-plane extents by the same factor, so
+    // the larger rectangle/viewport ratio keeps the whole clicked window visible.
+    const float scale = (std::max)(rectWidth / static_cast<float>(viewportWidth),
+        rectHeight / static_cast<float>(viewportHeight));
+    const float newDistance = std::clamp(distance * scale, 1.0f, tab.camera.farZ - 10.0f);
+
+    DirectX::XMVECTOR newTarget = DirectX::XMLoadFloat3(&focus);
+    DirectX::XMStoreFloat3(&tab.camera.target, newTarget);
+    DirectX::XMStoreFloat3(&tab.camera.position,
+        DirectX::XMVectorSubtract(newTarget, DirectX::XMVectorScale(forward, newDistance)));
+    tab.selection.lastNavInteractionMs.store(GetTickCount64(), std::memory_order_release);
+}
+
 static bool CreatePrimitiveGeometryElement(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType,
     const XMFLOAT3& placementPoint) {
     if (!targetTab || !VishwakarmaStorage::IsGeometry3DObjectType(objectType)) return false;
@@ -1065,6 +1103,73 @@ static bool HandlePrimitive3DPlacementInput(DATASETTAB& tab, const ACTION_DETAIL
     return true;
 }
 
+// --- Zoom Window mode (Commands::ZOOM_WINDOW) ---------------------------------------------------
+// Works like primitive placement: arming the mode makes the render thread trail the command icon
+// next to the cursor, then two clicks define the rectangle to zoom onto. ESC cancels. Applies to
+// whichever view is active: Scene3D camera or Page2D view.
+static void CancelZoomWindowMode(DATASETTAB& tab) {
+    tab.zoomWindowMode.store(false, std::memory_order_release);
+    tab.zoomWindowHasFirstCorner = false;
+}
+
+static void BeginZoomWindowMode(DATASETTAB* targetTab) {
+    if (!targetTab) return;
+    CancelPrimitive3DPlacement(*targetTab);
+    Cad2DCancelCreation(*targetTab);
+    targetTab->zoomWindowHasFirstCorner = false;
+    targetTab->zoomWindowMode.store(true, std::memory_order_release);
+}
+
+static bool HandleZoomWindowInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
+    if (!tab.zoomWindowMode.load(std::memory_order_acquire)) return false;
+
+    // A tool started after us wins: primitive placement or any 2D creation mode cancels this mode.
+    const bool anyCad2DCreationMode = tab.cad2d &&
+        (tab.cad2d->lineCreationMode.load(std::memory_order_acquire) ||
+         tab.cad2d->polylineCreationMode.load(std::memory_order_acquire) ||
+         tab.cad2d->polygonCreationMode.load(std::memory_order_acquire) ||
+         tab.cad2d->circleCreationMode.load(std::memory_order_acquire) ||
+         tab.cad2d->ellipseCreationMode.load(std::memory_order_acquire) ||
+         tab.cad2d->arcCreationMode.load(std::memory_order_acquire) ||
+         tab.cad2d->textCreationMode.load(std::memory_order_acquire));
+    if (anyCad2DCreationMode || static_cast<VishwakarmaStorage::ObjectType>(
+            tab.activePrimitive3DPlacementType.load(std::memory_order_acquire)) !=
+            VishwakarmaStorage::ObjectType::Unknown) {
+        CancelZoomWindowMode(tab);
+        return false;
+    }
+
+    if (input.actionType == ACTION_TYPE::KEYDOWN && input.x == VK_ESCAPE) {
+        CancelZoomWindowMode(tab);
+        return true;
+    }
+    if (input.actionType != ACTION_TYPE::LBUTTONDOWN || tab.isAltDown) return false;
+    if (IsOverRightOverlay(tab, input.x)) return false;
+
+    int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
+    if (!GetVisibleSceneViewportForTab(tab, viewportWidth, viewportHeight, viewportTop)) return true;
+    if (input.x < 0 || input.x >= viewportWidth ||
+        input.y < viewportTop || input.y >= viewportTop + viewportHeight) {
+        return true; // Click outside the scene area; keep waiting for a corner.
+    }
+
+    if (!tab.zoomWindowHasFirstCorner) {
+        tab.zoomWindowFirstX = input.x;
+        tab.zoomWindowFirstY = input.y;
+        tab.zoomWindowHasFirstCorner = true;
+        return true;
+    }
+
+    const int firstX = tab.zoomWindowFirstX, firstY = tab.zoomWindowFirstY;
+    CancelZoomWindowMode(tab);
+    if (Cad2DIsActivePage2D(tab)) {
+        Cad2DZoomToWindow(tab, firstX, firstY, input.x, input.y);
+    } else {
+        ZoomSceneToWindow(tab, firstX, firstY, input.x, input.y);
+    }
+    return true;
+}
+
 inline void addRandomGeometryElement(DATASETTAB* targetTab) {
 	if (!targetTab) return; //Safety against NULL pointer dereference.
     GeometryData geometry;// These will hold the data of the randomly created shape.
@@ -1217,6 +1322,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
             // Throttle: Skip intermediate MOUSEMOVE if >200/sec (check timestamp/rate)
             if (input.actionType == ACTION_TYPE::MOUSEMOVE && inputCount > 200) { continue; }  // Simple rate limit
 
+            if (HandleZoomWindowInput(*myTab, input)) { continue; }
             if (Cad2DHandleInput(*myTab, input)) { continue; }
             if (HandlePrimitive3DPlacementInput(*myTab, input)) { continue; }
 
@@ -1546,6 +1652,8 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 } else {
                     ZoomSceneToExtents(myTab, selectedOnly);
                 }
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::ZOOM_WINDOW_BEGIN) {
+                BeginZoomWindowMode(myTab);
             }
         }
         
@@ -1565,6 +1673,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         myTab->defaultScene3DMemoryId = 0;
         myTab->activeScene3DMemoryId = 0;
         CancelPrimitive3DPlacement(*myTab);
+        CancelZoomWindowMode(*myTab);
     }
     DataTreeView::ResetScroll(myTab->dataTreeView);
     myTab->engineeringReleased.store(true, std::memory_order_release);

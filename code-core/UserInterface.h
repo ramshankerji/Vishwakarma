@@ -470,8 +470,9 @@ constexpr UIControlDefinition AllUIControls[] = {
     { Commands::SELECT_LINES,          UITextID::SELECT_LINES, UIIconForCommand(Commands::SELECT_LINES), 1, 3, 0, 0, true, true, 0 , 2 }, // Anything othe than text and templates.
 
     // Subgroup : View
-    { Commands::ZOOM_MAX,              UITextID::ZOOM_MAX, UIIconForCommand(Commands::ZOOM_MAX), 1, 2, 0, 0, true, true, 0 , 1 }, //Fit ALL objects of active Scene3D/Page2D.
-    { Commands::ZOOM_FOCUS,            UITextID::ZOOM_FOCUS, UIIconForCommand(Commands::ZOOM_FOCUS), 1, 2, 1, 0, true, true, 0 , 1 }, //Fit selected objects (all if none selected).
+    { Commands::ZOOM_MAX,              UITextID::ZOOM_MAX, UIIconForCommand(Commands::ZOOM_MAX), 1, 3, 0, 0, true, true, 0 , 1 }, //Fit ALL objects of active Scene3D/Page2D.
+    { Commands::ZOOM_FOCUS,            UITextID::ZOOM_FOCUS, UIIconForCommand(Commands::ZOOM_FOCUS), 1, 3, 1, 0, true, true, 0 , 1 }, //Fit selected objects (all if none selected).
+    { Commands::ZOOM_WINDOW,           UITextID::ZOOM_WINDOW, UIIconForCommand(Commands::ZOOM_WINDOW), 1, 3, 2, 0, true, true, 0 , 1 }, //Two clicks define a rectangle to zoom onto.
 
     // ACTION GROUP 1: (2D) General
     // Subgroup : Create 2D Shapes

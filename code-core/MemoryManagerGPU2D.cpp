@@ -1008,3 +1008,39 @@ void Cad2DZoomToExtents(DATASETTAB& tab, bool selectedOnly) {
     if (halfH > 1.0e-9) zoom = (std::min)(zoom, (double)viewportHeight * 0.5 * margin / halfH);
     s.view.zoomPixelsPerCU.store((float)std::clamp(zoom, 0.02, 5000.0), std::memory_order_release);
 }
+
+void Cad2DZoomToWindow(DATASETTAB& tab, int x0, int y0, int x1, int y1) {
+    if (!tab.cad2d) return;
+    if (Cad2DFindTargetPage2DMemoryId(tab) == 0) return;
+
+    int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
+    if (!GetVisibleSceneViewportForTab(tab, viewportWidth, viewportHeight, viewportTop)) return;
+    if (viewportWidth <= 0 || viewportHeight <= 0) return;
+
+    TabCad2DStorage& s = *tab.cad2d;
+    const double zoom = (std::max)(
+        (double)s.view.zoomPixelsPerCU.load(std::memory_order_acquire), 0.02);
+    const double centerX = s.view.centerXCU.load(std::memory_order_acquire);
+    const double centerY = s.view.centerYCU.load(std::memory_order_acquire);
+    // Same pixel -> CAD-unit mapping as Page2DCoordinateFromInput / the wheel zoom.
+    auto toCU = [&](int px, int py, double& outX, double& outY) {
+        const double offsetX = (double)px - (double)viewportWidth * 0.5;
+        const double offsetY = (double)viewportHeight * 0.5 - (double)(py - viewportTop);
+        outX = centerX + offsetX / zoom;
+        outY = centerY + offsetY / zoom;
+    };
+    double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
+    toCU(x0, y0, ax, ay);
+    toCU(x1, y1, bx, by);
+
+    const double halfW = std::abs(bx - ax) * 0.5;
+    const double halfH = std::abs(by - ay) * 0.5;
+    if (halfW < 1.0e-9 && halfH < 1.0e-9) return; // Degenerate window; ignore.
+
+    double newZoom = 5000.0;
+    if (halfW > 1.0e-9) newZoom = (std::min)(newZoom, (double)viewportWidth * 0.5 / halfW);
+    if (halfH > 1.0e-9) newZoom = (std::min)(newZoom, (double)viewportHeight * 0.5 / halfH);
+    s.view.centerXCU.store((ax + bx) * 0.5, std::memory_order_release);
+    s.view.centerYCU.store((ay + by) * 0.5, std::memory_order_release);
+    s.view.zoomPixelsPerCU.store((float)std::clamp(newZoom, 0.02, 5000.0), std::memory_order_release);
+}

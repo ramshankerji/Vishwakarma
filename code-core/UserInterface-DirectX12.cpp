@@ -2109,6 +2109,23 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         }
     }
 
+    // Zoom Window mode cursor: trail the command icon while the mode waits for its 2 corner
+    // clicks. Unlike primitive placement this applies to both Scene3D and Page2D views.
+    if (activeTabIndex >= 0 && activeTabIndex < MV_MAX_TABS &&
+        (activeInternalSubTabType == VishwakarmaStorage::ObjectType::Scene3D ||
+         activeInternalSubTabType == VishwakarmaStorage::ObjectType::Page2D) &&
+        allTabs[activeTabIndex].zoomWindowMode.load(std::memory_order_acquire)) {
+        const float cursorIconSize = iconSizePx;
+        const float cursorIconGap = 6.0f;
+        const char32_t cursorIcon =
+            SVGIconRenderer::IconForID(static_cast<uint32_t>(Commands::ZOOM_WINDOW));
+        const float iconX = std::clamp(
+            input.mouseX - cursorIconSize * 0.5f, 0.0f, std::max(0.0f, W - cursorIconSize));
+        const float iconY = std::clamp(
+            input.mouseY + cursorIconGap, 0.0f, std::max(0.0f, H - cursorIconSize));
+        PushIcon(ctx, iconX, iconY, cursorIconSize, cursorIconSize, cursorIcon, 0xFF000000u, uiRes);
+    }
+
     // DRAW ALL UI GEOMETRY
     if (ctx.indexCount == 0) return;
 
