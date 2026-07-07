@@ -31,6 +31,7 @@ float LerpFloat(float a, float b, float t) {
 }
 
 int SceneTopUIHeightPx(int monitorId, const DX12ResourcesPerWindow& winRes) {
+    if (winRes.contentOnly) return 0; // Extracted view windows render content edge to edge.
     int topUITotalHeightPx = 0;
     if (monitorId >= 0 && monitorId < gpu.currentMonitorCount) {
         const UITopRibbonLayout& layout = gpu.screens[monitorId].topRibbonLayout;
@@ -1715,18 +1716,33 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 bool scene3DActive = false;
                 DirectX::XMMATRIX sceneViewProj = DirectX::XMMatrixIdentity();
                 int sceneTopUI = 0, sceneVpW = 0, sceneVpH = 0;
-                std::vector<InternalSubTab> internalSubTabsSnapshot;
                 uint64_t activeInternalSubTabMemoryId = 0;
                 VishwakarmaStorage::ObjectType activeInternalSubTabType =
                     VishwakarmaStorage::ObjectType::Unknown;
-                if (tab.storageObjectsMutex) {
-                    std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
-                    internalSubTabsSnapshot = tab.openInternalSubTabs;
-                    activeInternalSubTabMemoryId = tab.activeInternalSubTabMemoryId;
-                    for (const InternalSubTab& subTab : internalSubTabsSnapshot) {
-                        if (subTab.containerMemoryId == activeInternalSubTabMemoryId) {
-                            activeInternalSubTabType = subTab.containerType;
-                            break;
+                const bool contentOnlyWindow = window.windowKind == WINDOW_KIND_VIEW;
+                if (contentOnlyWindow) {
+                    // Extracted view window: render exactly the hosted sub-tab slot, regardless of
+                    // which sub-tab is active inline. Same GeometryPage, possibly another monitor.
+                    const uint16_t slot = window.viewSubTabSlot;
+                    if (slot < MV_MAX_SUBTABS &&
+                        tab.subTabStates[slot].load(std::memory_order_acquire) == SUBTAB_OPEN) {
+                        activeInternalSubTabMemoryId = tab.subTabs[slot].containerMemoryId;
+                        activeInternalSubTabType = tab.subTabs[slot].containerType;
+                    }
+                } else if (tab.storageObjectsMutex) {
+                    {
+                        std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
+                        activeInternalSubTabMemoryId = tab.activeInternalSubTabMemoryId;
+                    }
+                    const int activeSlot = FindPublishedSubTabSlot(tab, activeInternalSubTabMemoryId);
+                    if (activeSlot >= 0) {
+                        activeInternalSubTabType = tab.subTabs[activeSlot].containerType;
+                        // A Page2D lives in exactly 1 view; when that view is extracted into its own
+                        // window it is not drawn inline as well.
+                        if (activeInternalSubTabType == VishwakarmaStorage::ObjectType::Page2D &&
+                            tab.subTabHostWindowSlots[activeSlot].load(std::memory_order_acquire) >= 0) {
+                            activeInternalSubTabMemoryId = 0;
+                            activeInternalSubTabType = VishwakarmaStorage::ObjectType::Unknown;
                         }
                     }
                 }
@@ -1765,9 +1781,10 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 }
                 // Render User Interface using safe snapshot copy of current Input.
 
-                if (atlasFence.load(std::memory_order_acquire) == 0 ||
+                if (contentOnlyWindow ||
+                    atlasFence.load(std::memory_order_acquire) == 0 ||
                     gpu.copyFence->GetCompletedValue() < atlasFence.load()) {
-                    ; // atlas not ready → skip UI
+                    ; // atlas not ready (or extracted view window: no ribbon/bands) → skip UI
                 } else {
                     // Restore full window viewport & scissor before rendering UI overlay so UI is not clipped
                     threadRes.commandList->RSSetViewports(1, &winRes.viewport);
@@ -1776,7 +1793,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                         gpu.screens[monitorId].topRibbonLayout,
                         static_cast<float>(gpu.screens[monitorId].physicalDpiX),
                         static_cast<float>(gpu.screens[monitorId].physicalDpiY),
-                        inputSnapshot, internalSubTabsSnapshot, activeInternalSubTabMemoryId);
+                        inputSnapshot, activeInternalSubTabMemoryId);
                 }
 
                 // Service any pending click/scroll pick request. Runs after the UI (it renders into

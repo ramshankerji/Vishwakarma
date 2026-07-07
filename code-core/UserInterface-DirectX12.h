@@ -70,4 +70,4 @@ void PrecomputeTopRibbonLayout(UITopRibbonLayout& layout, float monitorDPIX, flo
 void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmdList,
     DX12ResourcesUI& uiRes, UITopRibbonLayout& topRibbonLayout,
     float monitorDPIX, float monitorDPIY, const UIInput& input,
-    const std::vector<InternalSubTab>& internalSubTabs, uint64_t activeInternalSubTabMemoryId);
+    uint64_t activeInternalSubTabMemoryId);

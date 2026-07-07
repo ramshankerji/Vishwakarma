@@ -2023,8 +2023,7 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         tab.storageLogicalObjects.clear();
         tab.storageObjects3D.clear();
         tab.expandedDataTreeNodeIds.clear();
-        tab.openInternalSubTabs.clear();
-        tab.activeInternalSubTabMemoryId = 0;
+        CloseAllInternalSubTabsLocked(tab);
         tab.defaultScene3DMemoryId = 0;
         tab.activeScene3DMemoryId = 0;
     }

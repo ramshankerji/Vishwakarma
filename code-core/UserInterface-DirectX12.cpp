@@ -91,15 +91,10 @@ static std::u32string BuildTreeNodeLabel(VishwakarmaStorage::ObjectType objectTy
 }
 
 static VishwakarmaStorage::ObjectType ActiveInternalSubTabType(
-    const std::vector<InternalSubTab>& internalSubTabs, uint64_t activeInternalSubTabMemoryId) {
-    if (activeInternalSubTabMemoryId == 0) return VishwakarmaStorage::ObjectType::Unknown;
-
-    for (const InternalSubTab& subTab : internalSubTabs) {
-        if (subTab.containerMemoryId == activeInternalSubTabMemoryId) {
-            return subTab.containerType;
-        }
-    }
-    return VishwakarmaStorage::ObjectType::Unknown;
+    const DATASETTAB& tab, uint64_t activeInternalSubTabMemoryId) {
+    const int slot = FindPublishedSubTabSlot(tab, activeInternalSubTabMemoryId);
+    if (slot < 0) return VishwakarmaStorage::ObjectType::Unknown;
+    return tab.subTabs[slot].containerType;
 }
 
 static UIAtlasRegion MakeAtlasRegion(int x, int y, int w, int h, int atlasW, int atlasH) {
@@ -999,9 +994,16 @@ void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t c
 // This is also responsible for all relevant DirectX12 configurations required for rendering User Interface.
 void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX12ResourcesUI& uiRes,
     UITopRibbonLayout& topRibbonLayout, float monitorDPIX, float monitorDPIY, const UIInput& input,
-    const std::vector<InternalSubTab>& internalSubTabs, uint64_t activeInternalSubTabMemoryId) {
-    
+    uint64_t activeInternalSubTabMemoryId) {
+
     if (!cmd) return; //Defensive check.
+
+    // Any click inside this window makes its active tab the routing context for ribbon commands
+    // (ProcessPendingUIActions reads it). Needed once tabs live in more than one window.
+    const int windowSlot = static_cast<int>(&window - allWindows);
+    if (input.leftButtonPressedThisFrame && window.activeTabIndex >= 0) {
+        g_uiActionSourceTabIndex.store(window.activeTabIndex, std::memory_order_release);
+    }
 
     cmd->SetPipelineState(uiRes.uiPSO.Get());
     cmd->SetGraphicsRootSignature(uiRes.uiRootSignature.Get());
@@ -1055,7 +1057,9 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     float topUITotalHeightPx = topRibbonLayout.topUITotalHeightPx;
     float roundedCornerRadiusPx = topRibbonLayout.roundedCornerRadiusPx;
     const VishwakarmaStorage::ObjectType activeInternalSubTabType =
-        ActiveInternalSubTabType(internalSubTabs, activeInternalSubTabMemoryId);
+        (window.activeTabIndex >= 0 && window.activeTabIndex < MV_MAX_TABS)
+        ? ActiveInternalSubTabType(allTabs[window.activeTabIndex], activeInternalSubTabMemoryId)
+        : VishwakarmaStorage::ObjectType::Unknown;
     const bool useDarkDataTreeText =
         activeInternalSubTabMemoryId == 0 ||
         activeInternalSubTabType == VishwakarmaStorage::ObjectType::Page2D ||
@@ -1153,7 +1157,19 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
 
     uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
     uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
-    
+
+    // Only tabs hosted by this window appear in its tab band. Extraction / drag-drop merge simply
+    // retarget DATASETTAB::hostWindowSlot.
+    uint16_t hostedTabs[MV_MAX_TABS];
+    uint16_t hostedCount = 0;
+    for (uint16_t i = 0; i < tabCount; ++i) {
+        if (allTabs[tabList[i]].hostWindowSlot.load(std::memory_order_acquire) == windowSlot) {
+            hostedTabs[hostedCount++] = tabList[i];
+        }
+    }
+    tabCount = hostedCount;
+    tabList = hostedTabs;
+
     if (canPushRect()) {
         PushRect(ctx, 0.0f, 0.0f, 5000.0f, topUITotalHeightPx, uiActiveColors.actionGroupBackground, uiRes);//
         incrementVertexIndexCounters();
@@ -1231,6 +1247,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             input.mouseY >= 0 && input.mouseY < tabBarHeightPx;
         if (!xHovered && tabHovered && input.leftButtonPressedThisFrame) {
             window.activeTabIndex = tabID; // Render thread will draw this tab's geometry on the next frame.
+            window.pressedTabId = tabID;   // Candidate for drag-out extraction while the button stays down.
         }
 
         // Draw the X button: only draw rounded background when hovered, otherwise render as plain text
@@ -1267,6 +1284,17 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
 
     // If some tabs are hidden, we may draw a subtle indicator (ellipsis) — skip for now
 
+    // Dragging a tab button downward out of the band extracts the tab into its own window
+    // (with the full ribbon). The last hosted tab of a window is not extractable.
+    if (input.leftButtonReleasedThisFrame || !input.leftButtonDown) {
+        window.pressedTabId = -1;
+    } else if (window.pressedTabId >= 0 && input.mouseY > tabBarHeightPx * 2.5f) {
+        if (tabCount > 1) {
+            PushUIAction(kExtractTabUIAction, static_cast<uint32_t>(window.pressedTabId), 0);
+        }
+        window.pressedTabId = -1;
+    }
+
     // Render '+' create new thread button at the end of tab bar
     float plusX = currentX + 6.0f; // small padding before plus
     float plusSize = std::max(plusButtonWidth, std::round(UI_ICON_SIZE_MM * pixelsPerMMy) + 8.0f);
@@ -1287,7 +1315,8 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
         }
     }
     if (plusHovered && input.leftButtonPressedThisFrame) {
-        PushUIAction(ACTION_ENGINEERING_CREATE, 0, 0);
+        // p1 = window slot, so the new tab is hosted by the window whose '+' was clicked.
+        PushUIAction(ACTION_ENGINEERING_CREATE, static_cast<uint64_t>(windowSlot), 0);
     }
 
     // TOP BUTTONS (ACTION GROUP BAR)
@@ -1453,12 +1482,22 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     const int activeTabIndex = window.activeTabIndex;
 
     // INTERNAL HIGH-LEVEL CONTAINER TABS (Scene3D, Page2D, and future container types).
+    // Rendered from the active tab's published fixed-slot sub-tab list (lock-free).
     const float internalBarY = topRibbonLayout.internalTabBarY;
     const float internalBarHeight = topRibbonLayout.internalTabBarHeightPx;
     if (internalBarHeight > 0.0f) {
         pushRect(0.0f, internalBarY, W, internalBarHeight, uiActiveColors.tabBackground);
 
-        const size_t internalTabCount = internalSubTabs.size();
+        uint16_t* subTabList = nullptr;
+        uint16_t subTabListCount = 0;
+        DATASETTAB* activeTabData = nullptr;
+        if (activeTabIndex >= 0 && activeTabIndex < MV_MAX_TABS) {
+            activeTabData = &allTabs[activeTabIndex];
+            subTabList = activeTabData->publishedSubTabIndexes.load(std::memory_order_acquire);
+            subTabListCount = activeTabData->publishedSubTabCount.load(std::memory_order_acquire);
+        }
+
+        const size_t internalTabCount = subTabList ? subTabListCount : 0;
         if (internalTabCount > 0) {
             const float defaultInternalTabWidth = 180.0f;
             const float minimumInternalTabWidth = std::max(4.0f * pixelsPerMMx, 8.0f);
@@ -1472,7 +1511,10 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
 
             float internalX = 0.0f;
             for (size_t i = 0; i < visibleInternalTabs; ++i) {
-                const InternalSubTab& subTab = internalSubTabs[i];
+                const uint16_t subTabSlot = subTabList[i];
+                const InternalSubTab& subTab = activeTabData->subTabs[subTabSlot];
+                const bool isExtracted =
+                    activeTabData->subTabHostWindowSlots[subTabSlot].load(std::memory_order_acquire) >= 0;
                 const bool isActive = subTab.containerMemoryId == activeInternalSubTabMemoryId;
                 const float tabX = internalX;
                 const float contentX = tabX + internalGapPx;
@@ -1500,13 +1542,15 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
                     } else if (tabHovered) {
                         PushUIAction(InternalSubTabs::kActivateUIAction,
                             static_cast<uint32_t>(activeTabIndex), subTab.containerMemoryId);
+                        window.pressedSubTabSlot = subTabSlot; // Drag-out extraction candidate.
                     }
                 }
 
                 std::u32string title = DataTreeView::AsciiToDisplayText(subTab.title.c_str());
-                const uint32_t textColor = isActive
-                    ? uiActiveColors.tabActiveText
-                    : uiActiveColors.tabBackgroundText;
+                // Extracted views keep their button in the band, drawn in the accent color; clicking
+                // an extracted Page2D focuses its dedicated window instead of activating inline.
+                const uint32_t textColor = isExtracted ? dataTreeActiveColor
+                    : (isActive ? uiActiveColors.tabActiveText : uiActiveColors.tabBackgroundText);
                 pushTextClipped(contentX + 6.0f,
                     textBaselineY(internalBarY, internalBarHeight, uiTextScale),
                     title.c_str(), std::max(0.0f, closeX - contentX - 10.0f),
@@ -1523,6 +1567,21 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
 
                 internalX += internalTabWidth;
             }
+        }
+
+        // Dragging a sub-tab button downward out of the band extracts that view into its own
+        // content-only window (or focuses the existing one when already extracted).
+        if (input.leftButtonReleasedThisFrame || !input.leftButtonDown) {
+            window.pressedSubTabSlot = -1;
+        } else if (window.pressedSubTabSlot >= 0 && activeTabData &&
+            input.mouseY > internalBarY + internalBarHeight * 2.5f) {
+            const uint16_t slot = static_cast<uint16_t>(window.pressedSubTabSlot);
+            if (slot < MV_MAX_SUBTABS &&
+                activeTabData->subTabStates[slot].load(std::memory_order_acquire) == SUBTAB_OPEN) {
+                PushUIAction(InternalSubTabs::kExtractUIAction,
+                    static_cast<uint32_t>(activeTabIndex), activeTabData->subTabs[slot].containerMemoryId);
+            }
+            window.pressedSubTabSlot = -1;
         }
     }
 

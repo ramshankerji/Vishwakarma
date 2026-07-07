@@ -114,7 +114,10 @@ uint16_t activeWindowIndexesA[MV_MAX_WINDOWS], activeWindowIndexesB[MV_MAX_WINDO
 std::atomic<uint16_t*> publishedWindowIndexes;
 std::atomic<uint16_t>  publishedWindowCount;
 
+std::atomic<int32_t> g_uiActionSourceTabIndex{ -1 };
+
 static int SceneTopUIHeightPxForWindow(const SingleUIWindow& window, int windowHeight) {
+    if (window.windowKind == WINDOW_KIND_VIEW) return 0; // Extracted views render content only.
     int topUITotalHeightPx = 0;
     const int monitorId = window.currentMonitorIndex;
     if (monitorId >= 0 && monitorId < gpu.currentMonitorCount) {
@@ -275,6 +278,72 @@ static const char* LogicalObjectNameForInternalSubTab(
     }
 }
 
+int FindPublishedSubTabSlot(const DATASETTAB& tab, uint64_t containerMemoryId) {
+    if (containerMemoryId == 0) return -1;
+    uint16_t* list = tab.publishedSubTabIndexes.load(std::memory_order_acquire);
+    const uint16_t count = tab.publishedSubTabCount.load(std::memory_order_acquire);
+    if (!list) return -1;
+    for (uint16_t i = 0; i < count; ++i) {
+        if (tab.subTabs[list[i]].containerMemoryId == containerMemoryId) return list[i];
+    }
+    return -1;
+}
+
+// Swaps to the other double-buffered index list and publishes it atomically.
+static void PublishSubTabList(DATASETTAB& tab, const uint16_t* entries, uint16_t count) {
+    uint16_t* currentList = tab.publishedSubTabIndexes.load(std::memory_order_acquire);
+    uint16_t* nextList = (currentList == tab.subTabIndexesA) ? tab.subTabIndexesB : tab.subTabIndexesA;
+    for (uint16_t i = 0; i < count; ++i) nextList[i] = entries[i];
+    tab.publishedSubTabIndexes.store(nextList, std::memory_order_release);
+    tab.publishedSubTabCount.store(count, std::memory_order_release);
+}
+
+// Marks a slot for delayed release. Frames submitted up to the recorded fence may still reference
+// this view's GPU assets; CleanupReleasedSubTabs frees the slot once every monitor passed it.
+static void RetireSubTabSlot(DATASETTAB& tab, uint16_t slot) {
+    tab.subTabReleaseFenceValues[slot] = gpu.renderFenceValue.load(std::memory_order_acquire);
+    tab.subTabStates[slot].store(SUBTAB_PENDING_GPU_RELEASE, std::memory_order_release);
+    const int16_t hostWindow = tab.subTabHostWindowSlots[slot].load(std::memory_order_acquire);
+    if (hostWindow >= 0) {
+        // The view lives in its own extracted window; ask the UI thread to close that window.
+        PushUIAction(kCloseViewWindowUIAction, tab.tabID, slot);
+    }
+}
+
+void CloseAllInternalSubTabsLocked(DATASETTAB& tab) {
+    uint16_t* list = tab.publishedSubTabIndexes.load(std::memory_order_acquire);
+    const uint16_t count = tab.publishedSubTabCount.load(std::memory_order_acquire);
+    PublishSubTabList(tab, nullptr, 0);
+    for (uint16_t i = 0; list && i < count; ++i) RetireSubTabSlot(tab, list[i]);
+    tab.activeInternalSubTabMemoryId = 0;
+}
+
+// Delayed slot release: PENDING_GPU_RELEASE -> FREE once every monitor's render fence passed the
+// value recorded at close time. Idle monitors that never reached that value count as drained once
+// they completed everything they actually submitted.
+static bool AllMonitorRenderFencesPassed(uint64_t fenceValue) {
+    for (int i = 0; i < gpu.currentMonitorCount; ++i) {
+        OneMonitorController& screen = gpu.screens[i];
+        if (!screen.renderFence) continue;
+        const uint64_t target = (std::min)(fenceValue, screen.renderFenceValue);
+        if (screen.renderFence->GetCompletedValue() < target) return false;
+    }
+    return true;
+}
+
+static void CleanupReleasedSubTabs(DATASETTAB* targetTab) {
+    if (!targetTab || !targetTab->storageObjectsMutex) return;
+    for (uint16_t slot = 0; slot < MV_MAX_SUBTABS; ++slot) {
+        if (targetTab->subTabStates[slot].load(std::memory_order_acquire) != SUBTAB_PENDING_GPU_RELEASE) continue;
+        if (!AllMonitorRenderFencesPassed(targetTab->subTabReleaseFenceValues[slot])) continue;
+
+        std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+        targetTab->subTabs[slot] = InternalSubTab{}; // Release title string memory.
+        targetTab->subTabHostWindowSlots[slot].store(-1, std::memory_order_release);
+        targetTab->subTabStates[slot].store(SUBTAB_FREE, std::memory_order_release);
+    }
+}
+
 static void OpenInternalSubTab(DATASETTAB* targetTab, uint64_t memoryId) {
     if (!targetTab || memoryId == 0) return;
     if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
@@ -287,16 +356,33 @@ static void OpenInternalSubTab(DATASETTAB* targetTab, uint64_t memoryId) {
             return;
         }
 
-        auto openIt = std::find_if(targetTab->openInternalSubTabs.begin(),
-            targetTab->openInternalSubTabs.end(), [memoryId](const InternalSubTab& subTab) {
-                return subTab.containerMemoryId == memoryId;
-            });
-        if (openIt == targetTab->openInternalSubTabs.end()) {
+        // A container (in particular Page2D) is only ever open in 1 sub-tab: reuse it if found.
+        if (FindPublishedSubTabSlot(*targetTab, memoryId) < 0) {
+            int freeSlot = -1;
+            for (uint16_t slot = 0; slot < MV_MAX_SUBTABS; ++slot) {
+                if (targetTab->subTabStates[slot].load(std::memory_order_acquire) == SUBTAB_FREE) {
+                    freeSlot = slot;
+                    break;
+                }
+            }
+            if (freeSlot < 0) return; // All MV_MAX_SUBTABS slots occupied (open or draining).
+
             const char* objectName = LogicalObjectNameForInternalSubTab(entry.objectType, entry.object);
-            std::string title = objectName && objectName[0] != '\0'
+            InternalSubTab& subTab = targetTab->subTabs[freeSlot];
+            subTab.containerType = entry.objectType;
+            subTab.containerMemoryId = memoryId;
+            subTab.title = objectName && objectName[0] != '\0'
                 ? objectName
                 : VishwakarmaStorage::ObjectTypeDisplayName(entry.objectType);
-            targetTab->openInternalSubTabs.push_back({ entry.objectType, memoryId, std::move(title) });
+            targetTab->subTabHostWindowSlots[freeSlot].store(-1, std::memory_order_release);
+            targetTab->subTabStates[freeSlot].store(SUBTAB_OPEN, std::memory_order_release);
+
+            uint16_t* currentList = targetTab->publishedSubTabIndexes.load(std::memory_order_acquire);
+            const uint16_t count = targetTab->publishedSubTabCount.load(std::memory_order_acquire);
+            uint16_t entries[MV_MAX_SUBTABS];
+            for (uint16_t i = 0; i < count; ++i) entries[i] = currentList[i];
+            entries[count] = static_cast<uint16_t>(freeSlot);
+            PublishSubTabList(*targetTab, entries, count + 1);
         }
 
         targetTab->activeInternalSubTabMemoryId = memoryId;
@@ -311,14 +397,11 @@ static void ActivateInternalSubTab(DATASETTAB* targetTab, uint64_t memoryId) {
     if (!targetTab || memoryId == 0 || !targetTab->storageObjectsMutex) return;
 
     std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
-    const auto openIt = std::find_if(targetTab->openInternalSubTabs.begin(),
-        targetTab->openInternalSubTabs.end(), [memoryId](const InternalSubTab& subTab) {
-            return subTab.containerMemoryId == memoryId;
-        });
-    if (openIt == targetTab->openInternalSubTabs.end()) return;
+    const int slot = FindPublishedSubTabSlot(*targetTab, memoryId);
+    if (slot < 0) return;
 
     targetTab->activeInternalSubTabMemoryId = memoryId;
-    if (openIt->containerType == VishwakarmaStorage::ObjectType::Scene3D) {
+    if (targetTab->subTabs[slot].containerType == VishwakarmaStorage::ObjectType::Scene3D) {
         targetTab->activeScene3DMemoryId = memoryId;
     }
 }
@@ -327,25 +410,37 @@ static void CloseInternalSubTab(DATASETTAB* targetTab, uint64_t memoryId) {
     if (!targetTab || memoryId == 0 || !targetTab->storageObjectsMutex) return;
 
     std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
-    auto closeIt = std::find_if(targetTab->openInternalSubTabs.begin(),
-        targetTab->openInternalSubTabs.end(), [memoryId](const InternalSubTab& subTab) {
-            return subTab.containerMemoryId == memoryId;
-        });
-    if (closeIt == targetTab->openInternalSubTabs.end()) return;
+    uint16_t* currentList = targetTab->publishedSubTabIndexes.load(std::memory_order_acquire);
+    const uint16_t count = targetTab->publishedSubTabCount.load(std::memory_order_acquire);
+    if (!currentList) return;
 
-    const size_t closedIndex = static_cast<size_t>(
-        std::distance(targetTab->openInternalSubTabs.begin(), closeIt));
+    uint16_t entries[MV_MAX_SUBTABS];
+    uint16_t nextCount = 0;
+    int closedPosition = -1;
+    uint16_t closedSlot = 0;
+    for (uint16_t i = 0; i < count; ++i) {
+        if (targetTab->subTabs[currentList[i]].containerMemoryId == memoryId) {
+            closedPosition = i;
+            closedSlot = currentList[i];
+            continue;
+        }
+        entries[nextCount++] = currentList[i];
+    }
+    if (closedPosition < 0) return;
+
     const bool closedActive = targetTab->activeInternalSubTabMemoryId == memoryId;
-    targetTab->openInternalSubTabs.erase(closeIt);
+    PublishSubTabList(*targetTab, entries, nextCount);
+    RetireSubTabSlot(*targetTab, closedSlot);
 
     if (!closedActive) return;
-    if (targetTab->openInternalSubTabs.empty()) {
+    if (nextCount == 0) {
         targetTab->activeInternalSubTabMemoryId = 0;
         return;
     }
 
-    const size_t replacementIndex = (std::min)(closedIndex, targetTab->openInternalSubTabs.size() - 1);
-    const InternalSubTab& replacement = targetTab->openInternalSubTabs[replacementIndex];
+    const uint16_t replacementSlot = entries[(std::min)(
+        static_cast<uint16_t>(closedPosition), static_cast<uint16_t>(nextCount - 1))];
+    const InternalSubTab& replacement = targetTab->subTabs[replacementSlot];
     targetTab->activeInternalSubTabMemoryId = replacement.containerMemoryId;
     if (replacement.containerType == VishwakarmaStorage::ObjectType::Scene3D) {
         targetTab->activeScene3DMemoryId = replacement.containerMemoryId;
@@ -1656,7 +1751,9 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 BeginZoomWindowMode(myTab);
             }
         }
-        
+
+        CleanupReleasedSubTabs(myTab); // Delayed sub-tab slot release once GPU fences passed.
+
         std::this_thread::sleep_for(std::chrono::milliseconds(10));// Sleep to yield CPU
         frameCounter++;
     } // End of while (!shutdownSignal), i.e. our primary application loop for this particular tab.
@@ -1668,8 +1765,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         myTab->storageLogicalObjects.clear();
         myTab->storageObjects3D.clear();
         myTab->expandedDataTreeNodeIds.clear();
-        myTab->openInternalSubTabs.clear();
-        myTab->activeInternalSubTabMemoryId = 0;
+        CloseAllInternalSubTabsLocked(*myTab);
         myTab->defaultScene3DMemoryId = 0;
         myTab->activeScene3DMemoryId = 0;
         CancelPrimitive3DPlacement(*myTab);

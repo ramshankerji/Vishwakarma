@@ -85,6 +85,12 @@ void AddEngineeringThread(uint64_t tabID, std::thread&& t);
 void JoinReleasedEngineeringThreads();
 void JoinAllEngineeringThreads();
 
+// Multi-window management. Defined after the window-class globals below; UI thread only.
+static void ExtractTabToNewWindow(uint16_t tabID);
+static void ExtractViewToNewWindow(uint16_t tabIndex, uint64_t containerMemoryId);
+static void CloseViewWindowFor(uint16_t tabIndex, uint16_t subTabSlot);
+static void CloseSecondaryWindow(uint16_t windowSlot);
+
 namespace {
 constexpr uint32_t ACTION_ENGINEERING_CLOSE = 0xE0000001u;
 constexpr uint32_t ACTION_ENGINEERING_CREATE = 0xE0000002u;
@@ -104,6 +110,18 @@ HWND FirstActiveWindowHandle() {
 }
 
 DATASETTAB* GetActiveTabForUIAction() {
+    uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
+    uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+
+    // Prefer the tab of the window the user last clicked in (set by RenderUIOverlay), so ribbon
+    // commands issued from an extracted tab window act on that window's tab.
+    const int32_t sourceTab = g_uiActionSourceTabIndex.load(std::memory_order_acquire);
+    if (sourceTab >= 0 && sourceTab < MV_MAX_TABS) {
+        for (uint16_t i = 0; i < tabCount; ++i) {
+            if (tabList[i] == sourceTab) return &allTabs[sourceTab];
+        }
+    }
+
     uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
     uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
     for (uint16_t i = 0; i < windowCount; ++i) {
@@ -111,8 +129,6 @@ DATASETTAB* GetActiveTabForUIAction() {
         if (tabID >= 0 && tabID < MV_MAX_TABS) return &allTabs[tabID];
     }
 
-    uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
-    uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
     if (tabCount > 0) return &allTabs[tabList[0]];
     return nullptr;
 }
@@ -183,9 +199,14 @@ std::wstring ShowOpenYyyDialog() {
 }
 
 DATASETTAB* CreateEngineeringTab(const std::wstring& displayName = L"",
-    const std::wstring& storageFilePath = L"", bool autoGenerateRandomGeometry = true) {
+    const std::wstring& storageFilePath = L"", bool autoGenerateRandomGeometry = true,
+    uint16_t hostWindowSlot = 0) {
     uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
     if (tabCount >= MV_MAX_TABS || nextTabSlot >= MV_MAX_TABS) return nullptr;
+    if (hostWindowSlot >= MV_MAX_WINDOWS || !allWindows[hostWindowSlot].hWnd ||
+        allWindows[hostWindowSlot].windowKind != WINDOW_KIND_TABHOST) {
+        hostWindowSlot = 0; // Fall back to the main window when the requested host is gone.
+    }
 
     uint16_t* currentList = publishedTabIndexes.load(std::memory_order_acquire);
     uint16_t* nextList = (currentList == activeTabIndexesA) ? activeTabIndexesB : activeTabIndexesA;
@@ -209,8 +230,7 @@ DATASETTAB* CreateEngineeringTab(const std::wstring& displayName = L"",
         tab.storageLogicalObjects.clear();
         tab.storageObjects3D.clear();
         tab.expandedDataTreeNodeIds.clear();
-        tab.openInternalSubTabs.clear();
-        tab.activeInternalSubTabMemoryId = 0;
+        CloseAllInternalSubTabsLocked(tab);
         tab.defaultScene3DMemoryId = 0;
         tab.activeScene3DMemoryId = 0;
     }
@@ -221,13 +241,10 @@ DATASETTAB* CreateEngineeringTab(const std::wstring& displayName = L"",
     if (tab.cad2d) InitCad2DTabResources(*tab.cad2d);
 
     nextList[tabCount] = tabID;
+    tab.hostWindowSlot.store(static_cast<int16_t>(hostWindowSlot), std::memory_order_release);
     PublishTabList(nextList, tabCount + 1);
 
-    uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
-    uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
-    for (uint16_t i = 0; i < windowCount; ++i) {
-        allWindows[windowList[i]].activeTabIndex = tabID;
-    }
+    allWindows[hostWindowSlot].activeTabIndex = tabID; // Only the hosting window switches to it.
 
     std::thread t(विश्वकर्मा, (uint64_t)tabID);
     AddEngineeringThread(tabID, std::move(t));
@@ -256,14 +273,39 @@ void RequestCloseEngineeringTab(uint16_t tabID) {
     closeQueuedTabs[tabID] = true;
 
     uint16_t replacementTab = nextList[(std::min)(static_cast<uint16_t>(closedPosition), static_cast<uint16_t>(nextCount - 1))];
+
+    // Prefer a replacement hosted by the same window as the closing tab, so that window's band
+    // does not jump to a tab it doesn't even show.
+    const int16_t hostSlot = allTabs[tabID].hostWindowSlot.load(std::memory_order_acquire);
+    int sameWindowReplacement = -1;
+    for (uint16_t i = 0; i < nextCount; ++i) {
+        if (allTabs[nextList[i]].hostWindowSlot.load(std::memory_order_acquire) == hostSlot) {
+            sameWindowReplacement = nextList[i];
+            break;
+        }
+    }
+
     uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
     uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
     for (uint16_t i = 0; i < windowCount; ++i) {
         SingleUIWindow& window = allWindows[windowList[i]];
-        if (window.activeTabIndex == tabID) window.activeTabIndex = replacementTab;
+        if (window.activeTabIndex == tabID) {
+            window.activeTabIndex = sameWindowReplacement >= 0 ? sameWindowReplacement : replacementTab;
+        }
     }
 
     PublishTabList(nextList, nextCount);
+
+    if (sameWindowReplacement < 0) {
+        if (hostSlot > 0 && hostSlot < MV_MAX_WINDOWS) {
+            // The closing tab was the only one in a secondary tab window: close that window too.
+            CloseSecondaryWindow(static_cast<uint16_t>(hostSlot));
+        } else {
+            // Main window ran out of hosted tabs: pull the replacement tab back into it.
+            allTabs[replacementTab].hostWindowSlot.store(0, std::memory_order_release);
+            allWindows[0].activeTabIndex = replacementTab;
+        }
+    }
 
     ACTION_DETAILS closeRequest{};
     closeRequest.actionType = ACTION_TYPE::CLOSE_TAB;
@@ -333,7 +375,9 @@ void ProcessPendingUIActions() {
 
     for (const UIActionEntry& action : actions) {
         if (action.id == ACTION_ENGINEERING_CREATE) {
-            CreateEngineeringTab();
+            // p1 = window slot whose '+' button was clicked; the new tab is hosted there.
+            CreateEngineeringTab(L"", L"", true,
+                action.p1 < MV_MAX_WINDOWS ? static_cast<uint16_t>(action.p1) : 0);
         } else if (action.id == ACTION_ENGINEERING_CLOSE) {
             RequestCloseEngineeringTab(static_cast<uint16_t>(action.p1));
         } else if (action.id == DataTreeView::kToggleEverythingUIAction) {
@@ -357,13 +401,36 @@ void ProcessPendingUIActions() {
             }
         } else if (action.id == InternalSubTabs::kActivateUIAction) {
             if (action.p1 < MV_MAX_TABS) {
-                PushSystemTodoToTab(&allTabs[static_cast<uint16_t>(action.p1)],
-                    ACTION_TYPE::ACTIVATE_INTERNAL_SUB_TAB, 0, 0, 0, action.p2);
+                DATASETTAB& actionTab = allTabs[static_cast<uint16_t>(action.p1)];
+                const int subTabSlot = FindPublishedSubTabSlot(actionTab, action.p2);
+                const int16_t viewWindowSlot = subTabSlot >= 0
+                    ? actionTab.subTabHostWindowSlots[subTabSlot].load(std::memory_order_acquire)
+                    : static_cast<int16_t>(-1);
+                if (subTabSlot >= 0 && viewWindowSlot >= 0 &&
+                    actionTab.subTabs[subTabSlot].containerType == VishwakarmaStorage::ObjectType::Page2D) {
+                    // A Page2D opens in exactly 1 view. When that view is extracted into its own
+                    // window, activating it focuses that window instead of showing it inline.
+                    if (allWindows[viewWindowSlot].hWnd) SetForegroundWindow(allWindows[viewWindowSlot].hWnd);
+                } else {
+                    PushSystemTodoToTab(&actionTab, ACTION_TYPE::ACTIVATE_INTERNAL_SUB_TAB, 0, 0, 0, action.p2);
+                }
             }
         } else if (action.id == InternalSubTabs::kCloseUIAction) {
             if (action.p1 < MV_MAX_TABS) {
                 PushSystemTodoToTab(&allTabs[static_cast<uint16_t>(action.p1)],
                     ACTION_TYPE::CLOSE_INTERNAL_SUB_TAB, 0, 0, 0, action.p2);
+            }
+        } else if (action.id == InternalSubTabs::kExtractUIAction) {
+            if (action.p1 < MV_MAX_TABS) {
+                ExtractViewToNewWindow(static_cast<uint16_t>(action.p1), action.p2);
+            }
+        } else if (action.id == kExtractTabUIAction) {
+            if (action.p1 < MV_MAX_TABS) {
+                ExtractTabToNewWindow(static_cast<uint16_t>(action.p1));
+            }
+        } else if (action.id == kCloseViewWindowUIAction) {
+            if (action.p1 < MV_MAX_TABS && action.p2 < MV_MAX_SUBTABS) {
+                CloseViewWindowFor(static_cast<uint16_t>(action.p1), static_cast<uint16_t>(action.p2));
             }
         } else if (action.id == static_cast<uint32_t>(Commands::PROJECT_SAVE)) {
             SaveActiveTabToStorage();
@@ -926,6 +993,277 @@ unsigned char* imgData = nullptr;
 HINSTANCE hInst;// Stored instance handle for use in Win32 API calls such as FindResource
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);// Forward declarations of functions included in this code module.
 
+// ===================== Multi-window management (UI thread only) =====================
+// Slot 0 is the main window created in wWinMain. Slots are never reused within a session,
+// mirroring how tab slots work (nextTabSlot).
+static uint16_t nextWindowSlot = 1;
+
+static void PublishWindowList(uint16_t* nextList, uint16_t nextCount) {
+    publishedWindowIndexes.store(nextList, std::memory_order_release);
+    publishedWindowCount.store(nextCount, std::memory_order_release);
+}
+
+// Creates a secondary top-level window (tab-host with full ribbon, or content-only extracted view)
+// near the cursor and publishes it for the render threads. Returns nullptr when out of slots.
+static SingleUIWindow* CreateSecondaryWindow(uint8_t kind, const std::wstring& title,
+    int parentTabIndex, uint16_t subTabSlot) {
+    if (nextWindowSlot >= MV_MAX_WINDOWS) return nullptr;
+
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    HMONITOR hMonitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+    int monitorIndex = primaryMonitorIndex;
+    for (int i = 0; i < gpu.currentMonitorCount; ++i) {
+        if (gpu.screens[i].hMonitor == hMonitor) { monitorIndex = i; break; }
+    }
+
+    const uint16_t windowSlot = nextWindowSlot++;
+    SingleUIWindow& window = allWindows[windowSlot];
+    window.windowKind = kind;
+    window.viewParentTabIndex = parentTabIndex;
+    window.viewSubTabSlot = subTabSlot;
+    window.activeTabIndex = parentTabIndex;
+    window.currentMonitorIndex = monitorIndex;
+    window.dx.contentOnly = (kind == WINDOW_KIND_VIEW);
+
+    window.hWnd = CreateWindowExW(WS_EX_OVERLAPPEDWINDOW, szWindowClass, title.c_str(),
+        WS_OVERLAPPEDWINDOW | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
+        cursor.x - 60, cursor.y - 20,
+        gpu.screens[monitorIndex].WindowWidth / 2, gpu.screens[monitorIndex].WindowHeight / 2,
+        NULL, NULL, hInst, NULL);
+    if (!window.hWnd) {
+        nextWindowSlot--;
+        return nullptr;
+    }
+
+    RECT clientRect{};
+    if (GetClientRect(window.hWnd, &clientRect)) {
+        window.currentWidth = static_cast<uint16_t>(clientRect.right - clientRect.left);
+        window.currentHeight = static_cast<uint16_t>(clientRect.bottom - clientRect.top);
+        window.nextRequestedWidth.store(window.currentWidth, std::memory_order_relaxed);
+        window.nextRequestedHeight.store(window.currentHeight, std::memory_order_relaxed);
+    }
+    gpu.InitD3DPerWindow(window.dx, window.hWnd, gpu.screens[monitorIndex].commandQueue.Get());
+
+    uint16_t* currentList = publishedWindowIndexes.load(std::memory_order_acquire);
+    const uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+    uint16_t* nextList = (currentList == activeWindowIndexesA) ? activeWindowIndexesB : activeWindowIndexesA;
+    for (uint16_t i = 0; i < windowCount; ++i) nextList[i] = currentList[i];
+    nextList[windowCount] = windowSlot;
+    PublishWindowList(nextList, windowCount + 1);
+
+    ShowWindow(window.hWnd, SW_SHOW);
+    UpdateWindow(window.hWnd);
+    return &window;
+}
+
+// Unpublishes a secondary window, waits out any in-flight frame, releases its DX resources and
+// destroys the OS window. The main window (slot 0) never goes through here.
+static void CloseSecondaryWindow(uint16_t windowSlot) {
+    if (windowSlot == 0 || windowSlot >= MV_MAX_WINDOWS) return;
+    SingleUIWindow& window = allWindows[windowSlot];
+    if (!window.hWnd) return;
+
+    window.isMigrating = true; // Render threads skip this window from their next frame on.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+
+    uint16_t* currentList = publishedWindowIndexes.load(std::memory_order_acquire);
+    const uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+    uint16_t* nextList = (currentList == activeWindowIndexesA) ? activeWindowIndexesB : activeWindowIndexesA;
+    uint16_t nextCount = 0;
+    for (uint16_t i = 0; i < windowCount; ++i) {
+        if (currentList[i] == windowSlot) continue;
+        nextList[nextCount++] = currentList[i];
+    }
+    PublishWindowList(nextList, nextCount);
+
+    // A render thread may still be recording a frame that includes this window (it read the window
+    // list before we unpublished). Two frame periods are enough for it to finish and present.
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Drain the monitor queue so no submitted GPU work still references this swap chain.
+    const int monitorIndex = window.currentMonitorIndex;
+    if (monitorIndex >= 0 && monitorIndex < gpu.currentMonitorCount) {
+        OneMonitorController& monitor = gpu.screens[monitorIndex];
+        if (monitor.commandQueue && monitor.renderFence) {
+            const uint64_t drainValue = gpu.renderFenceValue.fetch_add(1);
+            if (SUCCEEDED(monitor.commandQueue->Signal(monitor.renderFence.Get(), drainValue))) {
+                HANDLE hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+                if (hEvent) {
+                    if (monitor.renderFence->GetCompletedValue() < drainValue) {
+                        monitor.renderFence->SetEventOnCompletion(drainValue, hEvent);
+                        WaitForSingleObject(hEvent, 3000); // Device likely lost past this; proceed anyway.
+                    }
+                    CloseHandle(hEvent);
+                }
+            }
+        }
+    }
+
+    gpu.CleanupWindowResources(window.dx);
+    HWND hWndToDestroy = window.hWnd;
+    window.hWnd = nullptr;
+    window.activeTabIndex = -1;
+    window.viewParentTabIndex = -1;
+    DestroyWindow(hWndToDestroy);
+}
+
+// Extracts a tab out of its hosting window into a new dedicated tab-host window (full ribbon).
+static void ExtractTabToNewWindow(uint16_t tabID) {
+    if (tabID >= MV_MAX_TABS) return;
+    DATASETTAB& tab = allTabs[tabID];
+    const int16_t sourceSlot = tab.hostWindowSlot.load(std::memory_order_acquire);
+
+    uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
+    const uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+    bool tabIsOpen = false;
+    uint16_t hostedBySource = 0;
+    int replacementTab = -1;
+    for (uint16_t i = 0; i < tabCount; ++i) {
+        if (tabList[i] == tabID) tabIsOpen = true;
+        if (allTabs[tabList[i]].hostWindowSlot.load(std::memory_order_acquire) == sourceSlot) {
+            ++hostedBySource;
+            if (tabList[i] != tabID && replacementTab < 0) replacementTab = tabList[i];
+        }
+    }
+    if (!tabIsOpen || hostedBySource < 2) return; // The last hosted tab stays with its window.
+
+    SingleUIWindow* newWindow = CreateSecondaryWindow(WINDOW_KIND_TABHOST, tab.fileName, tabID, 0);
+    if (!newWindow) return;
+
+    tab.hostWindowSlot.store(static_cast<int16_t>(newWindow - allWindows), std::memory_order_release);
+    if (sourceSlot >= 0 && sourceSlot < MV_MAX_WINDOWS &&
+        allWindows[sourceSlot].activeTabIndex == tabID) {
+        allWindows[sourceSlot].activeTabIndex = replacementTab;
+    }
+}
+
+// Extracts one sub-tab (view) into a dedicated content-only window rendering the same
+// GeometryPage; focuses the existing window when the view is already extracted.
+static void ExtractViewToNewWindow(uint16_t tabIndex, uint64_t containerMemoryId) {
+    if (tabIndex >= MV_MAX_TABS) return;
+    DATASETTAB& tab = allTabs[tabIndex];
+    const int subTabSlot = FindPublishedSubTabSlot(tab, containerMemoryId);
+    if (subTabSlot < 0) return;
+
+    const int16_t existingWindow = tab.subTabHostWindowSlots[subTabSlot].load(std::memory_order_acquire);
+    if (existingWindow >= 0) {
+        if (allWindows[existingWindow].hWnd) SetForegroundWindow(allWindows[existingWindow].hWnd);
+        return;
+    }
+
+    const std::string& asciiTitle = tab.subTabs[subTabSlot].title;
+    std::wstring title(asciiTitle.begin(), asciiTitle.end());
+    SingleUIWindow* newWindow = CreateSecondaryWindow(WINDOW_KIND_VIEW, title, tabIndex,
+        static_cast<uint16_t>(subTabSlot));
+    if (!newWindow) return;
+    tab.subTabHostWindowSlots[subTabSlot].store(
+        static_cast<int16_t>(newWindow - allWindows), std::memory_order_release);
+}
+
+// Closes the extracted window of one sub-tab (used when the sub-tab itself is closed).
+static void CloseViewWindowFor(uint16_t tabIndex, uint16_t subTabSlot) {
+    if (tabIndex >= MV_MAX_TABS || subTabSlot >= MV_MAX_SUBTABS) return;
+    const int16_t windowSlot =
+        allTabs[tabIndex].subTabHostWindowSlots[subTabSlot].exchange(-1, std::memory_order_acq_rel);
+    if (windowSlot > 0 && windowSlot < MV_MAX_WINDOWS) {
+        CloseSecondaryWindow(static_cast<uint16_t>(windowSlot));
+    }
+}
+
+// User clicked the OS close button of a secondary window: hosted content returns to where it
+// came from (views go back inline, tabs re-host into the main window), then the window dies.
+static void HandleSecondaryWindowClose(SingleUIWindow& window) {
+    const uint16_t windowSlot = static_cast<uint16_t>(&window - allWindows);
+    if (window.windowKind == WINDOW_KIND_VIEW) {
+        if (window.viewParentTabIndex >= 0 && window.viewParentTabIndex < MV_MAX_TABS &&
+            window.viewSubTabSlot < MV_MAX_SUBTABS) {
+            allTabs[window.viewParentTabIndex].subTabHostWindowSlots[window.viewSubTabSlot]
+                .store(-1, std::memory_order_release);
+        }
+    } else {
+        uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
+        const uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+        for (uint16_t i = 0; i < tabCount; ++i) {
+            DATASETTAB& tab = allTabs[tabList[i]];
+            if (tab.hostWindowSlot.load(std::memory_order_acquire) == static_cast<int16_t>(windowSlot)) {
+                tab.hostWindowSlot.store(0, std::memory_order_release);
+                if (allWindows[0].activeTabIndex < 0) allWindows[0].activeTabIndex = tabList[i];
+            }
+        }
+    }
+    CloseSecondaryWindow(windowSlot);
+}
+
+// Drag-drop merge: dropping a secondary window onto another window's tab band merges it back.
+// A view window may ONLY be dropped on the window hosting its parent tab (consistency rule).
+static bool TryMergeWindowOnDrop(SingleUIWindow& dragged) {
+    const uint16_t draggedSlot = static_cast<uint16_t>(&dragged - allWindows);
+    if (draggedSlot == 0 || !dragged.hWnd) return false;
+
+    POINT cursor{};
+    if (!GetCursorPos(&cursor)) return false;
+
+    uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
+    const uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+    for (uint16_t i = 0; i < windowCount; ++i) {
+        const uint16_t targetSlot = windowList[i];
+        SingleUIWindow& target = allWindows[targetSlot];
+        if (&target == &dragged || !target.hWnd) continue;
+        if (target.windowKind != WINDOW_KIND_TABHOST) continue;
+
+        // Tab band rectangle of the target window in screen coordinates.
+        RECT clientRect{};
+        if (!GetClientRect(target.hWnd, &clientRect)) continue;
+        POINT origin{ 0, 0 };
+        ClientToScreen(target.hWnd, &origin);
+        float tabBarHeightPx = 0.0f;
+        const int monitorIndex = target.currentMonitorIndex;
+        if (monitorIndex >= 0 && monitorIndex < gpu.currentMonitorCount) {
+            if (gpu.screens[monitorIndex].topRibbonLayout.isValid) {
+                tabBarHeightPx = gpu.screens[monitorIndex].topRibbonLayout.tabBarHeightPx;
+            } else {
+                const float dpiY = gpu.screens[monitorIndex].physicalDpiY > 0
+                    ? static_cast<float>(gpu.screens[monitorIndex].physicalDpiY) : 96.0f;
+                tabBarHeightPx = UI_TAB_BAR_HEIGHT_MM * dpiY / 25.4f;
+            }
+        }
+        if (tabBarHeightPx <= 0.0f) continue;
+        if (cursor.x < origin.x || cursor.x >= origin.x + (clientRect.right - clientRect.left)) continue;
+        if (cursor.y < origin.y || cursor.y >= origin.y + static_cast<LONG>(tabBarHeightPx)) continue;
+
+        if (dragged.windowKind == WINDOW_KIND_VIEW) {
+            const int parentTab = dragged.viewParentTabIndex;
+            if (parentTab < 0 || parentTab >= MV_MAX_TABS) continue;
+            if (allTabs[parentTab].hostWindowSlot.load(std::memory_order_acquire) !=
+                static_cast<int16_t>(targetSlot)) {
+                continue; // Not the window hosting the parent tab: not a valid drop target.
+            }
+            allTabs[parentTab].subTabHostWindowSlots[dragged.viewSubTabSlot]
+                .store(-1, std::memory_order_release); // View returns inline.
+            CloseSecondaryWindow(draggedSlot);
+            return true;
+        }
+
+        // Dragged tab-host window: every tab it hosts moves into the target window.
+        uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
+        const uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+        int firstMovedTab = -1;
+        for (uint16_t t = 0; t < tabCount; ++t) {
+            DATASETTAB& tab = allTabs[tabList[t]];
+            if (tab.hostWindowSlot.load(std::memory_order_acquire) == static_cast<int16_t>(draggedSlot)) {
+                tab.hostWindowSlot.store(static_cast<int16_t>(targetSlot), std::memory_order_release);
+                if (firstMovedTab < 0) firstMovedTab = tabList[t];
+            }
+        }
+        if (dragged.activeTabIndex >= 0) target.activeTabIndex = dragged.activeTabIndex;
+        else if (firstMovedTab >= 0) target.activeTabIndex = firstMovedTab;
+        CloseSecondaryWindow(draggedSlot);
+        return true;
+    }
+    return false;
+}
+
 // Ask to AI: Whats the difference between WinMain and wWinMain for Windows Desktop C++ DirectX12 application?
 // WinMain: This was legacy name. New name is wWinMain with Unicode support.
 int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPWSTR lpCmdLine, _In_ int nCmdShow)
@@ -1176,8 +1514,23 @@ static void UpdateUIMousePosition(SingleUIWindow* window, LPARAM lParam) {
     window->uiInput.mouseY = static_cast<float>(GET_Y_LPARAM(lParam));
 }
 
+// Interacting inside an extracted view window makes its hosted sub-tab the tab's active one, so
+// the engineering thread interprets the input in the right (2D vs 3D) context. The unlocked read
+// of activeInternalSubTabMemoryId is benign: worst case one redundant activate request.
+static void ActivateHostedViewIfNeeded(SingleUIWindow* window, DATASETTAB* tab) {
+    if (!window || !tab || window->windowKind != WINDOW_KIND_VIEW) return;
+    const uint16_t slot = window->viewSubTabSlot;
+    if (slot >= MV_MAX_SUBTABS) return;
+    if (tab->subTabStates[slot].load(std::memory_order_acquire) != SUBTAB_OPEN) return;
+    const uint64_t hostedId = tab->subTabs[slot].containerMemoryId;
+    if (hostedId != 0 && tab->activeInternalSubTabMemoryId != hostedId) {
+        PushSystemTodoToTab(tab, ACTION_TYPE::ACTIVATE_INTERNAL_SUB_TAB, 0, 0, 0, hostedId);
+    }
+}
+
 static float GetTopRibbonHeightPxForWindow(const SingleUIWindow* window) {
-    if (!window || window->currentMonitorIndex < 0 || window->currentMonitorIndex >= gpu.currentMonitorCount) {
+    if (!window || window->windowKind == WINDOW_KIND_VIEW || // Extracted views have no ribbon.
+        window->currentMonitorIndex < 0 || window->currentMonitorIndex >= gpu.currentMonitorCount) {
         return 0.0f;
     }
 
@@ -1202,7 +1555,8 @@ static bool IsClientPointOverTopRibbon(const SingleUIWindow* window, const POINT
 
 static bool GetDataTreeLayoutForWindow(
     const SingleUIWindow* window, const DATASETTAB* tab, DataTreeView::LayoutMetrics& layout) {
-    if (!window || !tab || !tab->dataTreeView.isVisible.load(std::memory_order_acquire) ||
+    if (!window || !tab || window->windowKind == WINDOW_KIND_VIEW || // No data tree in view windows.
+        !tab->dataTreeView.isVisible.load(std::memory_order_acquire) ||
         window->currentMonitorIndex < 0 || window->currentMonitorIndex >= gpu.currentMonitorCount) {
         return false;
     }
@@ -1437,6 +1791,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
         }
         if (tab) {
+            ActivateHostedViewIfNeeded(currentWindow, tab);
             ad.actionType = ACTION_TYPE::LBUTTONDOWN;
             ad.source = INPUT_SOURCE::MOUSE;
             ad.x = GET_X_LPARAM(lParam);
@@ -1448,7 +1803,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
         return 0;
     }
-    
+
     case WM_LBUTTONUP:
     {
         const bool releasingDataTreeScrollbar = GetCapture() == hWnd;
@@ -1519,6 +1874,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             currentWindow->uiInput.middleButtonPressedThisFrame = true;
         }
         if (tab) {
+            ActivateHostedViewIfNeeded(currentWindow, tab);
             ad.actionType = ACTION_TYPE::MBUTTONDOWN;
             ad.source = INPUT_SOURCE::MOUSE;
             ad.x = GET_X_LPARAM(lParam);
@@ -1570,6 +1926,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (handledByTopRibbon || handledByDataTree || handledByRightOverlay) return 0;
 
         if (tab) {
+            ActivateHostedViewIfNeeded(currentWindow, tab);
             ad.actionType = ACTION_TYPE::MOUSEWHEEL;
             ad.source = INPUT_SOURCE::MOUSE;
             ad.x = uiPoint.x;
@@ -1678,6 +2035,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (pWin) {
             pWin->isInSizeMove = false;
 
+            // Drag-drop merge: dropping this window on another window's tab band merges it back
+            // (view windows only onto their parent tab's window). The window is destroyed then.
+            if (TryMergeWindowOnDrop(*pWin)) break;
+
             // Determine which monitor the window is now on
             HMONITOR hMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
             int newMonitorIdx = -1;
@@ -1705,6 +2066,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
         }
     case WM_CLOSE: // This is called BEFORE WM_DESTROY is received. Importantly, once this is over hWnd is destroyed.
+        // Secondary windows (extracted tabs / views) close individually: hosted content returns
+        // to the main window / inline band, rendering elsewhere continues undisturbed.
+        if (currentWindow && currentWindow != &allWindows[0]) {
+            HandleSecondaryWindowClose(*currentWindow);
+            return 0;
+        }
+        // Main window: full application shutdown below.
         // Initiate shutdown for render threads FIRST
         std::wcout << "WM_CLOSE: Pausing render threads..." << std::endl;
         pauseRenderThreads = true;
@@ -1729,7 +2097,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;  // Don't call DefWindowProc (prevents default handling)
         break;
     case WM_DESTROY:
-        PostQuitMessage(0);
+        // Only the main window quits the application; secondary windows die individually.
+        if (hWnd == allWindows[0].hWnd) PostQuitMessage(0);
         break;
     default:
         return DefWindowProc(hWnd, message, wParam, lParam);

@@ -47,6 +47,7 @@ constexpr uint32_t kCurveTypeEllipse = 1;
 constexpr uint32_t kCurveTypeArc = 2;
 
 uint32_t TopUIHeightPx(int monitorId, const DX12ResourcesPerWindow& winRes) {
+    if (winRes.contentOnly) return 0; // Extracted view windows render content edge to edge.
     int topUITotalHeightPx = 0;
     if (monitorId >= 0 && monitorId < gpu.currentMonitorCount) {
         const UITopRibbonLayout& layout = gpu.screens[monitorId].topRibbonLayout;

@@ -89,6 +89,18 @@ struct InternalSubTab {
     std::string title;
 };
 
+// Lifecycle of one fixed sub-tab slot inside DATASETTAB.
+// FREE -> OPEN -> PENDING_GPU_RELEASE -> FREE. A closed slot is only reused after every monitor's
+// render fence passed the value recorded at close time, so in-flight frames finish first.
+constexpr uint8_t SUBTAB_FREE = 0;
+constexpr uint8_t SUBTAB_OPEN = 1;
+constexpr uint8_t SUBTAB_PENDING_GPU_RELEASE = 2;
+
+// SingleUIWindow kinds. A tab-host window shows the full top ribbon and a tab band.
+// A view window shows only the content of one extracted sub-tab (no ribbon, no bands).
+constexpr uint8_t WINDOW_KIND_TABHOST = 0;
+constexpr uint8_t WINDOW_KIND_VIEW = 1;
+
 struct DATASETTAB {
     uint64_t tabID;
     std::wstring fileName;
@@ -134,7 +146,27 @@ struct DATASETTAB {
     std::vector<StoredLogicalObject> storageLogicalObjects; // Persisted organization objects in this tab.
     std::vector<StoredGeometryObject3D> storageObjects3D; // MVP persisted geometry objects in this tab.
     std::vector<uint64_t> expandedDataTreeNodeIds; // Expanded logical nodes in the visible data tree.
-    std::vector<InternalSubTab> openInternalSubTabs; // Engineering-thread owned; render thread copies under storageObjectsMutex.
+
+    // Fixed-slot registry of open sub-tabs (views), mirroring the allTabs/activeTabIndexes pattern.
+    // Slots are engineering-thread owned (written under storageObjectsMutex before the list is
+    // published); the index list is double buffered and published atomically so render/UI threads
+    // read it lock-free. Fixed size avoids std::vector reallocation issues.
+    InternalSubTab subTabs[MV_MAX_SUBTABS];
+    uint16_t subTabIndexesA[MV_MAX_SUBTABS] = {}, subTabIndexesB[MV_MAX_SUBTABS] = {};
+    std::atomic<uint16_t*> publishedSubTabIndexes{ nullptr };
+    std::atomic<uint16_t>  publishedSubTabCount{ 0 };
+    // Per-slot lifecycle enabling delayed release: a closed slot stays SUBTAB_PENDING_GPU_RELEASE
+    // until every monitor's render fence passes subTabReleaseFenceValues[slot]; only then does it
+    // become SUBTAB_FREE for reuse, so frames still referencing the view's GPU assets are done.
+    std::atomic<uint8_t> subTabStates[MV_MAX_SUBTABS] = {};
+    uint64_t subTabReleaseFenceValues[MV_MAX_SUBTABS] = {};
+    // -1 = view is inline in the sub-tab band; >= 0 = allWindows slot of its extracted dedicated window.
+    std::atomic<int16_t> subTabHostWindowSlots[MV_MAX_SUBTABS];
+
+    // The allWindows slot currently hosting this tab's button in its tab band. A tab is hosted by
+    // exactly one window; extraction / drag-drop merge just retargets this slot.
+    std::atomic<int16_t> hostWindowSlot{ 0 };
+
     uint64_t activeInternalSubTabMemoryId = 0; // Zero means no high-level container is currently visible.
     uint64_t defaultScene3DMemoryId = 0;
     uint64_t activeScene3DMemoryId = 0; // Organizational parent for newly generated 3D objects.
@@ -184,6 +216,10 @@ struct DATASETTAB {
         todoCPUQueue = std::make_unique<ThreadSafeQueueCPU>();
         storageObjectsMutex = std::make_unique<std::mutex>();
         cad2d = std::make_unique<TabCad2DStorage>();
+        publishedSubTabIndexes.store(subTabIndexesA, std::memory_order_relaxed);
+        for (int i = 0; i < MV_MAX_SUBTABS; ++i) {
+            subTabHostWindowSlots[i].store(-1, std::memory_order_relaxed);
+        }
     }
     DATASETTAB(const DATASETTAB&) = delete;// Disable copy (mutex cannot copy). Otherwise it can't reside in std::vector.
     DATASETTAB& operator=(const DATASETTAB&) = delete;
@@ -203,6 +239,15 @@ struct SingleUIWindow {
     int activeTabIndex = -1;
     int currentMonitorIndex; // The index of monitor returned by Windows API. It changes on monitor addition/removal.
     int requestedMonitorIndex;
+
+    // WINDOW_KIND_TABHOST (full ribbon + tab band) or WINDOW_KIND_VIEW (extracted sub-tab content only).
+    uint8_t windowKind = WINDOW_KIND_TABHOST;
+    int viewParentTabIndex = -1; // View windows: tab whose sub-tab is shown (mirrors activeTabIndex).
+    uint16_t viewSubTabSlot = 0; // View windows: slot into the parent tab's subTabs[].
+
+    // Drag-to-extract state (owned by the render thread that draws this window, immediate-mode UI).
+    int pressedTabId = -1;      // Tab button under the initial left-button press. -1 = none.
+    int pressedSubTabSlot = -1; // Sub-tab button under the initial left-button press. -1 = none.
     std::atomic<uint32_t> migrationState{ 0 };
     /*  0 : Normal rendering, 1 : UI requested migration, 2 : Source render thread released window
     3 : Destination render thread acquiring, 4 : Destination initialized resources, 0 : Back to normal */
@@ -239,6 +284,9 @@ struct SingleUIWindow {
         activeTabIndex(other.activeTabIndex),
         currentMonitorIndex(other.currentMonitorIndex),
         requestedMonitorIndex(other.requestedMonitorIndex),
+        windowKind(other.windowKind),
+        viewParentTabIndex(other.viewParentTabIndex),
+        viewSubTabSlot(other.viewSubTabSlot),
         tabBandRect(other.tabBandRect),
         viewBandRect(other.viewBandRect),
         contentRect(other.contentRect),
@@ -257,6 +305,9 @@ struct SingleUIWindow {
         activeTabIndex(other.activeTabIndex),
         currentMonitorIndex(other.currentMonitorIndex),
         requestedMonitorIndex(other.requestedMonitorIndex),
+        windowKind(other.windowKind),
+        viewParentTabIndex(other.viewParentTabIndex),
+        viewSubTabSlot(other.viewSubTabSlot),
         tabBandRect(other.tabBandRect),
         viewBandRect(other.viewBandRect),
         contentRect(other.contentRect),
@@ -276,6 +327,9 @@ struct SingleUIWindow {
             activeTabIndex = other.activeTabIndex;
             currentMonitorIndex = other.currentMonitorIndex;
             requestedMonitorIndex = other.requestedMonitorIndex;
+            windowKind = other.windowKind;
+            viewParentTabIndex = other.viewParentTabIndex;
+            viewSubTabSlot = other.viewSubTabSlot;
             tabBandRect = other.tabBandRect;
             viewBandRect = other.viewBandRect;
             contentRect = other.contentRect;
@@ -291,6 +345,16 @@ struct SingleUIWindow {
 
 void विश्वकर्मा(uint64_t tabID);
 bool GetVisibleSceneViewportForTab(const DATASETTAB& tab, int& widthPx, int& heightPx, int& topPx);
+
+// Lock-free scan of the published sub-tab list. Returns the slot index, or -1 when not open.
+int FindPublishedSubTabSlot(const DATASETTAB& tab, uint64_t containerMemoryId);
+// Marks every open sub-tab slot for delayed GPU release and publishes an empty list.
+// storageObjectsMutex must already be held by the caller.
+void CloseAllInternalSubTabsLocked(DATASETTAB& tab);
+
+// The tab that produced the most recent UI click (any window). ProcessPendingUIActions uses it to
+// route ribbon commands to the tab of the window the user actually clicked in. -1 = none yet.
+extern std::atomic<int32_t> g_uiActionSourceTabIndex;
 
 // Register a newly created engineering std::thread into the global registry (takes ownership)
 void AddEngineeringThread(std::thread&& t);

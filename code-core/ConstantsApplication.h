@@ -14,3 +14,7 @@ static const int MV_MAX_WINDOWS = 128; // Fits in a uint8_t if we ever need comp
 /*I ( Ram ) tried to open 500+ drawing simultaneously at once, while searching for specific drawing.
 Current state of art software failed ! Anyway 1000 is far more than normal human would like to see at once.*/
 static const int MV_MAX_TABS = 1024;//Maximum number of tabs.
+/*Maximum sub-tabs (views such as Page2D / Scene3D containers) open per tab. Fixed array inside
+DATASETTAB avoids std::vector reallocation issues and enables delayed slot release after the
+respective GPU assets are drained.*/
+static const int MV_MAX_SUBTABS = 128;

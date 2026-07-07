@@ -343,7 +343,12 @@ namespace InternalSubTabs {
 constexpr uint32_t kOpenUIAction = 0xE0000010u;
 constexpr uint32_t kActivateUIAction = 0xE0000011u;
 constexpr uint32_t kCloseUIAction = 0xE0000012u;
+constexpr uint32_t kExtractUIAction = 0xE0000013u; // p1 = tab index, p2 = containerMemoryId.
 }
+
+// Window management (only the UI thread creates/destroys OS windows; render threads request).
+constexpr uint32_t kExtractTabUIAction = 0xE0000030u;      // p1 = tab id dragged out of the tab band.
+constexpr uint32_t kCloseViewWindowUIAction = 0xE0000031u; // p1 = tab index, p2 = sub-tab slot.
 
 //TODO: WARNING: Get rid of mutex and use lock-free multi producer single consumer ring buffer for this.
 extern std::mutex g_actionQueueMutex;

@@ -470,13 +470,9 @@ void PrintActiveTab() {
     if (tab->storageObjectsMutex) {
         std::lock_guard<std::mutex> lock(*tab->storageObjectsMutex);
         containerMemoryId = tab->activeInternalSubTabMemoryId;
-        for (const InternalSubTab& subTab : tab->openInternalSubTabs) {
-            if (subTab.containerMemoryId == containerMemoryId) {
-                containerType = subTab.containerType;
-                break;
-            }
-        }
     }
+    const int subTabSlot = FindPublishedSubTabSlot(*tab, containerMemoryId);
+    if (subTabSlot >= 0) containerType = tab->subTabs[subTabSlot].containerType;
     if (containerMemoryId == 0) {
         MessageBoxW(OwnerWindowHandle(), L"Open a 2D Page or a 3D Scene to print.",
             L"Print", MB_OK | MB_ICONINFORMATION);
