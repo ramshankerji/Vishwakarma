@@ -213,6 +213,7 @@ Cad2DCurveGPURecord ToGpuEllipseRecord(const Cad2DEllipseRecordCPU& ellipse) {
     gpuCurve.lineWeightMode = static_cast<uint32_t>(ellipse.lineWeightMode);
     gpuCurve.colorABGR = ellipse.colorABGR;
     gpuCurve.curveType = kCurveTypeEllipse;
+    gpuCurve.rotationRadians = static_cast<float>(ellipse.rotationRadians);
     return gpuCurve;
 }
 
@@ -230,6 +231,7 @@ Cad2DCurveGPURecord ToGpuArcRecord(const Cad2DArcRecordCPU& arc) {
     gpuCurve.lineWeightMode = static_cast<uint32_t>(arc.lineWeightMode);
     gpuCurve.colorABGR = arc.colorABGR;
     gpuCurve.curveType = kCurveTypeArc;
+    gpuCurve.rotationRadians = static_cast<float>(arc.rotationRadians);
     return gpuCurve;
 }
 
@@ -613,6 +615,12 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage) {
     storage.textCreationYCU.store(0.0, std::memory_order_release);
     storage.textCreationObjectId = 0;
     storage.textCreationDraft.clear();
+    storage.transform2DKind.store(0, std::memory_order_release);
+    storage.transform2DStep.store(0, std::memory_order_release);
+    storage.transform2DP1XCU.store(0.0, std::memory_order_release);
+    storage.transform2DP1YCU.store(0.0, std::memory_order_release);
+    storage.transform2DP2XCU.store(0.0, std::memory_order_release);
+    storage.transform2DP2YCU.store(0.0, std::memory_order_release);
 }
 
 void RenderCad2DPage(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,

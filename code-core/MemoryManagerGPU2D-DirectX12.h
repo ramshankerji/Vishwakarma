@@ -49,7 +49,7 @@ struct Cad2DCurveGPURecord {
     uint32_t colorABGR;
     uint32_t curveType;
     uint32_t flags;
-    uint32_t padding0;
+    float rotationRadians; // CCW rotation of the radius axes about the center.
     uint32_t padding1;
     uint32_t padding2;
 };
@@ -185,6 +185,15 @@ struct TabCad2DStorage {
     std::atomic<double> textCreationYCU{ 0.0 };
     uint64_t textCreationObjectId = 0;
     std::string textCreationDraft;
+
+    // Selection transform mode (Cad2DTransformKind). The kind atomic is also read by the render
+    // thread to trail the EDIT_* command icon next to the cursor.
+    std::atomic<uint32_t> transform2DKind{ 0 };
+    std::atomic<uint32_t> transform2DStep{ 0 };
+    std::atomic<double> transform2DP1XCU{ 0.0 };
+    std::atomic<double> transform2DP1YCU{ 0.0 };
+    std::atomic<double> transform2DP2XCU{ 0.0 };
+    std::atomic<double> transform2DP2YCU{ 0.0 };
 };
 
 void InitCad2DTabResources(TabCad2DStorage& storage);

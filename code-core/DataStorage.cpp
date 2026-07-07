@@ -470,6 +470,7 @@ bool EncodeEllipse2D(const Cad2DEllipseRecordCPU& ellipse,
     message.set_center_y(ellipse.centerY);
     message.set_radius_x(ellipse.radiusX);
     message.set_radius_y(ellipse.radiusY);
+    message.set_rotation_radians(ellipse.rotationRadians);
     message.set_line_weight(ellipse.lineWeight);
     message.set_line_weight_mode(static_cast<uint32_t>(ellipse.lineWeightMode));
     message.set_color_abgr(ellipse.colorABGR);
@@ -483,6 +484,7 @@ bool EncodeArc2D(const Cad2DArcRecordCPU& arc,
     message.set_center_y(arc.centerY);
     message.set_radius_x(arc.radiusX);
     message.set_radius_y(arc.radiusY);
+    message.set_rotation_radians(arc.rotationRadians);
     message.set_start_x(arc.startX);
     message.set_start_y(arc.startY);
     message.set_end_x(arc.endX);
@@ -793,6 +795,7 @@ bool DecodeEllipse2D(const std::vector<uint8_t>& payload, Cad2DEllipseRecordCPU&
     ellipse.centerY = message.center_y();
     ellipse.radiusX = message.radius_x();
     ellipse.radiusY = message.radius_y();
+    ellipse.rotationRadians = message.rotation_radians(); // 0.0 for schema v1 files.
     ellipse.lineWeight = message.line_weight() > 0.0f ? message.line_weight() : 0.25f;
     ellipse.lineWeightMode = ReadLineWeightMode(message.line_weight_mode());
     ellipse.colorABGR = message.color_abgr();
@@ -807,6 +810,7 @@ bool DecodeArc2D(const std::vector<uint8_t>& payload, Cad2DArcRecordCPU& arc) {
     arc.centerY = message.center_y();
     arc.radiusX = message.radius_x();
     arc.radiusY = message.radius_y();
+    arc.rotationRadians = message.rotation_radians(); // 0.0 for schema v1 files.
     arc.startX = message.start_x();
     arc.startY = message.start_y();
     arc.endX = message.end_x();

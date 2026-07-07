@@ -484,6 +484,21 @@ void ProcessPendingUIActions() {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_ARC_CREATION2D);
         } else if (action.id == static_cast<uint32_t>(Commands::CREATE_TEXT)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_TEXT_CREATION2D);
+        } else if (action.id == static_cast<uint32_t>(Commands::EDIT_COPY)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_TRANSFORM2D,
+                static_cast<int>(Cad2DTransformKind::Copy));
+        } else if (action.id == static_cast<uint32_t>(Commands::EDIT_OFFSET)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_TRANSFORM2D,
+                static_cast<int>(Cad2DTransformKind::Offset));
+        } else if (action.id == static_cast<uint32_t>(Commands::EDIT_MIRROR)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_TRANSFORM2D,
+                static_cast<int>(Cad2DTransformKind::Mirror));
+        } else if (action.id == static_cast<uint32_t>(Commands::EDIT_ROTATE)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_TRANSFORM2D,
+                static_cast<int>(Cad2DTransformKind::Rotate));
+        } else if (action.id == static_cast<uint32_t>(Commands::EDIT_MOVE)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_TRANSFORM2D,
+                static_cast<int>(Cad2DTransformKind::Move));
         } else if (action.id == static_cast<uint32_t>(Commands::ZOOM_MAX)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::ZOOM_MAX_EXTENTS);
         } else if (action.id == static_cast<uint32_t>(Commands::ZOOM_FOCUS)) {

@@ -2037,8 +2037,11 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             tab.cad2d && tab.cad2d->arcCreationMode.load(std::memory_order_acquire);
         const bool textCreationMode =
             tab.cad2d && tab.cad2d->textCreationMode.load(std::memory_order_acquire);
+        const auto transformKind = static_cast<Cad2DTransformKind>(tab.cad2d
+            ? tab.cad2d->transform2DKind.load(std::memory_order_acquire) : 0u);
         if (lineCreationMode || polylineCreationMode || polygonCreationMode ||
-            circleCreationMode || ellipseCreationMode || arcCreationMode) {
+            circleCreationMode || ellipseCreationMode || arcCreationMode ||
+            transformKind != Cad2DTransformKind::None) {
             const float cursorIconSize = iconSizePx;
             const float cursorIconGap = 6.0f;
             Commands cursorCommand = Commands::CREATE_LINE;
@@ -2047,6 +2050,11 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             else if (circleCreationMode) cursorCommand = Commands::CREATE_CIRCLE;
             else if (ellipseCreationMode) cursorCommand = Commands::CREATE_ELLIPSE;
             else if (arcCreationMode) cursorCommand = Commands::CREATE_ARC;
+            else if (transformKind == Cad2DTransformKind::Copy) cursorCommand = Commands::EDIT_COPY;
+            else if (transformKind == Cad2DTransformKind::Offset) cursorCommand = Commands::EDIT_OFFSET;
+            else if (transformKind == Cad2DTransformKind::Mirror) cursorCommand = Commands::EDIT_MIRROR;
+            else if (transformKind == Cad2DTransformKind::Rotate) cursorCommand = Commands::EDIT_ROTATE;
+            else if (transformKind == Cad2DTransformKind::Move) cursorCommand = Commands::EDIT_MOVE;
             const char32_t cursorIcon =
                 SVGIconRenderer::IconForID(static_cast<uint32_t>(cursorCommand));
             const float iconX = std::clamp(

@@ -47,8 +47,8 @@ constexpr uint16_t kGeometry2DPolylineSchemaVersion = 1;
 constexpr uint16_t kGeometry2DPolygonSchemaVersion = 1;
 constexpr uint16_t kGeometry2DTextSchemaVersion = 1;
 constexpr uint16_t kGeometry2DCircleSchemaVersion = 1;
-constexpr uint16_t kGeometry2DEllipseSchemaVersion = 1;
-constexpr uint16_t kGeometry2DArcSchemaVersion = 1;
+constexpr uint16_t kGeometry2DEllipseSchemaVersion = 2; // v2: added rotation_radians.
+constexpr uint16_t kGeometry2DArcSchemaVersion = 2;     // v2: added rotation_radians.
 constexpr uint64_t kMaxLocalObjectId = (1ULL << 40) - 1ULL;
 
 constexpr uint32_t ToNumber(ObjectType value) {

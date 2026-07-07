@@ -11,6 +11,7 @@ struct PSInput {
     nointerpolation float halfWidthPx : TEXCOORD6;
     nointerpolation uint colorABGR : COLOR0;
     nointerpolation uint curveType : TEXCOORD7;
+    nointerpolation float rotationRadians : TEXCOORD8;
 };
 
 float4 DecodeABGR(uint colorABGR) {
@@ -36,10 +37,17 @@ bool AngleInCCWSweep(float angle, float startAngle, float endAngle) {
     return angle <= endAngle;
 }
 
-float EllipseStrokeDistance(float2 screenPx, float2 centerPx, float2 radiiPx, out float curveAngle) {
+float EllipseStrokeDistance(float2 screenPx, float2 centerPx, float2 radiiPx,
+    float rotationRadians, out float curveAngle) {
     float2 safeRadii = max(radiiPx, float2(0.0001, 0.0001));
     float2 localPx = screenPx - centerPx;
-    float2 normalizedModel = float2(localPx.x / safeRadii.x, -localPx.y / safeRadii.y);
+    float2 localModel = float2(localPx.x, -localPx.y); // Screen y grows downward; model y up.
+    float c = cos(rotationRadians);
+    float s = sin(rotationRadians);
+    // Un-rotate into the curve's local frame before normalizing by the radii.
+    float2 unrotated = float2(localModel.x * c + localModel.y * s,
+                              -localModel.x * s + localModel.y * c);
+    float2 normalizedModel = unrotated / safeRadii;
 
     if (dot(normalizedModel, normalizedModel) <= 0.00000001) {
         curveAngle = 0.0;
@@ -48,14 +56,17 @@ float EllipseStrokeDistance(float2 screenPx, float2 centerPx, float2 radiiPx, ou
         curveAngle = atan2(normalizedModel.y, normalizedModel.x);
     }
 
-    float2 closestPx = centerPx + float2(cos(curveAngle) * safeRadii.x, -sin(curveAngle) * safeRadii.y);
+    float2 localClosest = float2(cos(curveAngle) * safeRadii.x, sin(curveAngle) * safeRadii.y);
+    float2 rotatedClosest = float2(localClosest.x * c - localClosest.y * s,
+                                   localClosest.x * s + localClosest.y * c);
+    float2 closestPx = centerPx + float2(rotatedClosest.x, -rotatedClosest.y);
     return length(screenPx - closestPx);
 }
 
 float4 main(PSInput input) : SV_TARGET {
     float curveAngle = 0.0;
     float distanceToStroke = EllipseStrokeDistance(input.screenPositionPx, input.centerPx,
-        input.radiiPx, curveAngle);
+        input.radiiPx, input.rotationRadians, curveAngle);
 
     if (input.curveType == 2u) {
         const bool inSweep = AngleInCCWSweep(curveAngle, input.angleRange.x, input.angleRange.y);

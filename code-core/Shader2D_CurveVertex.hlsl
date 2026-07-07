@@ -19,7 +19,7 @@ struct Cad2DCurveRecord {
     uint colorABGR;
     uint curveType;
     uint flags;
-    uint padding0;
+    float rotationRadians; // CCW rotation of the radius axes about the center.
     uint padding1;
     uint padding2;
 };
@@ -37,6 +37,7 @@ struct PSInput {
     nointerpolation float halfWidthPx : TEXCOORD6;
     nointerpolation uint colorABGR : COLOR0;
     nointerpolation uint curveType : TEXCOORD7;
+    nointerpolation float rotationRadians : TEXCOORD8;
 };
 
 float2 ModelToScreen(float2 pCU) {
@@ -66,9 +67,14 @@ float ResolveLineWidthPx(Cad2DCurveRecord rec) {
     return max(widthPx, minLineWeightPx);
 }
 
-float CurveAngle(float2 pointCU, float2 centerCU, float2 radiiCU) {
+// Parameter angle of a world point, measured in the curve's rotated local frame.
+float CurveAngle(float2 pointCU, float2 centerCU, float2 radiiCU, float rotationRadians) {
     float2 safeRadii = max(abs(radiiCU), float2(0.000001, 0.000001));
-    float2 normalized = (pointCU - centerCU) / safeRadii;
+    float2 delta = pointCU - centerCU;
+    float c = cos(rotationRadians);
+    float s = sin(rotationRadians);
+    float2 local = float2(delta.x * c + delta.y * s, -delta.x * s + delta.y * c);
+    float2 normalized = local / safeRadii;
     return atan2(normalized.y, normalized.x);
 }
 
@@ -78,7 +84,13 @@ PSInput main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID) {
     float2 radiiPx = max(abs(rec.radiiCU) * zoomPixelsPerCU, float2(0.0001, 0.0001));
     float halfWidth = ResolveLineWidthPx(rec) * 0.5;
     float expand = halfWidth + 2.0;
-    float2 extent = radiiPx + expand;
+    // Axis-aligned bounding half-extents of the rotated ellipse.
+    float cosR = cos(rec.rotationRadians);
+    float sinR = sin(rec.rotationRadians);
+    float2 boundsPx = float2(
+        sqrt(radiiPx.x * cosR * radiiPx.x * cosR + radiiPx.y * sinR * radiiPx.y * sinR),
+        sqrt(radiiPx.x * sinR * radiiPx.x * sinR + radiiPx.y * cosR * radiiPx.y * cosR));
+    float2 extent = boundsPx + expand;
 
     float2 corners[6] = {
         centerPx + float2(-extent.x, -extent.y),
@@ -95,13 +107,14 @@ PSInput main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID) {
     output.centerPx = centerPx;
     output.radiiPx = radiiPx;
     output.angleRange = float2(
-        CurveAngle(rec.startCU, rec.centerCU, rec.radiiCU),
-        CurveAngle(rec.endCU, rec.centerCU, rec.radiiCU));
+        CurveAngle(rec.startCU, rec.centerCU, rec.radiiCU, rec.rotationRadians),
+        CurveAngle(rec.endCU, rec.centerCU, rec.radiiCU, rec.rotationRadians));
     output.startPx = ModelToScreen(rec.startCU);
     output.endPx = ModelToScreen(rec.endCU);
     output.halfWidthPx = halfWidth;
     // Selection highlight: deep blue (ABGR 0xFFA6260D) when the SELECTED flag bit is set.
     output.colorABGR = (rec.flags & 1u) ? 0xFFA6260Du : rec.colorABGR;
     output.curveType = rec.curveType;
+    output.rotationRadians = rec.rotationRadians;
     return output;
 }

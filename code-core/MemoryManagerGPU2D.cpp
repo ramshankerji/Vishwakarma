@@ -54,6 +54,12 @@ void ClearLineCreationState(TabCad2DStorage& storage) {
     storage.textCreationHasAnchor.store(false, std::memory_order_release);
     storage.textCreationXCU.store(0.0, std::memory_order_release);
     storage.textCreationYCU.store(0.0, std::memory_order_release);
+    storage.transform2DKind.store(0, std::memory_order_release);
+    storage.transform2DStep.store(0, std::memory_order_release);
+    storage.transform2DP1XCU.store(0.0, std::memory_order_release);
+    storage.transform2DP1YCU.store(0.0, std::memory_order_release);
+    storage.transform2DP2XCU.store(0.0, std::memory_order_release);
+    storage.transform2DP2YCU.store(0.0, std::memory_order_release);
     std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
     storage.polylineCreationObjectId = 0;
     storage.polylineCreationPoints.clear();
@@ -633,6 +639,16 @@ void Cad2DBeginTextCreation(DATASETTAB& tab) {
     tab.cad2d->textCreationHasAnchor.store(false, std::memory_order_release);
 }
 
+void Cad2DBeginTransform2D(DATASETTAB& tab, Cad2DTransformKind kind) {
+    if (!tab.cad2d || kind == Cad2DTransformKind::None || !Cad2DIsActivePage2D(tab)) return;
+    {
+        std::lock_guard<std::mutex> lock(tab.cad2d->selection2DMutex);
+        if (tab.cad2d->selectedObjectIds.empty()) return; // Nothing selected to transform.
+    }
+    ClearLineCreationState(*tab.cad2d); // Also resets the transform state; step restarts at 0.
+    tab.cad2d->transform2DKind.store(static_cast<uint32_t>(kind), std::memory_order_release);
+}
+
 // --- 2D CPU hit-testing for click-selection (see selection.md) ----------------------------------
 namespace {
 double DistPointToSegment(double px, double py, double ax, double ay, double bx, double by) {
@@ -649,11 +665,16 @@ double DistPointToCircle(double px, double py, double cx, double cy, double radi
     return std::abs(std::sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy)) - radius);
 }
 
-// Rough distance to an (axis-aligned) ellipse boundary; adequate for pick tolerance.
-double DistPointToEllipse(double px, double py, double cx, double cy, double rx, double ry) {
+// Rough distance to a (possibly rotated) ellipse boundary; adequate for pick tolerance.
+double DistPointToEllipse(double px, double py, double cx, double cy, double rx, double ry,
+    double rotationRadians) {
     const double sx = (std::max)(std::abs(rx), 1.0e-9);
     const double sy = (std::max)(std::abs(ry), 1.0e-9);
-    const double nx = (px - cx) / sx, ny = (py - cy) / sy;
+    const double dx = px - cx, dy = py - cy;
+    const double c = std::cos(rotationRadians), s = std::sin(rotationRadians);
+    const double lx = dx * c + dy * s;  // Un-rotate into the curve's local frame.
+    const double ly = -dx * s + dy * c;
+    const double nx = lx / sx, ny = ly / sy;
     const double r = std::sqrt(nx * nx + ny * ny);
     return std::abs(r - 1.0) * (std::min)(sx, sy);
 }
@@ -705,11 +726,13 @@ void Cad2DHandleSelectionClick(DATASETTAB& tab, double xCU, double yCU) {
         }
         for (const Cad2DEllipseRecordCPU& r : s.ellipseRecords) {
             if (r.isDeleted || r.containerMemoryId != container) continue;
-            consider(DistPointToEllipse(xCU, yCU, r.centerX, r.centerY, r.radiusX, r.radiusY), r.objectId);
+            consider(DistPointToEllipse(xCU, yCU, r.centerX, r.centerY, r.radiusX, r.radiusY,
+                r.rotationRadians), r.objectId);
         }
         for (const Cad2DArcRecordCPU& r : s.arcRecords) {
             if (r.isDeleted || r.containerMemoryId != container) continue;
-            consider(DistPointToEllipse(xCU, yCU, r.centerX, r.centerY, r.radiusX, r.radiusY), r.objectId);
+            consider(DistPointToEllipse(xCU, yCU, r.centerX, r.centerY, r.radiusX, r.radiusY,
+                r.rotationRadians), r.objectId);
         }
     }
 
@@ -719,6 +742,373 @@ void Cad2DHandleSelectionClick(DATASETTAB& tab, double xCU, double yCU) {
         if (bestId != 0) s.selectedObjectIds.insert(bestId); // Single-select; clears on empty click.
     }
     EnqueueCad2DSelectionRefresh(tab.tabID, container);
+}
+
+// --- Selection transforms (Commands::EDIT_COPY/OFFSET/MIRROR/ROTATE/MOVE) -----------------------
+
+constexpr double kPi2D = 3.14159265358979323846;
+
+// Rigid point map p' = base + M * (p - pivot); covers translation, rotation and reflection.
+struct Cad2DPointMapper {
+    double pivotX = 0.0, pivotY = 0.0;
+    double baseX = 0.0, baseY = 0.0;
+    double m00 = 1.0, m01 = 0.0, m10 = 0.0, m11 = 1.0;
+
+    Cad2DPoint2D Map(double x, double y) const {
+        const double vx = x - pivotX, vy = y - pivotY;
+        return { baseX + m00 * vx + m01 * vy, baseY + m10 * vx + m11 * vy };
+    }
+};
+
+// Offset side for a polyline: +1 = left of the direction of travel, -1 = right, decided by which
+// side of the segment nearest to the pick point the pick falls on.
+bool PolylineOffsetSideFromPick(const std::vector<Cad2DPoint2D>& points, double px, double py,
+    double& outSign) {
+    double bestDist = 0.0;
+    size_t bestSegment = points.size(); // Sentinel: no segment found yet.
+    for (size_t i = 0; i + 1 < points.size(); ++i) {
+        const double d = DistPointToSegment(px, py, points[i].x, points[i].y,
+            points[i + 1].x, points[i + 1].y);
+        if (bestSegment == points.size() || d < bestDist) { bestDist = d; bestSegment = i; }
+    }
+    if (bestSegment == points.size()) return false;
+    const Cad2DPoint2D& a = points[bestSegment];
+    const Cad2DPoint2D& b = points[bestSegment + 1];
+    const double side = (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x);
+    if (std::abs(side) <= 1.0e-12) return false; // Pick exactly on the line: side undefined.
+    outSign = side > 0.0 ? 1.0 : -1.0;
+    return true;
+}
+
+std::vector<Cad2DPoint2D> CleanPolylinePoints(const std::vector<Cad2DPoint2D>& points) {
+    std::vector<Cad2DPoint2D> cleaned;
+    cleaned.reserve(points.size());
+    for (const Cad2DPoint2D& p : points) {
+        if (!cleaned.empty() &&
+            std::hypot(p.x - cleaned.back().x, p.y - cleaned.back().y) <= 1.0e-12) continue;
+        cleaned.push_back(p);
+    }
+    return cleaned;
+}
+
+// Offsets an open polyline to one side (sign: +1 left of travel, -1 right) with miter joins.
+// Returns false when a segment is degenerate.
+bool OffsetPolylinePoints(const std::vector<Cad2DPoint2D>& points, double distance, double sign,
+    std::vector<Cad2DPoint2D>& outPoints) {
+    if (points.size() < 2) return false;
+    const size_t segmentCount = points.size() - 1;
+    std::vector<Cad2DPoint2D> dirs(segmentCount);   // Unit segment directions.
+    std::vector<Cad2DPoint2D> starts(segmentCount); // Offset segment start points.
+    for (size_t i = 0; i < segmentCount; ++i) {
+        const double dx = points[i + 1].x - points[i].x, dy = points[i + 1].y - points[i].y;
+        const double len = std::hypot(dx, dy);
+        if (len <= 1.0e-12) return false;
+        dirs[i] = { dx / len, dy / len };
+        starts[i] = { points[i].x - dirs[i].y * sign * distance,
+                      points[i].y + dirs[i].x * sign * distance };
+    }
+
+    outPoints.resize(points.size());
+    outPoints.front() = starts.front();
+    outPoints.back() = { points.back().x - dirs.back().y * sign * distance,
+                         points.back().y + dirs.back().x * sign * distance };
+    for (size_t j = 1; j < segmentCount; ++j) {
+        const Cad2DPoint2D& d0 = dirs[j - 1];
+        const Cad2DPoint2D& d1 = dirs[j];
+        const double cross = d0.x * d1.y - d0.y * d1.x;
+        if (std::abs(cross) <= 1.0e-9) { // Nearly collinear: plain perpendicular offset.
+            outPoints[j] = starts[j];
+            continue;
+        }
+        // Miter join: intersect offset lines (starts[j-1] + t*d0) and (starts[j] + u*d1).
+        const double wx = starts[j].x - starts[j - 1].x;
+        const double wy = starts[j].y - starts[j - 1].y;
+        const double t = (wx * d1.y - wy * d1.x) / cross;
+        outPoints[j] = { starts[j - 1].x + d0.x * t, starts[j - 1].y + d0.y * t };
+    }
+    return true;
+}
+
+// Applies the armed transform to every selected object of the active Page2D. Move/Rotate update
+// the records in place (ids preserved); Copy/Offset/Mirror enqueue brand-new objects.
+void ApplyTransform2DToSelection(DATASETTAB& tab, Cad2DTransformKind kind,
+    double p1x, double p1y, double p2x, double p2y, double p3x, double p3y) {
+    TabCad2DStorage& s = *tab.cad2d;
+    const uint64_t container = Cad2DFindTargetPage2DMemoryId(tab);
+    if (container == 0) return;
+
+    std::unordered_set<uint64_t> selected;
+    {
+        std::lock_guard<std::mutex> lock(s.selection2DMutex);
+        selected = s.selectedObjectIds;
+    }
+    if (selected.empty()) return;
+
+    const bool makesCopy = kind == Cad2DTransformKind::Copy ||
+        kind == Cad2DTransformKind::Offset || kind == Cad2DTransformKind::Mirror;
+    const double offsetDistance = std::hypot(p2x - p1x, p2y - p1y); // Offset only.
+
+    Cad2DPointMapper map{};
+    double rotationDeltaRadians = 0.0;
+    double mirrorLineAngleRadians = 0.0;
+    if (kind == Cad2DTransformKind::Copy || kind == Cad2DTransformKind::Move) {
+        map.pivotX = p1x; map.pivotY = p1y; map.baseX = p2x; map.baseY = p2y;
+    } else if (kind == Cad2DTransformKind::Rotate) {
+        rotationDeltaRadians = std::atan2(p3y - p1y, p3x - p1x) - std::atan2(p2y - p1y, p2x - p1x);
+        const double c = std::cos(rotationDeltaRadians), sn = std::sin(rotationDeltaRadians);
+        map.pivotX = p1x; map.pivotY = p1y; map.baseX = p1x; map.baseY = p1y;
+        map.m00 = c; map.m01 = -sn; map.m10 = sn; map.m11 = c;
+    } else if (kind == Cad2DTransformKind::Mirror) {
+        const double len = std::hypot(p2x - p1x, p2y - p1y);
+        if (len <= 1.0e-9) return;
+        const double ux = (p2x - p1x) / len, uy = (p2y - p1y) / len;
+        mirrorLineAngleRadians = std::atan2(uy, ux);
+        map.pivotX = p1x; map.pivotY = p1y; map.baseX = p1x; map.baseY = p1y;
+        map.m00 = 2.0 * ux * ux - 1.0; map.m01 = 2.0 * ux * uy;
+        map.m10 = 2.0 * ux * uy;       map.m11 = 2.0 * uy * uy - 1.0;
+    } else if (offsetDistance <= 1.0e-9) {
+        return;
+    }
+
+    std::vector<Cad2DLineRecordCPU> lines;
+    std::vector<Cad2DPolylineRecordCPU> polylines;
+    std::vector<Cad2DPolygonRecordCPU> polygons;
+    std::vector<Cad2DCircleRecordCPU> circles;
+    std::vector<Cad2DEllipseRecordCPU> ellipses;
+    std::vector<Cad2DArcRecordCPU> arcs;
+    std::vector<Cad2DTextRecordCPU> texts;
+
+    auto asNewObject = [&](auto& record) {
+        record.objectId = 0; // EnqueueCad2D* assigns a fresh memory id; save assigns persisted ids.
+        record.persistedId = 0;
+        record.persistedParentId = 0;
+    };
+    auto wanted = [&](uint64_t objectId, bool isDeleted, uint64_t recContainer) {
+        return !isDeleted && recContainer == container && selected.count(objectId) != 0;
+    };
+
+    {
+        std::lock_guard<std::mutex> lock(s.cpuRecordsMutex);
+        for (const Cad2DLineRecordCPU& r : s.lineRecords) {
+            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            Cad2DLineRecordCPU out = r;
+            if (kind == Cad2DTransformKind::Offset) {
+                // Parallel line at the offset distance, toward the side of the second click.
+                const double dirX = r.x2 - r.x1, dirY = r.y2 - r.y1;
+                const double len = std::hypot(dirX, dirY);
+                if (len <= 1.0e-12) continue;
+                const double side = dirX * (p2y - r.y1) - dirY * (p2x - r.x1);
+                if (std::abs(side) <= 1.0e-12) continue; // Click on the line: side undefined.
+                const double sign = side > 0.0 ? 1.0 : -1.0;
+                const double nx = -dirY / len * sign * offsetDistance;
+                const double ny = dirX / len * sign * offsetDistance;
+                out.x1 += nx; out.y1 += ny; out.x2 += nx; out.y2 += ny;
+            } else {
+                const Cad2DPoint2D a = map.Map(r.x1, r.y1);
+                const Cad2DPoint2D b = map.Map(r.x2, r.y2);
+                out.x1 = a.x; out.y1 = a.y; out.x2 = b.x; out.y2 = b.y;
+            }
+            if (makesCopy) asNewObject(out);
+            lines.push_back(out);
+        }
+        for (const Cad2DPolylineRecordCPU& r : s.polylineRecords) {
+            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            Cad2DPolylineRecordCPU out = r;
+            if (kind == Cad2DTransformKind::Offset) {
+                const std::vector<Cad2DPoint2D> cleaned = CleanPolylinePoints(r.points);
+                double sign = 0.0;
+                if (!PolylineOffsetSideFromPick(cleaned, p2x, p2y, sign)) continue;
+                if (!OffsetPolylinePoints(cleaned, offsetDistance, sign, out.points)) continue;
+            } else {
+                for (Cad2DPoint2D& p : out.points) p = map.Map(p.x, p.y);
+            }
+            if (makesCopy) asNewObject(out);
+            polylines.push_back(std::move(out));
+        }
+        for (const Cad2DPolygonRecordCPU& r : s.polygonRecords) {
+            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            Cad2DPolygonRecordCPU out = r;
+            if (kind == Cad2DTransformKind::Offset) {
+                // Offset the edges: the apothem changes by the distance, so the circumradius
+                // changes by distance / cos(pi/n). Second click outside the polygon grows it.
+                if (r.radius <= 0.0) continue;
+                const uint32_t n = std::clamp(r.lineSegmentCount, 3u, 16u);
+                const double cosHalf = (std::max)(std::cos(kPi2D / (double)n), 1.0e-9);
+                const double grow =
+                    std::hypot(p2x - r.centerX, p2y - r.centerY) > r.radius ? 1.0 : -1.0;
+                out.radius = r.radius + grow * offsetDistance / cosHalf;
+                if (out.radius <= kMinPolygonRadiusCU) continue;
+            } else {
+                const Cad2DPoint2D c = map.Map(r.centerX, r.centerY);
+                out.centerX = c.x; out.centerY = c.y;
+                // Vertex i sits at (center + (sin a, cos a) * radius), a = rotationDegrees + i*step,
+                // i.e. param a = 90deg - standard polar angle. A CCW rotation by theta maps a to
+                // a - theta; a reflection across a line at standard angle phi maps a to 180 - 2*phi - a.
+                if (kind == Cad2DTransformKind::Rotate) {
+                    out.rotationDegrees = r.rotationDegrees - rotationDeltaRadians * 180.0 / kPi2D;
+                } else if (kind == Cad2DTransformKind::Mirror) {
+                    out.rotationDegrees =
+                        180.0 - 2.0 * mirrorLineAngleRadians * 180.0 / kPi2D - r.rotationDegrees;
+                }
+            }
+            if (makesCopy) asNewObject(out);
+            polygons.push_back(out);
+        }
+        for (const Cad2DCircleRecordCPU& r : s.circleRecords) {
+            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            Cad2DCircleRecordCPU out = r;
+            if (kind == Cad2DTransformKind::Offset) {
+                const double grow =
+                    std::hypot(p2x - r.centerX, p2y - r.centerY) > r.radius ? 1.0 : -1.0;
+                out.radius = r.radius + grow * offsetDistance;
+                if (out.radius <= kMinCurveRadiusCU) continue;
+            } else {
+                const Cad2DPoint2D c = map.Map(r.centerX, r.centerY);
+                out.centerX = c.x; out.centerY = c.y;
+            }
+            if (makesCopy) asNewObject(out);
+            circles.push_back(out);
+        }
+        for (const Cad2DEllipseRecordCPU& r : s.ellipseRecords) {
+            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            Cad2DEllipseRecordCPU out = r;
+            if (kind == Cad2DTransformKind::Offset) {
+                const double sx = (std::max)(std::abs(r.radiusX), 1.0e-9);
+                const double sy = (std::max)(std::abs(r.radiusY), 1.0e-9);
+                const double dx = p2x - r.centerX, dy = p2y - r.centerY;
+                const double cr = std::cos(r.rotationRadians), sr = std::sin(r.rotationRadians);
+                const double nx = (dx * cr + dy * sr) / sx;  // Inside test in the local frame.
+                const double ny = (-dx * sr + dy * cr) / sy;
+                const double grow = nx * nx + ny * ny > 1.0 ? 1.0 : -1.0;
+                out.radiusX = r.radiusX + grow * offsetDistance;
+                out.radiusY = r.radiusY + grow * offsetDistance;
+                if (out.radiusX <= kMinCurveRadiusCU || out.radiusY <= kMinCurveRadiusCU) continue;
+            } else {
+                const Cad2DPoint2D c = map.Map(r.centerX, r.centerY);
+                out.centerX = c.x; out.centerY = c.y;
+                if (kind == Cad2DTransformKind::Rotate) {
+                    out.rotationRadians = r.rotationRadians + rotationDeltaRadians;
+                } else if (kind == Cad2DTransformKind::Mirror) {
+                    out.rotationRadians = 2.0 * mirrorLineAngleRadians - r.rotationRadians;
+                }
+            }
+            if (makesCopy) asNewObject(out);
+            ellipses.push_back(out);
+        }
+        for (const Cad2DArcRecordCPU& r : s.arcRecords) {
+            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            Cad2DArcRecordCPU out = r;
+            if (kind == Cad2DTransformKind::Offset) {
+                const double sx = (std::max)(std::abs(r.radiusX), 1.0e-9);
+                const double sy = (std::max)(std::abs(r.radiusY), 1.0e-9);
+                const double cr = std::cos(r.rotationRadians), sr = std::sin(r.rotationRadians);
+                const double dx = p2x - r.centerX, dy = p2y - r.centerY;
+                const double nx = (dx * cr + dy * sr) / sx;  // Inside test in the local frame.
+                const double ny = (-dx * sr + dy * cr) / sy;
+                const double grow = nx * nx + ny * ny > 1.0 ? 1.0 : -1.0;
+                out.radiusX = r.radiusX + grow * offsetDistance;
+                out.radiusY = r.radiusY + grow * offsetDistance;
+                if (out.radiusX <= kMinCurveRadiusCU || out.radiusY <= kMinCurveRadiusCU) continue;
+                // Rescale the end points per local axis so they stay on the new curve.
+                auto rescale = [&](double wx, double wy, double& ox, double& oy) {
+                    const double ex = wx - r.centerX, ey = wy - r.centerY;
+                    const double lx = (ex * cr + ey * sr) * (out.radiusX / sx);
+                    const double ly = (-ex * sr + ey * cr) * (out.radiusY / sy);
+                    ox = r.centerX + lx * cr - ly * sr;
+                    oy = r.centerY + lx * sr + ly * cr;
+                };
+                rescale(r.startX, r.startY, out.startX, out.startY);
+                rescale(r.endX, r.endY, out.endX, out.endY);
+            } else {
+                const Cad2DPoint2D c = map.Map(r.centerX, r.centerY);
+                const Cad2DPoint2D st = map.Map(r.startX, r.startY);
+                const Cad2DPoint2D en = map.Map(r.endX, r.endY);
+                out.centerX = c.x; out.centerY = c.y;
+                if (kind == Cad2DTransformKind::Rotate) {
+                    out.rotationRadians = r.rotationRadians + rotationDeltaRadians;
+                }
+                if (kind == Cad2DTransformKind::Mirror) {
+                    // Arcs sweep CCW from start to end; a reflection reverses the orientation,
+                    // so swap the end points to keep the same swept region. The reflected local
+                    // frame is rotated to 2*phi - theta.
+                    out.rotationRadians = 2.0 * mirrorLineAngleRadians - r.rotationRadians;
+                    out.startX = en.x; out.startY = en.y;
+                    out.endX = st.x; out.endY = st.y;
+                } else {
+                    out.startX = st.x; out.startY = st.y;
+                    out.endX = en.x; out.endY = en.y;
+                }
+            }
+            if (makesCopy) asNewObject(out);
+            arcs.push_back(out);
+        }
+        if (kind != Cad2DTransformKind::Offset) { // Offset is not defined for text.
+            for (const Cad2DTextRecordCPU& r : s.textRecords) {
+                if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+                Cad2DTextRecordCPU out = r;
+                // The rendered origin is (x + xOffsetCU, y + yOffsetCU); map that effective
+                // point so the offsets keep working unchanged.
+                const Cad2DPoint2D o =
+                    map.Map(r.x + (double)r.xOffsetCU, r.y + (double)r.yOffsetCU);
+                out.x = o.x - (double)r.xOffsetCU;
+                out.y = o.y - (double)r.yOffsetCU;
+                if (kind == Cad2DTransformKind::Rotate) {
+                    out.rotationRadians = r.rotationRadians + (float)rotationDeltaRadians;
+                } else if (kind == Cad2DTransformKind::Mirror) {
+                    // Reflect the baseline direction; glyphs stay readable (not mirrored).
+                    out.rotationRadians =
+                        (float)(2.0 * mirrorLineAngleRadians - (double)r.rotationRadians);
+                }
+                if (makesCopy) asNewObject(out);
+                texts.push_back(std::move(out));
+            }
+        }
+    }
+
+    for (Cad2DLineRecordCPU& r : lines) EnqueueCad2DLine(tab.tabID, container, r);
+    for (Cad2DPolylineRecordCPU& r : polylines) EnqueueCad2DPolyline(tab.tabID, container, std::move(r));
+    for (Cad2DPolygonRecordCPU& r : polygons) EnqueueCad2DPolygon(tab.tabID, container, r);
+    for (Cad2DCircleRecordCPU& r : circles) EnqueueCad2DCircle(tab.tabID, container, r);
+    for (Cad2DEllipseRecordCPU& r : ellipses) EnqueueCad2DEllipse(tab.tabID, container, r);
+    for (Cad2DArcRecordCPU& r : arcs) EnqueueCad2DArc(tab.tabID, container, r);
+    for (Cad2DTextRecordCPU& r : texts) EnqueueCad2DText(tab.tabID, container, std::move(r));
+}
+
+void HandleTransform2DClick(DATASETTAB& tab, double xCU, double yCU) {
+    TabCad2DStorage& s = *tab.cad2d;
+    const auto kind = static_cast<Cad2DTransformKind>(s.transform2DKind.load(std::memory_order_acquire));
+    if (kind == Cad2DTransformKind::None) return;
+    const uint32_t step = s.transform2DStep.load(std::memory_order_acquire);
+    const uint32_t pointsNeeded = kind == Cad2DTransformKind::Rotate ? 3u : 2u;
+
+    if (step == 0) {
+        s.transform2DP1XCU.store(xCU, std::memory_order_release);
+        s.transform2DP1YCU.store(yCU, std::memory_order_release);
+        s.transform2DStep.store(1, std::memory_order_release);
+        return;
+    }
+
+    const double p1x = s.transform2DP1XCU.load(std::memory_order_acquire);
+    const double p1y = s.transform2DP1YCU.load(std::memory_order_acquire);
+    if (std::hypot(xCU - p1x, yCU - p1y) <= 1.0e-9) return; // Coincident with the first point.
+
+    if (step == 1 && pointsNeeded == 3) {
+        s.transform2DP2XCU.store(xCU, std::memory_order_release);
+        s.transform2DP2YCU.store(yCU, std::memory_order_release);
+        s.transform2DStep.store(2, std::memory_order_release);
+        return;
+    }
+
+    double p2x = xCU, p2y = yCU, p3x = 0.0, p3y = 0.0;
+    if (pointsNeeded == 3) {
+        p2x = s.transform2DP2XCU.load(std::memory_order_acquire);
+        p2y = s.transform2DP2YCU.load(std::memory_order_acquire);
+        p3x = xCU; p3y = yCU;
+    }
+
+    ApplyTransform2DToSelection(tab, kind, p1x, p1y, p2x, p2y, p3x, p3y);
+    s.transform2DKind.store(0, std::memory_order_release); // One-shot; re-arm from the ribbon.
+    s.transform2DStep.store(0, std::memory_order_release);
 }
 } // namespace
 
@@ -732,7 +1122,8 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
             tab.cad2d->circleCreationMode.load(std::memory_order_acquire) ||
             tab.cad2d->ellipseCreationMode.load(std::memory_order_acquire) ||
             tab.cad2d->arcCreationMode.load(std::memory_order_acquire) ||
-            tab.cad2d->textCreationMode.load(std::memory_order_acquire);
+            tab.cad2d->textCreationMode.load(std::memory_order_acquire) ||
+            tab.cad2d->transform2DKind.load(std::memory_order_acquire) != 0;
         if (input.actionType == ACTION_TYPE::KEYDOWN && input.x == VK_ESCAPE && anyCreationMode) {
             ClearLineCreationState(*tab.cad2d);
             return true;
@@ -749,7 +1140,8 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
                 tab.cad2d->circleCreationMode.load(std::memory_order_acquire) ||
                 tab.cad2d->ellipseCreationMode.load(std::memory_order_acquire) ||
                 tab.cad2d->arcCreationMode.load(std::memory_order_acquire) ||
-                tab.cad2d->textCreationMode.load(std::memory_order_acquire))) {
+                tab.cad2d->textCreationMode.load(std::memory_order_acquire) ||
+                tab.cad2d->transform2DKind.load(std::memory_order_acquire) != 0)) {
             ClearLineCreationState(*tab.cad2d);
             return true;
         }
@@ -858,6 +1250,12 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
             double xCU = 0.0, yCU = 0.0;
             if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
                 HandleTextCreationClick(tab, xCU, yCU);
+            }
+        }
+        else if (tab.cad2d->transform2DKind.load(std::memory_order_acquire) != 0) {
+            double xCU = 0.0, yCU = 0.0;
+            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+                HandleTransform2DClick(tab, xCU, yCU);
             }
         }
         else {
@@ -983,8 +1381,12 @@ void Cad2DZoomToExtents(DATASETTAB& tab, bool selectedOnly) {
         }
         for (const Cad2DEllipseRecordCPU& r : s.ellipseRecords) {
             if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
-            include(r.centerX - r.radiusX, r.centerY - r.radiusY);
-            include(r.centerX + r.radiusX, r.centerY + r.radiusY);
+            // Axis-aligned bounding half-extents of the rotated ellipse.
+            const double c = std::cos(r.rotationRadians), sn = std::sin(r.rotationRadians);
+            const double hx = std::sqrt(r.radiusX * c * r.radiusX * c + r.radiusY * sn * r.radiusY * sn);
+            const double hy = std::sqrt(r.radiusX * sn * r.radiusX * sn + r.radiusY * c * r.radiusY * c);
+            include(r.centerX - hx, r.centerY - hy);
+            include(r.centerX + hx, r.centerY + hy);
         }
         for (const Cad2DArcRecordCPU& r : s.arcRecords) {
             if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;

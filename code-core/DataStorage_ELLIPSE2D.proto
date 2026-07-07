@@ -14,4 +14,5 @@ message Ellipse2D {
   float line_weight = 5;
   uint32 line_weight_mode = 6;
   uint32 color_abgr = 7;
+  double rotation_radians = 8; // CCW rotation of the radius axes about the center. Added in schema v2.
 }
