@@ -641,7 +641,8 @@ void RenderCad2DPage(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWin
         static_cast<float>(storage.view.centerYCU.load(std::memory_order_acquire))
     };
     constants.zoomPixelsPerCU =
-        (std::max)(storage.view.zoomPixelsPerCU.load(std::memory_order_acquire), 0.02f);
+        (std::max)(storage.view.zoomPixelsPerCU.load(std::memory_order_acquire),
+            kCad2DZoomMinPixelsPerCU);
     constants.dpiY = monitorId >= 0 && monitorId < gpu.currentMonitorCount
         ? static_cast<float>(gpu.screens[monitorId].physicalDpiY)
         : 96.0f;

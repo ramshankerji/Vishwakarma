@@ -134,7 +134,8 @@ void Record2DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab,
     // Print exactly the region currently visible on screen: scale the on-screen zoom so
     // the same horizontal CU extent fills the printed page width at print DPI.
     const float screenZoom =
-        (std::max)(storage.view.zoomPixelsPerCU.load(std::memory_order_acquire), 0.02f);
+        (std::max)(storage.view.zoomPixelsPerCU.load(std::memory_order_acquire),
+            kCad2DZoomMinPixelsPerCU);
     int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
     if (GetVisibleSceneViewportForTab(tab, viewportWidth, viewportHeight, viewportTop) &&
         viewportWidth > 0) {

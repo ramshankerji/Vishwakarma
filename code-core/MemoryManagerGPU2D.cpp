@@ -75,7 +75,8 @@ bool Page2DCoordinateFromInput(DATASETTAB& tab, const ACTION_DETAILS& input,
     }
 
     const double zoom = (std::max)(
-        (double)tab.cad2d->view.zoomPixelsPerCU.load(std::memory_order_acquire), 0.02);
+        (double)tab.cad2d->view.zoomPixelsPerCU.load(std::memory_order_acquire),
+        (double)kCad2DZoomMinPixelsPerCU);
     const double centerX = tab.cad2d->view.centerXCU.load(std::memory_order_acquire);
     const double centerY = tab.cad2d->view.centerYCU.load(std::memory_order_acquire);
     const double offsetX = (double)input.x - (double)viewportWidth * 0.5;
@@ -664,7 +665,8 @@ void Cad2DHandleSelectionClick(DATASETTAB& tab, double xCU, double yCU) {
     TabCad2DStorage& s = *tab.cad2d;
 
     const double zoom = (std::max)(
-        (double)s.view.zoomPixelsPerCU.load(std::memory_order_acquire), 0.02);
+        (double)s.view.zoomPixelsPerCU.load(std::memory_order_acquire),
+        (double)kCad2DZoomMinPixelsPerCU);
     const double tolCU = 6.0 / zoom; // ~6 pixel pick tolerance in CAD units.
     uint64_t bestId = 0;
     double bestDist = tolCU;
@@ -770,7 +772,8 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
         const int dx = input.x - tab.lastMouseX;
         const int dy = input.y - tab.lastMouseY;
         if (tab.mouseMiddleDown) {
-            const float zoom = (std::max)(tab.cad2d->view.zoomPixelsPerCU.load(std::memory_order_acquire), 0.01f);
+            const float zoom = (std::max)(tab.cad2d->view.zoomPixelsPerCU.load(std::memory_order_acquire),
+                kCad2DZoomMinPixelsPerCU);
             const double currentX = tab.cad2d->view.centerXCU.load(std::memory_order_acquire);
             const double currentY = tab.cad2d->view.centerYCU.load(std::memory_order_acquire);
             tab.cad2d->view.centerXCU.store(currentX - (double)dx / (double)zoom, std::memory_order_release);
@@ -785,7 +788,8 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
         const float wheelSteps = input.delta / (float)WHEEL_DELTA;
         const float currentZoom = tab.cad2d->view.zoomPixelsPerCU.load(std::memory_order_acquire);
         const float zoomFactor = std::pow(1.12f, wheelSteps);
-        const float nextZoom = std::clamp(currentZoom * zoomFactor, 0.02f, 5000.0f);
+        const float nextZoom = std::clamp(currentZoom * zoomFactor,
+            kCad2DZoomMinPixelsPerCU, kCad2DZoomMaxPixelsPerCU);
         const double currentX = tab.cad2d->view.centerXCU.load(std::memory_order_acquire);
         const double currentY = tab.cad2d->view.centerYCU.load(std::memory_order_acquire);
         int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
@@ -995,18 +999,19 @@ void Cad2DZoomToExtents(DATASETTAB& tab, bool selectedOnly) {
     }
     if (!hasBounds) return;
 
-    // The view center stays fixed; pick the largest zoom that still covers the farthest extents.
-    const double centerX = s.view.centerXCU.load(std::memory_order_acquire);
-    const double centerY = s.view.centerYCU.load(std::memory_order_acquire);
-    const double halfW = (std::max)(std::abs(minX - centerX), std::abs(maxX - centerX));
-    const double halfH = (std::max)(std::abs(minY - centerY), std::abs(maxY - centerY));
-    if (halfW < 1.0e-9 && halfH < 1.0e-9) return; // Single point at the center; nothing to fit.
+    // Recenter the view on the extents, then pick the largest zoom that still fits them.
+    s.view.centerXCU.store((minX + maxX) * 0.5, std::memory_order_release);
+    s.view.centerYCU.store((minY + maxY) * 0.5, std::memory_order_release);
+    const double halfW = (maxX - minX) * 0.5;
+    const double halfH = (maxY - minY) * 0.5;
+    if (halfW < 1.0e-9 && halfH < 1.0e-9) return; // Single point; recentered, keep the zoom.
 
     const double margin = 0.95; // Keep a small breathing border around the extents.
-    double zoom = 5000.0;
+    double zoom = (double)kCad2DZoomMaxPixelsPerCU;
     if (halfW > 1.0e-9) zoom = (std::min)(zoom, (double)viewportWidth * 0.5 * margin / halfW);
     if (halfH > 1.0e-9) zoom = (std::min)(zoom, (double)viewportHeight * 0.5 * margin / halfH);
-    s.view.zoomPixelsPerCU.store((float)std::clamp(zoom, 0.02, 5000.0), std::memory_order_release);
+    s.view.zoomPixelsPerCU.store((float)std::clamp(zoom,
+        (double)kCad2DZoomMinPixelsPerCU, (double)kCad2DZoomMaxPixelsPerCU), std::memory_order_release);
 }
 
 void Cad2DZoomToWindow(DATASETTAB& tab, int x0, int y0, int x1, int y1) {
@@ -1019,7 +1024,8 @@ void Cad2DZoomToWindow(DATASETTAB& tab, int x0, int y0, int x1, int y1) {
 
     TabCad2DStorage& s = *tab.cad2d;
     const double zoom = (std::max)(
-        (double)s.view.zoomPixelsPerCU.load(std::memory_order_acquire), 0.02);
+        (double)s.view.zoomPixelsPerCU.load(std::memory_order_acquire),
+        (double)kCad2DZoomMinPixelsPerCU);
     const double centerX = s.view.centerXCU.load(std::memory_order_acquire);
     const double centerY = s.view.centerYCU.load(std::memory_order_acquire);
     // Same pixel -> CAD-unit mapping as Page2DCoordinateFromInput / the wheel zoom.
@@ -1037,10 +1043,11 @@ void Cad2DZoomToWindow(DATASETTAB& tab, int x0, int y0, int x1, int y1) {
     const double halfH = std::abs(by - ay) * 0.5;
     if (halfW < 1.0e-9 && halfH < 1.0e-9) return; // Degenerate window; ignore.
 
-    double newZoom = 5000.0;
+    double newZoom = (double)kCad2DZoomMaxPixelsPerCU;
     if (halfW > 1.0e-9) newZoom = (std::min)(newZoom, (double)viewportWidth * 0.5 / halfW);
     if (halfH > 1.0e-9) newZoom = (std::min)(newZoom, (double)viewportHeight * 0.5 / halfH);
     s.view.centerXCU.store((ax + bx) * 0.5, std::memory_order_release);
     s.view.centerYCU.store((ay + by) * 0.5, std::memory_order_release);
-    s.view.zoomPixelsPerCU.store((float)std::clamp(newZoom, 0.02, 5000.0), std::memory_order_release);
+    s.view.zoomPixelsPerCU.store((float)std::clamp(newZoom,
+        (double)kCad2DZoomMinPixelsPerCU, (double)kCad2DZoomMaxPixelsPerCU), std::memory_order_release);
 }

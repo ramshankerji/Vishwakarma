@@ -14,7 +14,10 @@ Conversion policy (MVP, host has no layer concept):
   DIMENSION            -> Page2D lines + text (host has no dimension element)
 Everything else the reader supports (arcs, ellipses, splines, ...) is counted
 and skipped for now. Coordinates pass through unscaled: one DXF drawing unit
-becomes one Page2D ComputerUnit.
+becomes one Page2D ComputerUnit. The converted drawing is translated as a
+whole so its bounding box centers on the Page2D origin: real DXF files often
+sit 10^5..10^6 units away from their origin, which would land far outside the
+host's default view and beyond float32 GPU coordinate precision.
 """
 
 from __future__ import annotations
@@ -271,6 +274,33 @@ class Converter:
                 added = True
         return added
 
+    def recenter(self):
+        """Translate all elements so the content bounding box centers on the
+        origin; returns the applied (dx, dy). Scale is untouched."""
+        xs, ys = [], []
+        for x1, y1, x2, y2 in self.lines:
+            xs += (x1, x2)
+            ys += (y1, y2)
+        for t in self.texts:
+            xs.append(t[0])
+            ys.append(t[1])
+        for cx, cy, radius, _n, _rot in self.polygons:
+            xs += (cx - radius, cx + radius)
+            ys += (cy - radius, cy + radius)
+        if not xs:
+            return 0.0, 0.0
+        dx = -(min(xs) + max(xs)) / 2.0
+        dy = -(min(ys) + max(ys)) / 2.0
+        if dx == 0.0 and dy == 0.0:
+            return 0.0, 0.0
+        self.lines = [(x1 + dx, y1 + dy, x2 + dx, y2 + dy)
+                      for x1, y1, x2, y2 in self.lines]
+        self.texts = [(x + dx, y + dy, height, rotation, justification, content)
+                      for x, y, height, rotation, justification, content in self.texts]
+        self.polygons = [(cx + dx, cy + dy, radius, count, rot)
+                         for cx, cy, radius, count, rot in self.polygons]
+        return dx, dy
+
     # -- dispatch ----------------------------------------------------------
 
     _HANDLERS = {
@@ -304,6 +334,7 @@ def run() -> None:
 
     converter = Converter(doc)
     converter.convert()
+    offset_x, offset_y = converter.recenter()
 
     total = len(converter.lines) + len(converter.texts) + len(converter.polygons)
     imported = ', '.join(f'{name} {count}' for name, count in converter.imported.most_common())
@@ -313,6 +344,8 @@ def run() -> None:
         f"Parsed '{request.file_name}': {total} Page2D elements "
         f"({len(converter.lines)} lines, {len(converter.texts)} texts, "
         f"{len(converter.polygons)} polygons) from [{imported or 'nothing'}]"
+        + (f"; recentered by ({offset_x:.3f}, {offset_y:.3f})"
+           if offset_x or offset_y else "")
         + (f"; skipped [{skipped}]" if skipped else ""))
 
     for start in range(0, len(converter.lines), LINES_PER_BATCH):

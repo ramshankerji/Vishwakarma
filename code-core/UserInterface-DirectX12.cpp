@@ -2004,7 +2004,8 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             if (GetVisibleSceneViewportForTab(tab, viewportWidth, viewportHeight, viewportTop) &&
                 viewportWidth > 0 && viewportHeight > 0) {
                 const float zoom = std::max(
-                    tab.cad2d->view.zoomPixelsPerCU.load(std::memory_order_acquire), 0.02f);
+                    tab.cad2d->view.zoomPixelsPerCU.load(std::memory_order_acquire),
+                    kCad2DZoomMinPixelsPerCU);
                 const double centerX = tab.cad2d->view.centerXCU.load(std::memory_order_acquire);
                 const double centerY = tab.cad2d->view.centerYCU.load(std::memory_order_acquire);
                 const double anchorX = tab.cad2d->textCreationXCU.load(std::memory_order_acquire);
