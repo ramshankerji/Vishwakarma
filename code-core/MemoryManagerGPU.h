@@ -306,14 +306,14 @@ struct CameraState { // Each view gets its own camera state.
 
 inline void UpdateCameraOrbit(CameraState& cam)
 {
-    static float rotationAngle = 0.0f; // Remove static when implementing tab UI.
-    rotationAngle += 0.002f;   // per-frame speed 
-
     // Calculate the 2D radius from the target on the XY plane. We ignore Z here to prevent the "spiral away" bug.
     float dx = cam.position.x - cam.target.x;
     float dy = cam.position.y - cam.target.y;
     float radius = hypotf(dx, dy);
     if (radius < 0.001f) radius = 10.0f;// Safety check to prevent radius becoming 0 (which locks the camera)
+
+    // Stateless: advance from the camera's own azimuth, so every view camera orbits independently.
+    float rotationAngle = atan2f(dy, dx) + 0.002f; // per-frame speed
 
     float x = cam.target.x + cosf(rotationAngle) * radius; // Orbit in XY plane
     float y = cam.target.y + sinf(rotationAngle) * radius;

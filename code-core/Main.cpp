@@ -406,10 +406,9 @@ void ProcessPendingUIActions() {
                 const int16_t viewWindowSlot = subTabSlot >= 0
                     ? actionTab.subTabHostWindowSlots[subTabSlot].load(std::memory_order_acquire)
                     : static_cast<int16_t>(-1);
-                if (subTabSlot >= 0 && viewWindowSlot >= 0 &&
-                    actionTab.subTabs[subTabSlot].containerType == VishwakarmaStorage::ObjectType::Page2D) {
-                    // A Page2D opens in exactly 1 view. When that view is extracted into its own
-                    // window, activating it focuses that window instead of showing it inline.
+                if (subTabSlot >= 0 && viewWindowSlot >= 0) {
+                    // An extracted sub-tab is not shown inline: activating its band button
+                    // focuses the dedicated window instead (applies to all container types).
                     if (allWindows[viewWindowSlot].hWnd) SetForegroundWindow(allWindows[viewWindowSlot].hWnd);
                 } else {
                     PushSystemTodoToTab(&actionTab, ACTION_TYPE::ACTIVATE_INTERNAL_SUB_TAB, 0, 0, 0, action.p2);
@@ -1123,6 +1122,13 @@ static void CloseSecondaryWindow(uint16_t windowSlot) {
     DestroyWindow(hWndToDestroy);
 }
 
+// Scene input routed to a sub-tab slot falls back to the inline view when that slot's dedicated
+// window goes away (close / merge-back).
+static void ResetInputViewRouting(DATASETTAB& tab, uint16_t subTabSlot) {
+    int32_t expected = static_cast<int32_t>(subTabSlot);
+    tab.inputViewSubTabSlot.compare_exchange_strong(expected, -1, std::memory_order_acq_rel);
+}
+
 // Extracts a tab out of its hosting window into a new dedicated tab-host window (full ribbon).
 static void ExtractTabToNewWindow(uint16_t tabID) {
     if (tabID >= MV_MAX_TABS) return;
@@ -1174,6 +1180,10 @@ static void ExtractViewToNewWindow(uint16_t tabIndex, uint64_t containerMemoryId
     if (!newWindow) return;
     tab.subTabHostWindowSlots[subTabSlot].store(
         static_cast<int16_t>(newWindow - allWindows), std::memory_order_release);
+    // The extracted view no longer renders inline: scene input follows it into its new window,
+    // and the engineering thread hands the inline band over to the next still-inline sub-tab.
+    tab.inputViewSubTabSlot.store(subTabSlot, std::memory_order_release);
+    PushSystemTodoToTab(&tab, ACTION_TYPE::INTERNAL_SUB_TAB_EXTRACTED, 0, 0, 0, containerMemoryId);
 }
 
 // Closes the extracted window of one sub-tab (used when the sub-tab itself is closed).
@@ -1181,6 +1191,7 @@ static void CloseViewWindowFor(uint16_t tabIndex, uint16_t subTabSlot) {
     if (tabIndex >= MV_MAX_TABS || subTabSlot >= MV_MAX_SUBTABS) return;
     const int16_t windowSlot =
         allTabs[tabIndex].subTabHostWindowSlots[subTabSlot].exchange(-1, std::memory_order_acq_rel);
+    ResetInputViewRouting(allTabs[tabIndex], subTabSlot);
     if (windowSlot > 0 && windowSlot < MV_MAX_WINDOWS) {
         CloseSecondaryWindow(static_cast<uint16_t>(windowSlot));
     }
@@ -1193,8 +1204,13 @@ static void HandleSecondaryWindowClose(SingleUIWindow& window) {
     if (window.windowKind == WINDOW_KIND_VIEW) {
         if (window.viewParentTabIndex >= 0 && window.viewParentTabIndex < MV_MAX_TABS &&
             window.viewSubTabSlot < MV_MAX_SUBTABS) {
-            allTabs[window.viewParentTabIndex].subTabHostWindowSlots[window.viewSubTabSlot]
+            DATASETTAB& parentTab = allTabs[window.viewParentTabIndex];
+            parentTab.subTabHostWindowSlots[window.viewSubTabSlot]
                 .store(-1, std::memory_order_release);
+            ResetInputViewRouting(parentTab, window.viewSubTabSlot);
+            // Make the returning view the inline-active one so it stays visible.
+            PushSystemTodoToTab(&parentTab, ACTION_TYPE::ACTIVATE_INTERNAL_SUB_TAB, 0, 0, 0,
+                parentTab.subTabs[window.viewSubTabSlot].containerMemoryId);
         }
     } else {
         uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
@@ -1210,7 +1226,9 @@ static void HandleSecondaryWindowClose(SingleUIWindow& window) {
     CloseSecondaryWindow(windowSlot);
 }
 
-// Drag-drop merge: dropping a secondary window onto another window's tab band merges it back.
+static float GetTopRibbonHeightPxForWindow(const SingleUIWindow* window); // Defined below.
+
+// Drag-drop merge: dropping a secondary window onto another window's top UI band merges it back.
 // A view window may ONLY be dropped on the window hosting its parent tab (consistency rule).
 static bool TryMergeWindowOnDrop(SingleUIWindow& dragged) {
     const uint16_t draggedSlot = static_cast<uint16_t>(&dragged - allWindows);
@@ -1227,25 +1245,16 @@ static bool TryMergeWindowOnDrop(SingleUIWindow& dragged) {
         if (&target == &dragged || !target.hWnd) continue;
         if (target.windowKind != WINDOW_KIND_TABHOST) continue;
 
-        // Tab band rectangle of the target window in screen coordinates.
+        // Drop zone of the target window in screen coordinates: the whole top UI band
+        // (tab bar + ribbon + sub-tab band), so the drop is easy to hit.
         RECT clientRect{};
         if (!GetClientRect(target.hWnd, &clientRect)) continue;
         POINT origin{ 0, 0 };
         ClientToScreen(target.hWnd, &origin);
-        float tabBarHeightPx = 0.0f;
-        const int monitorIndex = target.currentMonitorIndex;
-        if (monitorIndex >= 0 && monitorIndex < gpu.currentMonitorCount) {
-            if (gpu.screens[monitorIndex].topRibbonLayout.isValid) {
-                tabBarHeightPx = gpu.screens[monitorIndex].topRibbonLayout.tabBarHeightPx;
-            } else {
-                const float dpiY = gpu.screens[monitorIndex].physicalDpiY > 0
-                    ? static_cast<float>(gpu.screens[monitorIndex].physicalDpiY) : 96.0f;
-                tabBarHeightPx = UI_TAB_BAR_HEIGHT_MM * dpiY / 25.4f;
-            }
-        }
-        if (tabBarHeightPx <= 0.0f) continue;
+        const float dropBandHeightPx = GetTopRibbonHeightPxForWindow(&target);
+        if (dropBandHeightPx <= 0.0f) continue;
         if (cursor.x < origin.x || cursor.x >= origin.x + (clientRect.right - clientRect.left)) continue;
-        if (cursor.y < origin.y || cursor.y >= origin.y + static_cast<LONG>(tabBarHeightPx)) continue;
+        if (cursor.y < origin.y || cursor.y >= origin.y + static_cast<LONG>(dropBandHeightPx)) continue;
 
         if (dragged.windowKind == WINDOW_KIND_VIEW) {
             const int parentTab = dragged.viewParentTabIndex;
@@ -1254,8 +1263,14 @@ static bool TryMergeWindowOnDrop(SingleUIWindow& dragged) {
                 static_cast<int16_t>(targetSlot)) {
                 continue; // Not the window hosting the parent tab: not a valid drop target.
             }
-            allTabs[parentTab].subTabHostWindowSlots[dragged.viewSubTabSlot]
+            DATASETTAB& parent = allTabs[parentTab];
+            parent.subTabHostWindowSlots[dragged.viewSubTabSlot]
                 .store(-1, std::memory_order_release); // View returns inline.
+            ResetInputViewRouting(parent, dragged.viewSubTabSlot);
+            // Make the returning view the inline-active one so the merge is visible.
+            PushSystemTodoToTab(&parent, ACTION_TYPE::ACTIVATE_INTERNAL_SUB_TAB, 0, 0, 0,
+                parent.subTabs[dragged.viewSubTabSlot].containerMemoryId);
+            target.activeTabIndex = parentTab; // Show the parent tab in the drop window.
             CloseSecondaryWindow(draggedSlot);
             return true;
         }
@@ -1529,20 +1544,6 @@ static void UpdateUIMousePosition(SingleUIWindow* window, LPARAM lParam) {
     window->uiInput.mouseY = static_cast<float>(GET_Y_LPARAM(lParam));
 }
 
-// Interacting inside an extracted view window makes its hosted sub-tab the tab's active one, so
-// the engineering thread interprets the input in the right (2D vs 3D) context. The unlocked read
-// of activeInternalSubTabMemoryId is benign: worst case one redundant activate request.
-static void ActivateHostedViewIfNeeded(SingleUIWindow* window, DATASETTAB* tab) {
-    if (!window || !tab || window->windowKind != WINDOW_KIND_VIEW) return;
-    const uint16_t slot = window->viewSubTabSlot;
-    if (slot >= MV_MAX_SUBTABS) return;
-    if (tab->subTabStates[slot].load(std::memory_order_acquire) != SUBTAB_OPEN) return;
-    const uint64_t hostedId = tab->subTabs[slot].containerMemoryId;
-    if (hostedId != 0 && tab->activeInternalSubTabMemoryId != hostedId) {
-        PushSystemTodoToTab(tab, ACTION_TYPE::ACTIVATE_INTERNAL_SUB_TAB, 0, 0, 0, hostedId);
-    }
-}
-
 static float GetTopRibbonHeightPxForWindow(const SingleUIWindow* window) {
     if (!window || window->windowKind == WINDOW_KIND_VIEW || // Extracted views have no ribbon.
         window->currentMonitorIndex < 0 || window->currentMonitorIndex >= gpu.currentMonitorCount) {
@@ -1566,6 +1567,23 @@ static float GetTopRibbonHeightPxForWindow(const SingleUIWindow* window) {
 static bool IsClientPointOverTopRibbon(const SingleUIWindow* window, const POINT& pt) {
     const float ribbonHeight = GetTopRibbonHeightPxForWindow(window);
     return ribbonHeight > 0.0f && pt.y >= 0 && (float)pt.y < ribbonHeight;
+}
+
+// Interacting inside a window's content area retargets the tab's input view: extracted view
+// windows route scene/page input (camera, 2D tools) to their own sub-tab slot, the tab-host
+// window routes it back to the inline-active sub-tab. Ribbon / band clicks (above the top UI of
+// a tab-host window) leave the routing unchanged, so ribbon tools keep acting on the view the
+// user last worked in.
+static void RouteSceneInputToWindowView(SingleUIWindow* window, DATASETTAB* tab, int clientY) {
+    if (!window || !tab) return;
+    if (window->windowKind == WINDOW_KIND_VIEW) {
+        const uint16_t slot = window->viewSubTabSlot;
+        if (slot >= MV_MAX_SUBTABS) return;
+        if (tab->subTabStates[slot].load(std::memory_order_acquire) != SUBTAB_OPEN) return;
+        tab->inputViewSubTabSlot.store(slot, std::memory_order_release);
+    } else if (static_cast<float>(clientY) >= GetTopRibbonHeightPxForWindow(window)) {
+        tab->inputViewSubTabSlot.store(-1, std::memory_order_release);
+    }
 }
 
 static bool GetDataTreeLayoutForWindow(
@@ -1806,7 +1824,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
         }
         if (tab) {
-            ActivateHostedViewIfNeeded(currentWindow, tab);
+            RouteSceneInputToWindowView(currentWindow, tab, GET_Y_LPARAM(lParam));
             ad.actionType = ACTION_TYPE::LBUTTONDOWN;
             ad.source = INPUT_SOURCE::MOUSE;
             ad.x = GET_X_LPARAM(lParam);
@@ -1889,7 +1907,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             currentWindow->uiInput.middleButtonPressedThisFrame = true;
         }
         if (tab) {
-            ActivateHostedViewIfNeeded(currentWindow, tab);
+            RouteSceneInputToWindowView(currentWindow, tab, GET_Y_LPARAM(lParam));
             ad.actionType = ACTION_TYPE::MBUTTONDOWN;
             ad.source = INPUT_SOURCE::MOUSE;
             ad.x = GET_X_LPARAM(lParam);
@@ -1941,7 +1959,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (handledByTopRibbon || handledByDataTree || handledByRightOverlay) return 0;
 
         if (tab) {
-            ActivateHostedViewIfNeeded(currentWindow, tab);
+            RouteSceneInputToWindowView(currentWindow, tab, uiPoint.y);
             ad.actionType = ACTION_TYPE::MOUSEWHEEL;
             ad.source = INPUT_SOURCE::MOUSE;
             ad.x = uiPoint.x;

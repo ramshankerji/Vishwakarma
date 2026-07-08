@@ -146,11 +146,23 @@ bool GetVisibleSceneViewportForTab(const DATASETTAB& tab, int& widthPx, int& hei
     heightPx = 0;
     topPx = 0;
 
+    // When the input view is an extracted sub-tab, measure its dedicated window (content-only);
+    // otherwise measure the tab-host window showing the inline view.
+    const int inputSlot = InputViewSlot(tab);
+    const int16_t viewWindowSlot = inputSlot >= 0
+        ? tab.subTabHostWindowSlots[inputSlot].load(std::memory_order_acquire)
+        : static_cast<int16_t>(-1);
+
     uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
     const uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
     for (uint16_t i = 0; i < windowCount; ++i) {
         const SingleUIWindow& window = allWindows[windowList[i]];
-        if (window.activeTabIndex != static_cast<int>(tab.tabID)) continue;
+        if (viewWindowSlot >= 0) {
+            if (windowList[i] != static_cast<uint16_t>(viewWindowSlot)) continue;
+        } else {
+            if (window.windowKind != WINDOW_KIND_TABHOST) continue;
+            if (window.activeTabIndex != static_cast<int>(tab.tabID)) continue;
+        }
 
         const int windowWidth = window.dx.WindowWidth > 0 ? window.dx.WindowWidth : window.currentWidth;
         const int windowHeight = window.dx.WindowHeight > 0 ? window.dx.WindowHeight : window.currentHeight;
@@ -169,10 +181,18 @@ bool GetVisibleSceneViewportForTab(const DATASETTAB& tab, int& widthPx, int& hei
 // hosting this tab. Backup guard for scene interaction (see propertiesPane.md §6); the WndProc side
 // is the primary guard, this covers events already queued when the pane opens.
 static bool IsOverRightOverlay(const DATASETTAB& tab, int x) {
+    // Extracted view windows have no right overlay: input targeting one is never over it.
+    const int inputSlot = InputViewSlot(tab);
+    if (inputSlot >= 0 &&
+        tab.subTabHostWindowSlots[inputSlot].load(std::memory_order_acquire) >= 0) {
+        return false;
+    }
+
     uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
     const uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
     for (uint16_t i = 0; i < windowCount; ++i) {
         const SingleUIWindow& window = allWindows[windowList[i]];
+        if (window.windowKind != WINDOW_KIND_TABHOST) continue;
         if (window.activeTabIndex != static_cast<int>(tab.tabID)) continue;
 
         const int windowWidth = window.dx.WindowWidth > 0 ? window.dx.WindowWidth : window.currentWidth;
@@ -287,6 +307,31 @@ int FindPublishedSubTabSlot(const DATASETTAB& tab, uint64_t containerMemoryId) {
         if (tab.subTabs[list[i]].containerMemoryId == containerMemoryId) return list[i];
     }
     return -1;
+}
+
+int InputViewSlot(const DATASETTAB& tab) {
+    const int32_t forced = tab.inputViewSubTabSlot.load(std::memory_order_acquire);
+    if (forced >= 0 && forced < MV_MAX_SUBTABS &&
+        tab.subTabStates[forced].load(std::memory_order_acquire) == SUBTAB_OPEN) {
+        return forced;
+    }
+    // Unlocked read of activeInternalSubTabMemoryId is benign: worst case one stale resolution.
+    return FindPublishedSubTabSlot(tab, tab.activeInternalSubTabMemoryId);
+}
+
+uint64_t InputViewContainerId(const DATASETTAB& tab) {
+    const int slot = InputViewSlot(tab);
+    return slot >= 0 ? tab.subTabs[slot].containerMemoryId : 0;
+}
+
+// Camera the engineering thread's scene input math applies to: the input view's per-view camera
+// when it is a Scene3D, else the tab-level fallback camera (content shown without any sub-tab).
+static CameraState& ActiveSceneCamera(DATASETTAB& tab) {
+    const int slot = InputViewSlot(tab);
+    if (slot >= 0 && tab.subTabs[slot].containerType == VishwakarmaStorage::ObjectType::Scene3D) {
+        return tab.subTabs[slot].camera;
+    }
+    return tab.camera;
 }
 
 // Swaps to the other double-buffered index list and publishes it atomically.
@@ -444,6 +489,29 @@ static void CloseInternalSubTab(DATASETTAB* targetTab, uint64_t memoryId) {
     targetTab->activeInternalSubTabMemoryId = replacement.containerMemoryId;
     if (replacement.containerType == VishwakarmaStorage::ObjectType::Scene3D) {
         targetTab->activeScene3DMemoryId = replacement.containerMemoryId;
+    }
+}
+
+// An extracted view no longer renders inline: when it was the inline-active sub-tab, hand the
+// inline band over to the first still-inline open sub-tab (or none).
+static void HandleSubTabExtracted(DATASETTAB* targetTab, uint64_t memoryId) {
+    if (!targetTab || memoryId == 0 || !targetTab->storageObjectsMutex) return;
+
+    std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+    if (targetTab->activeInternalSubTabMemoryId != memoryId) return;
+
+    targetTab->activeInternalSubTabMemoryId = 0;
+    uint16_t* list = targetTab->publishedSubTabIndexes.load(std::memory_order_acquire);
+    const uint16_t count = targetTab->publishedSubTabCount.load(std::memory_order_acquire);
+    for (uint16_t i = 0; list && i < count; ++i) {
+        const InternalSubTab& candidate = targetTab->subTabs[list[i]];
+        if (candidate.containerMemoryId == memoryId) continue;
+        if (targetTab->subTabHostWindowSlots[list[i]].load(std::memory_order_acquire) >= 0) continue;
+        targetTab->activeInternalSubTabMemoryId = candidate.containerMemoryId;
+        if (candidate.containerType == VishwakarmaStorage::ObjectType::Scene3D) {
+            targetTab->activeScene3DMemoryId = candidate.containerMemoryId;
+        }
+        break;
     }
 }
 
@@ -729,11 +797,12 @@ static bool Scene3DPlacementPointFromInput(DATASETTAB& tab, const ACTION_DETAILS
     const float ndcX = mouseX / static_cast<float>(viewportWidth) * 2.0f - 1.0f;
     const float ndcY = 1.0f - mouseY / static_cast<float>(viewportHeight) * 2.0f;
     const float aspect = static_cast<float>(viewportWidth) / static_cast<float>(viewportHeight);
-    const float tanHalfFov = std::tan(tab.camera.fov * 0.5f);
+    const CameraState& cam = ActiveSceneCamera(tab);
+    const float tanHalfFov = std::tan(cam.fov * 0.5f);
 
-    DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&tab.camera.position);
-    DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&tab.camera.target);
-    DirectX::XMVECTOR worldUp = DirectX::XMLoadFloat3(&tab.camera.up);
+    DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&cam.position);
+    DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&cam.target);
+    DirectX::XMVECTOR worldUp = DirectX::XMLoadFloat3(&cam.up);
     DirectX::XMVECTOR forward = DirectX::XMVector3Normalize(DirectX::XMVectorSubtract(target, eye));
     DirectX::XMVECTOR right = DirectX::XMVector3Cross(worldUp, forward);
     if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(right)) <= 0.000001f) {
@@ -782,24 +851,25 @@ static void CenterCameraOnPoint(CameraState& cam, const DirectX::XMFLOAT3& p) {
 static void ApplyPickResult(DATASETTAB& tab, bool hit, uint64_t objectId,
     const DirectX::XMFLOAT3& cg, const DirectX::XMFLOAT3& surface, uint32_t purposeRaw) {
     const PickPurpose purpose = static_cast<PickPurpose>(purposeRaw);
+    CameraState& cam = ActiveSceneCamera(tab);
     if (purpose == PickPurpose::Select) {
         {
             std::lock_guard<std::mutex> lock(tab.selection.selectedMutex);
             tab.selection.selectedObjectIds.clear();
             if (objectId != 0) tab.selection.selectedObjectIds.push_back(objectId); // Single-select.
         }
-        if (objectId != 0) CenterCameraOnPoint(tab.camera, cg); // Focus on the selected object's CG.
+        if (objectId != 0) CenterCameraOnPoint(cam, cg); // Focus on the selected object's CG.
     } else if (purpose == PickPurpose::Recenter && hit) {
         // Only recenter when the surface is meaningfully off the current pivot, so a stationary
         // cursor doesn't jitter the view every scroll notch. Tunable UX; see selection.md.
-        DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&tab.camera.target);
-        DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&tab.camera.position);
+        DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&cam.target);
+        DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&cam.position);
         DirectX::XMVECTOR surf = DirectX::XMLoadFloat3(&surface);
         const float dist = DirectX::XMVectorGetX(
             DirectX::XMVector3Length(DirectX::XMVectorSubtract(eye, target)));
         const float moved = DirectX::XMVectorGetX(
             DirectX::XMVector3Length(DirectX::XMVectorSubtract(surf, target)));
-        if (moved > 0.05f * (std::max)(dist, 1.0f)) CenterCameraOnPoint(tab.camera, surface);
+        if (moved > 0.05f * (std::max)(dist, 1.0f)) CenterCameraOnPoint(cam, surface);
     }
 }
 
@@ -817,9 +887,10 @@ static void ZoomSceneToExtents(DATASETTAB* myTab, bool selectedOnly) {
     }
     const bool filterBySelection = selectedOnly && !selected.empty(); // Empty selection = fit all.
 
-    DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&myTab->camera.target);
-    DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&myTab->camera.position);
-    DirectX::XMVECTOR worldUp = DirectX::XMLoadFloat3(&myTab->camera.up);
+    CameraState& cam = ActiveSceneCamera(*myTab);
+    DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&cam.target);
+    DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&cam.position);
+    DirectX::XMVECTOR worldUp = DirectX::XMLoadFloat3(&cam.up);
     DirectX::XMVECTOR forward = DirectX::XMVectorSubtract(target, eye);
     if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(forward)) <= 0.000001f) return;
     forward = DirectX::XMVector3Normalize(forward);
@@ -828,14 +899,14 @@ static void ZoomSceneToExtents(DATASETTAB* myTab, bool selectedOnly) {
     right = DirectX::XMVector3Normalize(right);
     DirectX::XMVECTOR viewUp = DirectX::XMVector3Cross(forward, right);
 
-    float aspect = myTab->camera.aspect;
+    float aspect = cam.aspect;
     int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
     if (GetVisibleSceneViewportForTab(*myTab, viewportWidth, viewportHeight, viewportTop) &&
         viewportWidth > 0 && viewportHeight > 0) {
         aspect = static_cast<float>(viewportWidth) / static_cast<float>(viewportHeight);
     }
     const float margin = 0.95f; // Keep a small breathing border around the extents.
-    const float tanHalfFovY = std::tan(myTab->camera.fov * 0.5f) * margin;
+    const float tanHalfFovY = std::tan(cam.fov * 0.5f) * margin;
     const float tanHalfFovX = tanHalfFovY * aspect;
     if (tanHalfFovY <= 0.0001f || tanHalfFovX <= 0.0001f) return;
 
@@ -858,15 +929,15 @@ static void ZoomSceneToExtents(DATASETTAB* myTab, bool selectedOnly) {
             // and it is inside the frustum when |lateral| <= depth * tanHalfFov. Solve for minimum d.
             requiredDistance = (std::max)(requiredDistance, std::abs(alongRight) / tanHalfFovX - alongForward);
             requiredDistance = (std::max)(requiredDistance, std::abs(alongUp) / tanHalfFovY - alongForward);
-            requiredDistance = (std::max)(requiredDistance, myTab->camera.nearZ - alongForward);
+            requiredDistance = (std::max)(requiredDistance, cam.nearZ - alongForward);
             hasPoints = true;
         }
     }
     if (!hasPoints) return;
 
     // Same distance clamping as the mouse-wheel zoom.
-    const float newDistance = std::clamp(requiredDistance, 1.0f, myTab->camera.farZ - 10.0f);
-    DirectX::XMStoreFloat3(&myTab->camera.position,
+    const float newDistance = std::clamp(requiredDistance, 1.0f, cam.farZ - 10.0f);
+    DirectX::XMStoreFloat3(&cam.position,
         DirectX::XMVectorSubtract(target, DirectX::XMVectorScale(forward, newDistance)));
     myTab->selection.lastNavInteractionMs.store(GetTickCount64(), std::memory_order_release);
 }
@@ -889,8 +960,9 @@ static void ZoomSceneToWindow(DATASETTAB& tab, int x0, int y0, int x1, int y1) {
     XMFLOAT3 focus{};
     if (!Scene3DPlacementPointFromInput(tab, centerPixel, focus)) return;
 
-    DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&tab.camera.position);
-    DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&tab.camera.target);
+    CameraState& cam = ActiveSceneCamera(tab);
+    DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&cam.position);
+    DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&cam.target);
     DirectX::XMVECTOR forward = DirectX::XMVectorSubtract(target, eye);
     const float distance = DirectX::XMVectorGetX(DirectX::XMVector3Length(forward));
     if (distance <= 0.0001f) return;
@@ -900,11 +972,11 @@ static void ZoomSceneToWindow(DATASETTAB& tab, int x0, int y0, int x1, int y1) {
     // the larger rectangle/viewport ratio keeps the whole clicked window visible.
     const float scale = (std::max)(rectWidth / static_cast<float>(viewportWidth),
         rectHeight / static_cast<float>(viewportHeight));
-    const float newDistance = std::clamp(distance * scale, 1.0f, tab.camera.farZ - 10.0f);
+    const float newDistance = std::clamp(distance * scale, 1.0f, cam.farZ - 10.0f);
 
     DirectX::XMVECTOR newTarget = DirectX::XMLoadFloat3(&focus);
-    DirectX::XMStoreFloat3(&tab.camera.target, newTarget);
-    DirectX::XMStoreFloat3(&tab.camera.position,
+    DirectX::XMStoreFloat3(&cam.target, newTarget);
+    DirectX::XMStoreFloat3(&cam.position,
         DirectX::XMVectorSubtract(newTarget, DirectX::XMVectorScale(forward, newDistance)));
     tab.selection.lastNavInteractionMs.store(GetTickCount64(), std::memory_order_release);
 }
@@ -1388,7 +1460,18 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         if (myTab->closeRequested.load(std::memory_order_acquire)) break;
 
 		// Automatic camera rotation for troubleshooting. Toggle using "r". To be removed later or made optional in UI.
-        if(myTab->autoCameraRotation) UpdateCameraOrbit(myTab->camera); 
+        if (myTab->autoCameraRotation) {
+            UpdateCameraOrbit(myTab->camera); // Fallback camera (content without any sub-tab).
+            // Every open Scene3D view orbits its own camera independently.
+            uint16_t* orbitList = myTab->publishedSubTabIndexes.load(std::memory_order_acquire);
+            const uint16_t orbitCount = myTab->publishedSubTabCount.load(std::memory_order_acquire);
+            for (uint16_t i = 0; orbitList && i < orbitCount; ++i) {
+                InternalSubTab& subTab = myTab->subTabs[orbitList[i]];
+                if (subTab.containerType == VishwakarmaStorage::ObjectType::Scene3D) {
+                    UpdateCameraOrbit(subTab.camera);
+                }
+            }
+        }
         
         // Check timer and add a new pyramid every second.
         auto currentTime = std::chrono::steady_clock::now();
@@ -1422,6 +1505,9 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
             if (Cad2DHandleInput(*myTab, input)) { continue; }
             if (HandlePrimitive3DPlacementInput(*myTab, input)) { continue; }
 
+            // Camera of the view this input targets (per-view for Scene3D sub-tabs).
+            CameraState& cam = ActiveSceneCamera(*myTab);
+
             // Handle based on type
             switch (input.actionType) {
             case ACTION_TYPE::MOUSEMOVE:
@@ -1436,9 +1522,9 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 dy = float(input.y - myTab->lastMouseY);
 
                 // Calculate Vector from Target to Camera (View Vector)
-                vx = myTab->camera.position.x - myTab->camera.target.x;
-                vy = myTab->camera.position.y - myTab->camera.target.y;
-                vz = myTab->camera.position.z - myTab->camera.target.z;
+                vx = cam.position.x - cam.target.x;
+                vy = cam.position.y - cam.target.y;
+                vz = cam.position.z - cam.target.z;
                 distance = std::sqrt(vx * vx + vy * vy + vz * vz);
 
                 if (isPanning) {// PANNING IMPLEMENTATION
@@ -1471,13 +1557,13 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                     float moveZ = (rz * dx * panSpeed) + (uz * dy * panSpeed);
 
                     // Apply to BOTH Position and Target to maintain view direction
-                    myTab->camera.position.x += moveX;
-                    myTab->camera.position.y += moveY;
-                    myTab->camera.position.z += moveZ;
+                    cam.position.x += moveX;
+                    cam.position.y += moveY;
+                    cam.position.z += moveZ;
 
-                    myTab->camera.target.x += moveX;
-                    myTab->camera.target.y += moveY;
-                    myTab->camera.target.z += moveZ;
+                    cam.target.x += moveX;
+                    cam.target.y += moveY;
+                    cam.target.z += moveZ;
                 }
                 else if (isOrbiting) {// Orbit / Rotate around Focal Point (Target)
                     float sensitivity = 0.005f; // Adjust rotation speed here
@@ -1485,9 +1571,9 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                     dy = (input.y - myTab->lastMouseY) * sensitivity;
 
                     // Calculate vector from Target to Camera (The Radius vector)
-                    vx = myTab->camera.position.x - myTab->camera.target.x;
-                    vy = myTab->camera.position.y - myTab->camera.target.y;
-                    vz = myTab->camera.position.z - myTab->camera.target.z;
+                    vx = cam.position.x - cam.target.x;
+                    vy = cam.position.y - cam.target.y;
+                    vz = cam.position.z - cam.target.z;
 
                     // Convert to Spherical Coordinates. radius (distance), theta (azimuth), phi (elevation)
                     float radius = std::sqrt(vx * vx + vy * vy + vz * vz);
@@ -1510,20 +1596,20 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                     float nz = radius * std::cos(phi);
 
                     // Update Camera Position relative to Target
-                    myTab->camera.position.x = myTab->camera.target.x + nx;
-                    myTab->camera.position.y = myTab->camera.target.y + ny;
-                    myTab->camera.position.z = myTab->camera.target.z + nz;
+                    cam.position.x = cam.target.x + nx;
+                    cam.position.y = cam.target.y + ny;
+                    cam.position.z = cam.target.z + nz;
 
                     // Flag to Copy Thread that camera changed (if your engine requires explicit dirty flags)
                     // std::lock_guard<std::mutex> lock(toCopyThreadMutex);
                     // commandToCopyThreadQueue.push({ CommandToCopyThreadType::UPDATE_CAMERA, ... });
                 }
 				// Camera Safety Check to ensure camera and target are not at the same, crashing view matrix calculation.
-                vx = myTab->camera.position.x - myTab->camera.target.x;
-                vy = myTab->camera.position.y - myTab->camera.target.y;
-                vz = myTab->camera.position.z - myTab->camera.target.z;
+                vx = cam.position.x - cam.target.x;
+                vy = cam.position.y - cam.target.y;
+                vz = cam.position.z - cam.target.z;
                 if (vx * vx + vy * vy + vz * vz < 0.000001f) {
-                    myTab->camera.position.z += 0.001f;}// tiny nudge along camera up
+                    cam.position.z += 0.001f;}// tiny nudge along camera up
                 
                 // Standard Mouse Update
                 if (myTab->mouseLeftDown && !isOrbiting && !isPanning) {
@@ -1542,9 +1628,9 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 float wheelSteps = input.delta / (float)WHEEL_DELTA; // Since new mouse send lots of events ?
 
                 // Calculate the vector from Target to Position
-                float dx = myTab->camera.position.x - myTab->camera.target.x;
-                float dy = myTab->camera.position.y - myTab->camera.target.y;
-                float dz = myTab->camera.position.z - myTab->camera.target.z;
+                float dx = cam.position.x - cam.target.x;
+                float dy = cam.position.y - cam.target.y;
+                float dz = cam.position.z - cam.target.z;
                 distance = std::sqrt(dx * dx + dy * dy + dz * dz);// Calculate current distance from target
 
                 // Determine Zoom Factor. Standard mouse wheel delta is 120. 
@@ -1555,7 +1641,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
 
                 // Safety Clamping. Prevent getting stuck at 0 (locking the camera) or going too far
                 if (newDistance < 1.0f) newDistance = 1.0f;
-                if (newDistance > myTab->camera.farZ - 10.0f) newDistance = myTab->camera.farZ - 10.0f;
+                if (newDistance > cam.farZ - 10.0f) newDistance = cam.farZ - 10.0f;
 
                 // Keep the point under the cursor visually anchored while changing distance.
                 if (distance > 0.002f) {
@@ -1568,11 +1654,11 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                         const float ndcX = mouseX / (float)viewportWidth * 2.0f - 1.0f;
                         const float ndcY = 1.0f - mouseY / (float)viewportHeight * 2.0f;
                         const float aspect = (float)viewportWidth / (float)viewportHeight;
-                        const float tanHalfFov = std::tan(myTab->camera.fov * 0.5f);
+                        const float tanHalfFov = std::tan(cam.fov * 0.5f);
 
-                        DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&myTab->camera.position);
-                        DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&myTab->camera.target);
-                        DirectX::XMVECTOR worldUp = DirectX::XMLoadFloat3(&myTab->camera.up);
+                        DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&cam.position);
+                        DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&cam.target);
+                        DirectX::XMVECTOR worldUp = DirectX::XMLoadFloat3(&cam.up);
                         DirectX::XMVECTOR forward = DirectX::XMVector3Normalize(DirectX::XMVectorSubtract(target, eye));
                         DirectX::XMVECTOR right = DirectX::XMVector3Cross(worldUp, forward);
                         if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(right)) > 0.000001f) {
@@ -1592,16 +1678,16 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                                     DirectX::XMVectorScale(DirectX::XMVectorSubtract(eye, focusPoint), scale));
                                 target = DirectX::XMVectorAdd(focusPoint,
                                     DirectX::XMVectorScale(DirectX::XMVectorSubtract(target, focusPoint), scale));
-                                DirectX::XMStoreFloat3(&myTab->camera.position, eye);
-                                DirectX::XMStoreFloat3(&myTab->camera.target, target);
+                                DirectX::XMStoreFloat3(&cam.position, eye);
+                                DirectX::XMStoreFloat3(&cam.target, target);
                                 appliedCursorZoom = true;
                             }
                         }
                     }
                     if (!appliedCursorZoom) {
-                        myTab->camera.position.x = myTab->camera.target.x + (dx * scale);
-                        myTab->camera.position.y = myTab->camera.target.y + (dy * scale);
-                        myTab->camera.position.z = myTab->camera.target.z + (dz * scale);
+                        cam.position.x = cam.target.x + (dx * scale);
+                        cam.position.y = cam.target.y + (dy * scale);
+                        cam.position.z = cam.target.z + (dz * scale);
                     }
                 }
 
@@ -1649,7 +1735,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 {
                     myTab->autoCameraRotation = !myTab->autoCameraRotation; 
                 }
-				if (input.x == 67 || input.x == 99) { myTab->camera.Initialize(); } // 'c' & "C". Reset camera.
+				if (input.x == 67 || input.x == 99) { cam.Initialize(); } // 'c' & "C". Reset camera.
                 break;
 
             case ACTION_TYPE::CAPTURECHANGED:
@@ -1703,6 +1789,8 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 ActivateInternalSubTab(myTab, nextWorkTODO.objectId);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::CLOSE_INTERNAL_SUB_TAB) {
                 CloseInternalSubTab(myTab, nextWorkTODO.objectId);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::INTERNAL_SUB_TAB_EXTRACTED) {
+                HandleSubTabExtracted(myTab, nextWorkTODO.objectId);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_PRIMITIVE_CREATION3D) {
                 BeginPrimitive3DPlacement(myTab, static_cast<VishwakarmaStorage::ObjectType>(nextWorkTODO.x));
             } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_LINE_CREATION2D) {

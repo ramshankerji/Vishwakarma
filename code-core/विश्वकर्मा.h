@@ -87,6 +87,9 @@ struct InternalSubTab {
     VishwakarmaStorage::ObjectType containerType = VishwakarmaStorage::ObjectType::Unknown;
     uint64_t containerMemoryId = 0;
     std::string title;
+    // Per-view camera (Scene3D views). Engineering thread writes, render threads read lock-free,
+    // same 1-frame-staleness contract as the rest of the camera pipeline.
+    CameraState camera;
 };
 
 // Lifecycle of one fixed sub-tab slot inside DATASETTAB.
@@ -168,6 +171,11 @@ struct DATASETTAB {
     std::atomic<int16_t> hostWindowSlot{ 0 };
 
     uint64_t activeInternalSubTabMemoryId = 0; // Zero means no high-level container is currently visible.
+    // The view (sub-tab slot) scene/page input currently applies to. -1 = the inline-active
+    // sub-tab; >= 0 = an extracted view the user last interacted with. Written by the UI thread
+    // (WndProc), read by the engineering thread; also read by render threads to place selection
+    // overlays / picks in the interacting window.
+    std::atomic<int32_t> inputViewSubTabSlot{ -1 };
     uint64_t defaultScene3DMemoryId = 0;
     uint64_t activeScene3DMemoryId = 0; // Organizational parent for newly generated 3D objects.
     std::atomic<uint32_t> activePrimitive3DPlacementType{
@@ -348,6 +356,11 @@ bool GetVisibleSceneViewportForTab(const DATASETTAB& tab, int& widthPx, int& hei
 
 // Lock-free scan of the published sub-tab list. Returns the slot index, or -1 when not open.
 int FindPublishedSubTabSlot(const DATASETTAB& tab, uint64_t containerMemoryId);
+// The sub-tab slot scene/page input currently targets: the extracted view the user last
+// interacted with (inputViewSubTabSlot), else the inline-active sub-tab. -1 when none resolves.
+int InputViewSlot(const DATASETTAB& tab);
+// Container memoryId of the input view slot (0 when none).
+uint64_t InputViewContainerId(const DATASETTAB& tab);
 // Marks every open sub-tab slot for delayed GPU release and publishes an empty list.
 // storageObjectsMutex must already be held by the caller.
 void CloseAllInternalSubTabsLocked(DATASETTAB& tab);

@@ -23,18 +23,14 @@ struct InternalSubTab;
 
 using Microsoft::WRL::ComPtr;
 
-struct DX12ResourcesUI { // GPU resources
+struct DX12ResourcesUI { // GPU resources shared by all windows (read-only during recording).
+    // The dynamic vertex/index/ortho buffers live per window (DX12ResourcesPerWindow): all
+    // windows of a monitor are recorded into ONE command list and executed together, so a
+    // shared upload buffer would be overwritten by the last-recorded window.
     std::array<ComPtr<ID3D12Resource>, UI_MAX_ATLAS_TEXTURES> uiAtlasTextures; // 1024×1024 or 2048×2048 RGBA (or R8 for alpha-only)
-    ComPtr<ID3D12Resource> uiVertexBuffer; // Dynamic upload buffer for vertices
-    ComPtr<ID3D12Resource> uiIndexBuffer;  // Dynamic upload buffer for indices
-
-    UINT8* pVertexDataBegin = nullptr; // Mapped pointer for immediate writing
-    UINT8* pIndexDataBegin = nullptr;
-    UINT8* pOrthoDataBegin = nullptr;
 
     ComPtr<ID3D12PipelineState> uiPSO;
     ComPtr<ID3D12RootSignature> uiRootSignature;
-    ComPtr<ID3D12Resource> uiOrthoConstantBuffer;
     ComPtr<ID3D12DescriptorHeap> srvHeap;
     ComPtr<ID3D12DescriptorHeap> samplerHeap;
 

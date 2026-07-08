@@ -222,7 +222,12 @@ void Record3DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab,
     if (!tabRes.rootSignature || !tabRes.pipelineState || !tabRes.commandSignature) return;
     if (!tabRes.worldMatrixBuffer) return;
 
-    const CameraState camera = tab.camera;
+    // Print with the per-view camera of the inline-active Scene3D sub-tab (matches what the
+    // user sees); fall back to the tab-level camera when no Scene3D sub-tab is active.
+    const int activeSlot = FindPublishedSubTabSlot(tab, tab.activeInternalSubTabMemoryId);
+    const CameraState camera = activeSlot >= 0 &&
+        tab.subTabs[activeSlot].containerType == VishwakarmaStorage::ObjectType::Scene3D
+        ? tab.subTabs[activeSlot].camera : tab.camera;
     XMVECTOR eyePosition = XMLoadFloat3(&camera.position);
     XMVECTOR focusPoint = XMLoadFloat3(&camera.target);
     XMVECTOR upDirection = XMLoadFloat3(&camera.up);

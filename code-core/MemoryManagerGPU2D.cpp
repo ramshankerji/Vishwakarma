@@ -554,9 +554,13 @@ void PopAllCad2DCopyCommands(std::vector<CommandToCopyThread2D>& outCommands) {
 uint64_t Cad2DFindTargetPage2DMemoryId(DATASETTAB& tab) {
     if (!tab.storageObjectsMutex) return 0;
 
+    // Keyed on the input view (inline-active sub-tab, or the extracted view the user last
+    // interacted with), so 2D tools follow the view actually receiving the input.
+    const uint64_t inputContainerId = InputViewContainerId(tab);
+
     std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
-    if (tab.activeInternalSubTabMemoryId != 0) {
-        StoredLogicalObject* active = FindLogicalObjectByIdLocked(tab, tab.activeInternalSubTabMemoryId);
+    if (inputContainerId != 0) {
+        StoredLogicalObject* active = FindLogicalObjectByIdLocked(tab, inputContainerId);
         if (active && active->objectType == VishwakarmaStorage::ObjectType::Page2D) {
             return active->object->memoryID;
         }
@@ -572,10 +576,13 @@ uint64_t Cad2DFindTargetPage2DMemoryId(DATASETTAB& tab) {
 
 bool Cad2DIsActivePage2D(DATASETTAB& tab) {
     if (!tab.storageObjectsMutex) return false;
-    std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
-    if (tab.activeInternalSubTabMemoryId == 0) return false;
 
-    StoredLogicalObject* active = FindLogicalObjectByIdLocked(tab, tab.activeInternalSubTabMemoryId);
+    const uint64_t inputContainerId = InputViewContainerId(tab); // Input view, not just inline-active.
+
+    std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
+    if (inputContainerId == 0) return false;
+
+    StoredLogicalObject* active = FindLogicalObjectByIdLocked(tab, inputContainerId);
     return active && active->objectType == VishwakarmaStorage::ObjectType::Page2D;
 }
 

@@ -651,6 +651,14 @@ void शंकर::CleanupWindowResources(DX12ResourcesPerWindow& winRes) {
     winRes.constantBuffer.Reset();
     winRes.cbvHeap.Reset();
 
+    // Per-window dynamic UI overlay buffers.
+    if (winRes.pUIVertexDataBegin) { winRes.uiVertexBuffer->Unmap(0, nullptr); winRes.pUIVertexDataBegin = nullptr; }
+    if (winRes.pUIIndexDataBegin) { winRes.uiIndexBuffer->Unmap(0, nullptr); winRes.pUIIndexDataBegin = nullptr; }
+    if (winRes.pUIOrthoDataBegin) { winRes.uiOrthoConstantBuffer->Unmap(0, nullptr); winRes.pUIOrthoDataBegin = nullptr; }
+    winRes.uiVertexBuffer.Reset();
+    winRes.uiIndexBuffer.Reset();
+    winRes.uiOrthoConstantBuffer.Reset();
+
     for (int i = 0; i < FRAMES_PER_RENDERTARGETS; ++i) {
         winRes.renderTextures[i].Reset();
     }
@@ -1711,7 +1719,6 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             if (tabIndex >= 0) {
                 DATASETTAB& tab = allTabs[tabIndex];
                 DX12ResourcesPerTab& tabRes = tab.dx;
-                tabRes.camera = tab.camera; // Update camera from Tab.
                 // Scene-3D selection context (populated in the 3D branch below, used after the UI).
                 bool scene3DActive = false;
                 DirectX::XMMATRIX sceneViewProj = DirectX::XMMatrixIdentity();
@@ -1719,6 +1726,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 uint64_t activeInternalSubTabMemoryId = 0;
                 VishwakarmaStorage::ObjectType activeInternalSubTabType =
                     VishwakarmaStorage::ObjectType::Unknown;
+                int renderSlot = -1; // Sub-tab slot this window displays. -1 = none.
                 const bool contentOnlyWindow = window.windowKind == WINDOW_KIND_VIEW;
                 if (contentOnlyWindow) {
                     // Extracted view window: render exactly the hosted sub-tab slot, regardless of
@@ -1728,6 +1736,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                         tab.subTabStates[slot].load(std::memory_order_acquire) == SUBTAB_OPEN) {
                         activeInternalSubTabMemoryId = tab.subTabs[slot].containerMemoryId;
                         activeInternalSubTabType = tab.subTabs[slot].containerType;
+                        renderSlot = slot;
                     }
                 } else if (tab.storageObjectsMutex) {
                     {
@@ -1737,15 +1746,25 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                     const int activeSlot = FindPublishedSubTabSlot(tab, activeInternalSubTabMemoryId);
                     if (activeSlot >= 0) {
                         activeInternalSubTabType = tab.subTabs[activeSlot].containerType;
-                        // A Page2D lives in exactly 1 view; when that view is extracted into its own
-                        // window it is not drawn inline as well.
-                        if (activeInternalSubTabType == VishwakarmaStorage::ObjectType::Page2D &&
-                            tab.subTabHostWindowSlots[activeSlot].load(std::memory_order_acquire) >= 0) {
+                        // A sub-tab lives in exactly 1 view; while that view is extracted into its
+                        // own window it is not drawn inline as well (any container type).
+                        if (tab.subTabHostWindowSlots[activeSlot].load(std::memory_order_acquire) >= 0) {
                             activeInternalSubTabMemoryId = 0;
                             activeInternalSubTabType = VishwakarmaStorage::ObjectType::Unknown;
+                        } else {
+                            renderSlot = activeSlot;
                         }
                     }
                 }
+                // Per-view camera: each Scene3D sub-tab carries its own camera; content shown
+                // without a sub-tab falls back to the tab-level camera.
+                tabRes.camera = renderSlot >= 0 &&
+                    tab.subTabs[renderSlot].containerType == VishwakarmaStorage::ObjectType::Scene3D
+                    ? tab.subTabs[renderSlot].camera : tab.camera;
+                // Selection overlays and pick requests belong to the view the user interacts
+                // with; only the window displaying that view records them, so two windows of the
+                // same tab do not clobber the shared per-tab overlay / pick resources.
+                const bool isInputViewWindow = renderSlot == InputViewSlot(tab);
                 uint64_t fenceToWaitFor = gpu.copyFenceValue.load(std::memory_order_acquire);// Cross-Queue Sync.
                 //if (fenceToWaitFor > 0) { threadRes.commandQueue->Wait(gpu.copyFence.Get(), fenceToWaitFor); }
                 //Above is commented out because render thread now no longer need to wait for copyFence,
@@ -1774,9 +1793,11 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                         DirectX::XMMATRIX projM = DirectX::XMMatrixPerspectiveFovLH(
                             tabRes.camera.fov, aspect, tabRes.camera.nearZ, tabRes.camera.farZ);
                         sceneViewProj = viewM * projM; // Matches PopulateCommandList's view-proj.
-                        RecordSelectionOverlays(threadRes.commandList.Get(), winRes, tabRes,
-                            tab.geometry, tab.selection, sceneViewProj, sceneTopUI, sceneVpW,
-                            sceneVpH, activeInternalSubTabMemoryId);
+                        if (isInputViewWindow) {
+                            RecordSelectionOverlays(threadRes.commandList.Get(), winRes, tabRes,
+                                tab.geometry, tab.selection, sceneViewProj, sceneTopUI, sceneVpW,
+                                sceneVpH, activeInternalSubTabMemoryId);
+                        }
                     }
                 }
                 // Render User Interface using safe snapshot copy of current Input.
@@ -1798,7 +1819,8 @@ void GpuRenderThread(int monitorId, int refreshRate) {
 
                 // Service any pending click/scroll pick request. Runs after the UI (it renders into
                 // its own targets) and records a readback tagged with this frame's fence below.
-                if (scene3DActive && sceneVpH > 0) {
+                // Only the input view's window services picks: its camera/viewport match the click.
+                if (scene3DActive && sceneVpH > 0 && isInputViewWindow) {
                     ServicePick(threadRes.commandList.Get(), winRes, tabRes, tab.geometry,
                         tab.selection, tabRes.pickCtx, monitorId, sceneViewProj, sceneTopUI,
                         sceneVpW, sceneVpH, activeInternalSubTabMemoryId);

@@ -507,26 +507,9 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
     psoDesc.SampleDesc.Count = 1;
 
     ThrowIfFailed( device->CreateGraphicsPipelineState( &psoDesc, IID_PPV_ARGS(&uiRes.uiPSO)));
-    
-    // Vertex buffer
-    auto uploadHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
 
-    auto vbDesc = CD3DX12_RESOURCE_DESC::Buffer( uiRes.maxVertices * sizeof(UIVertex));
-    ThrowIfFailed( device->CreateCommittedResource( &uploadHeap, D3D12_HEAP_FLAG_NONE, &vbDesc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uiRes.uiVertexBuffer)));
-
-    auto ibDesc = CD3DX12_RESOURCE_DESC::Buffer( uiRes.maxIndices * sizeof(uint16_t));
-    ThrowIfFailed( device->CreateCommittedResource( &uploadHeap, D3D12_HEAP_FLAG_NONE, &ibDesc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uiRes.uiIndexBuffer)));
-
-    auto cbDesc = CD3DX12_RESOURCE_DESC::Buffer(256);
-    ThrowIfFailed( device->CreateCommittedResource( &uploadHeap, D3D12_HEAP_FLAG_NONE, &cbDesc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&uiRes.uiOrthoConstantBuffer)));
-
-    CD3DX12_RANGE readRange(0, 0);
-    uiRes.uiVertexBuffer->Map( 0, &readRange, reinterpret_cast<void**>(&uiRes.pVertexDataBegin));
-    uiRes.uiIndexBuffer->Map(  0, &readRange, reinterpret_cast<void**>(&uiRes.pIndexDataBegin));
-    uiRes.uiOrthoConstantBuffer->Map( 0, &readRange, reinterpret_cast<void**>(&uiRes.pOrthoDataBegin));
+    // The dynamic vertex/index/ortho buffers are per window (DX12ResourcesPerWindow), created
+    // lazily by RenderUIOverlay (see EnsureWindowUIBuffers).
     std::wcout << L"UI Resources Initialized (Phase 4A)\n";
     
     AtlasBitmap englishAtlas = BuildMSDFFontAtlas();
@@ -574,10 +557,6 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
 
 // Cleanup
 void CleanupUIResources(DX12ResourcesUI& uiRes) {
-    if (uiRes.uiVertexBuffer) uiRes.uiVertexBuffer->Unmap(0, nullptr);
-    if (uiRes.uiIndexBuffer) uiRes.uiIndexBuffer->Unmap(0, nullptr);
-    if (uiRes.uiOrthoConstantBuffer) uiRes.uiOrthoConstantBuffer->Unmap(0, nullptr);
-
     uiRes = {};
 }
 
@@ -989,6 +968,36 @@ void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t c
     ctx.indexCount += glyphCount * 6;
 }
 
+// Creates this window's dynamic UI buffers on first use. Per window by necessity: one monitor
+// command list records all its windows before executing, so a shared upload buffer would be
+// overwritten by the last-recorded window and every window would present that window's UI.
+static void EnsureWindowUIBuffers(DX12ResourcesPerWindow& winRes, ID3D12GraphicsCommandList* cmd,
+    const DX12ResourcesUI& uiRes) {
+    if (winRes.uiVertexBuffer) return;
+
+    ComPtr<ID3D12Device> device;
+    if (FAILED(cmd->GetDevice(IID_PPV_ARGS(&device)))) return;
+
+    auto uploadHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+
+    auto vbDesc = CD3DX12_RESOURCE_DESC::Buffer(uiRes.maxVertices * sizeof(UIVertex));
+    ThrowIfFailed(device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &vbDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&winRes.uiVertexBuffer)));
+
+    auto ibDesc = CD3DX12_RESOURCE_DESC::Buffer(uiRes.maxIndices * sizeof(uint16_t));
+    ThrowIfFailed(device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &ibDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&winRes.uiIndexBuffer)));
+
+    auto cbDesc = CD3DX12_RESOURCE_DESC::Buffer(256);
+    ThrowIfFailed(device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &cbDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&winRes.uiOrthoConstantBuffer)));
+
+    CD3DX12_RANGE readRange(0, 0);
+    winRes.uiVertexBuffer->Map(0, &readRange, reinterpret_cast<void**>(&winRes.pUIVertexDataBegin));
+    winRes.uiIndexBuffer->Map(0, &readRange, reinterpret_cast<void**>(&winRes.pUIIndexDataBegin));
+    winRes.uiOrthoConstantBuffer->Map(0, &readRange, reinterpret_cast<void**>(&winRes.pUIOrthoDataBegin));
+}
+
 // This function renders the list of tabs, all top menu buttons (with dropdowns if required),
 // side favorite / frequent buttons bars, right side property window, bottom status bar.
 // This is also responsible for all relevant DirectX12 configurations required for rendering User Interface.
@@ -997,6 +1006,12 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     uint64_t activeInternalSubTabMemoryId) {
 
     if (!cmd) return; //Defensive check.
+
+    EnsureWindowUIBuffers(window.dx, cmd, uiRes);
+    if (!window.dx.pUIVertexDataBegin || !window.dx.pUIIndexDataBegin ||
+        !window.dx.pUIOrthoDataBegin) {
+        return;
+    }
 
     // Any click inside this window makes its active tab the routing context for ribbon commands
     // (ProcessPendingUIActions reads it). Needed once tabs live in more than one window.
@@ -1017,23 +1032,21 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     cmd->SetGraphicsRootDescriptorTable(1, uiRes.srvHeap->GetGPUDescriptorHandleForHeapStart());
     // Root Parameter 2 = Sampler table
     cmd->SetGraphicsRootDescriptorTable(2, uiRes.samplerHeap->GetGPUDescriptorHandleForHeapStart());
-    // Bind ortho constant buffer (still root parameter 0)
-    cmd->SetGraphicsRootConstantBufferView(0, uiRes.uiOrthoConstantBuffer->GetGPUVirtualAddress());
+    // Bind this window's ortho constant buffer (still root parameter 0)
+    cmd->SetGraphicsRootConstantBufferView(0, window.dx.uiOrthoConstantBuffer->GetGPUVirtualAddress());
 
     float W = (float)window.dx.WindowWidth;
     float H = (float)window.dx.WindowHeight;
-    float* ortho = (float*)uiRes.pOrthoDataBegin;
+    float* ortho = (float*)window.dx.pUIOrthoDataBegin;
 
     ortho[0] = 2 / W; ortho[1] = 0;   ortho[2] = 0; ortho[3] = -1;
     ortho[4] = 0;   ortho[5] = -2 / H; ortho[6] = 0; ortho[7] = 1;
     ortho[8] = 0;   ortho[9] = 0;   ortho[10] = 1; ortho[11] = 0;
     ortho[12] = 0;  ortho[13] = 0;  ortho[14] = 0; ortho[15] = 1;
 
-    cmd->SetGraphicsRootConstantBufferView( 0, uiRes.uiOrthoConstantBuffer->GetGPUVirtualAddress());
-
     UIDrawContext ctx;
-    ctx.vertexPtr = reinterpret_cast<UIVertex*>(uiRes.pVertexDataBegin);
-    ctx.indexPtr = reinterpret_cast<uint16_t*>(uiRes.pIndexDataBegin);
+    ctx.vertexPtr = reinterpret_cast<UIVertex*>(window.dx.pUIVertexDataBegin);
+    ctx.indexPtr = reinterpret_cast<uint16_t*>(window.dx.pUIIndexDataBegin);
     ctx.vertexCount = 0;
     ctx.indexCount = 0;
     if (!topRibbonLayout.isValid || topRibbonLayout.dpiX != monitorDPIX || topRibbonLayout.dpiY != monitorDPIY) {
@@ -2198,12 +2211,12 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     if (ctx.indexCount == 0) return;
 
     D3D12_VERTEX_BUFFER_VIEW vbv{};
-    vbv.BufferLocation = uiRes.uiVertexBuffer->GetGPUVirtualAddress();
+    vbv.BufferLocation = window.dx.uiVertexBuffer->GetGPUVirtualAddress();
     vbv.SizeInBytes = ctx.vertexCount * sizeof(UIVertex);
     vbv.StrideInBytes = sizeof(UIVertex);
 
     D3D12_INDEX_BUFFER_VIEW ibv{};
-    ibv.BufferLocation = uiRes.uiIndexBuffer->GetGPUVirtualAddress();
+    ibv.BufferLocation = window.dx.uiIndexBuffer->GetGPUVirtualAddress();
     ibv.SizeInBytes = ctx.indexCount * sizeof(uint16_t);
     ibv.Format = DXGI_FORMAT_R16_UINT;
 

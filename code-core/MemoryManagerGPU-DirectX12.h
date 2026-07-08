@@ -272,6 +272,16 @@ struct DX12ResourcesPerWindow {// Presentation Logic
     ComPtr<ID3D12DescriptorHeap> cbvHeap;
     UINT8* cbvDataBegin = nullptr;
 
+    // Per-window dynamic UI overlay buffers (created lazily by RenderUIOverlay). They must not
+    // be shared between windows: one monitor command list records all its windows before
+    // executing, so a shared upload buffer would show the last-recorded window's UI everywhere.
+    ComPtr<ID3D12Resource> uiVertexBuffer;
+    ComPtr<ID3D12Resource> uiIndexBuffer;
+    ComPtr<ID3D12Resource> uiOrthoConstantBuffer;
+    UINT8* pUIVertexDataBegin = nullptr;
+    UINT8* pUIIndexDataBegin = nullptr;
+    UINT8* pUIOrthoDataBegin = nullptr;
+
 	UINT frameIndex = 0; // Remember this is different from allocatorIndex in Render Thread.
     // It can change even during windows resize.
 };
