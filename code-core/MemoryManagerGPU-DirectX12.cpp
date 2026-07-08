@@ -659,6 +659,13 @@ void शंकर::CleanupWindowResources(DX12ResourcesPerWindow& winRes) {
     winRes.uiIndexBuffer.Reset();
     winRes.uiOrthoConstantBuffer.Reset();
 
+    // Per-window Page2D view constant buffer.
+    if (winRes.pCad2DViewConstantDataBegin) {
+        winRes.cad2dViewConstantBuffer->Unmap(0, nullptr);
+        winRes.pCad2DViewConstantDataBegin = nullptr;
+    }
+    winRes.cad2dViewConstantBuffer.Reset();
+
     for (int i = 0; i < FRAMES_PER_RENDERTARGETS; ++i) {
         winRes.renderTextures[i].Reset();
     }
@@ -1771,7 +1778,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 //because, now render thread operate over READ ONLY page list.
                 if (activeInternalSubTabType == VishwakarmaStorage::ObjectType::Page2D && tab.cad2d) {
                     RenderCad2DPage(threadRes.commandList.Get(), winRes, *tab.cad2d,
-                        gpu.uiResources, monitorId, activeInternalSubTabMemoryId);
+                        gpu.uiResources, monitorId, activeInternalSubTabMemoryId, renderSlot);
                 } else {
                     ClearSceneSkyGradient(threadRes.commandList.Get(), winRes, rttHandle, monitorId);
                     gpu.PopulateCommandList(threadRes.commandList.Get(), winRes, tabRes, tab.geometry,

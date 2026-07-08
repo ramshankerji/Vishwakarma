@@ -2077,17 +2077,19 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
             PushIcon(ctx, iconX, iconY, cursorIconSize, cursorIconSize, cursorIcon, 0xFF000000u, uiRes);
         }
 
-        if (textCreationMode &&
+        const int page2DViewSlot = FindPublishedSubTabSlot(tab, activeInternalSubTabMemoryId);
+        if (textCreationMode && page2DViewSlot >= 0 &&
             tab.cad2d->textCreationHasAnchor.load(std::memory_order_acquire) &&
             ((GetTickCount64() / 500ULL) % 2ULL) == 0ULL) {
             int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
             if (GetVisibleSceneViewportForTab(tab, viewportWidth, viewportHeight, viewportTop) &&
                 viewportWidth > 0 && viewportHeight > 0) {
+                const Cad2DViewState& view = tab.cad2d->views[page2DViewSlot];
                 const float zoom = std::max(
-                    tab.cad2d->view.zoomPixelsPerCU.load(std::memory_order_acquire),
+                    view.zoomPixelsPerCU.load(std::memory_order_acquire),
                     kCad2DZoomMinPixelsPerCU);
-                const double centerX = tab.cad2d->view.centerXCU.load(std::memory_order_acquire);
-                const double centerY = tab.cad2d->view.centerYCU.load(std::memory_order_acquire);
+                const double centerX = view.centerXCU.load(std::memory_order_acquire);
+                const double centerY = view.centerYCU.load(std::memory_order_acquire);
                 const double anchorX = tab.cad2d->textCreationXCU.load(std::memory_order_acquire);
                 const double anchorY = tab.cad2d->textCreationYCU.load(std::memory_order_acquire);
                 std::string draftText;

@@ -539,25 +539,10 @@ void InitCad2DTabResources(TabCad2DStorage& storage) {
         ThrowIfFailed(gpu.device->CreateGraphicsPipelineState(&psoDesc,
             IID_PPV_ARGS(&storage.dx.textPSO)));
     }
-
-    {
-        CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_UPLOAD);
-        auto desc = CD3DX12_RESOURCE_DESC::Buffer(256);
-        ThrowIfFailed(gpu.device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
-            &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-            IID_PPV_ARGS(&storage.dx.viewConstantBuffer)));
-        CD3DX12_RANGE readRange(0, 0);
-        ThrowIfFailed(storage.dx.viewConstantBuffer->Map(0, &readRange,
-            reinterpret_cast<void**>(&storage.dx.pViewConstantDataBegin)));
-    }
+    // The view constant buffer is created per window on demand (RenderCad2DPage).
 }
 
 void CleanupCad2DTabResources(TabCad2DStorage& storage) {
-    if (storage.dx.viewConstantBuffer && storage.dx.pViewConstantDataBegin) {
-        storage.dx.viewConstantBuffer->Unmap(0, nullptr);
-        storage.dx.pViewConstantDataBegin = nullptr;
-    }
-
     Cad2DPageSnapshot* snapshot = storage.activeSnapshot.exchange(nullptr, std::memory_order_acq_rel);
     delete snapshot;
     for (auto& retired : storage.retiredSnapshots) delete retired.snapshot;
@@ -573,7 +558,6 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage) {
     storage.dx.curveRootSignature.Reset();
     storage.dx.textPSO.Reset();
     storage.dx.textRootSignature.Reset();
-    storage.dx.viewConstantBuffer.Reset();
 
     std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
     storage.lineRecords.clear();
@@ -623,11 +607,30 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage) {
     storage.transform2DP2YCU.store(0.0, std::memory_order_release);
 }
 
+// Creates this window's Page2D view constant buffer on first use. Per window (not per tab) so two
+// windows showing different Page2Ds of one tab don't overwrite each other's view in the shared
+// monitor command list. Mirrors EnsureWindowUIBuffers.
+static void EnsureWindowCad2DViewBuffer(DX12ResourcesPerWindow& winRes) {
+    if (winRes.cad2dViewConstantBuffer) return;
+    CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_UPLOAD);
+    auto desc = CD3DX12_RESOURCE_DESC::Buffer(256);
+    ThrowIfFailed(gpu.device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
+        &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&winRes.cad2dViewConstantBuffer)));
+    CD3DX12_RANGE readRange(0, 0);
+    ThrowIfFailed(winRes.cad2dViewConstantBuffer->Map(0, &readRange,
+        reinterpret_cast<void**>(&winRes.pCad2DViewConstantDataBegin)));
+}
+
 void RenderCad2DPage(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     TabCad2DStorage& storage, DX12ResourcesUI& uiResources, int monitorId,
-    uint64_t activeContainerMemoryId) {
+    uint64_t activeContainerMemoryId, int viewSlot) {
     if (!commandList || activeContainerMemoryId == 0 || winRes.WindowHeight <= 0) return;
-    if (!storage.dx.lineRootSignature || !storage.dx.viewConstantBuffer) return;
+    if (!storage.dx.lineRootSignature) return;
+    if (viewSlot < 0 || viewSlot >= MV_MAX_SUBTABS) return;
+
+    EnsureWindowCad2DViewBuffer(winRes);
+    if (!winRes.pCad2DViewConstantDataBegin) return;
 
     const uint32_t topUI = TopUIHeightPx(monitorId, winRes);
     const int sceneHeight = winRes.WindowHeight - static_cast<int>(topUI);
@@ -644,13 +647,14 @@ void RenderCad2DPage(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWin
     const float cadBackground[] = { 230.0f / 255.0f, 230.0f / 255.0f, 230.0f / 255.0f, 1.0f };
     commandList->ClearRenderTargetView(rttHandle, cadBackground, 0, nullptr);
 
+    const Cad2DViewState& view = storage.views[viewSlot]; // Per-view pan/zoom of the shown Page2D.
     Cad2DViewConstants constants{};
     constants.viewCenterCU = {
-        static_cast<float>(storage.view.centerXCU.load(std::memory_order_acquire)),
-        static_cast<float>(storage.view.centerYCU.load(std::memory_order_acquire))
+        static_cast<float>(view.centerXCU.load(std::memory_order_acquire)),
+        static_cast<float>(view.centerYCU.load(std::memory_order_acquire))
     };
     constants.zoomPixelsPerCU =
-        (std::max)(storage.view.zoomPixelsPerCU.load(std::memory_order_acquire),
+        (std::max)(view.zoomPixelsPerCU.load(std::memory_order_acquire),
             kCad2DZoomMinPixelsPerCU);
     constants.dpiY = monitorId >= 0 && monitorId < gpu.currentMonitorCount
         ? static_cast<float>(gpu.screens[monitorId].physicalDpiY)
@@ -660,15 +664,15 @@ void RenderCad2DPage(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWin
         static_cast<float>(sceneHeight)
     };
     constants.minLineWeightPx = 1.0f;
-    memcpy(storage.dx.pViewConstantDataBegin, &constants, sizeof(constants));
+    memcpy(winRes.pCad2DViewConstantDataBegin, &constants, sizeof(constants));
+    const D3D12_GPU_VIRTUAL_ADDRESS viewCBV = winRes.cad2dViewConstantBuffer->GetGPUVirtualAddress();
 
     Cad2DPageSnapshot* snapshot = storage.activeSnapshot.load(std::memory_order_acquire);
     if (!snapshot) return;
 
     commandList->SetGraphicsRootSignature(storage.dx.lineRootSignature.Get());
     commandList->SetPipelineState(storage.dx.linePSO.Get());
-    commandList->SetGraphicsRootConstantBufferView(0,
-        storage.dx.viewConstantBuffer->GetGPUVirtualAddress());
+    commandList->SetGraphicsRootConstantBufferView(0, viewCBV);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     for (Cad2DPageGPU* page : snapshot->pages) {
@@ -683,8 +687,7 @@ void RenderCad2DPage(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWin
     if (storage.dx.curveRootSignature && storage.dx.curvePSO && storage.dx.curveCommandSignature) {
         commandList->SetGraphicsRootSignature(storage.dx.curveRootSignature.Get());
         commandList->SetPipelineState(storage.dx.curvePSO.Get());
-        commandList->SetGraphicsRootConstantBufferView(0,
-            storage.dx.viewConstantBuffer->GetGPUVirtualAddress());
+        commandList->SetGraphicsRootConstantBufferView(0, viewCBV);
         commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
         for (Cad2DPageGPU* page : snapshot->pages) {
@@ -705,8 +708,7 @@ void RenderCad2DPage(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWin
     commandList->SetPipelineState(storage.dx.textPSO.Get());
     ID3D12DescriptorHeap* heaps[] = { uiResources.srvHeap.Get(), uiResources.samplerHeap.Get() };
     commandList->SetDescriptorHeaps(_countof(heaps), heaps);
-    commandList->SetGraphicsRootConstantBufferView(0,
-        storage.dx.viewConstantBuffer->GetGPUVirtualAddress());
+    commandList->SetGraphicsRootConstantBufferView(0, viewCBV);
     commandList->SetGraphicsRootDescriptorTable(1, uiResources.srvHeap->GetGPUDescriptorHandleForHeapStart());
     commandList->SetGraphicsRootDescriptorTable(2, uiResources.samplerHeap->GetGPUDescriptorHandleForHeapStart());
 

@@ -16,6 +16,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "ConstantsApplication.h" // MV_MAX_SUBTABS: one Cad2DViewState per sub-tab slot.
 #include "MemoryManagerGPU2D.h"
 
 struct DX12ResourcesPerWindow;
@@ -79,6 +80,14 @@ struct Cad2DViewState {
     std::atomic<double> centerXCU{ 0.0 };
     std::atomic<double> centerYCU{ 0.0 };
     std::atomic<float> zoomPixelsPerCU{ 2.0f };
+
+    // Back to the default view. Used when a sub-tab slot is (re)assigned to a Page2D so a recycled
+    // slot does not inherit the previous Page2D's pan/zoom.
+    void Reset() {
+        centerXCU.store(0.0, std::memory_order_release);
+        centerYCU.store(0.0, std::memory_order_release);
+        zoomPixelsPerCU.store(2.0f, std::memory_order_release);
+    }
 };
 
 struct Cad2DPageGPU {
@@ -113,14 +122,16 @@ struct DX12Resources2DPerTab {
 
     ComPtr<ID3D12RootSignature> textRootSignature;
     ComPtr<ID3D12PipelineState> textPSO;
-
-    ComPtr<ID3D12Resource> viewConstantBuffer;
-    uint8_t* pViewConstantDataBegin = nullptr;
+    // The view constant buffer is per window (DX12ResourcesPerWindow::cad2dViewConstantBuffer),
+    // not here, so two windows showing different Page2Ds of this tab render independent views.
 };
 
 struct TabCad2DStorage {
     DX12Resources2DPerTab dx;
-    Cad2DViewState view;
+    // Pan/zoom is per view: each open Page2D sub-tab slot owns its own view state, so the same
+    // tab's two Page2Ds (inline + extracted, or two extracted windows) pan/zoom independently.
+    // Indexed by sub-tab slot; input resolves the interacting slot, render/print the shown slot.
+    Cad2DViewState views[MV_MAX_SUBTABS];
 
     // 2D click-selection (CPU hit-testing). Selected object ids; the copy thread reads this while
     // rebuilding pages and stamps kCad2DSelectedFlag into the matching GPU records.
@@ -200,7 +211,7 @@ void InitCad2DTabResources(TabCad2DStorage& storage);
 void CleanupCad2DTabResources(TabCad2DStorage& storage);
 void RenderCad2DPage(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     TabCad2DStorage& storage, DX12ResourcesUI& uiResources, int monitorId,
-    uint64_t activeContainerMemoryId);
+    uint64_t activeContainerMemoryId, int viewSlot);
 void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch);
 void PruneCad2DRetiredResources(TabCad2DStorage& storage, uint64_t safeRetireFence);
 void ReleaseCad2DRetiredResources(TabCad2DStorage& storage);

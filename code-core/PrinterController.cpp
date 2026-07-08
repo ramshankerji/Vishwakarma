@@ -120,21 +120,25 @@ std::vector<Print3DPage> Collect3DPages(TabGeometryStorage& storage, uint64_t co
 
 // Records draw calls for a Page2D drawing. Mirror of RenderCad2DPage, but with our own
 // render target, viewport and view-constant buffer so the on-screen renderer is untouched.
-void Record2DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab,
+void Record2DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab, uint64_t containerMemoryId,
     const std::vector<Print2DPage>& pages, ID3D12Resource* viewConstantBuffer,
     uint8_t* pViewConstantData, uint32_t widthPx, uint32_t heightPx) {
     TabCad2DStorage& storage = *tab.cad2d;
 
+    // Print with the per-view pan/zoom of the Page2D being printed (its own sub-tab slot).
+    const int slot = FindPublishedSubTabSlot(tab, containerMemoryId);
+    const Cad2DViewState& view = (slot >= 0) ? storage.views[slot] : storage.views[0];
+
     Cad2DViewConstants constants{};
     constants.viewCenterCU = {
-        static_cast<float>(storage.view.centerXCU.load(std::memory_order_acquire)),
-        static_cast<float>(storage.view.centerYCU.load(std::memory_order_acquire))
+        static_cast<float>(view.centerXCU.load(std::memory_order_acquire)),
+        static_cast<float>(view.centerYCU.load(std::memory_order_acquire))
     };
 
     // Print exactly the region currently visible on screen: scale the on-screen zoom so
     // the same horizontal CU extent fills the printed page width at print DPI.
     const float screenZoom =
-        (std::max)(storage.view.zoomPixelsPerCU.load(std::memory_order_acquire),
+        (std::max)(view.zoomPixelsPerCU.load(std::memory_order_acquire),
             kCad2DZoomMinPixelsPerCU);
     int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
     if (GetVisibleSceneViewportForTab(tab, viewportWidth, viewportHeight, viewportTop) &&
@@ -358,7 +362,8 @@ std::vector<uint8_t> RenderForPrint(DATASETTAB& tab, bool isPage2D, uint64_t con
 
     if (isPage2D) {
         std::vector<Print2DPage> pages = Collect2DPages(*tab.cad2d, containerMemoryId);
-        Record2DDraws(cmd.Get(), tab, pages, constantBuffer.Get(), pConstantData, widthPx, heightPx);
+        Record2DDraws(cmd.Get(), tab, containerMemoryId, pages, constantBuffer.Get(), pConstantData,
+            widthPx, heightPx);
     } else {
         std::vector<Print3DPage> pages = Collect3DPages(tab.geometry, containerMemoryId);
         Record3DDraws(cmd.Get(), tab, pages, constantBuffer.Get(), pConstantData, widthPx, heightPx);

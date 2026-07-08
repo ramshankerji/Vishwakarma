@@ -419,6 +419,10 @@ static void OpenInternalSubTab(DATASETTAB* targetTab, uint64_t memoryId) {
             subTab.title = objectName && objectName[0] != '\0'
                 ? objectName
                 : VishwakarmaStorage::ObjectTypeDisplayName(entry.objectType);
+            subTab.camera.Initialize(); // Fresh per-view 3D camera for this slot.
+            if (targetTab->cad2d) {
+                targetTab->cad2d->views[freeSlot].Reset(); // Fresh per-view Page2D pan/zoom.
+            }
             targetTab->subTabHostWindowSlots[freeSlot].store(-1, std::memory_order_release);
             targetTab->subTabStates[freeSlot].store(SUBTAB_OPEN, std::memory_order_release);
 

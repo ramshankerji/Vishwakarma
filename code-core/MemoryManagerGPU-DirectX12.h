@@ -282,6 +282,12 @@ struct DX12ResourcesPerWindow {// Presentation Logic
     UINT8* pUIIndexDataBegin = nullptr;
     UINT8* pUIOrthoDataBegin = nullptr;
 
+    // Per-window Page2D view constant buffer (created lazily by RenderCad2DPage). Per window for
+    // the same reason as the UI overlay buffers: two windows can display two different Page2Ds of
+    // one tab, and a shared per-tab buffer would render both with the last-recorded window's view.
+    ComPtr<ID3D12Resource> cad2dViewConstantBuffer;
+    UINT8* pCad2DViewConstantDataBegin = nullptr;
+
 	UINT frameIndex = 0; // Remember this is different from allocatorIndex in Render Thread.
     // It can change even during windows resize.
 };
