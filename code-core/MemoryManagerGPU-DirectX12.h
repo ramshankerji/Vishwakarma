@@ -30,11 +30,15 @@
 #include <map>
 #include <list>
 
+#include "RenderScene3D.h"
+
 #include "ConstantsApplication.h"
 #include "MemoryManagerGPU.h"
 #include "UserInterface-DirectX12.h"
 #include "डेटा.h"
 #include "Selection3D-DirectX12.h"
+#include "RenderScene3D-DirectX12.h"
+
 
 using namespace Microsoft::WRL;
 
@@ -292,6 +296,12 @@ struct DX12ResourcesPerWindow {// Presentation Logic
     // It can change even during windows resize.
 };
 
+// Opaque platform aliases (selected in GPUPlatformSelector.h). Core data structures
+// (DATASETTAB, SingleUIWindow) use these so they never name a graphics-API type directly.
+// On other platforms the same alias names bind to the Vulkan / Metal resource structs.
+using PlatformTabGpu    = DX12ResourcesPerTab;
+using PlatformWindowGpu = DX12ResourcesPerWindow;
+
 struct DX12ResourcesPerRenderThread { // This one is created 1 for each monitor.
     // For convenience only. It simply points to OneMonitorController.commandQueue
 	ComPtr<ID3D12CommandQueue> commandQueue;
@@ -522,7 +532,7 @@ public:
     void InitD3DPerTab(DX12ResourcesPerTab& tabRes); // Call this when a new Tab is created
     void InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D12CommandQueue* commandQueue);
     // monitorId: index into gpu.screens[] for DPI/physical info used by UI layout calculations
-    void PopulateCommandList(ID3D12GraphicsCommandList* cmdList, //Called by per monitor render thread.
+    void RenderScene3D(ID3D12GraphicsCommandList* cmdList, //Called by per monitor render thread.
         DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage,
         int monitorId, uint64_t activeContainerMemoryId);
     void WaitForPreviousFrame(const DX12ResourcesPerRenderThread& dx);

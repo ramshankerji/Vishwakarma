@@ -180,18 +180,23 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClCompile Include="ImprovementData.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="MemoryManagerGPU-DirectX12.cpp" />
+    <ClCompile Include="RenderCompositor-DirectX12.cpp" />
+    <ClCompile Include="RenderScene3D-DirectX12.cpp" />
     <ClCompile Include="Selection3D-DirectX12.cpp" />
-    <ClCompile Include="MemoryManagerGPU2D.cpp" />
-    <ClCompile Include="MemoryManagerGPU2D-DirectX12.cpp" />
+    <ClCompile Include="RenderPage2D.cpp" />
+    <ClCompile Include="RenderPage2D-DirectX12.cpp" />
     <ClCompile Include="preCompiledHeadersWindows.cpp" />
     <ClCompile Include="PrinterController.cpp" />
     <ClCompile Include="SoftwareUpdate.cpp" />
     <ClCompile Include="SVGIconRenderer.cpp" />
     <ClCompile Include="UserInterface-DirectX12.cpp" />
+    <ClCompile Include="UserInterface.cpp" />
     <ClCompile Include="UserInterfaceTranslationCompiled.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AccountManager.h" />
+    <ClInclude Include="colors.h" />
+    <ClInclude Include="GPUPlatformSelector.h" />
     <ClInclude Include="ImprovementData.h" />
     <ClInclude Include="..\code-core\CommonNamedNumbers.h" />
     <ClInclude Include="DataTreeView.h" />
@@ -219,9 +224,12 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClInclude Include="ConstantsText.h" />
     <ClInclude Include="ListOfCommands.h" />
     <ClInclude Include="MemoryManagerGPU-DirectX12.h" />
+    <ClInclude Include="RenderCompositor-DirectX12.h" />
+    <ClInclude Include="RenderScene3D-DirectX12.h" />
+    <ClInclude Include="RenderScene3D.h" />
     <ClInclude Include="Selection3D-DirectX12.h" />
-    <ClInclude Include="MemoryManagerGPU2D.h" />
-    <ClInclude Include="MemoryManagerGPU2D-DirectX12.h" />
+    <ClInclude Include="RenderPage2D.h" />
+    <ClInclude Include="RenderPage2D-DirectX12.h" />
     <ClInclude Include="MemoryManagerGPU-Vulkan1.1.h" />
     <ClInclude Include="preCompiledHeadersWindows.h" />
     <ClInclude Include="PrinterController.h" />

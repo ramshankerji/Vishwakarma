@@ -21,8 +21,8 @@ This thread is also responsible for engineering calculations, consistency of Dat
 #include "डेटा.h"
 #include "डेटा-सामान्य-3D.h"
 #include "PropertyPane.h"
-#include "MemoryManagerGPU-DirectX12.h"
 #include "ExtensionCommunications.h"
+#include "GPUPlatformSelector.h"
 
 राम cpu;
 शंकर gpu;

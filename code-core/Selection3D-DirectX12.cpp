@@ -240,7 +240,7 @@ void EnsurePickTargets(PickPassContext& ctx, UINT w, UINT h) {
         D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&ctx.readbackDepth)));
 }
 
-// Bind whole-page vertex/index buffers exactly like PopulateCommandList does, so per-object
+// Bind whole-page vertex/index buffers exactly like RenderScene3D does, so per-object
 // StartIndexLocation / BaseVertexLocation match the indirect-draw arithmetic.
 void BindPageBuffers(ID3D12GraphicsCommandList* cmd, GeometryPage& page) {
     D3D12_VERTEX_BUFFER_VIEW vbv{};

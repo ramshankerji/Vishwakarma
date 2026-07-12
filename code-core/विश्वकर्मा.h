@@ -6,8 +6,8 @@
 #include <mutex>
 #include <string>
 #include "MemoryManagerCPU.h"
-#include "MemoryManagerGPU-DirectX12.h"
-#include "MemoryManagerGPU2D-DirectX12.h"
+#include "GPUPlatformSelector.h"
+#include "RenderPage2D-DirectX12.h"
 #include "UserInputProcessing.h"
 #include "CommonNamedNumbers.h"
 #include "DataTreeView.h"
@@ -189,7 +189,7 @@ struct DATASETTAB {
     int zoomWindowFirstY = 0;
     std::unique_ptr<std::mutex> storageObjectsMutex;
 
-	DX12ResourcesPerTab dx; // DirectX12 resources specific to this tab.
+	PlatformTabGpu dx; // Per-tab GPU resources (DX12/Vulkan/Metal via GPUPlatformSelector.h).
     //ThreadSafeQueueCPU userInputQueue; // Dedicated Input Queue for this tab's engineering thread.
     //ThreadSafeQueueCPU todoCPUQueue;   // Dedicated Work Queue for this tab's engineering thread. Self TODOs.
     std::unique_ptr<ThreadSafeQueueCPU> userInputQueue;
@@ -282,7 +282,7 @@ struct SingleUIWindow {
     std::atomic<uint64_t> uiKeyboardCaptureCount{ 0 }; // != 0 while a UI text field has focus (WndProc suppresses shortcuts).
     std::atomic<uint32_t> rightOverlayWidthPx{ 0 };    // Icon bar (+ pane) width in px; input guards read it.
 
-    DX12ResourcesPerWindow dx;
+    PlatformWindowGpu dx;
 
     // BOILERPLATE TO FIX C2672 ERROR
     SingleUIWindow() = default;// Default Constructor

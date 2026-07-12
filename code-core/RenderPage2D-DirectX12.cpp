@@ -1,6 +1,6 @@
 // Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
 
-#include "MemoryManagerGPU2D-DirectX12.h"
+#include "RenderPage2D-DirectX12.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -622,7 +622,7 @@ static void EnsureWindowCad2DViewBuffer(DX12ResourcesPerWindow& winRes) {
         reinterpret_cast<void**>(&winRes.pCad2DViewConstantDataBegin)));
 }
 
-void RenderCad2DPage(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
+void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     TabCad2DStorage& storage, DX12ResourcesUI& uiResources, int monitorId,
     uint64_t activeContainerMemoryId, int viewSlot) {
     if (!commandList || activeContainerMemoryId == 0 || winRes.WindowHeight <= 0) return;

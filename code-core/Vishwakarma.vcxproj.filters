@@ -109,10 +109,10 @@
     <ClCompile Include="Selection3D-DirectX12.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
-    <ClCompile Include="MemoryManagerGPU2D.cpp">
+    <ClCompile Include="RenderPage2D.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
-    <ClCompile Include="MemoryManagerGPU2D-DirectX12.cpp">
+    <ClCompile Include="RenderPage2D-DirectX12.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
     <ClCompile Include="ImageHandling.cpp">
@@ -131,6 +131,27 @@
       <Filter>code-core</Filter>
     </ClCompile>
     <ClCompile Include="SVGIconRenderer.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="ExtensionCommunications.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\ExtensionIPC.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="PrinterController.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="SoftwareUpdate.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="RenderScene3D-DirectX12.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="RenderCompositor-DirectX12.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="UserInterface.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
   </ItemGroup>
@@ -213,10 +234,10 @@
     <ClInclude Include="Selection3D-DirectX12.h">
       <Filter>code-core</Filter>
     </ClInclude>
-    <ClInclude Include="MemoryManagerGPU2D.h">
+    <ClInclude Include="RenderPage2D.h">
       <Filter>code-core</Filter>
     </ClInclude>
-    <ClInclude Include="MemoryManagerGPU2D-DirectX12.h">
+    <ClInclude Include="RenderPage2D-DirectX12.h">
       <Filter>code-core</Filter>
     </ClInclude>
     <ClInclude Include="MemoryManagerGPU-Vulkan1.1.h">
@@ -256,6 +277,24 @@
       <Filter>code-core</Filter>
     </ClInclude>
     <ClInclude Include="SVGIconRenderer.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="ExtensionCommunications.h" />
+    <ClInclude Include="PrinterController.h" />
+    <ClInclude Include="SoftwareUpdate.h" />
+    <ClInclude Include="GPUPlatformSelector.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="RenderScene3D.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="colors.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="RenderScene3D-DirectX12.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="RenderCompositor-DirectX12.h">
       <Filter>code-core</Filter>
     </ClInclude>
   </ItemGroup>
@@ -351,6 +390,9 @@
     <None Include="..\code-miscellaneous\svg_icon_embedder.py">
       <Filter>code-miscellaneous</Filter>
     </None>
+    <None Include="ExtensionIPC.proto" />
+    <None Include="..\code-miscellaneous\DeployExtensions.ps1" />
+    <None Include="..\code-miscellaneous\msdf_charset_exporter.py" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="..\code-core\logo.ico">

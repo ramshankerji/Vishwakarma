@@ -123,7 +123,7 @@ void InitSelection3DResources(DX12ResourcesPerTab& tabRes);
 void CleanupSelection3DResources(DX12ResourcesPerTab& tabRes);
 
 // Draw selection highlight + rotation-center cube into the currently bound scene render target.
-// Must be called after PopulateCommandList (so b0 view-proj constants are already populated) and
+// Must be called after RenderScene3D (so b0 view-proj constants are already populated) and
 // while the scene RTV/DSV + scene viewport are still bound.
 void RecordSelectionOverlays(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage, SelectionState& selection,

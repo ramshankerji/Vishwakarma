@@ -21,7 +21,7 @@
 #include "विश्वकर्मा.h"
 #include "ExtensionCommunications.h"
 #include "ExtensionIPC.pb.h"
-#include "MemoryManagerGPU2D.h" // Cad2DIsActivePage2D: DXF imports need an open Page2D.
+#include "RenderPage2D.h" // Cad2DIsActivePage2D: DXF imports need an open Page2D.
 
 #include <windows.h>
 #include <commdlg.h>

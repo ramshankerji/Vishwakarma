@@ -17,7 +17,7 @@
 #include <vector>
 
 #include "ConstantsApplication.h" // MV_MAX_SUBTABS: one Cad2DViewState per sub-tab slot.
-#include "MemoryManagerGPU2D.h"
+#include "RenderPage2D.h"
 
 struct DX12ResourcesPerWindow;
 struct DX12ResourcesUI;
@@ -209,7 +209,7 @@ struct TabCad2DStorage {
 
 void InitCad2DTabResources(TabCad2DStorage& storage);
 void CleanupCad2DTabResources(TabCad2DStorage& storage);
-void RenderCad2DPage(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
+void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     TabCad2DStorage& storage, DX12ResourcesUI& uiResources, int monitorId,
     uint64_t activeContainerMemoryId, int viewSlot);
 void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch);

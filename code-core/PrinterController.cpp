@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "MemoryManagerGPU-DirectX12.h"
-#include "MemoryManagerGPU2D-DirectX12.h"
+#include "RenderPage2D-DirectX12.h"
 #include "UserInterface-DirectX12.h"
 #include "विश्वकर्मा.h"
 
@@ -217,7 +217,7 @@ void Record2DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab, uint64_t con
     }
 }
 
-// Records draw calls for an image of the 3D scene. Mirror of शंकर::PopulateCommandList,
+// Records draw calls for an image of the 3D scene. Mirror of शंकर::RenderScene3D,
 // but with our own constant buffer so the per-window one is untouched.
 void Record3DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab,
     const std::vector<Print3DPage>& pages, ID3D12Resource* constantBuffer,
