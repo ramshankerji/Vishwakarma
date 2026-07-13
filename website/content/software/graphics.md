@@ -18,10 +18,6 @@ Having made above decisions, we have to be realistic about our core-engineering-
 
 Our software installer will verify that all the relevant APIs are present on the system, before installation. So this way, inside application, we don't check every time whether a particular feature is supported by available hardware. Unless the initial installed-hardware itself changes. By default this check shouldn't take more than a few micro-seconds during application startups.
 
-### Actual Code of our graphics engine.
-{{< codefile src="code-core/MemoryManagerGPU-DirectX12.h" >}}
-{{< codefile src="code-core/MemoryManagerGPU-DirectX12.cpp" >}}
-
 ## Detailed design: the memory manager & rendering core
 
 The notes below capture the architecture of our GPU memory manager (the *Vishwakarma* core) and the rendering engine that sits on top of it. They were written as we implemented the engine and are the single source of truth for *why* the code looks the way it does.

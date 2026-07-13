@@ -152,6 +152,7 @@
         }
         main {
             flex: 1;
+            min-width: 0; /* Allow long embedded code to shrink within the flex layout. */
             max-width: 252mm; /* A4 paper width (210mm) widened by 20% */
             margin: 10px auto 40px auto; /* 10px top, auto right, 40px bottom, auto left */
             padding: 0 10px;

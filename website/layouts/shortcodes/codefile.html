@@ -1,9 +1,17 @@
 <div class="code-embed-wrapper" style="margin-bottom: 20px;">
     <style>
     /* This ensures only these embedded files wrap, keeping your CSS scoped */
+    .code-embed-wrapper {
+        min-width: 0;
+        max-width: 100%;
+    }
+
     .code-embed-wrapper pre {
+        width: 100%;
+        max-width: 100%;
         white-space: pre-wrap !important;
-        word-wrap: break-word !important;
+        overflow-wrap: anywhere;
+        word-wrap: break-word;
         background-color: #f8f8f8;
         padding: 1rem;
         border-radius: 4px;
@@ -23,6 +31,18 @@
     /* This is the magic part: Ensure the line and number stay together */
     .code-embed-wrapper code {
         display: block; 
+    }
+
+    /* Hugo renders each numbered source line as a flex row. Permit its code
+       column to shrink so long tokens wrap instead of widening the page. */
+    .code-embed-wrapper pre > code > span,
+    .code-embed-wrapper pre > code > span > span:last-child {
+        min-width: 0;
+    }
+
+    .code-embed-wrapper pre > code > span > span:last-child {
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
     </style>
     
