@@ -28,6 +28,12 @@
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_ARC2D.pb.cc">
       <Filter>code-core</Filter>
     </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_ASSET2D_DEFINITION.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_ASSET2D_INSERT.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CIRCLE2D.pb.cc">
       <Filter>code-core</Filter>
     </ClCompile>
@@ -325,6 +331,12 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="DataStorage_ARC2D.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_ASSET2D_DEFINITION.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_ASSET2D_INSERT.proto">
       <Filter>code-core</Filter>
     </None>
     <None Include="DataStorage_CIRCLE2D.proto">

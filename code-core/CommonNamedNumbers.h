@@ -31,6 +31,8 @@ enum class ObjectType : uint32_t {
     Arc2D = 19,
     Torus = 20,
     Ellipsoid = 21,
+    Asset2DDefinition = 22,
+    Asset2DInsert = 23,
 };
 
 enum class LifecycleState : uint32_t {
@@ -49,6 +51,8 @@ constexpr uint16_t kGeometry2DTextSchemaVersion = 1;
 constexpr uint16_t kGeometry2DCircleSchemaVersion = 1;
 constexpr uint16_t kGeometry2DEllipseSchemaVersion = 2; // v2: added rotation_radians.
 constexpr uint16_t kGeometry2DArcSchemaVersion = 2;     // v2: added rotation_radians.
+constexpr uint16_t kAsset2DDefinitionSchemaVersion = 1;
+constexpr uint16_t kAsset2DInsertSchemaVersion = 1;
 constexpr uint64_t kMaxLocalObjectId = (1ULL << 40) - 1ULL;
 
 constexpr uint32_t ToNumber(ObjectType value) {
@@ -81,6 +85,12 @@ constexpr bool IsGeometry2DObjectType(ObjectType value) {
         value == ObjectType::Arc2D;
 }
 
+// Virtual 2D asset containers: never rendered themselves; they own 2D geometry through parent_id.
+constexpr bool IsAsset2DObjectType(ObjectType value) {
+    return value == ObjectType::Asset2DDefinition ||
+        value == ObjectType::Asset2DInsert;
+}
+
 inline const char* ObjectTypeDisplayName(ObjectType value) {
     switch (value) {
     case ObjectType::Pyramid: return "Pyramid";
@@ -104,6 +114,8 @@ inline const char* ObjectTypeDisplayName(ObjectType value) {
     case ObjectType::Circle2D: return "Circle2D";
     case ObjectType::Ellipse2D: return "Ellipse2D";
     case ObjectType::Arc2D: return "Arc2D";
+    case ObjectType::Asset2DDefinition: return "Asset2DDefinition";
+    case ObjectType::Asset2DInsert: return "Asset2DInsert";
     default: return "Unknown";
     }
 }

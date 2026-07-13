@@ -493,6 +493,10 @@ void ProcessPendingUIActions() {
         } else if (action.id == static_cast<uint32_t>(Commands::EDIT_MOVE)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_TRANSFORM2D,
                 static_cast<int>(Cad2DTransformKind::Move));
+        } else if (action.id == static_cast<uint32_t>(Commands::CREATE_ASSET2D)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::CREATE_ASSET2D_FROM_SELECTION);
+        } else if (action.id == static_cast<uint32_t>(Commands::INSERT_ASSET2D)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_ASSET_INSERT2D);
         } else if (action.id == static_cast<uint32_t>(Commands::ZOOM_MAX)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::ZOOM_MAX_EXTENTS);
         } else if (action.id == static_cast<uint32_t>(Commands::ZOOM_FOCUS)) {

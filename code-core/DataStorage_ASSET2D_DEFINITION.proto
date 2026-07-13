@@ -1,0 +1,15 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+option optimize_for = LITE_RUNTIME;
+
+// Non-parametric 2D asset definition. The master geometry rows reference this row through the
+// object_store parent_id column; they keep the source page coordinates of asset creation.
+message Asset2DDefinition {
+  uint32 asset_number = 1; // User-visible numeric id shown in the Insert Asset dropdown.
+  double base_x = 2;       // Insert base point: middle of the source objects' bounding box.
+  double base_y = 3;
+}

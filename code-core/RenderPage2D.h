@@ -47,6 +47,7 @@ struct Cad2DLineRecordCPU {
     uint64_t containerMemoryId = 0;
     uint64_t persistedId = 0;
     uint64_t persistedParentId = 0;
+    uint64_t parentObjectId = 0; // 0 = plain page object; else owning Asset2DInsert / Asset2DDefinition.
     double x1 = 0.0;
     double y1 = 0.0;
     double x2 = 0.0;
@@ -63,6 +64,7 @@ struct Cad2DPolylineRecordCPU {
     uint64_t containerMemoryId = 0;
     uint64_t persistedId = 0;
     uint64_t persistedParentId = 0;
+    uint64_t parentObjectId = 0; // 0 = plain page object; else owning Asset2DInsert / Asset2DDefinition.
     std::vector<Cad2DPoint2D> points;
     float lineWeight = 0.25f;
     Cad2DLineWeightMode lineWeightMode = Cad2DLineWeightMode::PaperMM;
@@ -76,6 +78,7 @@ struct Cad2DPolygonRecordCPU {
     uint64_t containerMemoryId = 0;
     uint64_t persistedId = 0;
     uint64_t persistedParentId = 0;
+    uint64_t parentObjectId = 0; // 0 = plain page object; else owning Asset2DInsert / Asset2DDefinition.
     uint32_t lineSegmentCount = 4;
     double centerX = 0.0;
     double centerY = 0.0;
@@ -93,6 +96,7 @@ struct Cad2DCircleRecordCPU {
     uint64_t containerMemoryId = 0;
     uint64_t persistedId = 0;
     uint64_t persistedParentId = 0;
+    uint64_t parentObjectId = 0; // 0 = plain page object; else owning Asset2DInsert / Asset2DDefinition.
     double centerX = 0.0;
     double centerY = 0.0;
     double radius = 0.0;
@@ -108,6 +112,7 @@ struct Cad2DEllipseRecordCPU {
     uint64_t containerMemoryId = 0;
     uint64_t persistedId = 0;
     uint64_t persistedParentId = 0;
+    uint64_t parentObjectId = 0; // 0 = plain page object; else owning Asset2DInsert / Asset2DDefinition.
     double centerX = 0.0;
     double centerY = 0.0;
     double radiusX = 0.0;
@@ -125,6 +130,7 @@ struct Cad2DArcRecordCPU {
     uint64_t containerMemoryId = 0;
     uint64_t persistedId = 0;
     uint64_t persistedParentId = 0;
+    uint64_t parentObjectId = 0; // 0 = plain page object; else owning Asset2DInsert / Asset2DDefinition.
     double centerX = 0.0;
     double centerY = 0.0;
     double radiusX = 0.0;
@@ -148,6 +154,7 @@ struct Cad2DTextRecordCPU {
     uint64_t containerMemoryId = 0;
     uint64_t persistedId = 0;
     uint64_t persistedParentId = 0;
+    uint64_t parentObjectId = 0; // 0 = plain page object; else owning Asset2DInsert / Asset2DDefinition.
     double x = 0.0;
     double y = 0.0;
     float textHeightCU = 3.5f;
@@ -158,6 +165,36 @@ struct Cad2DTextRecordCPU {
     float xOffsetCU = 0.0f;
     float yOffsetCU = 0.0f;
     std::string text;
+    uint16_t schemaVersion = 0;
+    bool isDeleted = false;
+};
+
+// Non-parametric asset definition. Virtual container object: never rendered or hit-tested itself.
+// Its master geometry is regular Cad2D*RecordCPU records with parentObjectId = this objectId and
+// containerMemoryId = 0 (so no page ever draws them). assetNumber is the user-visible numeric id.
+struct Cad2DAssetDefinitionRecordCPU {
+    uint64_t objectId = 0;
+    uint64_t persistedId = 0;
+    uint64_t persistedParentId = 0;
+    uint32_t assetNumber = 0; // Random numeric id shown in the Insert Asset dropdown.
+    double baseX = 0.0; // Insert base point: middle of the bounding box of the source objects.
+    double baseY = 0.0; // Master geometry keeps source page coordinates; inserts translate by
+                        // (insert point - base point).
+    uint16_t schemaVersion = 0;
+    bool isDeleted = false;
+};
+
+// One placed instance of an asset on a Page2D. Virtual container object: never rendered itself;
+// its member records live on the page (containerMemoryId = page) with parentObjectId = this
+// objectId, so the draw side needs no asset awareness. Selection expands through the parent.
+struct Cad2DAssetInsertRecordCPU {
+    uint64_t objectId = 0;
+    uint64_t containerMemoryId = 0; // Owning Page2D.
+    uint64_t persistedId = 0;
+    uint64_t persistedParentId = 0;
+    uint64_t definitionObjectId = 0; // Memory id of the Cad2DAssetDefinitionRecordCPU.
+    double x = 0.0; // Insert point in page ComputerUnits.
+    double y = 0.0;
     uint16_t schemaVersion = 0;
     bool isDeleted = false;
 };
@@ -304,6 +341,13 @@ void Cad2DBeginTextCreation(DATASETTAB& tab);
 // Arms a selection transform (Cad2DTransformKind) on the active Page2D. No-op when the 2D
 // selection is empty. The following clicks are consumed by Cad2DHandleInput; ESC cancels.
 void Cad2DBeginTransform2D(DATASETTAB& tab, Cad2DTransformKind kind);
+// Converts the current 2D selection into a new asset: creates a Asset2DDefinition (random
+// assetNumber, base point = bounding-box center, hidden master copies) plus the first
+// Asset2DInsert, and re-parents the selected records to that insert. Drawing stays unchanged.
+void Cad2DCreateAssetFromSelection(DATASETTAB& tab);
+// Arms asset-insert mode: every following Page2D click places an instance of the asset selected
+// in the Insert Asset pane (assetInsertSelectedDefinitionId; falls back to the first definition).
+void Cad2DBeginAssetInsert(DATASETTAB& tab);
 bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input);
 void Cad2DAutoGenerateDemoContent(DATASETTAB& tab);
 // Zoom Max / Zoom Focus: recenter the view on the objects of the active Page2D and rescale

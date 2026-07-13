@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <random>
 #include <utility>
 
 #include "CommonNamedNumbers.h"
@@ -54,6 +55,7 @@ void ClearLineCreationState(TabCad2DStorage& storage) {
     storage.textCreationHasAnchor.store(false, std::memory_order_release);
     storage.textCreationXCU.store(0.0, std::memory_order_release);
     storage.textCreationYCU.store(0.0, std::memory_order_release);
+    storage.assetInsertMode.store(false, std::memory_order_release);
     storage.transform2DKind.store(0, std::memory_order_release);
     storage.transform2DStep.store(0, std::memory_order_release);
     storage.transform2DP1XCU.store(0.0, std::memory_order_release);
@@ -666,6 +668,143 @@ void Cad2DBeginTransform2D(DATASETTAB& tab, Cad2DTransformKind kind) {
     tab.cad2d->transform2DKind.store(static_cast<uint32_t>(kind), std::memory_order_release);
 }
 
+void Cad2DCreateAssetFromSelection(DATASETTAB& tab) {
+    if (!tab.cad2d || !Cad2DIsActivePage2D(tab)) return;
+    TabCad2DStorage& s = *tab.cad2d;
+    const uint64_t container = Cad2DFindTargetPage2DMemoryId(tab);
+    if (container == 0) return;
+
+    std::unordered_set<uint64_t> selected;
+    {
+        std::lock_guard<std::mutex> lock(s.selection2DMutex);
+        selected = s.selectedObjectIds;
+    }
+    if (selected.empty()) return;
+
+    std::lock_guard<std::mutex> lock(s.cpuRecordsMutex);
+
+    auto wanted = [&](const auto& r) {
+        return !r.isDeleted && r.containerMemoryId == container && selected.count(r.objectId) != 0;
+    };
+
+    // Bounding box of the selected objects; its middle becomes the asset insert base point.
+    double minX = 0.0, minY = 0.0, maxX = 0.0, maxY = 0.0;
+    bool hasBounds = false;
+    auto include = [&](double x, double y) {
+        if (!hasBounds) { minX = maxX = x; minY = maxY = y; hasBounds = true; return; }
+        minX = (std::min)(minX, x); maxX = (std::max)(maxX, x);
+        minY = (std::min)(minY, y); maxY = (std::max)(maxY, y);
+    };
+    for (const Cad2DLineRecordCPU& r : s.lineRecords) {
+        if (!wanted(r)) continue;
+        include(r.x1, r.y1); include(r.x2, r.y2);
+    }
+    for (const Cad2DPolylineRecordCPU& r : s.polylineRecords) {
+        if (!wanted(r)) continue;
+        for (const Cad2DPoint2D& p : r.points) include(p.x, p.y);
+    }
+    for (const Cad2DPolygonRecordCPU& r : s.polygonRecords) {
+        if (!wanted(r)) continue;
+        include(r.centerX - r.radius, r.centerY - r.radius);
+        include(r.centerX + r.radius, r.centerY + r.radius);
+    }
+    for (const Cad2DCircleRecordCPU& r : s.circleRecords) {
+        if (!wanted(r)) continue;
+        include(r.centerX - r.radius, r.centerY - r.radius);
+        include(r.centerX + r.radius, r.centerY + r.radius);
+    }
+    for (const Cad2DEllipseRecordCPU& r : s.ellipseRecords) {
+        if (!wanted(r)) continue;
+        const double c = std::cos(r.rotationRadians), sn = std::sin(r.rotationRadians);
+        const double hx = std::sqrt(r.radiusX * c * r.radiusX * c + r.radiusY * sn * r.radiusY * sn);
+        const double hy = std::sqrt(r.radiusX * sn * r.radiusX * sn + r.radiusY * c * r.radiusY * c);
+        include(r.centerX - hx, r.centerY - hy);
+        include(r.centerX + hx, r.centerY + hy);
+    }
+    for (const Cad2DArcRecordCPU& r : s.arcRecords) {
+        if (!wanted(r)) continue;
+        const double radius = (std::max)(std::abs(r.radiusX), std::abs(r.radiusY));
+        include(r.centerX - radius, r.centerY - radius); // Full-ellipse box; conservative for partial arcs.
+        include(r.centerX + radius, r.centerY + radius);
+    }
+    for (const Cad2DTextRecordCPU& r : s.textRecords) {
+        if (!wanted(r)) continue;
+        include(r.x, r.y); include(r.x, r.y + (double)r.textHeightCU);
+    }
+    if (!hasBounds) return;
+
+    // Random user-visible asset number, unique within this tab's definitions.
+    std::mt19937 rng{ std::random_device{}() };
+    std::uniform_int_distribution<uint32_t> dist(100000u, 999999u);
+    uint32_t assetNumber = 0;
+    do {
+        assetNumber = dist(rng);
+        for (const Cad2DAssetDefinitionRecordCPU& d : s.assetDefinitionRecords) {
+            if (!d.isDeleted && d.assetNumber == assetNumber) { assetNumber = 0; break; }
+        }
+    } while (assetNumber == 0);
+
+    Cad2DAssetDefinitionRecordCPU definition{};
+    definition.objectId = MemoryID::next();
+    definition.assetNumber = assetNumber;
+    definition.baseX = (minX + maxX) * 0.5;
+    definition.baseY = (minY + maxY) * 0.5;
+    definition.schemaVersion = VishwakarmaStorage::kAsset2DDefinitionSchemaVersion;
+
+    // The originals become the first placed instance; drawing stays exactly as it is.
+    Cad2DAssetInsertRecordCPU firstInsert{};
+    firstInsert.objectId = MemoryID::next();
+    firstInsert.containerMemoryId = container;
+    firstInsert.definitionObjectId = definition.objectId;
+    firstInsert.x = definition.baseX;
+    firstInsert.y = definition.baseY;
+    firstInsert.schemaVersion = VishwakarmaStorage::kAsset2DInsertSchemaVersion;
+
+    // Hidden master copies keep the source page coordinates (inserts translate by click - base).
+    // containerMemoryId = 0: no page owns them, so they never render, hit-test or zoom-fit.
+    auto convert = [&](auto& records) {
+        const size_t originalCount = records.size();
+        for (size_t i = 0; i < originalCount; ++i) {
+            if (!wanted(records[i])) continue;
+            auto master = records[i];
+            master.objectId = MemoryID::next();
+            master.persistedId = 0;
+            master.persistedParentId = 0;
+            master.parentObjectId = definition.objectId;
+            master.containerMemoryId = 0;
+            tab.allIDsInThisTab.push_back(master.objectId);
+            records.push_back(std::move(master)); // May reallocate; re-index the original below.
+            records[i].parentObjectId = firstInsert.objectId;
+        }
+    };
+    convert(s.lineRecords);
+    convert(s.polylineRecords);
+    convert(s.polygonRecords);
+    convert(s.circleRecords);
+    convert(s.ellipseRecords);
+    convert(s.arcRecords);
+    convert(s.textRecords);
+
+    s.assetDefinitionRecords.push_back(definition);
+    s.assetInsertRecords.push_back(firstInsert);
+    tab.allIDsInThisTab.push_back(definition.objectId);
+    tab.allIDsInThisTab.push_back(firstInsert.objectId);
+}
+
+void Cad2DBeginAssetInsert(DATASETTAB& tab) {
+    if (!tab.cad2d || !Cad2DIsActivePage2D(tab)) return;
+    {
+        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
+        bool anyDefinition = false;
+        for (const Cad2DAssetDefinitionRecordCPU& d : tab.cad2d->assetDefinitionRecords) {
+            if (!d.isDeleted) { anyDefinition = true; break; }
+        }
+        if (!anyDefinition) return; // No asset to insert yet.
+    }
+    ClearLineCreationState(*tab.cad2d);
+    tab.cad2d->assetInsertMode.store(true, std::memory_order_release);
+}
+
 // --- 2D CPU hit-testing for click-selection (see selection.md) ----------------------------------
 namespace {
 double DistPointToSegment(double px, double py, double ax, double ay, double bx, double by) {
@@ -708,22 +847,24 @@ void Cad2DHandleSelectionClick(DATASETTAB& tab, double xCU, double yCU) {
         (double)kCad2DZoomMinPixelsPerCU);
     const double tolCU = 6.0 / zoom; // ~6 pixel pick tolerance in CAD units.
     uint64_t bestId = 0;
+    uint64_t bestParentId = 0;
     double bestDist = tolCU;
+    std::vector<uint64_t> hitGroup; // The hit object, expanded to its whole asset instance.
 
     {
         std::lock_guard<std::mutex> lock(s.cpuRecordsMutex);
-        auto consider = [&](double d, uint64_t id) {
-            if (d < bestDist) { bestDist = d; bestId = id; }
+        auto consider = [&](double d, uint64_t id, uint64_t parentId) {
+            if (d < bestDist) { bestDist = d; bestId = id; bestParentId = parentId; }
         };
         for (const Cad2DLineRecordCPU& r : s.lineRecords) {
             if (r.isDeleted || r.containerMemoryId != container) continue;
-            consider(DistPointToSegment(xCU, yCU, r.x1, r.y1, r.x2, r.y2), r.objectId);
+            consider(DistPointToSegment(xCU, yCU, r.x1, r.y1, r.x2, r.y2), r.objectId, r.parentObjectId);
         }
         for (const Cad2DPolylineRecordCPU& r : s.polylineRecords) {
             if (r.isDeleted || r.containerMemoryId != container) continue;
             for (size_t i = 1; i < r.points.size(); ++i) {
                 consider(DistPointToSegment(xCU, yCU, r.points[i - 1].x, r.points[i - 1].y,
-                    r.points[i].x, r.points[i].y), r.objectId);
+                    r.points[i].x, r.points[i].y), r.objectId, r.parentObjectId);
             }
         }
         for (const Cad2DPolygonRecordCPU& r : s.polygonRecords) {
@@ -735,29 +876,72 @@ void Cad2DHandleSelectionClick(DATASETTAB& tab, double xCU, double yCU) {
                 const double a1 = (r.rotationDegrees + step * ((i + 1) % n)) * 3.14159265358979323846 / 180.0;
                 consider(DistPointToSegment(xCU, yCU,
                     r.centerX + std::sin(a0) * r.radius, r.centerY + std::cos(a0) * r.radius,
-                    r.centerX + std::sin(a1) * r.radius, r.centerY + std::cos(a1) * r.radius), r.objectId);
+                    r.centerX + std::sin(a1) * r.radius, r.centerY + std::cos(a1) * r.radius),
+                    r.objectId, r.parentObjectId);
             }
         }
         for (const Cad2DCircleRecordCPU& r : s.circleRecords) {
             if (r.isDeleted || r.containerMemoryId != container) continue;
-            consider(DistPointToCircle(xCU, yCU, r.centerX, r.centerY, r.radius), r.objectId);
+            consider(DistPointToCircle(xCU, yCU, r.centerX, r.centerY, r.radius), r.objectId,
+                r.parentObjectId);
         }
         for (const Cad2DEllipseRecordCPU& r : s.ellipseRecords) {
             if (r.isDeleted || r.containerMemoryId != container) continue;
             consider(DistPointToEllipse(xCU, yCU, r.centerX, r.centerY, r.radiusX, r.radiusY,
-                r.rotationRadians), r.objectId);
+                r.rotationRadians), r.objectId, r.parentObjectId);
         }
         for (const Cad2DArcRecordCPU& r : s.arcRecords) {
             if (r.isDeleted || r.containerMemoryId != container) continue;
             consider(DistPointToEllipse(xCU, yCU, r.centerX, r.centerY, r.radiusX, r.radiusY,
-                r.rotationRadians), r.objectId);
+                r.rotationRadians), r.objectId, r.parentObjectId);
+        }
+
+        if (bestId != 0) {
+            // Parent expansion: when the hit object's parent is a Asset2DInsert, the whole
+            // instance is selected - every record sharing that parent, across all record types.
+            bool parentIsAssetInsert = false;
+            if (bestParentId != 0) {
+                for (const Cad2DAssetInsertRecordCPU& insert : s.assetInsertRecords) {
+                    if (!insert.isDeleted && insert.objectId == bestParentId) {
+                        parentIsAssetInsert = true;
+                        break;
+                    }
+                }
+            }
+            if (parentIsAssetInsert) {
+                auto gather = [&](const auto& records) {
+                    for (const auto& r : records) {
+                        if (!r.isDeleted && r.parentObjectId == bestParentId) hitGroup.push_back(r.objectId);
+                    }
+                };
+                gather(s.lineRecords);
+                gather(s.polylineRecords);
+                gather(s.polygonRecords);
+                gather(s.circleRecords);
+                gather(s.ellipseRecords);
+                gather(s.arcRecords);
+                gather(s.textRecords);
+            } else {
+                hitGroup.push_back(bestId);
+            }
         }
     }
 
     {
         std::lock_guard<std::mutex> lock(s.selection2DMutex);
-        s.selectedObjectIds.clear();
-        if (bestId != 0) s.selectedObjectIds.insert(bestId); // Single-select; clears on empty click.
+        // Ctrl+click accumulates: toggles the hit object / asset instance in the selection.
+        // A plain click replaces the selection (and clears it on an empty click).
+        if (!tab.isCtrlDown) s.selectedObjectIds.clear();
+        if (!hitGroup.empty()) {
+            bool allAlreadySelected = tab.isCtrlDown;
+            for (uint64_t id : hitGroup) {
+                if (s.selectedObjectIds.count(id) == 0) { allAlreadySelected = false; break; }
+            }
+            for (uint64_t id : hitGroup) {
+                if (allAlreadySelected) s.selectedObjectIds.erase(id);
+                else s.selectedObjectIds.insert(id);
+            }
+        }
     }
     EnqueueCad2DSelectionRefresh(tab.tabID, container);
 }
@@ -900,6 +1084,7 @@ void ApplyTransform2DToSelection(DATASETTAB& tab, Cad2DTransformKind kind,
         record.objectId = 0; // EnqueueCad2D* assigns a fresh memory id; save assigns persisted ids.
         record.persistedId = 0;
         record.persistedParentId = 0;
+        record.parentObjectId = 0; // Copies detach from any asset instance (plain page objects).
     };
     auto wanted = [&](uint64_t objectId, bool isDeleted, uint64_t recContainer) {
         return !isDeleted && recContainer == container && selected.count(objectId) != 0;
@@ -1128,6 +1313,92 @@ void HandleTransform2DClick(DATASETTAB& tab, double xCU, double yCU) {
     s.transform2DKind.store(0, std::memory_order_release); // One-shot; re-arm from the ribbon.
     s.transform2DStep.store(0, std::memory_order_release);
 }
+
+// Places one instance of the asset chosen in the Insert Asset pane at the clicked point: a new
+// Asset2DInsert plus page copies of the definition's master records, translated from the asset
+// base point to the click and parented to the insert. The mode stays armed for repeated placing.
+void HandleAssetInsertClick(DATASETTAB& tab, double xCU, double yCU) {
+    TabCad2DStorage& s = *tab.cad2d;
+    const uint64_t container = Cad2DFindTargetPage2DMemoryId(tab);
+    if (container == 0) return;
+
+    std::vector<Cad2DLineRecordCPU> lines;
+    std::vector<Cad2DPolylineRecordCPU> polylines;
+    std::vector<Cad2DPolygonRecordCPU> polygons;
+    std::vector<Cad2DCircleRecordCPU> circles;
+    std::vector<Cad2DEllipseRecordCPU> ellipses;
+    std::vector<Cad2DArcRecordCPU> arcs;
+    std::vector<Cad2DTextRecordCPU> texts;
+    bool placed = false;
+
+    {
+        std::lock_guard<std::mutex> lock(s.cpuRecordsMutex);
+        // The pane's selection when it is still a live definition, else the first available one.
+        const uint64_t wantedId = s.assetInsertSelectedDefinitionId.load(std::memory_order_acquire);
+        const Cad2DAssetDefinitionRecordCPU* definition = nullptr;
+        for (const Cad2DAssetDefinitionRecordCPU& d : s.assetDefinitionRecords) {
+            if (d.isDeleted) continue;
+            if (!definition) definition = &d;
+            if (wantedId != 0 && d.objectId == wantedId) { definition = &d; break; }
+        }
+        if (!definition) return;
+
+        Cad2DAssetInsertRecordCPU insert{};
+        insert.objectId = MemoryID::next();
+        insert.containerMemoryId = container;
+        insert.definitionObjectId = definition->objectId;
+        insert.x = xCU;
+        insert.y = yCU;
+        insert.schemaVersion = VishwakarmaStorage::kAsset2DInsertSchemaVersion;
+
+        const double dx = xCU - definition->baseX;
+        const double dy = yCU - definition->baseY;
+        const uint64_t definitionId = definition->objectId;
+
+        auto instantiate = [&](const auto& records, auto& out, auto&& translate) {
+            for (const auto& r : records) {
+                if (r.isDeleted || r.parentObjectId != definitionId) continue;
+                auto member = r;
+                member.objectId = 0; // EnqueueCad2D* assigns a fresh memory id.
+                member.persistedId = 0;
+                member.persistedParentId = 0;
+                member.parentObjectId = insert.objectId;
+                member.containerMemoryId = container;
+                translate(member);
+                out.push_back(std::move(member));
+            }
+        };
+        instantiate(s.lineRecords, lines, [&](Cad2DLineRecordCPU& r) {
+            r.x1 += dx; r.y1 += dy; r.x2 += dx; r.y2 += dy; });
+        instantiate(s.polylineRecords, polylines, [&](Cad2DPolylineRecordCPU& r) {
+            for (Cad2DPoint2D& p : r.points) { p.x += dx; p.y += dy; } });
+        instantiate(s.polygonRecords, polygons, [&](Cad2DPolygonRecordCPU& r) {
+            r.centerX += dx; r.centerY += dy; });
+        instantiate(s.circleRecords, circles, [&](Cad2DCircleRecordCPU& r) {
+            r.centerX += dx; r.centerY += dy; });
+        instantiate(s.ellipseRecords, ellipses, [&](Cad2DEllipseRecordCPU& r) {
+            r.centerX += dx; r.centerY += dy; });
+        instantiate(s.arcRecords, arcs, [&](Cad2DArcRecordCPU& r) {
+            r.centerX += dx; r.centerY += dy;
+            r.startX += dx; r.startY += dy;
+            r.endX += dx; r.endY += dy; });
+        instantiate(s.textRecords, texts, [&](Cad2DTextRecordCPU& r) {
+            r.x += dx; r.y += dy; });
+
+        s.assetInsertRecords.push_back(insert);
+        tab.allIDsInThisTab.push_back(insert.objectId);
+        placed = true;
+    }
+
+    if (!placed) return;
+    for (Cad2DLineRecordCPU& r : lines) EnqueueCad2DLine(tab.tabID, container, r);
+    for (Cad2DPolylineRecordCPU& r : polylines) EnqueueCad2DPolyline(tab.tabID, container, std::move(r));
+    for (Cad2DPolygonRecordCPU& r : polygons) EnqueueCad2DPolygon(tab.tabID, container, r);
+    for (Cad2DCircleRecordCPU& r : circles) EnqueueCad2DCircle(tab.tabID, container, r);
+    for (Cad2DEllipseRecordCPU& r : ellipses) EnqueueCad2DEllipse(tab.tabID, container, r);
+    for (Cad2DArcRecordCPU& r : arcs) EnqueueCad2DArc(tab.tabID, container, r);
+    for (Cad2DTextRecordCPU& r : texts) EnqueueCad2DText(tab.tabID, container, std::move(r));
+}
 } // namespace
 
 bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
@@ -1141,6 +1412,7 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
             tab.cad2d->ellipseCreationMode.load(std::memory_order_acquire) ||
             tab.cad2d->arcCreationMode.load(std::memory_order_acquire) ||
             tab.cad2d->textCreationMode.load(std::memory_order_acquire) ||
+            tab.cad2d->assetInsertMode.load(std::memory_order_acquire) ||
             tab.cad2d->transform2DKind.load(std::memory_order_acquire) != 0;
         if (input.actionType == ACTION_TYPE::KEYDOWN && input.x == VK_ESCAPE && anyCreationMode) {
             ClearLineCreationState(*tab.cad2d);
@@ -1159,6 +1431,7 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
                 tab.cad2d->ellipseCreationMode.load(std::memory_order_acquire) ||
                 tab.cad2d->arcCreationMode.load(std::memory_order_acquire) ||
                 tab.cad2d->textCreationMode.load(std::memory_order_acquire) ||
+                tab.cad2d->assetInsertMode.load(std::memory_order_acquire) ||
                 tab.cad2d->transform2DKind.load(std::memory_order_acquire) != 0)) {
             ClearLineCreationState(*tab.cad2d);
             return true;
@@ -1270,6 +1543,12 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
             double xCU = 0.0, yCU = 0.0;
             if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
                 HandleTextCreationClick(tab, xCU, yCU);
+            }
+        }
+        else if (tab.cad2d->assetInsertMode.load(std::memory_order_acquire)) {
+            double xCU = 0.0, yCU = 0.0;
+            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+                HandleAssetInsertClick(tab, xCU, yCU);
             }
         }
         else if (tab.cad2d->transform2DKind.load(std::memory_order_acquire) != 0) {

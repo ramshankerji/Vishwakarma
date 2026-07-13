@@ -126,7 +126,9 @@ enum class ACTION_TYPE : uint16_t { // Specifying uint16_t ensures that it is of
     ZOOM_FOCUS_SELECTED = 30024, // Fit the selected objects (all objects when nothing is selected).
     ZOOM_WINDOW_BEGIN = 30025,  // Arm zoom-window mode; the next 2 scene clicks define the rectangle.
     BEGIN_TRANSFORM2D = 30026,  // Arm a Page2D selection transform; x = Cad2DTransformKind.
-    INTERNAL_SUB_TAB_EXTRACTED = 30027 // objectId = extracted container; hand the inline band over.
+    INTERNAL_SUB_TAB_EXTRACTED = 30027, // objectId = extracted container; hand the inline band over.
+    CREATE_ASSET2D_FROM_SELECTION = 30028, // Convert the 2D selection into a Asset2DDefinition + first insert.
+    BEGIN_ASSET_INSERT2D = 30029 // Arm asset-insert mode; each Page2D click places the selected asset.
 };
 
 struct ACTION_DETAILS_OLD {

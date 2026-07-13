@@ -83,6 +83,9 @@ struct TabCad2DStorage {
     std::vector<Cad2DEllipseRecordCPU> ellipseRecords;
     std::vector<Cad2DArcRecordCPU> arcRecords;
     std::vector<Cad2DTextRecordCPU> textRecords;
+    // Virtual asset containers (engineering-thread data; nothing here reaches the GPU).
+    std::vector<Cad2DAssetDefinitionRecordCPU> assetDefinitionRecords;
+    std::vector<Cad2DAssetInsertRecordCPU> assetInsertRecords;
 
     std::atomic<Cad2DPageSnapshot*> activeSnapshot{ nullptr };
     std::vector<std::unique_ptr<Cad2DPageGPU>> activePages;
@@ -133,6 +136,12 @@ struct TabCad2DStorage {
     std::atomic<double> textCreationYCU{ 0.0 };
     uint64_t textCreationObjectId = 0;
     std::string textCreationDraft;
+
+    // Asset-insert mode: armed by Commands::INSERT_ASSET2D; each Page2D click places an instance.
+    // The selected definition id is written by the UI thread (Insert Asset pane dropdown) and read
+    // by the engineering thread on click; 0 / stale falls back to the first definition.
+    std::atomic<bool> assetInsertMode{ false };
+    std::atomic<uint64_t> assetInsertSelectedDefinitionId{ 0 };
 
     // Selection transform mode (Cad2DTransformKind). The kind atomic is also read by the render
     // thread to trail the EDIT_* command icon next to the cursor.

@@ -294,6 +294,12 @@ struct UIInput {
     // Optional hotkey raw keys this frame (can be added later as a small bitset)
 };
 
+// Reusable immediate-mode dropdown state (Insert Asset pane; future setting panes). The caller
+// owns one instance per dropdown (usually on SingleUIWindow) and draws it via BuildUIDropdown.
+struct UIDropdownState {
+    bool isOpen = false;
+};
+
 // Editable text-field state (UI/render thread owned). One in-progress edit per window.
 // Keystrokes mutate this buffer only; the committed value reaches the engineering thread on Enter.
 struct UITextEditState {
@@ -503,7 +509,8 @@ constexpr UIControlDefinition AllUIControls[] = {
     { Commands::CREATE_POINT,           UITextID::CREATE_POINT, U'x', 1, 3, 0, 0, true, true, 1 , 5 },
     { Commands::CREATE_ARRAY,           UITextID::CREATE_ARRAY, U'x', 1, 3, 1, 0, true, true, 1 , 5 },
     { Commands::CREATE_GRID2D,          UITextID::CREATE_GRID2D, U'x', 1, 3, 2, 0, true, true, 1 , 5 },
-    { Commands::CREATE_BLOCK2D,         UITextID::CREATE_BLOCK2D, U'x', 1, 3, 0, 0, true, true, 1 , 5 },
+    { Commands::CREATE_ASSET2D,         UITextID::CREATE_ASSET2D, U'x', 1, 3, 0, 0, true, true, 1 , 5 },
+    { Commands::INSERT_ASSET2D,         UITextID::INSERT_ASSET2D, U'x', 1, 3, 1, 0, true, true, 1 , 5 },
 
     // SubGroup: Modify
     { Commands::EDIT_COPY,              UITextID::EDIT_COPY, U'x', 1, 3, 0, 0, true, true, 1 , 3 },
@@ -825,6 +832,13 @@ void PushRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h
 void PushTopRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h, float radiusPx,
     uint32_t color, DX12ResourcesUI& uiRes);
 void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t color, DX12ResourcesUI& uiRes);
+
+// Reusable dropdown: draws a closed field at (x, y, width, rowHeightPx) showing items[selectedIndex]
+// and, while open, the item list below it. Handles its own hit-testing against input and returns
+// the (possibly changed) selected index (-1 when itemCount == 0). ASCII item labels only.
+int BuildUIDropdown(UIDrawContext& ctx, DX12ResourcesUI& uiRes, const UIInput& input,
+    UIDropdownState& state, float x, float y, float width, float rowHeightPx, float textScale,
+    const char* const* items, int itemCount, int selectedIndex);
 
 // Portable half of RenderUIOverlay: widget layout + hit-testing for the whole overlay. Fills ctx
 // with the frame's UI geometry and emits UIActions; the platform wrapper draws ctx afterwards.

@@ -59,7 +59,8 @@ enum class Commands : uint32_t {
     CREATE_POINT = 3332664091,
     CREATE_ARRAY = 3084147119,
     CREATE_GRID2D = 4165978869,
-    CREATE_BLOCK2D = 3467346282,
+    CREATE_ASSET2D = 3467346282,
+    INSERT_ASSET2D = 3125987404, // Opens the Insert Asset pane and arms asset-insert mode.
 
     EDIT_COPY = 3089016617,
     EDIT_MIRROR = 3701724585,

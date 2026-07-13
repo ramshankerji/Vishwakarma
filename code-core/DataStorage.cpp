@@ -14,10 +14,13 @@
 #include <random>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "CommonNamedNumbers.h"
 #include "DataStorage_ARC2D.pb.h"
+#include "DataStorage_ASSET2D_DEFINITION.pb.h"
+#include "DataStorage_ASSET2D_INSERT.pb.h"
 #include "DataStorage_CIRCLE2D.pb.h"
 #include "DataStorage_CONE.pb.h"
 #include "DataStorage_CUBOID.pb.h"
@@ -196,9 +199,9 @@ bool EnsureFileInfo(sqlite3* db, uint64_t objectCounterNext, std::string* errorM
         UpsertFileInfoText(db, "last_saved_by_application", "Vishwakarma", errorMessage) &&
         UpsertFileInfoText(db, "last_saved_time_utc", now, errorMessage) &&
         UpsertFileInfoText(db, "schema_catalog_hash",
-            "logical-hierarchy-geometry3d-page2d-line2d-polyline2d-polygon2d-circle2d-ellipse2d-arc2d-text2d-mvp-schema-v1",
+            "logical-hierarchy-geometry3d-page2d-line2d-polyline2d-polygon2d-circle2d-ellipse2d-arc2d-text2d-asset2ddefinition-asset2dinsert-mvp-schema-v1",
             errorMessage) &&
-        UpsertFileInfoText(db, "schema_catalog_version", "7", errorMessage) &&
+        UpsertFileInfoText(db, "schema_catalog_version", "8", errorMessage) &&
         UpsertFileInfoText(db, "object_counter_next", std::to_string(objectCounterNext), errorMessage);
 }
 
@@ -508,6 +511,24 @@ bool EncodeText2D(const Cad2DTextRecordCPU& text, std::vector<uint8_t>& payload,
     message.set_x_offset_cu(text.xOffsetCU);
     message.set_y_offset_cu(text.yOffsetCU);
     message.set_text(text.text);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
+bool EncodeAsset2DDefinition(const Cad2DAssetDefinitionRecordCPU& definition,
+    std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Asset2DDefinition message;
+    message.set_asset_number(definition.assetNumber);
+    message.set_base_x(definition.baseX);
+    message.set_base_y(definition.baseY);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
+bool EncodeAsset2DInsert(const Cad2DAssetInsertRecordCPU& insert, uint64_t definitionPersistedId,
+    std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Asset2DInsert message;
+    message.set_definition_id(definitionPersistedId);
+    message.set_x(insert.x);
+    message.set_y(insert.y);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -838,6 +859,28 @@ bool DecodeText2D(const std::vector<uint8_t>& payload, Cad2DTextRecordCPU& text)
     return !text.text.empty();
 }
 
+bool DecodeAsset2DDefinition(const std::vector<uint8_t>& payload,
+    Cad2DAssetDefinitionRecordCPU& definition) {
+    pb::Asset2DDefinition message;
+    if (!ParseMessage(payload, message)) return false;
+
+    definition.assetNumber = message.asset_number();
+    definition.baseX = message.base_x();
+    definition.baseY = message.base_y();
+    return definition.assetNumber != 0;
+}
+
+bool DecodeAsset2DInsert(const std::vector<uint8_t>& payload, Cad2DAssetInsertRecordCPU& insert,
+    uint64_t& outDefinitionPersistedId) {
+    pb::Asset2DInsert message;
+    if (!ParseMessage(payload, message)) return false;
+
+    outDefinitionPersistedId = message.definition_id();
+    insert.x = message.x();
+    insert.y = message.y();
+    return outDefinitionPersistedId != 0;
+}
+
 std::string ObjectTypeName(ObjectType objectType) {
     switch (objectType) {
     case ObjectType::Pyramid: return "Pyramid";
@@ -861,6 +904,8 @@ std::string ObjectTypeName(ObjectType objectType) {
     case ObjectType::Circle2D: return "Circle2D";
     case ObjectType::Ellipse2D: return "Ellipse2D";
     case ObjectType::Arc2D: return "Arc2D";
+    case ObjectType::Asset2DDefinition: return "Asset2DDefinition";
+    case ObjectType::Asset2DInsert: return "Asset2DInsert";
     default: return "Unknown";
     }
 }
@@ -888,6 +933,8 @@ bool ObjectTypeFromNumber(uint32_t value, ObjectType& objectType) {
     case 19: objectType = ObjectType::Arc2D; return true;
     case 20: objectType = ObjectType::Torus; return true;
     case 21: objectType = ObjectType::Ellipsoid; return true;
+    case 22: objectType = ObjectType::Asset2DDefinition; return true;
+    case 23: objectType = ObjectType::Asset2DInsert; return true;
     default: objectType = ObjectType::Unknown; return false;
     }
 }
@@ -895,6 +942,12 @@ bool ObjectTypeFromNumber(uint32_t value, ObjectType& objectType) {
 uint16_t DefaultSchemaVersionForObjectType(ObjectType objectType) {
     if (VishwakarmaStorage::IsLogicalObjectType(objectType)) {
         return VishwakarmaStorage::kLogicalElementSchemaVersion;
+    }
+    if (objectType == ObjectType::Asset2DDefinition) {
+        return VishwakarmaStorage::kAsset2DDefinitionSchemaVersion;
+    }
+    if (objectType == ObjectType::Asset2DInsert) {
+        return VishwakarmaStorage::kAsset2DInsertSchemaVersion;
     }
     if (VishwakarmaStorage::IsGeometry2DObjectType(objectType)) {
         switch (objectType) {
@@ -1390,6 +1443,63 @@ void AppendText2DToTab(DATASETTAB& tab, Cad2DTextRecordCPU text) {
     EnqueueCad2DText(tab.tabID, text.containerMemoryId, std::move(text));
 }
 
+// Virtual asset containers: stored in the tab's record vectors only; nothing reaches the GPU.
+void AppendAsset2DDefinitionToTab(DATASETTAB& tab, Cad2DAssetDefinitionRecordCPU definition) {
+    if (!tab.cad2d) tab.cad2d = std::make_unique<TabCad2DStorage>();
+    if (definition.objectId == 0) definition.objectId = MemoryID::next();
+    if (definition.schemaVersion == 0) {
+        definition.schemaVersion = VishwakarmaStorage::kAsset2DDefinitionSchemaVersion;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
+        auto existing = std::find_if(tab.cad2d->assetDefinitionRecords.begin(),
+            tab.cad2d->assetDefinitionRecords.end(),
+            [&](const Cad2DAssetDefinitionRecordCPU& existingDefinition) {
+                return existingDefinition.objectId == definition.objectId;
+            });
+        if (existing == tab.cad2d->assetDefinitionRecords.end()) {
+            tab.cad2d->assetDefinitionRecords.push_back(definition);
+        }
+        else {
+            *existing = definition;
+        }
+    }
+
+    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), definition.objectId) ==
+        tab.allIDsInThisTab.end()) {
+        tab.allIDsInThisTab.push_back(definition.objectId);
+    }
+}
+
+void AppendAsset2DInsertToTab(DATASETTAB& tab, Cad2DAssetInsertRecordCPU insert) {
+    if (!tab.cad2d) tab.cad2d = std::make_unique<TabCad2DStorage>();
+    if (insert.objectId == 0) insert.objectId = MemoryID::next();
+    if (insert.schemaVersion == 0) {
+        insert.schemaVersion = VishwakarmaStorage::kAsset2DInsertSchemaVersion;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
+        auto existing = std::find_if(tab.cad2d->assetInsertRecords.begin(),
+            tab.cad2d->assetInsertRecords.end(),
+            [&](const Cad2DAssetInsertRecordCPU& existingInsert) {
+                return existingInsert.objectId == insert.objectId;
+            });
+        if (existing == tab.cad2d->assetInsertRecords.end()) {
+            tab.cad2d->assetInsertRecords.push_back(insert);
+        }
+        else {
+            *existing = insert;
+        }
+    }
+
+    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), insert.objectId) ==
+        tab.allIDsInThisTab.end()) {
+        tab.allIDsInThisTab.push_back(insert.objectId);
+    }
+}
+
 struct ObjectStoreRow {
     uint64_t objectId = 0;
     uint64_t parentId = 0;
@@ -1461,6 +1571,16 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
                 maxExistingId = text.persistedId;
             }
         }
+        for (const Cad2DAssetDefinitionRecordCPU& definition : cad2d->assetDefinitionRecords) {
+            if (definition.persistedId > maxExistingId) {
+                maxExistingId = definition.persistedId;
+            }
+        }
+        for (const Cad2DAssetInsertRecordCPU& insert : cad2d->assetInsertRecords) {
+            if (insert.persistedId > maxExistingId) {
+                maxExistingId = insert.persistedId;
+            }
+        }
     }
 
     uint64_t assignNextId = maxExistingId + 1;
@@ -1491,6 +1611,38 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
     }
 
     if (cad2d) {
+        // Definitions and inserts get their ids before the geometry records, so a member row's
+        // parent (its insert / definition) always carries a lower object_id in a fresh save.
+        for (Cad2DAssetDefinitionRecordCPU& definition : cad2d->assetDefinitionRecords) {
+            if (definition.objectId == 0) {
+                definition.objectId = MemoryID::next();
+            }
+            if (definition.persistedId == 0) {
+                if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
+                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    return false;
+                }
+                definition.persistedId = assignNextId++;
+            }
+            if (definition.schemaVersion == 0) {
+                definition.schemaVersion = VishwakarmaStorage::kAsset2DDefinitionSchemaVersion;
+            }
+        }
+        for (Cad2DAssetInsertRecordCPU& insert : cad2d->assetInsertRecords) {
+            if (insert.objectId == 0) {
+                insert.objectId = MemoryID::next();
+            }
+            if (insert.persistedId == 0) {
+                if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
+                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    return false;
+                }
+                insert.persistedId = assignNextId++;
+            }
+            if (insert.schemaVersion == 0) {
+                insert.schemaVersion = VishwakarmaStorage::kAsset2DInsertSchemaVersion;
+            }
+        }
         for (Cad2DLineRecordCPU& line : cad2d->lineRecords) {
             if (line.objectId == 0) {
                 line.objectId = MemoryID::next();
@@ -1652,6 +1804,16 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
                 memoryIdToPersistedId[text.objectId] = text.persistedId;
             }
         }
+        for (const Cad2DAssetDefinitionRecordCPU& definition : cad2d->assetDefinitionRecords) {
+            if (definition.objectId != 0 && definition.persistedId != 0) {
+                memoryIdToPersistedId[definition.objectId] = definition.persistedId;
+            }
+        }
+        for (const Cad2DAssetInsertRecordCPU& insert : cad2d->assetInsertRecords) {
+            if (insert.objectId != 0 && insert.persistedId != 0) {
+                memoryIdToPersistedId[insert.objectId] = insert.persistedId;
+            }
+        }
     }
 
     auto resolveParentId = [&](META_DATA* object) {
@@ -1667,8 +1829,9 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
     };
 
     auto resolveLineParentId = [&](Cad2DLineRecordCPU& line) {
-        if (line.containerMemoryId != 0) {
-            auto parentIt = memoryIdToPersistedId.find(line.containerMemoryId);
+        const uint64_t owner = line.parentObjectId != 0 ? line.parentObjectId : line.containerMemoryId;
+        if (owner != 0) {
+            auto parentIt = memoryIdToPersistedId.find(owner);
             if (parentIt != memoryIdToPersistedId.end()) {
                 line.persistedParentId = parentIt->second;
                 return parentIt->second;
@@ -1678,8 +1841,9 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
     };
 
     auto resolvePolylineParentId = [&](Cad2DPolylineRecordCPU& polyline) {
-        if (polyline.containerMemoryId != 0) {
-            auto parentIt = memoryIdToPersistedId.find(polyline.containerMemoryId);
+        const uint64_t owner = polyline.parentObjectId != 0 ? polyline.parentObjectId : polyline.containerMemoryId;
+        if (owner != 0) {
+            auto parentIt = memoryIdToPersistedId.find(owner);
             if (parentIt != memoryIdToPersistedId.end()) {
                 polyline.persistedParentId = parentIt->second;
                 return parentIt->second;
@@ -1689,8 +1853,9 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
     };
 
     auto resolvePolygonParentId = [&](Cad2DPolygonRecordCPU& polygon) {
-        if (polygon.containerMemoryId != 0) {
-            auto parentIt = memoryIdToPersistedId.find(polygon.containerMemoryId);
+        const uint64_t owner = polygon.parentObjectId != 0 ? polygon.parentObjectId : polygon.containerMemoryId;
+        if (owner != 0) {
+            auto parentIt = memoryIdToPersistedId.find(owner);
             if (parentIt != memoryIdToPersistedId.end()) {
                 polygon.persistedParentId = parentIt->second;
                 return parentIt->second;
@@ -1700,8 +1865,9 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
     };
 
     auto resolveCircleParentId = [&](Cad2DCircleRecordCPU& circle) {
-        if (circle.containerMemoryId != 0) {
-            auto parentIt = memoryIdToPersistedId.find(circle.containerMemoryId);
+        const uint64_t owner = circle.parentObjectId != 0 ? circle.parentObjectId : circle.containerMemoryId;
+        if (owner != 0) {
+            auto parentIt = memoryIdToPersistedId.find(owner);
             if (parentIt != memoryIdToPersistedId.end()) {
                 circle.persistedParentId = parentIt->second;
                 return parentIt->second;
@@ -1711,8 +1877,9 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
     };
 
     auto resolveEllipseParentId = [&](Cad2DEllipseRecordCPU& ellipse) {
-        if (ellipse.containerMemoryId != 0) {
-            auto parentIt = memoryIdToPersistedId.find(ellipse.containerMemoryId);
+        const uint64_t owner = ellipse.parentObjectId != 0 ? ellipse.parentObjectId : ellipse.containerMemoryId;
+        if (owner != 0) {
+            auto parentIt = memoryIdToPersistedId.find(owner);
             if (parentIt != memoryIdToPersistedId.end()) {
                 ellipse.persistedParentId = parentIt->second;
                 return parentIt->second;
@@ -1722,8 +1889,9 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
     };
 
     auto resolveArcParentId = [&](Cad2DArcRecordCPU& arc) {
-        if (arc.containerMemoryId != 0) {
-            auto parentIt = memoryIdToPersistedId.find(arc.containerMemoryId);
+        const uint64_t owner = arc.parentObjectId != 0 ? arc.parentObjectId : arc.containerMemoryId;
+        if (owner != 0) {
+            auto parentIt = memoryIdToPersistedId.find(owner);
             if (parentIt != memoryIdToPersistedId.end()) {
                 arc.persistedParentId = parentIt->second;
                 return parentIt->second;
@@ -1733,8 +1901,9 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
     };
 
     auto resolveTextParentId = [&](Cad2DTextRecordCPU& text) {
-        if (text.containerMemoryId != 0) {
-            auto parentIt = memoryIdToPersistedId.find(text.containerMemoryId);
+        const uint64_t owner = text.parentObjectId != 0 ? text.parentObjectId : text.containerMemoryId;
+        if (owner != 0) {
+            auto parentIt = memoryIdToPersistedId.find(owner);
             if (parentIt != memoryIdToPersistedId.end()) {
                 text.persistedParentId = parentIt->second;
                 return parentIt->second;
@@ -1762,6 +1931,59 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
     }
 
     if (cad2d) {
+        // Asset containers first: SQLite checks the parent_id foreign key per statement, so a
+        // definition / insert row must exist before the geometry rows that reference it.
+        for (Cad2DAssetDefinitionRecordCPU& definition : cad2d->assetDefinitionRecords) {
+            if (definition.objectId == 0) continue;
+
+            std::vector<uint8_t> payload;
+            if (!EncodeAsset2DDefinition(definition, payload, errorMessage)) return false;
+
+            ObjectStoreRow row;
+            row.objectId = definition.persistedId;
+            row.parentId = 0; // Definitions are tab-level; no page owns them.
+            row.objectType = ObjectType::Asset2DDefinition;
+            row.schemaVersion = definition.schemaVersion != 0
+                ? definition.schemaVersion
+                : VishwakarmaStorage::kAsset2DDefinitionSchemaVersion;
+            row.lifecycleState = definition.isDeleted ? LifecycleState::SoftDeleted : LifecycleState::Live;
+            row.payload = std::move(payload);
+            rows.push_back(std::move(row));
+        }
+
+        for (Cad2DAssetInsertRecordCPU& insert : cad2d->assetInsertRecords) {
+            if (insert.objectId == 0) continue;
+
+            uint64_t definitionPersistedId = 0;
+            if (insert.definitionObjectId != 0) {
+                auto definitionIt = memoryIdToPersistedId.find(insert.definitionObjectId);
+                if (definitionIt != memoryIdToPersistedId.end()) {
+                    definitionPersistedId = definitionIt->second;
+                }
+            }
+            if (definitionPersistedId == 0) continue; // Orphan insert; nothing to re-instantiate.
+
+            std::vector<uint8_t> payload;
+            if (!EncodeAsset2DInsert(insert, definitionPersistedId, payload, errorMessage)) return false;
+
+            ObjectStoreRow row;
+            row.objectId = insert.persistedId;
+            if (insert.containerMemoryId != 0) {
+                auto containerIt = memoryIdToPersistedId.find(insert.containerMemoryId);
+                if (containerIt != memoryIdToPersistedId.end()) {
+                    insert.persistedParentId = containerIt->second;
+                }
+            }
+            row.parentId = insert.persistedParentId;
+            row.objectType = ObjectType::Asset2DInsert;
+            row.schemaVersion = insert.schemaVersion != 0
+                ? insert.schemaVersion
+                : VishwakarmaStorage::kAsset2DInsertSchemaVersion;
+            row.lifecycleState = insert.isDeleted ? LifecycleState::SoftDeleted : LifecycleState::Live;
+            row.payload = std::move(payload);
+            rows.push_back(std::move(row));
+        }
+
         for (Cad2DLineRecordCPU& line : cad2d->lineRecords) {
             if (line.objectId == 0) continue;
 
@@ -2040,6 +2262,10 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         tab.cad2d->ellipseRecords.clear();
         tab.cad2d->arcRecords.clear();
         tab.cad2d->textRecords.clear();
+        tab.cad2d->assetDefinitionRecords.clear();
+        tab.cad2d->assetInsertRecords.clear();
+        tab.cad2d->assetInsertMode.store(false, std::memory_order_release);
+        tab.cad2d->assetInsertSelectedDefinitionId.store(0, std::memory_order_release);
         tab.cad2d->demoLineCounter.store(0, std::memory_order_release);
         tab.cad2d->demoTextQueued.store(false, std::memory_order_release);
         tab.cad2d->lineCreationMode.store(false, std::memory_order_release);
@@ -2078,6 +2304,19 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
 
     std::unordered_map<uint64_t, uint64_t> persistedIdToMemoryId;
 
+    // 2D geometry rows are buffered and appended after the scan (second phase below): an asset's
+    // member rows can carry lower object_ids than their owning Asset2DInsert row, so their parent
+    // linkage only resolves once every container row is loaded.
+    std::vector<Cad2DLineRecordCPU> pendingLines;
+    std::vector<Cad2DPolylineRecordCPU> pendingPolylines;
+    std::vector<Cad2DPolygonRecordCPU> pendingPolygons;
+    std::vector<Cad2DCircleRecordCPU> pendingCircles;
+    std::vector<Cad2DEllipseRecordCPU> pendingEllipses;
+    std::vector<Cad2DArcRecordCPU> pendingArcs;
+    std::vector<Cad2DTextRecordCPU> pendingTexts;
+    std::unordered_map<uint64_t, uint64_t> insertPageByMemoryId; // Asset2DInsert -> owning Page2D.
+    std::unordered_set<uint64_t> definitionMemoryIds;            // Asset2DDefinition memory ids.
+
     while ((rc = sqlite3_step(statement.stmt)) == SQLITE_ROW) {
         uint64_t objectId = static_cast<uint64_t>(sqlite3_column_int64(statement.stmt, 0));
         uint64_t parentId = sqlite3_column_type(statement.stmt, 1) == SQLITE_NULL
@@ -2113,15 +2352,7 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
                     ? schemaVersion
                     : DefaultSchemaVersionForObjectType(objectType);
                 line.isDeleted = false;
-                if (parentId != 0) {
-                    auto parentIt = persistedIdToMemoryId.find(parentId);
-                    if (parentIt != persistedIdToMemoryId.end()) {
-                        line.containerMemoryId = parentIt->second;
-                    }
-                }
-
-                AppendLine2DToTab(tab, line);
-                persistedIdToMemoryId[objectId] = line.objectId;
+                pendingLines.push_back(std::move(line));
             }
             else if (objectType == ObjectType::Polyline2D) {
                 Cad2DPolylineRecordCPU polyline;
@@ -2137,16 +2368,7 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
                     ? schemaVersion
                     : DefaultSchemaVersionForObjectType(objectType);
                 polyline.isDeleted = false;
-                if (parentId != 0) {
-                    auto parentIt = persistedIdToMemoryId.find(parentId);
-                    if (parentIt != persistedIdToMemoryId.end()) {
-                        polyline.containerMemoryId = parentIt->second;
-                    }
-                }
-
-                const uint64_t runtimeObjectId = polyline.objectId;
-                AppendPolyline2DToTab(tab, std::move(polyline));
-                persistedIdToMemoryId[objectId] = runtimeObjectId;
+                pendingPolylines.push_back(std::move(polyline));
             }
             else if (objectType == ObjectType::Polygon2D) {
                 Cad2DPolygonRecordCPU polygon;
@@ -2162,16 +2384,7 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
                     ? schemaVersion
                     : DefaultSchemaVersionForObjectType(objectType);
                 polygon.isDeleted = false;
-                if (parentId != 0) {
-                    auto parentIt = persistedIdToMemoryId.find(parentId);
-                    if (parentIt != persistedIdToMemoryId.end()) {
-                        polygon.containerMemoryId = parentIt->second;
-                    }
-                }
-
-                const uint64_t runtimeObjectId = polygon.objectId;
-                AppendPolygon2DToTab(tab, polygon);
-                persistedIdToMemoryId[objectId] = runtimeObjectId;
+                pendingPolygons.push_back(polygon);
             }
             else if (objectType == ObjectType::Circle2D) {
                 Cad2DCircleRecordCPU circle;
@@ -2187,16 +2400,7 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
                     ? schemaVersion
                     : DefaultSchemaVersionForObjectType(objectType);
                 circle.isDeleted = false;
-                if (parentId != 0) {
-                    auto parentIt = persistedIdToMemoryId.find(parentId);
-                    if (parentIt != persistedIdToMemoryId.end()) {
-                        circle.containerMemoryId = parentIt->second;
-                    }
-                }
-
-                const uint64_t runtimeObjectId = circle.objectId;
-                AppendCircle2DToTab(tab, circle);
-                persistedIdToMemoryId[objectId] = runtimeObjectId;
+                pendingCircles.push_back(circle);
             }
             else if (objectType == ObjectType::Ellipse2D) {
                 Cad2DEllipseRecordCPU ellipse;
@@ -2212,16 +2416,7 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
                     ? schemaVersion
                     : DefaultSchemaVersionForObjectType(objectType);
                 ellipse.isDeleted = false;
-                if (parentId != 0) {
-                    auto parentIt = persistedIdToMemoryId.find(parentId);
-                    if (parentIt != persistedIdToMemoryId.end()) {
-                        ellipse.containerMemoryId = parentIt->second;
-                    }
-                }
-
-                const uint64_t runtimeObjectId = ellipse.objectId;
-                AppendEllipse2DToTab(tab, ellipse);
-                persistedIdToMemoryId[objectId] = runtimeObjectId;
+                pendingEllipses.push_back(ellipse);
             }
             else if (objectType == ObjectType::Arc2D) {
                 Cad2DArcRecordCPU arc;
@@ -2237,16 +2432,7 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
                     ? schemaVersion
                     : DefaultSchemaVersionForObjectType(objectType);
                 arc.isDeleted = false;
-                if (parentId != 0) {
-                    auto parentIt = persistedIdToMemoryId.find(parentId);
-                    if (parentIt != persistedIdToMemoryId.end()) {
-                        arc.containerMemoryId = parentIt->second;
-                    }
-                }
-
-                const uint64_t runtimeObjectId = arc.objectId;
-                AppendArc2DToTab(tab, arc);
-                persistedIdToMemoryId[objectId] = runtimeObjectId;
+                pendingArcs.push_back(arc);
             }
             else if (objectType == ObjectType::Text2D) {
                 Cad2DTextRecordCPU text;
@@ -2262,20 +2448,65 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
                     ? schemaVersion
                     : DefaultSchemaVersionForObjectType(objectType);
                 text.isDeleted = false;
-                if (parentId != 0) {
-                    auto parentIt = persistedIdToMemoryId.find(parentId);
-                    if (parentIt != persistedIdToMemoryId.end()) {
-                        text.containerMemoryId = parentIt->second;
-                    }
-                }
-
-                const uint64_t runtimeObjectId = text.objectId;
-                AppendText2DToTab(tab, std::move(text));
-                persistedIdToMemoryId[objectId] = runtimeObjectId;
+                pendingTexts.push_back(std::move(text));
             }
             else {
                 SetError(errorMessage, "Unsupported 2D object_type in .yyy file: " + std::to_string(objectTypeNumber));
                 return false;
+            }
+            continue;
+        }
+
+        if (VishwakarmaStorage::IsAsset2DObjectType(objectType)) {
+            if (objectType == ObjectType::Asset2DDefinition) {
+                Cad2DAssetDefinitionRecordCPU definition;
+                if (!DecodeAsset2DDefinition(payload, definition)) {
+                    SetError(errorMessage, "Could not decode " + ObjectTypeName(objectType) + " protobuf payload.");
+                    return false;
+                }
+
+                definition.objectId = MemoryID::next();
+                definition.persistedId = objectId;
+                definition.persistedParentId = parentId;
+                definition.schemaVersion = schemaVersion != 0
+                    ? schemaVersion
+                    : DefaultSchemaVersionForObjectType(objectType);
+                definition.isDeleted = false;
+
+                AppendAsset2DDefinitionToTab(tab, definition);
+                persistedIdToMemoryId[objectId] = definition.objectId;
+                definitionMemoryIds.insert(definition.objectId);
+            }
+            else {
+                Cad2DAssetInsertRecordCPU insert;
+                uint64_t definitionPersistedId = 0;
+                if (!DecodeAsset2DInsert(payload, insert, definitionPersistedId)) {
+                    SetError(errorMessage, "Could not decode " + ObjectTypeName(objectType) + " protobuf payload.");
+                    return false;
+                }
+
+                insert.objectId = MemoryID::next();
+                insert.persistedId = objectId;
+                insert.persistedParentId = parentId;
+                insert.schemaVersion = schemaVersion != 0
+                    ? schemaVersion
+                    : DefaultSchemaVersionForObjectType(objectType);
+                insert.isDeleted = false;
+                if (parentId != 0) { // Owning Page2D; pages always precede their inserts.
+                    auto parentIt = persistedIdToMemoryId.find(parentId);
+                    if (parentIt != persistedIdToMemoryId.end()) {
+                        insert.containerMemoryId = parentIt->second;
+                    }
+                }
+                // Definition rows always carry lower object_ids than their inserts (save order).
+                auto definitionIt = persistedIdToMemoryId.find(definitionPersistedId);
+                if (definitionIt != persistedIdToMemoryId.end()) {
+                    insert.definitionObjectId = definitionIt->second;
+                }
+
+                AppendAsset2DInsertToTab(tab, insert);
+                persistedIdToMemoryId[objectId] = insert.objectId;
+                insertPageByMemoryId[insert.objectId] = insert.containerMemoryId;
             }
             continue;
         }
@@ -2317,6 +2548,55 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
     if (rc != SQLITE_DONE) {
         SetError(errorMessage, SqliteError(database.db, "Failed while reading object_store"));
         return false;
+    }
+
+    // Second phase: append the buffered 2D geometry now that every container row is loaded.
+    // Parent = Page2D -> plain page object; parent = Asset2DInsert -> member of that placed
+    // instance on the insert's page; parent = Asset2DDefinition -> hidden master geometry
+    // (containerMemoryId 0: never rendered or hit-tested).
+    auto resolve2DGeometryParent = [&](auto& record) {
+        if (record.persistedParentId == 0) return;
+        auto parentIt = persistedIdToMemoryId.find(record.persistedParentId);
+        if (parentIt == persistedIdToMemoryId.end()) return;
+        const uint64_t parentMemoryId = parentIt->second;
+        auto insertIt = insertPageByMemoryId.find(parentMemoryId);
+        if (insertIt != insertPageByMemoryId.end()) {
+            record.parentObjectId = parentMemoryId;
+            record.containerMemoryId = insertIt->second;
+        } else if (definitionMemoryIds.count(parentMemoryId) != 0) {
+            record.parentObjectId = parentMemoryId;
+            record.containerMemoryId = 0;
+        } else {
+            record.containerMemoryId = parentMemoryId;
+        }
+    };
+    for (Cad2DLineRecordCPU& line : pendingLines) {
+        resolve2DGeometryParent(line);
+        AppendLine2DToTab(tab, line);
+    }
+    for (Cad2DPolylineRecordCPU& polyline : pendingPolylines) {
+        resolve2DGeometryParent(polyline);
+        AppendPolyline2DToTab(tab, std::move(polyline));
+    }
+    for (Cad2DPolygonRecordCPU& polygon : pendingPolygons) {
+        resolve2DGeometryParent(polygon);
+        AppendPolygon2DToTab(tab, polygon);
+    }
+    for (Cad2DCircleRecordCPU& circle : pendingCircles) {
+        resolve2DGeometryParent(circle);
+        AppendCircle2DToTab(tab, circle);
+    }
+    for (Cad2DEllipseRecordCPU& ellipse : pendingEllipses) {
+        resolve2DGeometryParent(ellipse);
+        AppendEllipse2DToTab(tab, ellipse);
+    }
+    for (Cad2DArcRecordCPU& arc : pendingArcs) {
+        resolve2DGeometryParent(arc);
+        AppendArc2DToTab(tab, arc);
+    }
+    for (Cad2DTextRecordCPU& text : pendingTexts) {
+        resolve2DGeometryParent(text);
+        AppendText2DToTab(tab, std::move(text));
     }
 
     return true;

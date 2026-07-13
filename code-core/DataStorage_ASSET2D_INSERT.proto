@@ -1,0 +1,15 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+option optimize_for = LITE_RUNTIME;
+
+// One placed instance of an Asset2DDefinition on a Page2D. The row's parent_id is the owning
+// Page2D; the instance's member geometry rows reference this row through their parent_id.
+message Asset2DInsert {
+  uint64 definition_id = 1; // object_store object_id of the Asset2DDefinition row.
+  double x = 2;             // Insert point in page ComputerUnits.
+  double y = 3;
+}

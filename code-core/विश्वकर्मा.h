@@ -278,6 +278,10 @@ struct SingleUIWindow {
     // Right-side object properties pane (website/content/software/propertiesPane.md). UI-only state,
     // same class as activeDropdownAction: toggled directly in the immediate-mode hit test.
     bool rightPaneOpen = false;
+    // Insert Asset pane: opened by the INSERT_ASSET2D ribbon button; shares the right-side pane
+    // slot with the properties pane. Its dropdown picks the asset the next Page2D clicks place.
+    bool assetInsertPaneOpen = false;
+    UIDropdownState assetInsertDropdown;
     UITextEditState textEditState;                    // In-progress property-field edit (render thread owned).
     std::atomic<uint64_t> uiKeyboardCaptureCount{ 0 }; // != 0 while a UI text field has focus (WndProc suppresses shortcuts).
     std::atomic<uint32_t> rightOverlayWidthPx{ 0 };    // Icon bar (+ pane) width in px; input guards read it.

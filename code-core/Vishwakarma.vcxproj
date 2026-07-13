@@ -151,6 +151,8 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClCompile Include="ExtensionCommunications.cpp" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\ExtensionIPC.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_ARC2D.pb.cc" />
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_ASSET2D_DEFINITION.pb.cc" />
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_ASSET2D_INSERT.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CIRCLE2D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_Common3D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_CONE.pb.cc" />
@@ -251,6 +253,8 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
   </ItemGroup>
   <ItemGroup>
     <None Include="DataStorage_ARC2D.proto" />
+    <None Include="DataStorage_ASSET2D_DEFINITION.proto" />
+    <None Include="DataStorage_ASSET2D_INSERT.proto" />
     <None Include="DataStorage_CIRCLE2D.proto" />
     <None Include="DataStorage_Common3D.proto" />
     <None Include="DataStorage_CUBOID.proto" />

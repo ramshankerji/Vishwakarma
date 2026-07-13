@@ -760,6 +760,124 @@ void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t c
     ctx.indexCount += glyphCount * 6;
 }
 
+namespace {
+// File-scope helpers for reusable widgets (BuildUIDropdown). Unlike raw PushRect, they advance
+// the vertex/index counters themselves, mirroring BuildUIOverlay's local pushRect/pushTextClipped.
+void PushWidgetRect(UIDrawContext& ctx, DX12ResourcesUI& uiRes, float x, float y, float w, float h,
+    uint32_t color) {
+    if (ctx.vertexCount + 4 > uiRes.maxVertices || ctx.indexCount + 6 > uiRes.maxIndices) return;
+    PushRect(ctx, x, y, w, h, color, uiRes);
+    ctx.vertexPtr += 4;
+    ctx.indexPtr += 6;
+    ctx.vertexCount += 4;
+    ctx.indexCount += 6;
+}
+
+// ASCII text scaled by 'textScale', clipped to maxWidth, baseline at baselineY.
+void PushWidgetText(UIDrawContext& ctx, DX12ResourcesUI& uiRes, float x, float baselineY,
+    const char* text, float maxWidth, uint32_t color, float textScale) {
+    if (!text || maxWidth <= 0.0f) return;
+    float cursorX = x;
+    const float textRight = x + maxWidth;
+    for (const char* p = text; *p; ++p) {
+        auto glyphIt = glyphLookup.find(static_cast<char32_t>(static_cast<unsigned char>(*p)));
+        if (glyphIt == glyphLookup.end()) continue;
+        const Glyph& g = glyphIt->second;
+        if (g.width <= 0 || g.height <= 0) {
+            cursorX += (float)g.advanceX * textScale;
+            continue;
+        }
+        const float xpos = std::floor(cursorX + (float)g.bearingX * textScale + 0.5f);
+        const float ypos = std::floor(baselineY - (float)g.bearingY * textScale + 0.5f);
+        const float glyphWidth = (float)g.width * textScale;
+        const float glyphHeight = (float)g.height * textScale;
+        if (xpos + glyphWidth > textRight) break;
+        if (ctx.vertexCount + 4 > uiRes.maxVertices || ctx.indexCount + 6 > uiRes.maxIndices) return;
+
+        uint16_t base = ctx.vertexCount;
+        ctx.vertexPtr[0] = { xpos,              ypos,               g.uvMinX, g.uvMinY, color, UI_ENGLISH_ATLAS_SLOT };
+        ctx.vertexPtr[1] = { xpos + glyphWidth, ypos,               g.uvMaxX, g.uvMinY, color, UI_ENGLISH_ATLAS_SLOT };
+        ctx.vertexPtr[2] = { xpos + glyphWidth, ypos + glyphHeight, g.uvMaxX, g.uvMaxY, color, UI_ENGLISH_ATLAS_SLOT };
+        ctx.vertexPtr[3] = { xpos,              ypos + glyphHeight, g.uvMinX, g.uvMaxY, color, UI_ENGLISH_ATLAS_SLOT };
+        ctx.indexPtr[0] = base + 0;
+        ctx.indexPtr[1] = base + 1;
+        ctx.indexPtr[2] = base + 2;
+        ctx.indexPtr[3] = base + 0;
+        ctx.indexPtr[4] = base + 2;
+        ctx.indexPtr[5] = base + 3;
+        ctx.vertexPtr += 4;
+        ctx.indexPtr += 6;
+        ctx.vertexCount += 4;
+        ctx.indexCount += 6;
+        cursorX += (float)g.advanceX * textScale;
+    }
+}
+
+float WidgetTextBaselineY(float y, float h, float textScale) {
+    auto glyphIt = glyphLookup.find(U'M');
+    if (glyphIt == glyphLookup.end()) return y + h * 0.7f;
+    const Glyph& g = glyphIt->second;
+    return y + h * 0.5f + (float)g.bearingY * textScale - (float)g.height * textScale * 0.5f;
+}
+} // namespace
+
+int BuildUIDropdown(UIDrawContext& ctx, DX12ResourcesUI& uiRes, const UIInput& input,
+    UIDropdownState& state, float x, float y, float width, float rowHeightPx, float textScale,
+    const char* const* items, int itemCount, int selectedIndex) {
+    if (itemCount <= 0) {
+        state.isOpen = false;
+        return -1;
+    }
+    int selected = std::clamp(selectedIndex, 0, itemCount - 1);
+
+    // Hit-test first (immediate mode: reacts to last frame's layout, draws this frame's state).
+    if (input.leftButtonPressedThisFrame) {
+        const bool fieldHit = input.mouseX >= x && input.mouseX < x + width &&
+            input.mouseY >= y && input.mouseY < y + rowHeightPx;
+        if (fieldHit) {
+            state.isOpen = !state.isOpen;
+        } else if (state.isOpen) {
+            for (int i = 0; i < itemCount; ++i) {
+                const float itemY = y + rowHeightPx * (float)(i + 1);
+                if (input.mouseX >= x && input.mouseX < x + width &&
+                    input.mouseY >= itemY && input.mouseY < itemY + rowHeightPx) {
+                    selected = i;
+                    break;
+                }
+            }
+            state.isOpen = false; // Any click outside the field closes (selecting or not).
+        }
+    }
+
+    const float textPad = std::max(1.0f, rowHeightPx * 0.2f);
+    const float markerWidth = rowHeightPx; // Square slot for the open/close marker.
+    const uint32_t fieldBg = 0xFFF7F7F7u;
+    const uint32_t textColor = 0xFF000000u;
+
+    // Closed field: current value plus a 'v' marker at the right edge.
+    PushWidgetRect(ctx, uiRes, x, y, width, rowHeightPx, fieldBg);
+    PushWidgetText(ctx, uiRes, x + textPad, WidgetTextBaselineY(y, rowHeightPx, textScale),
+        items[selected], width - markerWidth - 2.0f * textPad, textColor, textScale);
+    PushWidgetText(ctx, uiRes, x + width - markerWidth + textPad,
+        WidgetTextBaselineY(y, rowHeightPx, textScale), "v", markerWidth - textPad,
+        0xFF666666u, textScale);
+
+    if (state.isOpen) {
+        const float listY = y + rowHeightPx;
+        PushWidgetRect(ctx, uiRes, x, listY, width, rowHeightPx * (float)itemCount, 0xFFCCCCCCu); // Border frame.
+        for (int i = 0; i < itemCount; ++i) {
+            const float itemY = listY + rowHeightPx * (float)i;
+            const bool hovered = input.mouseX >= x && input.mouseX < x + width &&
+                input.mouseY >= itemY && input.mouseY < itemY + rowHeightPx;
+            const uint32_t rowBg = hovered ? 0xFFC4D5CDu : (i == selected ? 0xFFE8F2EDu : 0xFFFFFFFFu);
+            PushWidgetRect(ctx, uiRes, x + 1.0f, itemY + 1.0f, width - 2.0f, rowHeightPx - 2.0f, rowBg);
+            PushWidgetText(ctx, uiRes, x + textPad, WidgetTextBaselineY(itemY, rowHeightPx, textScale),
+                items[i], width - 2.0f * textPad, textColor, textScale);
+        }
+    }
+    return selected;
+}
+
 // Portable half of RenderUIOverlay (UserInterface-<Platform>.cpp): lays out and hit-tests every
 // widget (tab bands, ribbon, data tree, property pane, cursor icons), fills ctx with the frame's
 // UI geometry and emits UIActions. The caller binds the pipeline and draws ctx afterwards.
@@ -1166,6 +1284,12 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
                 if (ctrl.zIndex == 1) { // Dropdown trigger
                     window.activeDropdownAction = ctrl.action;
                 }
+                if (ctrl.action == Commands::INSERT_ASSET2D) {
+                    // Companion right-side pane for picking the asset; the engineering thread
+                    // arms asset-insert mode through the pushed action above.
+                    window.assetInsertPaneOpen = true;
+                    window.rightPaneOpen = false; // The two panes share the right-side slot.
+                }
             }
 
             if (!ctrl.isEnabled) { // Gray-out overlay for disabled controls
@@ -1524,13 +1648,74 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
             btnSize - 2.0f * iconInset, UIIconForCommand(Commands::PROPERTIES_PANE), 0xFF333333u, uiRes);
         if (btnHovered && input.leftButtonPressedThisFrame) {
             window.rightPaneOpen = !window.rightPaneOpen;
+            window.assetInsertPaneOpen = false; // The two panes share the right-side slot.
             ImprovementData::RecordRibbonAction(static_cast<uint32_t>(Commands::PROPERTIES_PANE));
         }
 
         UITextEditState& edit = window.textEditState;
         float paneWidthPx = 0.0f;
 
-        if (window.rightPaneOpen) {
+        if (window.assetInsertPaneOpen) {
+            edit.focusedFieldKey = 0; // No property edit while the Insert Asset pane is shown.
+            paneWidthPx = rightPaneWidthPx;
+            const float paneX = W - rightIconBarWidthPx - rightPaneWidthPx;
+            pushRect(paneX, overlayTop, rightPaneWidthPx, overlayHeight, uiActiveColors.actionGroupBackground);
+            pushRect(paneX, overlayTop, 1.0f, overlayHeight, uiActiveColors.actionGroupSeperator);
+
+            const float pad = std::round(2.0f * pixelsPerMMx);
+            const float rowH = buttonHeightPx;
+            const float rowGap = std::max(1.0f, std::round(0.6f * pixelsPerMMy));
+            float rowY = overlayTop + pad;
+
+            pushTextClipped(paneX + pad, textBaselineY(rowY, rowH, uiTextScale),
+                LocalizedUIString(UITextID::INSERT_ASSET2D), rightPaneWidthPx - 2.0f * pad,
+                uiActiveColors.actionText, uiTextScale);
+            rowY += rowH + rowGap;
+
+            // Snapshot the active tab's asset definitions: their numeric ids fill the dropdown.
+            constexpr int kMaxAssetItems = 64;
+            char itemText[kMaxAssetItems][12];
+            const char* itemPtrs[kMaxAssetItems];
+            uint64_t itemDefinitionIds[kMaxAssetItems];
+            int itemCount = 0;
+            uint64_t selectedDefinitionId = 0;
+            TabCad2DStorage* cad2d = nullptr;
+            if (activeTabIndex >= 0 && activeTabIndex < MV_MAX_TABS) {
+                cad2d = allTabs[activeTabIndex].cad2d.get();
+            }
+            if (cad2d) {
+                selectedDefinitionId =
+                    cad2d->assetInsertSelectedDefinitionId.load(std::memory_order_acquire);
+                std::lock_guard<std::mutex> lock(cad2d->cpuRecordsMutex);
+                for (const Cad2DAssetDefinitionRecordCPU& d : cad2d->assetDefinitionRecords) {
+                    if (d.isDeleted) continue;
+                    if (itemCount >= kMaxAssetItems) break;
+                    auto res = std::to_chars(itemText[itemCount], itemText[itemCount] + 11, d.assetNumber);
+                    *res.ptr = '\0';
+                    itemPtrs[itemCount] = itemText[itemCount];
+                    itemDefinitionIds[itemCount] = d.objectId;
+                    ++itemCount;
+                }
+            }
+
+            if (itemCount == 0) {
+                pushTextClipped(paneX + pad, textBaselineY(rowY, rowH, uiTextScale),
+                    U"No assets defined yet.", rightPaneWidthPx - 2.0f * pad,
+                    uiActiveColors.actionText, uiTextScale);
+            } else {
+                int selectedIndex = 0; // Defaults to the first definition when none is chosen.
+                for (int i = 0; i < itemCount; ++i) {
+                    if (itemDefinitionIds[i] == selectedDefinitionId) { selectedIndex = i; break; }
+                }
+                const int newIndex = BuildUIDropdown(ctx, uiRes, input, window.assetInsertDropdown,
+                    paneX + pad, rowY, rightPaneWidthPx - 2.0f * pad, rowH, uiTextScale,
+                    itemPtrs, itemCount, selectedIndex);
+                if (cad2d && newIndex >= 0 && newIndex < itemCount) {
+                    cad2d->assetInsertSelectedDefinitionId.store(itemDefinitionIds[newIndex],
+                        std::memory_order_release);
+                }
+            }
+        } else if (window.rightPaneOpen) {
             paneWidthPx = rightPaneWidthPx;
             const float paneX = W - rightIconBarWidthPx - rightPaneWidthPx;
             pushRect(paneX, overlayTop, rightPaneWidthPx, overlayHeight, uiActiveColors.actionGroupBackground);
