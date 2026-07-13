@@ -797,3 +797,37 @@ struct UITopRibbonLayout {
     float dpiY = 0.0f;
     bool isValid = false;
 };
+
+// ---------- Platform-agnostic UI overlay interface (implemented in UserInterface.cpp) ----------
+// Everything below only fills CPU-side arrays (AtlasBitmap pixels, UIDrawContext vertex/index
+// streams) and emits UIActions. The platform half (UserInterface-<Platform>.cpp) uploads the
+// atlases, owns the PSOs / dynamic buffers and issues the actual draw calls.
+
+struct DX12ResourcesUI; // Platform GPU resources; full definition in UserInterface-<Platform>.h.
+struct SingleUIWindow;  // विश्वकर्मा.h
+
+struct UIDrawContext { // Draw context
+    UIVertex* vertexPtr;
+    uint16_t* indexPtr;
+    uint32_t vertexCount, indexCount;
+};
+
+// CPU-side atlas bitmap builders (MSDF font + icons). Uploaded by the platform InitUIResources.
+AtlasBitmap BuildIconAtlas();
+AtlasBitmap BuildMSDFFontAtlas();
+
+void PrecomputeTopRibbonLayout(UITopRibbonLayout& layout, float monitorDPIX, float monitorDPIY);
+
+// Quad / text tessellation: append vertices+indices into ctx (bounds-checked via uiRes limits).
+void PushRect(UIDrawContext& ctx, float x, float y, float w, float h, uint32_t color, DX12ResourcesUI& uiRes);
+void PushRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h, float radiusPx,
+    uint32_t color, DX12ResourcesUI& uiRes);
+void PushTopRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h, float radiusPx,
+    uint32_t color, DX12ResourcesUI& uiRes);
+void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t color, DX12ResourcesUI& uiRes);
+
+// Portable half of RenderUIOverlay: widget layout + hit-testing for the whole overlay. Fills ctx
+// with the frame's UI geometry and emits UIActions; the platform wrapper draws ctx afterwards.
+void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI& uiRes,
+    UITopRibbonLayout& topRibbonLayout, float monitorDPIX, float monitorDPIY, const UIInput& input,
+    uint64_t activeInternalSubTabMemoryId);

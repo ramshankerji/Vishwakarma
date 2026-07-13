@@ -5,7 +5,6 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <d3dx12.h>
-#include <DirectXMath.h>
 #include <wrl.h>
 
 #include <atomic>
@@ -17,78 +16,12 @@
 #include <vector>
 
 #include "ConstantsApplication.h" // MV_MAX_SUBTABS: one Cad2DViewState per sub-tab slot.
-#include "RenderPage2D.h"
+#include "RenderPage2D.h" // GPU record ABI layouts (Cad2D*GPURecord, Cad2DViewConstants, Cad2DViewState).
 
 struct DX12ResourcesPerWindow;
 struct DX12ResourcesUI;
 
 using Microsoft::WRL::ComPtr;
-
-struct Cad2DLineGPURecord {
-    float x1;
-    float y1;
-    float x2;
-    float y2;
-    float lineWeight;
-    uint32_t lineWeightMode;
-    uint32_t colorABGR;
-    uint32_t flags;
-};
-static_assert(sizeof(Cad2DLineGPURecord) == 32, "Cad2DLineGPURecord must be 32 bytes.");
-
-struct Cad2DCurveGPURecord {
-    float centerX;
-    float centerY;
-    float radiusX;
-    float radiusY;
-    float startX;
-    float startY;
-    float endX;
-    float endY;
-    float lineWeight;
-    uint32_t lineWeightMode;
-    uint32_t colorABGR;
-    uint32_t curveType;
-    uint32_t flags;
-    float rotationRadians; // CCW rotation of the radius axes about the center.
-    uint32_t padding1;
-    uint32_t padding2;
-};
-static_assert(sizeof(Cad2DCurveGPURecord) == 64, "Cad2DCurveGPURecord must be 64 bytes.");
-
-struct Cad2DTextVertex {
-    float x;
-    float y;
-    float u;
-    float v;
-    uint32_t colorABGR;
-    uint32_t atlasIndex;
-};
-static_assert(sizeof(Cad2DTextVertex) == 24, "Cad2DTextVertex must match Shader2D_TextVertex input.");
-
-struct Cad2DViewConstants {
-    DirectX::XMFLOAT2 viewCenterCU;
-    float zoomPixelsPerCU;
-    float dpiY;
-    DirectX::XMFLOAT2 viewportSizePx;
-    float minLineWeightPx;
-    float padding0;
-};
-static_assert(sizeof(Cad2DViewConstants) == 32, "Cad2DViewConstants must stay 16-byte aligned.");
-
-struct Cad2DViewState {
-    std::atomic<double> centerXCU{ 0.0 };
-    std::atomic<double> centerYCU{ 0.0 };
-    std::atomic<float> zoomPixelsPerCU{ 2.0f };
-
-    // Back to the default view. Used when a sub-tab slot is (re)assigned to a Page2D so a recycled
-    // slot does not inherit the previous Page2D's pan/zoom.
-    void Reset() {
-        centerXCU.store(0.0, std::memory_order_release);
-        centerYCU.store(0.0, std::memory_order_release);
-        zoomPixelsPerCU.store(2.0f, std::memory_order_release);
-    }
-};
 
 struct Cad2DPageGPU {
     uint64_t containerMemoryId = 0;
@@ -126,8 +59,12 @@ struct DX12Resources2DPerTab {
     // not here, so two windows showing different Page2Ds of this tab render independent views.
 };
 
+// Opaque platform alias (same pattern as PlatformTabGpu / PlatformWindowGpu): TabCad2DStorage
+// holds its GPU-side state through this name; other platforms bind it to their own struct.
+using Page2DGpuResources = DX12Resources2DPerTab;
+
 struct TabCad2DStorage {
-    DX12Resources2DPerTab dx;
+    Page2DGpuResources dx;
     // Pan/zoom is per view: each open Page2D sub-tab slot owns its own view state, so the same
     // tab's two Page2Ds (inline + extracted, or two extracted windows) pan/zoom independently.
     // Indexed by sub-tab slot; input resolves the interacting slot, render/print the shown slot.

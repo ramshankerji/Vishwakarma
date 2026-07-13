@@ -180,6 +180,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClCompile Include="ImprovementData.cpp" />
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="MemoryManagerGPU-DirectX12.cpp" />
+    <ClCompile Include="RenderCompositor.cpp" />
     <ClCompile Include="RenderCompositor-DirectX12.cpp" />
     <ClCompile Include="RenderScene3D-DirectX12.cpp" />
     <ClCompile Include="Selection3D-DirectX12.cpp" />
@@ -224,6 +225,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClInclude Include="ConstantsText.h" />
     <ClInclude Include="ListOfCommands.h" />
     <ClInclude Include="MemoryManagerGPU-DirectX12.h" />
+    <ClInclude Include="RenderCompositor.h" />
     <ClInclude Include="RenderCompositor-DirectX12.h" />
     <ClInclude Include="RenderScene3D-DirectX12.h" />
     <ClInclude Include="RenderScene3D.h" />

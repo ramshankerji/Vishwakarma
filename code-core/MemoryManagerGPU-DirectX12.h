@@ -75,45 +75,10 @@ struct GpuResourceVertexIndexInfo {
     // In a real DX12 app, this would hold ID3D12Resource*, D3D12_VERTEX_BUFFER_VIEW, etc.
 };
 
-struct IndirectCommand { // OPTIMIZED Indirect Command
-    uint32_t matrixIndex; // 4 Bytes (Root Constant b1)
-	// Since Jumbo buffer ( or pages in future ) remains same, we bind it once.
-    // REMOVED: D3D12_VERTEX_BUFFER_VIEW vbv (Saved 16 Bytes)
-    // REMOVED: D3D12_INDEX_BUFFER_VIEW  ibv (Saved 16 Bytes)
-    D3D12_DRAW_INDEXED_ARGUMENTS drawArguments;// 20 Bytes
-}; // Total size: 24 Bytes (down from 56 Bytes!)
-static_assert(sizeof(IndirectCommand) == 24, "IndirectCommand must be exactly 24 bytes.");
-
-/* Page Metadata: GeometryPlacementRecordInPage (CPU-side only).
-One entry per geometry object inside a GeometryPage. Used by Copy Thread for defragmentation, 
-rebuilds, and future features. (frustum culling, ray-cast selection, LOD, etc.).
-Total size = 56 bytes (tightly packed, cache-friendly). */
-struct GeometryPlacementRecordInPage {
-    uint64_t objectID;           // Unique 64-bit ID across entire process (unchanged)
-
-    // Byte offsets into this page's vertex/index buffers (page max = 4 MB → uint32_t is safe)
-    // Vertex region (grows upward)
-    uint32_t vertexByteOffset; // Start of this object's vertices in the page (bytes)
-    uint32_t vertexSize;       // In bytes
-
-    // Index region (grows downward)
-    uint32_t indexByteOffset;    // Start of this object's indices in the page (bytes)
-    uint32_t indexSize;          // In bytes
-
-    uint32_t indexCount;         // Number of indices (not bytes) For ExecuteIndirect
-    uint32_t matrixIndex;        // Index into the per-tab WorldMatrix structured buffer
-
-    // Axis-Aligned Bounding Box (AABB) – stored as float32 only (24 bytes total)
-    // Always present for future use (frustum culling, selection, etc.).
-    // Set to {0,0,0} / {0,0,0} if we don't need it yet – costs nothing extra.
-    float minX, minY, minZ, maxX, maxY, maxZ; // Minimum corner (X,Y,Z) Maximum corner (X,Y,Z)
-
-    // Optional padding for perfect 8-byte alignment (not needed – compiler will pad anyway)
-	bool isDeleted = false; // Marked for deletion (soft delete, for defragmentation)
-};
-
-static_assert(sizeof(GeometryPlacementRecordInPage) == 64, 
-    "GeometryPlacementRecordInPage must be exactly 64 bytes for optimal cache/line usage.");
+// IndirectCommand and GeometryPlacementRecordInPage are portable ABI layouts (RenderScene3D.h).
+// Verify here that the portable drawArguments block matches D3D12_DRAW_INDEXED_ARGUMENTS exactly.
+static_assert(sizeof(IndirectCommand::DrawIndexedArguments) == sizeof(D3D12_DRAW_INDEXED_ARGUMENTS),
+    "IndirectCommand::DrawIndexedArguments must match D3D12_DRAW_INDEXED_ARGUMENTS bit for bit.");
 
 struct GeometryPage {
     // GPU RESOURCES. Single unified 4 MB buffer
@@ -361,16 +326,7 @@ struct OneMonitorController { // Variables stored per monitor.
     HANDLE renderFenceEvent = nullptr;
 };
 
-// Commands sent from Generator thread(s) to the Copy thread
-enum class CommandToCopyThreadType { NONE = 0, ADD, MODIFY, REMOVE };
-struct CommandToCopyThread
-{
-    CommandToCopyThreadType type;
-    std::optional<GeometryData> geometry; // Present for ADD and MODIFY
-    uint64_t id = 0; // Always present
-    uint64_t tabID = 0; // NEW: We must know which tab this object belongs to!
-    uint64_t containerMemoryId = 0; // Parent high-level container; pages never mix container IDs.
-};
+// CommandToCopyThreadType / CommandToCopyThread moved to RenderScene3D.h (portable).
 
 extern std::atomic<bool> pauseRenderThreads; // Defined in Main.cpp
 
@@ -394,38 +350,7 @@ inline void ThrowIfFailed(HRESULT hr) {
 }
 
 
-class ThreadSafeQueueGPU {
-public:
-    void push(CommandToCopyThread value) {
-        std::lock_guard<std::mutex> lock(mutex);
-        fifoQueue.push(std::move(value));
-        cond.notify_one();
-    }
-
-    // Non-blocking pop
-    bool try_pop(CommandToCopyThread& value) {
-        std::lock_guard<std::mutex> lock(mutex);
-        if (fifoQueue.empty()) { return false; }
-        value = std::move(fifoQueue.front());
-        fifoQueue.pop();
-        return true;
-    }
-
-    // Shuts down the queue, waking up any waiting threads
-    void shutdownQueue() {
-        std::lock_guard<std::mutex> lock(mutex);
-        shutdown = true;
-        cond.notify_all();
-    }
-
-private:
-    std::queue<CommandToCopyThread> fifoQueue; // fifo = First-In First-Out
-    std::mutex mutex;
-    std::condition_variable cond;
-    bool shutdown = false;
-};
-
-inline ThreadSafeQueueGPU g_gpuCommandQueue;
+// ThreadSafeQueueGPU / g_gpuCommandQueue moved to RenderScene3D.h (portable).
 
 enum class UploadType : uint8_t {
     Texture2D,
@@ -616,10 +541,7 @@ inline void WaitForFenceValue(DX12ResourcesPerWindow dx, UINT64 fenceValue)
 }
 
 // Thread Functions
-// Thread synchronization between Main Logic thread and Copy thread
-inline std::mutex toCopyThreadMutex;
-inline std::condition_variable toCopyThreadCV;
-inline std::queue<CommandToCopyThread> commandToCopyThreadQueue;
+// toCopyThreadMutex / toCopyThreadCV / commandToCopyThreadQueue moved to RenderScene3D.h (portable).
 
 // Thread Functions - Just Declaration!
 void GpuCopyThread();

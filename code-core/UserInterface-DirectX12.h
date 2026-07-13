@@ -38,30 +38,17 @@ struct DX12ResourcesUI { // GPU resources shared by all windows (read-only durin
     uint32_t maxIndices = 65536 * 3;
 };
 
-struct UIDrawContext { // Draw context
-    UIVertex* vertexPtr;
-    uint16_t* indexPtr;
-    uint32_t vertexCount, indexCount;
-};
-
 // DirectX12 Immediate Mode UI System (Phase 4A). Tab Bar Rendering Only
-// External interfaces of User Interface sub module of the code.
+// External interfaces of User Interface sub module of the code. The platform-agnostic pieces
+// (UIDrawContext, Push* tessellation, PrecomputeTopRibbonLayout, BuildUIOverlay, atlas bitmap
+// builders) are declared in UserInterface.h and implemented in UserInterface.cpp.
 void InitUIResources(DX12ResourcesUI& uiRes, ID3D12Device* device);
 void CleanupUIResources(DX12ResourcesUI& uiRes);
-
-void PushRect(UIDrawContext& ctx, float x, float y, float w, float h, uint32_t color, DX12ResourcesUI& uiRes);
-void PushRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h, float radiusPx,
-    uint32_t color, DX12ResourcesUI& uiRes);
-void PushTopRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h, float radiusPx,
-    uint32_t color, DX12ResourcesUI& uiRes);
-void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t color, DX12ResourcesUI& uiRes);
 
 // Slots 0 and 1 are currently reserved for the mandatory English and Icon atlases.
 // Future script atlases can use slots [UI_FIRST_DYNAMIC_SCRIPT_ATLAS_SLOT, UI_MAX_ATLAS_TEXTURES).
 bool UploadUIAtlasTexture(DX12ResourcesUI& uiRes, ID3D12Device* device, uint32_t atlasSlot,
     const AtlasBitmap& atlas);
-
-void PrecomputeTopRibbonLayout(UITopRibbonLayout& layout, float monitorDPIX, float monitorDPIY);
 
 void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmdList,
     DX12ResourcesUI& uiRes, UITopRibbonLayout& topRibbonLayout,

@@ -1,6 +1,7 @@
 // Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <queue>
@@ -175,6 +176,82 @@ enum class CommandToCopyThread2DType : uint8_t {
 // GPU record 'flags' bit set for the currently selected 2D objects; the 2D vertex shaders read it
 // and override the stroke color to the deep-blue selection color. See selection.md.
 constexpr uint32_t kCad2DSelectedFlag = 1u;
+
+// ---------- GPU record ABI layouts (shared by the HLSL / future SPIR-V / MSL shaders) ----------
+// Byte-exact shader input layouts, identical on every platform. The static_asserts are the
+// cross-platform ABI contract - do not change sizes without updating every Shader2D_* shader.
+
+// Two floats spelled portably (same layout as HLSL float2 / DirectX::XMFLOAT2 / GLSL vec2).
+struct Cad2DFloat2 {
+    float x;
+    float y;
+};
+
+struct Cad2DLineGPURecord {
+    float x1;
+    float y1;
+    float x2;
+    float y2;
+    float lineWeight;
+    uint32_t lineWeightMode;
+    uint32_t colorABGR;
+    uint32_t flags;
+};
+static_assert(sizeof(Cad2DLineGPURecord) == 32, "Cad2DLineGPURecord must be 32 bytes.");
+
+struct Cad2DCurveGPURecord {
+    float centerX;
+    float centerY;
+    float radiusX;
+    float radiusY;
+    float startX;
+    float startY;
+    float endX;
+    float endY;
+    float lineWeight;
+    uint32_t lineWeightMode;
+    uint32_t colorABGR;
+    uint32_t curveType;
+    uint32_t flags;
+    float rotationRadians; // CCW rotation of the radius axes about the center.
+    uint32_t padding1;
+    uint32_t padding2;
+};
+static_assert(sizeof(Cad2DCurveGPURecord) == 64, "Cad2DCurveGPURecord must be 64 bytes.");
+
+struct Cad2DTextVertex {
+    float x;
+    float y;
+    float u;
+    float v;
+    uint32_t colorABGR;
+    uint32_t atlasIndex;
+};
+static_assert(sizeof(Cad2DTextVertex) == 24, "Cad2DTextVertex must match Shader2D_TextVertex input.");
+
+struct Cad2DViewConstants {
+    Cad2DFloat2 viewCenterCU;
+    float zoomPixelsPerCU;
+    float dpiY;
+    Cad2DFloat2 viewportSizePx;
+    float minLineWeightPx;
+    float padding0;
+};
+static_assert(sizeof(Cad2DViewConstants) == 32, "Cad2DViewConstants must stay 16-byte aligned.");
+
+struct Cad2DViewState {
+    std::atomic<double> centerXCU{ 0.0 };
+    std::atomic<double> centerYCU{ 0.0 };
+    std::atomic<float> zoomPixelsPerCU{ 2.0f };
+
+    // Back to the default view. Used when a sub-tab slot is (re)assigned to a Page2D so a recycled
+    // slot does not inherit the previous Page2D's pan/zoom.
+    void Reset() {
+        centerXCU.store(0.0, std::memory_order_release);
+        centerYCU.store(0.0, std::memory_order_release);
+        zoomPixelsPerCU.store(2.0f, std::memory_order_release);
+    }
+};
 
 // Modal transforms applied to the current 2D selection of the active Page2D. Armed by the ribbon
 // EDIT_* buttons; the next mouse clicks provide the reference points (2 for Copy/Offset/Mirror/

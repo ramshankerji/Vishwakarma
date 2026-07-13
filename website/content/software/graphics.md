@@ -235,7 +235,19 @@ As items complete, they move out of this pending list and into the design docume
 
 ## Rendering architecture (control flow)
 
-The rendering code is organized into three interchangeable renderer groups sitting on a shared GPU foundation, coordinated by a compositor. One render thread per monitor drives the whole flow top-to-bottom:
+The rendering code is organized into three clearly separated groups, plus the two layers they sit on:
+
+| Group | Responsibility | One-line contract |
+|---|---|---|
+| **Scene3D Renderer** | Render one specific 3D scene into an already-bound render target | "Given a Scene3D container + camera + viewport, record its draw commands" |
+| **Page2D Renderer** | Render one specific 2D page into an already-bound render target | "Given a Page2D container + pan/zoom view + viewport, record its draw commands" |
+| **Compositor** | Decide which views / active tabs appear in which window, stitch the results, present | Owns render threads, windows, swap chains, RTT→backbuffer copy, present, migration/resize |
+| **UI Overlay** | Ribbon / tab bands / data tree / property pane, always drawn on top | The `UserInterface*` module — its own group, independent of the two renderers |
+| **GPU Foundation** | Device, queues, copy thread, VRAM paging, upload ring | Shared singleton (`शंकर`) serving both renderers — neither 3D nor 2D specific |
+
+Second axis: **platform separation**. Platform-agnostic code lives in one place (headers where possible). Each platform (DirectX12/Windows now; Vulkan/Linux+Android and Metal/iOS+Mac later) provides its own definitions of the *same function names*, selected at build time by compiling exactly one platform `.cpp` per module. No virtual interfaces, no `#ifdef` forests. The naming convention: `<Module>.h/.cpp` is platform-agnostic; `<Module>-<Platform>.h/.cpp` is per-platform (e.g. `RenderPage2D.cpp` vs `RenderPage2D-DirectX12.cpp`), and `GPUPlatformSelector.h` is the only file that names a platform header.
+
+One render thread per monitor drives the whole flow top-to-bottom:
 
 ```
 ┌────────────────────────────────┐
