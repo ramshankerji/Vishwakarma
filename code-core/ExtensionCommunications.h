@@ -54,11 +54,30 @@ struct ImportedPage2DPolygon {
     double rotationDegrees = 0.0;
 };
 
+// A 2D asset (DXF "block") definition and its hidden master geometry, in the block's own frame.
+struct ImportedAsset2DDefinition {
+    uint32_t key = 0;      // Worker-local id referenced by ImportedAsset2DInsert::key.
+    double baseX = 0, baseY = 0;
+    std::vector<ImportedPage2DLine> lines;
+    std::vector<ImportedPage2DText> texts;
+    std::vector<ImportedPage2DPolygon> polygons;
+};
+
+struct ImportedAsset2DInsert {
+    uint32_t key = 0;      // References an ImportedAsset2DDefinition::key.
+    double x = 0, y = 0;
+    // Per-instance transform baked into the members at materialization; negative scale = mirror.
+    double scaleX = 1.0, scaleY = 1.0;
+    double rotationDegrees = 0.0; // Counter-clockwise.
+};
+
 struct ImportedPage2DContent {
     std::wstring sourceFile;
     std::vector<ImportedPage2DLine> lines;
     std::vector<ImportedPage2DText> texts;
     std::vector<ImportedPage2DPolygon> polygons;
+    std::vector<ImportedAsset2DDefinition> assetDefinitions;
+    std::vector<ImportedAsset2DInsert> assetInserts;
 };
 
 // Main thread (UI dispatch): shows the .std open dialog and queues an

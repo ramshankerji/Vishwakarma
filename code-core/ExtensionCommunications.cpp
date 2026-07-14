@@ -40,6 +40,9 @@ constexpr size_t    kMaxImported2DTexts    = 500'000;
 constexpr size_t    kMaxImported2DPolygons = 500'000;
 constexpr size_t    kMaxImported2DTextBytes = 4096;            // Per text element.
 constexpr uint32_t  kMaxPolygonSegments = 512;
+constexpr size_t    kMaxImported2DAssetDefinitions = 8'192;
+constexpr size_t    kMaxImported2DAssetInserts     = 1'000'000;
+constexpr size_t    kMaxImported2DAssetMasters     = 200'000;  // Master elements per definition.
 constexpr ULONGLONG kImportTimeoutMs   = 180'000;              // Whole import, wall clock.
 
 HWND FirstWindowHandleForDialogs() {
@@ -332,6 +335,47 @@ bool AppendValidatedBatch(const vishwakarma::extension::v1::CreateGeometryBatch&
     return true;
 }
 
+// Per-element validators shared by the plain Page2D batch and the asset master geometry: each
+// checks one worker-supplied element and appends the converted host struct, or returns false.
+bool ConvertValidated2DLine(const vishwakarma::extension::v1::Page2DLine& line,
+    std::vector<ImportedPage2DLine>& out, std::string& error) {
+    if (!std::isfinite(line.x1()) || !std::isfinite(line.y1()) ||
+        !std::isfinite(line.x2()) || !std::isfinite(line.y2())) {
+        error = "Worker sent a 2D line with non-finite coordinates";
+        return false;
+    }
+    out.push_back({ line.x1(), line.y1(), line.x2(), line.y2() });
+    return true;
+}
+
+bool ConvertValidated2DText(const vishwakarma::extension::v1::Page2DText& text,
+    std::vector<ImportedPage2DText>& out, std::string& error) {
+    if (!std::isfinite(text.x()) || !std::isfinite(text.y()) ||
+        !std::isfinite(text.height()) || !std::isfinite(text.rotation_radians()) ||
+        text.height() <= 0.0 || text.justification() > 8 ||
+        text.text().empty() || text.text().size() > kMaxImported2DTextBytes) {
+        error = "Worker sent an invalid 2D text element";
+        return false;
+    }
+    out.push_back({ text.x(), text.y(), (float)text.height(),
+        (float)text.rotation_radians(), text.justification(), text.text() });
+    return true;
+}
+
+bool ConvertValidated2DPolygon(const vishwakarma::extension::v1::Page2DPolygon& polygon,
+    std::vector<ImportedPage2DPolygon>& out, std::string& error) {
+    if (!std::isfinite(polygon.center_x()) || !std::isfinite(polygon.center_y()) ||
+        !std::isfinite(polygon.radius()) || !std::isfinite(polygon.rotation_degrees()) ||
+        polygon.radius() <= 0.0 ||
+        polygon.segment_count() < 3 || polygon.segment_count() > kMaxPolygonSegments) {
+        error = "Worker sent an invalid 2D polygon";
+        return false;
+    }
+    out.push_back({ polygon.center_x(), polygon.center_y(),
+        polygon.radius(), polygon.segment_count(), polygon.rotation_degrees() });
+    return true;
+}
+
 bool AppendValidatedPage2DBatch(const vishwakarma::extension::v1::CreatePage2DBatch& batch,
     ImportedPage2DContent& content, std::string& error) {
     if (content.lines.size() + batch.lines_size() > kMaxImported2DLines) {
@@ -347,34 +391,67 @@ bool AppendValidatedPage2DBatch(const vishwakarma::extension::v1::CreatePage2DBa
         return false;
     }
     for (const auto& line : batch.lines()) {
-        if (!std::isfinite(line.x1()) || !std::isfinite(line.y1()) ||
-            !std::isfinite(line.x2()) || !std::isfinite(line.y2())) {
-            error = "Worker sent a 2D line with non-finite coordinates";
-            return false;
-        }
-        content.lines.push_back({ line.x1(), line.y1(), line.x2(), line.y2() });
+        if (!ConvertValidated2DLine(line, content.lines, error)) return false;
     }
     for (const auto& text : batch.texts()) {
-        if (!std::isfinite(text.x()) || !std::isfinite(text.y()) ||
-            !std::isfinite(text.height()) || !std::isfinite(text.rotation_radians()) ||
-            text.height() <= 0.0 || text.justification() > 8 ||
-            text.text().empty() || text.text().size() > kMaxImported2DTextBytes) {
-            error = "Worker sent an invalid 2D text element";
-            return false;
-        }
-        content.texts.push_back({ text.x(), text.y(), (float)text.height(),
-            (float)text.rotation_radians(), text.justification(), text.text() });
+        if (!ConvertValidated2DText(text, content.texts, error)) return false;
     }
     for (const auto& polygon : batch.polygons()) {
-        if (!std::isfinite(polygon.center_x()) || !std::isfinite(polygon.center_y()) ||
-            !std::isfinite(polygon.radius()) || !std::isfinite(polygon.rotation_degrees()) ||
-            polygon.radius() <= 0.0 ||
-            polygon.segment_count() < 3 || polygon.segment_count() > kMaxPolygonSegments) {
-            error = "Worker sent an invalid 2D polygon";
+        if (!ConvertValidated2DPolygon(polygon, content.polygons, error)) return false;
+    }
+    return true;
+}
+
+bool AppendValidatedAsset2DBatch(const vishwakarma::extension::v1::CreateAsset2DBatch& batch,
+    ImportedPage2DContent& content, std::string& error) {
+    if (content.assetDefinitions.size() + batch.definitions_size() > kMaxImported2DAssetDefinitions) {
+        error = "Worker exceeded the 2D asset definition cap";
+        return false;
+    }
+    if (content.assetInserts.size() + batch.inserts_size() > kMaxImported2DAssetInserts) {
+        error = "Worker exceeded the 2D asset insert cap";
+        return false;
+    }
+    for (const auto& definition : batch.definitions()) {
+        const size_t masterCount = (size_t)definition.lines_size() +
+            definition.texts_size() + definition.polygons_size();
+        if (masterCount == 0 || masterCount > kMaxImported2DAssetMasters) {
+            error = "Worker sent an asset definition with no / too many master elements";
             return false;
         }
-        content.polygons.push_back({ polygon.center_x(), polygon.center_y(),
-            polygon.radius(), polygon.segment_count(), polygon.rotation_degrees() });
+        if (!std::isfinite(definition.base_x()) || !std::isfinite(definition.base_y())) {
+            error = "Worker sent an asset definition with a non-finite base point";
+            return false;
+        }
+        ImportedAsset2DDefinition out;
+        out.key = definition.asset_key();
+        out.baseX = definition.base_x();
+        out.baseY = definition.base_y();
+        for (const auto& line : definition.lines()) {
+            if (!ConvertValidated2DLine(line, out.lines, error)) return false;
+        }
+        for (const auto& text : definition.texts()) {
+            if (!ConvertValidated2DText(text, out.texts, error)) return false;
+        }
+        for (const auto& polygon : definition.polygons()) {
+            if (!ConvertValidated2DPolygon(polygon, out.polygons, error)) return false;
+        }
+        content.assetDefinitions.push_back(std::move(out));
+    }
+    for (const auto& insert : batch.inserts()) {
+        if (!std::isfinite(insert.x()) || !std::isfinite(insert.y())) {
+            error = "Worker sent an asset insert with a non-finite point";
+            return false;
+        }
+        if (!std::isfinite(insert.scale_x()) || !std::isfinite(insert.scale_y()) ||
+            !std::isfinite(insert.rotation_degrees()) ||
+            std::abs(insert.scale_x()) < 1.0e-9 || std::abs(insert.scale_x()) > 1.0e9 ||
+            std::abs(insert.scale_y()) < 1.0e-9 || std::abs(insert.scale_y()) > 1.0e9) {
+            error = "Worker sent an asset insert with an invalid scale / rotation";
+            return false;
+        }
+        content.assetInserts.push_back({ insert.asset_key(), insert.x(), insert.y(),
+            insert.scale_x(), insert.scale_y(), insert.rotation_degrees() });
     }
     return true;
 }
@@ -563,6 +640,11 @@ ImportedPage2DContent* RunQueuedDxfImport(uint64_t payloadId, std::string& error
                 continue;
             }
             break;
+        case vishwakarma::extension::v1::WorkerToHost::kCreateAsset2DBatch:
+            if (AppendValidatedAsset2DBatch(message.create_asset2d_batch(), *content, error)) {
+                continue;
+            }
+            break;
         case vishwakarma::extension::v1::WorkerToHost::kLog:
             std::cout << kDxfImporter.logTag << " "
                       << message.log().text().substr(0, 2000) << "\n";
@@ -588,11 +670,30 @@ ImportedPage2DContent* RunQueuedDxfImport(uint64_t payloadId, std::string& error
         return nullptr; // WorkerProcess destructor terminates the worker.
     }
 
+    // Sandbox boundary: an insert may only reference a definition that actually arrived. Drop the
+    // rest instead of trusting the worker (same policy as std members referencing missing nodes).
+    std::unordered_set<uint32_t> definedKeys;
+    definedKeys.reserve(content->assetDefinitions.size());
+    for (const ImportedAsset2DDefinition& definition : content->assetDefinitions) {
+        definedKeys.insert(definition.key);
+    }
+    std::vector<ImportedAsset2DInsert> validInserts;
+    validInserts.reserve(content->assetInserts.size());
+    for (const ImportedAsset2DInsert& insert : content->assetInserts) {
+        if (definedKeys.count(insert.key)) validInserts.push_back(insert);
+    }
+    content->assetInserts = std::move(validInserts);
+
     const size_t total = content->lines.size() + content->texts.size() + content->polygons.size();
     WriteImportResultMarker(kDxfImporter, "OK: " + std::to_string(content->lines.size()) + " lines, " +
                             std::to_string(content->texts.size()) + " texts, " +
-                            std::to_string(content->polygons.size()) + " polygons from " + Utf8FromWide(*path));
-    std::cout << kDxfImporter.logTag << " Validated " << total << " Page2D elements from "
+                            std::to_string(content->polygons.size()) + " polygons, " +
+                            std::to_string(content->assetDefinitions.size()) + " assets (" +
+                            std::to_string(content->assetInserts.size()) + " inserts) from " +
+                            Utf8FromWide(*path));
+    std::cout << kDxfImporter.logTag << " Validated " << total << " Page2D elements, "
+              << content->assetDefinitions.size() << " asset definitions and "
+              << content->assetInserts.size() << " inserts from "
               << Utf8FromWide(*path) << std::endl;
     return content.release();
 }

@@ -32,6 +32,7 @@ message WorkerToHost {
     WorkerLog log = 2;
     WorkerResult result = 3;  // Final message; worker exits after sending it.
     CreatePage2DBatch create_page2d_batch = 4;
+    CreateAsset2DBatch create_asset2d_batch = 5;
   }
 }
 
@@ -88,6 +89,38 @@ message CreatePage2DBatch {
   repeated Page2DLine lines = 1;
   repeated Page2DText texts = 2;
   repeated Page2DPolygon polygons = 3;
+}
+
+// A 2D asset (DXF "block") definition with its master geometry. asset_key is a
+// worker-local id (unique within one import session) that inserts reference;
+// the host assigns the real object id and the user-visible random asset number.
+// Master geometry is in the definition's own coordinate frame; base_x/base_y is
+// the insert base point (DXF BLOCK base point). Reuses the Page2D element messages.
+message Asset2DDefinitionImport {
+  uint32 asset_key = 1;
+  string name = 2;        // DXF block name; informational for now.
+  double base_x = 3;
+  double base_y = 4;
+  repeated Page2DLine lines = 5;
+  repeated Page2DText texts = 6;
+  repeated Page2DPolygon polygons = 7;
+}
+
+// One placed instance of a definition on the currently open Page2D. The host bakes the
+// transform into the instance's member records: member = insert + R(rotation) * S(scale)
+// * (master - base). Zero / non-finite scales are rejected by the host.
+message Asset2DInsertImport {
+  uint32 asset_key = 1;   // References an Asset2DDefinitionImport.asset_key.
+  double x = 2;           // Insert point in Page2D ComputerUnits.
+  double y = 3;
+  double scale_x = 4;           // Negative scale = mirror along that axis.
+  double scale_y = 5;
+  double rotation_degrees = 6;  // Counter-clockwise.
+}
+
+message CreateAsset2DBatch {
+  repeated Asset2DDefinitionImport definitions = 1;
+  repeated Asset2DInsertImport inserts = 2;
 }
 
 message WorkerLog {

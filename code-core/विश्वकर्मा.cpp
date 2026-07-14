@@ -1228,9 +1228,70 @@ static void ImportDxfFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
         EnqueueCad2DPolygon(myTab->tabID, pageMemoryId, record);
     }
 
+    // DXF blocks -> Asset2D. Each definition's master geometry (block frame) is stored hidden;
+    // each insert stamps an instance onto the page with its scale / rotation baked into the
+    // members: Cad2DInstantiateAsset maps member = insert + R(rot) * S(scale) * (master - base).
+    std::unordered_map<uint32_t, uint64_t> definitionByKey;
+    definitionByKey.reserve(content->assetDefinitions.size());
+    for (const auto& definition : content->assetDefinitions) {
+        std::vector<Cad2DLineRecordCPU> masterLines;
+        std::vector<Cad2DTextRecordCPU> masterTexts;
+        std::vector<Cad2DPolygonRecordCPU> masterPolygons;
+        masterLines.reserve(definition.lines.size());
+        masterTexts.reserve(definition.texts.size());
+        masterPolygons.reserve(definition.polygons.size());
+        for (const auto& line : definition.lines) {
+            Cad2DLineRecordCPU record{};
+            record.x1 = line.x1; record.y1 = line.y1; record.x2 = line.x2; record.y2 = line.y2;
+            record.lineWeight = 1.0f;
+            record.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+            record.colorABGR = 0xFF000000u;
+            record.schemaVersion = VishwakarmaStorage::kGeometry2DLineSchemaVersion;
+            masterLines.push_back(record);
+        }
+        for (const auto& text : definition.texts) {
+            Cad2DTextRecordCPU record{};
+            record.x = text.x; record.y = text.y;
+            record.textHeightCU = text.heightCU;
+            record.rotationRadians = text.rotationRadians;
+            record.colorABGR = 0xFF000000u;
+            record.font = 0;
+            record.justification = static_cast<Cad2DTextJustification>(text.justification);
+            record.text = text.textUtf8;
+            record.schemaVersion = VishwakarmaStorage::kGeometry2DTextSchemaVersion;
+            masterTexts.push_back(std::move(record));
+        }
+        for (const auto& polygon : definition.polygons) {
+            Cad2DPolygonRecordCPU record{};
+            record.lineSegmentCount = polygon.segmentCount;
+            record.centerX = polygon.centerX; record.centerY = polygon.centerY;
+            record.radius = polygon.radius;
+            record.rotationDegrees = polygon.rotationDegrees;
+            record.lineWeight = 1.0f;
+            record.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+            record.colorABGR = 0xFF000000u;
+            record.schemaVersion = VishwakarmaStorage::kGeometry2DPolygonSchemaVersion;
+            masterPolygons.push_back(record);
+        }
+        const uint64_t definitionId = Cad2DCreateAssetDefinition(*myTab, definition.baseX,
+            definition.baseY, masterLines, masterTexts, masterPolygons);
+        if (definitionId != 0) definitionByKey[definition.key] = definitionId;
+    }
+
+    size_t placedInserts = 0;
+    for (const auto& insert : content->assetInserts) {
+        auto it = definitionByKey.find(insert.key);
+        if (it == definitionByKey.end()) continue;
+        if (Cad2DInstantiateAsset(*myTab, pageMemoryId, it->second, insert.x, insert.y,
+                insert.scaleX, insert.scaleY, insert.rotationDegrees)) {
+            ++placedInserts;
+        }
+    }
+
     std::cout << "[dxf-importer] Created " << content->lines.size() << " lines, "
-              << content->texts.size() << " texts and " << content->polygons.size()
-              << " polygons in the open Page2D." << std::endl; // Flush: rare event, aids diagnosis.
+              << content->texts.size() << " texts, " << content->polygons.size()
+              << " polygons, " << definitionByKey.size() << " asset definitions and "
+              << placedInserts << " inserts in the open Page2D." << std::endl; // Flush: rare event, aids diagnosis.
 }
 
 static void BeginPrimitive3DPlacement(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType) {

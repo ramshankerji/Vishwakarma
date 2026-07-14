@@ -529,6 +529,9 @@ bool EncodeAsset2DInsert(const Cad2DAssetInsertRecordCPU& insert, uint64_t defin
     message.set_definition_id(definitionPersistedId);
     message.set_x(insert.x);
     message.set_y(insert.y);
+    message.set_scale_x(insert.scaleX);
+    message.set_scale_y(insert.scaleY);
+    message.set_rotation_degrees(insert.rotationDegrees);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -878,6 +881,16 @@ bool DecodeAsset2DInsert(const std::vector<uint8_t>& payload, Cad2DAssetInsertRe
     outDefinitionPersistedId = message.definition_id();
     insert.x = message.x();
     insert.y = message.y();
+    // Schema v1 rows predate the transform fields: absent proto3 doubles read as 0, and a
+    // zero scale is meaningless, so (0, 0) means identity. v2 always writes non-zero scales.
+    if (message.scale_x() == 0.0 && message.scale_y() == 0.0) {
+        insert.scaleX = 1.0;
+        insert.scaleY = 1.0;
+    } else {
+        insert.scaleX = message.scale_x();
+        insert.scaleY = message.scale_y();
+    }
+    insert.rotationDegrees = message.rotation_degrees();
     return outDefinitionPersistedId != 0;
 }
 

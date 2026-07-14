@@ -52,7 +52,7 @@ constexpr uint16_t kGeometry2DCircleSchemaVersion = 1;
 constexpr uint16_t kGeometry2DEllipseSchemaVersion = 2; // v2: added rotation_radians.
 constexpr uint16_t kGeometry2DArcSchemaVersion = 2;     // v2: added rotation_radians.
 constexpr uint16_t kAsset2DDefinitionSchemaVersion = 1;
-constexpr uint16_t kAsset2DInsertSchemaVersion = 1;
+constexpr uint16_t kAsset2DInsertSchemaVersion = 2; // v2: added scale_x/scale_y/rotation_degrees.
 constexpr uint64_t kMaxLocalObjectId = (1ULL << 40) - 1ULL;
 
 constexpr uint32_t ToNumber(ObjectType value) {

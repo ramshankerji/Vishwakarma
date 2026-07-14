@@ -12,6 +12,13 @@ Conversion policy (MVP, host has no layer concept):
   TEXT / MTEXT         -> Page2D text (plain content only; the host renders
                           everything with its embedded MSDF font)
   DIMENSION            -> Page2D lines + text (host has no dimension element)
+  BLOCK + INSERT       -> Asset2D definition + placed instances carrying the
+                          INSERT's scale / rotation / mirror; the host bakes
+                          the transform into each instance's member geometry.
+                          Rectangular arrays expand into one instance per
+                          cell. Nested INSERTs inside a block are flattened
+                          (with their local transforms) into the definition's
+                          master geometry.
 Everything else the reader supports (arcs, ellipses, splines, ...) is counted
 and skipped for now. Coordinates pass through unscaled: one DXF drawing unit
 becomes one Page2D ComputerUnit. The converted drawing is translated as a
@@ -34,10 +41,19 @@ import InteroperabilityWithDXFFile as dxf
 LINES_PER_BATCH = 5000
 TEXTS_PER_BATCH = 1000
 POLYGONS_PER_BATCH = 1000
+ASSET_INSERTS_PER_BATCH = 5000
 CIRCLE_SEGMENT_COUNT = 64
 ARC_TESSELLATION_STEP = math.pi / 12.0  # 15 degrees per segment on bulge arcs
 MIN_SEGMENT_LENGTH = 1e-9
 FALLBACK_TEXT_HEIGHT = 2.5
+
+# Block/INSERT (Asset2D) policy. Instances carry the INSERT's scale / rotation
+# and the host bakes the transform into the placed member geometry. An INSERT
+# whose scale is ~zero would collapse its members to a point (and the host
+# rejects it), so those are skipped.
+DEGENERATE_SCALE_TOL = 1e-9
+MAX_BLOCK_RECURSION_DEPTH = 16     # Guards pathological / cyclic nested blocks.
+MAX_ARRAY_CELLS = 100_000          # Cap on one INSERT's col*row expansion.
 
 # Host-side Cad2DTextJustification values (3x3 grid, row-major from top-left).
 JUSTIFY_GRID = ((0, 1, 2),   # top:    TopLeft, TopMiddle, TopRight
@@ -274,9 +290,11 @@ class Converter:
                 added = True
         return added
 
-    def recenter(self):
-        """Translate all elements so the content bounding box centers on the
-        origin; returns the applied (dx, dy). Scale is untouched."""
+    def recenter(self, extra_points=()):
+        """Translate this converter's elements so the bounding box of them plus
+        `extra_points` (anchors that are translated by the caller, e.g. asset
+        insert points) centers on the origin. Returns the applied (dx, dy).
+        Scale is untouched."""
         xs, ys = [], []
         for x1, y1, x2, y2 in self.lines:
             xs += (x1, x2)
@@ -287,6 +305,9 @@ class Converter:
         for cx, cy, radius, _n, _rot in self.polygons:
             xs += (cx - radius, cx + radius)
             ys += (cy - radius, cy + radius)
+        for px, py in extra_points:
+            xs.append(px)
+            ys.append(py)
         if not xs:
             return 0.0, 0.0
         dx = -(min(xs) + max(xs)) / 2.0
@@ -313,13 +334,103 @@ class Converter:
         'Dimension': add_dimension,
     }
 
-    def convert(self):
-        for entity in self.doc.entities:
+    def convert(self, entities=None):
+        for entity in (self.doc.entities if entities is None else entities):
             handler = self._HANDLERS.get(type(entity).__name__)
             if handler is not None:
                 handler(self, entity)
             else:
                 self.skipped[type(entity).__name__.upper()] += 1
+
+
+# ---------------------------------------------------------------------------
+# Block (Asset2D) resolution: flatten a BLOCK definition's geometry into
+# (lines, texts, polygons) in the block's own frame, recursively expanding
+# nested INSERTs. Cached per block name; a visiting set breaks cycles.
+# ---------------------------------------------------------------------------
+
+def transform_geometry(geom, tx, ty, base_x, base_y, sx, sy, rotation_rad):
+    """Map (lines, texts, polygons) from a block frame to a placement:
+    world = (tx, ty) + R(rotation) * S(sx, sy) * (P - base). Text height and
+    polygon radius scale by the axis magnitude (an approximation for the
+    non-uniform / rotated case, which cannot be a regular polygon)."""
+    lines, texts, polygons = geom
+    cos_r, sin_r = math.cos(rotation_rad), math.sin(rotation_rad)
+
+    def xf(px, py):
+        qx, qy = (px - base_x) * sx, (py - base_y) * sy
+        return (tx + qx * cos_r - qy * sin_r, ty + qx * sin_r + qy * cos_r)
+
+    out_lines = []
+    for x1, y1, x2, y2 in lines:
+        ax, ay = xf(x1, y1)
+        bx, by = xf(x2, y2)
+        out_lines.append((ax, ay, bx, by))
+    out_texts = []
+    height_scale = abs(sy) if sy else 1.0
+    for x, y, height, rotation, justification, content in texts:
+        nx, ny = xf(x, y)
+        out_texts.append((nx, ny, height * height_scale,
+                          rotation + rotation_rad, justification, content))
+    out_polygons = []
+    radius_scale = max(abs(sx), abs(sy)) or 1.0
+    rotation_deg = math.degrees(rotation_rad)
+    for cx, cy, radius, count, rot in polygons:
+        ncx, ncy = xf(cx, cy)
+        out_polygons.append((ncx, ncy, radius * radius_scale, count, rot + rotation_deg))
+    return out_lines, out_texts, out_polygons
+
+
+def resolve_block_geometry(doc, name, cache, visiting=None, depth=0):
+    """Return (lines, texts, polygons) for a block in its own frame, flattening
+    nested INSERTs. Returns empty geometry for unknown/cyclic/too-deep blocks."""
+    if name in cache:
+        return cache[name]
+    if visiting is None:
+        visiting = set()
+    block = doc.blocks.get(name)
+    if block is None or name in visiting or depth > MAX_BLOCK_RECURSION_DEPTH:
+        return ([], [], [])
+
+    visiting.add(name)
+    conv = Converter(doc)
+    plain = [e for e in block.entities if not isinstance(e, dxf.Insert)]
+    conv.convert(plain)
+    lines, texts, polygons = list(conv.lines), list(conv.texts), list(conv.polygons)
+
+    for insert in (e for e in block.entities if isinstance(e, dxf.Insert)):
+        child = resolve_block_geometry(doc, insert.name, cache, visiting, depth + 1)
+        child_block = doc.blocks.get(insert.name)
+        base = child_block.base if child_block is not None else (0.0, 0.0, 0.0)
+        tl, tt, tp = transform_geometry(child, insert.insert[0], insert.insert[1],
+                                        base[0], base[1], insert.x_scale, insert.y_scale,
+                                        math.radians(insert.rotation))
+        lines += tl
+        texts += tt
+        polygons += tp
+
+    visiting.discard(name)
+    result = (lines, texts, polygons)
+    cache[name] = result
+    return result
+
+
+def array_cells(insert):
+    """Yield the insertion points of an INSERT's rectangular array (usually one
+    cell). Spacings live in the block frame, so each cell offset gets the
+    INSERT's scale and rotation. Capped so a hostile row/col count cannot
+    explode memory."""
+    cols, rows = insert.col_count, insert.row_count
+    if cols * rows > MAX_ARRAY_CELLS:
+        cols, rows = 1, 1
+    rotation = math.radians(insert.rotation)
+    cos_r, sin_r = math.cos(rotation), math.sin(rotation)
+    for row in range(rows):
+        for col in range(cols):
+            ox = col * insert.col_spacing * insert.x_scale
+            oy = row * insert.row_spacing * insert.y_scale
+            yield (insert.insert[0] + ox * cos_r - oy * sin_r,
+                   insert.insert[1] + ox * sin_r + oy * cos_r)
 
 
 def run() -> None:
@@ -332,18 +443,72 @@ def run() -> None:
         channel.send_result(False, f"Failed to parse '{request.file_name}': {exc}")
         return
 
+    # Model-space geometry (everything except block references) converts as before.
+    model_entities = [e for e in doc.entities if not isinstance(e, dxf.Insert)]
+    model_inserts = [e for e in doc.entities if isinstance(e, dxf.Insert)]
     converter = Converter(doc)
-    converter.convert()
-    offset_x, offset_y = converter.recenter()
+    converter.convert(model_entities)
 
-    total = len(converter.lines) + len(converter.texts) + len(converter.polygons)
+    # Block references. Every INSERT of a defined, non-empty block becomes an
+    # Asset2D instance carrying the INSERT's scale / rotation / mirror; the
+    # host bakes that transform into the instance's member geometry.
+    block_cache = {}
+    definitions = {}        # block name -> definition dict (built lazily)
+    asset_inserts = []      # (key, x, y, sx, sy, rotation_deg), recentered below
+    next_key = 1
+    for insert in model_inserts:
+        name = insert.name
+        # Skip anonymous / system / external-reference blocks (dimensions, layouts).
+        if not name or name.startswith('*'):
+            converter.skipped['INSERT (system block)'] += 1
+            continue
+        if name not in doc.blocks:
+            converter.skipped['INSERT (undefined block)'] += 1
+            continue
+        if (abs(insert.x_scale) < DEGENERATE_SCALE_TOL or
+                abs(insert.y_scale) < DEGENERATE_SCALE_TOL):
+            converter.skipped['INSERT (degenerate scale)'] += 1
+            continue
+        geometry = resolve_block_geometry(doc, name, block_cache)
+        if not any(geometry):
+            converter.skipped['INSERT (empty block)'] += 1
+            continue
+
+        if name not in definitions:
+            base = doc.blocks[name].base
+            definitions[name] = {
+                'key': next_key, 'name': name,
+                'base_x': base[0], 'base_y': base[1],
+                'lines': geometry[0], 'texts': geometry[1], 'polygons': geometry[2]}
+            next_key += 1
+        key = definitions[name]['key']
+        for cx, cy in array_cells(insert):
+            asset_inserts.append((key, cx, cy, insert.x_scale, insert.y_scale,
+                                  insert.rotation))
+        converter.imported['INSERT'] += 1
+
+    # Definitions are created lazily by their first insert, so every one is used.
+    definition_list = list(definitions.values())
+
+    # Recenter model geometry and the asset insert points together, so block
+    # instances keep their position relative to the plain drawing. Master
+    # geometry, base points and the instance transforms stay in the block frame.
+    anchors = [(x, y) for _k, x, y, _sx, _sy, _rot in asset_inserts]
+    offset_x, offset_y = converter.recenter(extra_points=anchors)
+    if offset_x or offset_y:
+        asset_inserts = [(k, x + offset_x, y + offset_y, sx, sy, rot)
+                         for k, x, y, sx, sy, rot in asset_inserts]
+
+    page_total = len(converter.lines) + len(converter.texts) + len(converter.polygons)
+    total = page_total + len(definition_list) + len(asset_inserts)
     imported = ', '.join(f'{name} {count}' for name, count in converter.imported.most_common())
     skipped = ', '.join(f'{name} {count}' for name, count in sorted(
         (converter.skipped + doc.discarded_counts).items()))
     channel.send_log(
-        f"Parsed '{request.file_name}': {total} Page2D elements "
+        f"Parsed '{request.file_name}': {page_total} Page2D elements "
         f"({len(converter.lines)} lines, {len(converter.texts)} texts, "
-        f"{len(converter.polygons)} polygons) from [{imported or 'nothing'}]"
+        f"{len(converter.polygons)} polygons), {len(definition_list)} asset "
+        f"definitions with {len(asset_inserts)} instances from [{imported or 'nothing'}]"
         + (f"; recentered by ({offset_x:.3f}, {offset_y:.3f})"
            if offset_x or offset_y else "")
         + (f"; skipped [{skipped}]" if skipped else ""))
@@ -354,6 +519,12 @@ def run() -> None:
         channel.send_page2d_batch(texts=converter.texts[start:start + TEXTS_PER_BATCH])
     for start in range(0, len(converter.polygons), POLYGONS_PER_BATCH):
         channel.send_page2d_batch(polygons=converter.polygons[start:start + POLYGONS_PER_BATCH])
+
+    # One definition per batch (each is self-contained); inserts chunked.
+    for definition in definition_list:
+        channel.send_asset2d_batch(definitions=[definition])
+    for start in range(0, len(asset_inserts), ASSET_INSERTS_PER_BATCH):
+        channel.send_asset2d_batch(inserts=asset_inserts[start:start + ASSET_INSERTS_PER_BATCH])
 
     channel.send_result(True, "", total_elements=total)
 

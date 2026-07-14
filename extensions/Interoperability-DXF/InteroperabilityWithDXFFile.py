@@ -7,10 +7,11 @@
 
 """Pure-Python reader for ASCII DXF files (AutoCAD 2012-era tag set).
 
-Reads model-space entities only. Supported entity types are converted to
-plain Python objects (see the dataclasses below); everything else is counted
-and discarded. Deliberately discarded by design:
-  - BLOCKS section content and INSERT/ATTRIB references
+Reads model-space entities plus BLOCK definitions and their INSERT references.
+Supported entity types are converted to plain Python objects (see the
+dataclasses below); everything else is counted and discarded. Deliberately
+discarded by design:
+  - ATTRIB / ATTDEF block attributes (INSERT geometry is kept, text is not)
   - Embedded OLE objects (OLE2FRAME)
   - Paper-space / plot-layout entities (group code 67 == 1)
 
@@ -267,6 +268,34 @@ class Leader(Entity):
     vertices: List[Point3] = field(default_factory=list)
 
 
+@dataclass
+class Insert(Entity):
+    """Block reference. Placement of a named BLOCK definition, optionally as a
+    rectangular array (col/row counts and spacings)."""
+    name: str = ''
+    insert: Point3 = (0.0, 0.0, 0.0)
+    x_scale: float = 1.0
+    y_scale: float = 1.0
+    z_scale: float = 1.0
+    rotation: float = 0.0     # degrees, counter-clockwise
+    col_count: int = 1
+    row_count: int = 1
+    col_spacing: float = 0.0
+    row_spacing: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# Block definition (BLOCKS section)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Block:
+    name: str = ''
+    base: Point3 = (0.0, 0.0, 0.0)  # insert base point (aligns with an INSERT point)
+    flags: int = 0                  # bit 1 = anonymous, bits 4/8/16/32 = xref-related
+    entities: List[Entity] = field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Document
 # ---------------------------------------------------------------------------
@@ -280,9 +309,9 @@ class DxfDocument:
     text_styles: Dict[str, TextStyle] = field(default_factory=dict)
     dim_styles: Dict[str, DimStyle] = field(default_factory=dict)
     entities: List[Entity] = field(default_factory=list)
+    blocks: Dict[str, Block] = field(default_factory=dict)
     read_counts: Counter = field(default_factory=Counter)
     discarded_counts: Counter = field(default_factory=Counter)
-    blocks_discarded: int = 0
 
     @property
     def acadver(self) -> str:
@@ -738,6 +767,22 @@ def _parse_leader(rec: List[Tag]) -> Leader:
     return e
 
 
+def _parse_insert(rec: List[Tag]) -> Insert:
+    e = Insert()
+    fld = _scalar_fields(e, rec)
+    e.name = fld.get(2, '').strip()
+    e.insert = _xyz(fld, 10, 20, 30)
+    e.x_scale = _f(fld.get(41, '1'), 1.0)
+    e.y_scale = _f(fld.get(42, '1'), 1.0)
+    e.z_scale = _f(fld.get(43, '1'), 1.0)
+    e.rotation = _f(fld.get(50, '0'))
+    e.col_count = max(1, _i(fld.get(70, '1'), 1))
+    e.row_count = max(1, _i(fld.get(71, '1'), 1))
+    e.col_spacing = _f(fld.get(44, '0'))
+    e.row_spacing = _f(fld.get(45, '0'))
+    return e
+
+
 _ENTITY_PARSERS = {
     'LINE': _parse_line,
     'POINT': _parse_point,
@@ -751,6 +796,7 @@ _ENTITY_PARSERS = {
     'SOLID': _parse_solid,
     'SPLINE': _parse_spline,
     'LEADER': _parse_leader,
+    'INSERT': _parse_insert,
     # POLYLINE is handled specially (absorbs VERTEX/SEQEND children).
 }
 
@@ -768,7 +814,12 @@ def _is_paper_space(rec: List[Tag]) -> bool:
     return any(code == 67 and _i(value) == 1 for code, value in rec)
 
 
-def _parse_entities(tags: List[Tag], i: int, doc: DxfDocument) -> int:
+def _parse_entity_run(tags: List[Tag], i: int, doc: DxfDocument, sink: List[Entity],
+                      stop_names: Tuple[str, ...], count_read: bool = True) -> int:
+    """Parse a run of entities into `sink`, stopping at (without consuming) the
+    first 0-code tag whose value is in `stop_names`. Shared by the ENTITIES
+    section and BLOCK bodies. Discarded/paper-space entities are counted on doc;
+    model-space reads are counted only when `count_read` is True."""
     n = len(tags)
     while i < n:
         code, value = tags[i]
@@ -776,9 +827,7 @@ def _parse_entities(tags: List[Tag], i: int, doc: DxfDocument) -> int:
         if code != 0:  # stray tag, should not happen
             i += 1
             continue
-        if etype == 'ENDSEC':
-            return i + 1
-        if etype == 'SECTION':  # unterminated section: hand back
+        if etype in stop_names:
             return i
 
         j = _skip_to_next_zero(tags, i + 1)
@@ -798,21 +847,64 @@ def _parse_entities(tags: List[Tag], i: int, doc: DxfDocument) -> int:
                 doc.discarded_counts['POLYLINE'] += 1
                 doc.discarded_counts['VERTEX'] += len(vertex_recs)
             else:
-                doc.entities.append(_parse_polyline(rec, vertex_recs))
-                doc.read_counts['POLYLINE'] += 1
+                sink.append(_parse_polyline(rec, vertex_recs))
+                if count_read:
+                    doc.read_counts['POLYLINE'] += 1
             continue
 
         parser = _ENTITY_PARSERS.get(etype)
         if parser is None or _is_paper_space(rec):
             doc.discarded_counts[_safe_type_name(etype)] += 1
             continue
-        doc.entities.append(parser(rec))
-        doc.read_counts[etype] += 1
+        sink.append(parser(rec))
+        if count_read:
+            doc.read_counts[etype] += 1
+    return i
+
+
+def _parse_entities(tags: List[Tag], i: int, doc: DxfDocument) -> int:
+    i = _parse_entity_run(tags, i, doc, doc.entities, ('ENDSEC', 'SECTION'))
+    if i < len(tags) and tags[i][1].strip() == 'ENDSEC':
+        return i + 1  # consume ENDSEC; a bare SECTION is handed back for the caller
+    return i
+
+
+def _parse_one_block(tags: List[Tag], i: int, doc: DxfDocument) -> int:
+    """Parse a single 0 BLOCK ... 0 ENDBLK record. `i` points at the BLOCK tag."""
+    n = len(tags)
+    j = _skip_to_next_zero(tags, i + 1)
+    rec = tags[i + 1:j]
+    i = j
+
+    block = Block()
+    bx = by = bz = 0.0
+    for code, value in rec:
+        if code == 2:
+            block.name = value.strip()
+        elif code == 10:
+            bx = _f(value)
+        elif code == 20:
+            by = _f(value)
+        elif code == 30:
+            bz = _f(value)
+        elif code == 70:
+            block.flags = _i(value)
+    block.base = (bx, by, bz)
+
+    # Block-body entities (may include nested INSERTs) are not model space, so
+    # they do not inflate the model read statistics.
+    i = _parse_entity_run(tags, i, doc, block.entities,
+                          ('ENDBLK', 'ENDSEC', 'SECTION'), count_read=False)
+    if i < n and tags[i][1].strip() == 'ENDBLK':
+        i = _skip_to_next_zero(tags, i + 1)  # consume the ENDBLK record
+
+    if block.name:
+        doc.blocks[block.name] = block
     return i
 
 
 def _parse_blocks(tags: List[Tag], i: int, doc: DxfDocument) -> int:
-    """Count BLOCK definitions and skip the whole section."""
+    """Parse BLOCK definitions (with their entities) into doc.blocks."""
     n = len(tags)
     while i < n:
         code, value = tags[i]
@@ -822,8 +914,9 @@ def _parse_blocks(tags: List[Tag], i: int, doc: DxfDocument) -> int:
         if code == 0 and name == 'SECTION':  # unterminated section: hand back
             return i
         if code == 0 and name == 'BLOCK':
-            doc.blocks_discarded += 1
-        i += 1
+            i = _parse_one_block(tags, i, doc)
+        else:
+            i += 1
     return i
 
 
@@ -901,7 +994,8 @@ def main(argv: List[str]) -> int:
     _print_counter('Entities read (model space):', doc.read_counts)
     print()
     _print_counter('Entities discarded (unsupported / paper space):', doc.discarded_counts)
-    print(f'\nBlock definitions discarded: {doc.blocks_discarded}')
+    inserts = sum(1 for e in doc.entities if isinstance(e, Insert))
+    print(f'\nBlock definitions: {len(doc.blocks)}   Model-space INSERTs: {inserts}')
     return 0
 
 

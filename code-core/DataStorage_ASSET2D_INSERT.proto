@@ -12,4 +12,10 @@ message Asset2DInsert {
   uint64 definition_id = 1; // object_store object_id of the Asset2DDefinition row.
   double x = 2;             // Insert point in page ComputerUnits.
   double y = 3;
+  // Per-instance transform, baked into the member geometry at placement:
+  // member = insert + R(rotation) * S(scale) * (master - base). Schema v1 rows
+  // lack these fields; the loader treats scale (0, 0) as identity (1, 1).
+  double scale_x = 4;
+  double scale_y = 5;           // Negative scale = mirror along that axis.
+  double rotation_degrees = 6;  // Counter-clockwise.
 }
