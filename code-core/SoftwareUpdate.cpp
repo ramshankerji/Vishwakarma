@@ -19,6 +19,7 @@
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <knownfolders.h>
+#include <tlhelp32.h>
 
 #include <atomic>
 #include <cstdint>
@@ -40,10 +41,13 @@
 
 namespace fs = std::filesystem;
 
+#pragma comment(lib, "Advapi32.lib") // Registry + scheduled-task-adjacent Win32 calls.
+
 // ------------------------------------------------------------------ Constants
 static const wchar_t* kCompanyFolder = L"Mission Vishwakarma";
 static const wchar_t* kAppExeName = L"Vishwakarma.exe";
 static const wchar_t* kReleaseJsonName = L"Vishwakarma_release_details.json";
+static const wchar_t* kScheduledTaskName = L"VishwakarmaUpgrade"; // Weekly background updater.
 static const wchar_t* kManifestUrl =
     L"https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma_release_details.json";
 static const wchar_t* kManifestSigUrl =
@@ -192,6 +196,29 @@ static bool LaunchProcess(const fs::path& exe, const std::wstring& args) {
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     return true;
+}
+
+// Absolute path to a Windows system tool, avoiding PATH hijacking (same guard used for tar.exe).
+static fs::path System32Path(const wchar_t* exeName) {
+    wchar_t sysDir[MAX_PATH]{};
+    GetSystemDirectoryW(sysDir, MAX_PATH);
+    return fs::path(sysDir) / exeName;
+}
+
+// Runs a helper exe hidden, waits for it, and returns its exit code (-1 on launch failure).
+static int RunProcessHidden(const fs::path& exe, const std::wstring& cmdLine, DWORD timeoutMs) {
+    std::wstring cmd = cmdLine;
+    STARTUPINFOW si{ sizeof(si) };
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) return -1;
+    DWORD code = (DWORD)-1;
+    if (WaitForSingleObject(pi.hProcess, timeoutMs) == WAIT_OBJECT_0)
+        GetExitCodeProcess(pi.hProcess, &code);
+    else TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return (int)code;
 }
 
 #ifdef VISHWAKARMA_INSTALLER
@@ -511,6 +538,40 @@ static void CreateDesktopShortcut(const fs::path& targetExe) {
     link->Release();
 }
 
+// Registers (or updates) the weekly per-user background-update task via schtasks.exe. Idempotent:
+// /F updates an existing "VishwakarmaUpgrade" task in place rather than creating a duplicate, which
+// also satisfies the "if present, just fix it" rule. /IT runs it only while the user is logged on,
+// /RL LIMITED with the user's own (non-elevated) token. Best effort; a failure is non-fatal.
+static bool CreateUpgradeScheduledTask(const fs::path& appExe) {
+    fs::path schtasks = System32Path(L"schtasks.exe");
+    std::wstring cmd = L"\"" + schtasks.wstring() + L"\" /Create /F /TN " + kScheduledTaskName +
+        L" /SC WEEKLY /IT /RL LIMITED /TR \"\\\"" + appExe.wstring() + L"\\\" --background-update\"";
+    return RunProcessHidden(schtasks, cmd, 30000) == 0;
+}
+
+// Adds the per-user "Apps & features" entry so the user can uninstall from Windows Settings.
+// UninstallString points back at the application exe with --uninstall.
+static void RegisterUninstallEntry(const fs::path& dir, const fs::path& exe, long long version) {
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MissionVishwakarma",
+        0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) != ERROR_SUCCESS) return;
+    auto setStr = [&](const wchar_t* name, const std::wstring& val) {
+        RegSetValueExW(key, name, 0, REG_SZ, (const BYTE*)val.c_str(),
+                       (DWORD)((val.size() + 1) * sizeof(wchar_t)));
+    };
+    setStr(L"DisplayName", L"Mission Vishwakarma");
+    setStr(L"DisplayIcon", exe.wstring());
+    setStr(L"Publisher", L"Ram Shanker");
+    setStr(L"InstallLocation", dir.wstring());
+    setStr(L"DisplayVersion", std::to_wstring(version));
+    setStr(L"UninstallString", L"\"" + exe.wstring() + L"\" --uninstall");
+    DWORD one = 1;
+    RegSetValueExW(key, L"NoModify", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));
+    RegSetValueExW(key, L"NoRepair", 0, REG_DWORD, (const BYTE*)&one, sizeof(one));
+    RegCloseKey(key);
+}
+
 int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
     bool allUsers = false, updateMode = false, noLaunch = false;
     int argc = 0;
@@ -593,6 +654,15 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
         // Ed25519 installation identity key pair: created here at install time; the
         // application re-creates it on launch if it ever goes missing.
         AccountManager::EnsureInstallationKey();
+
+        // The weekly background-update task and the uninstall entry are per-user only: the task
+        // must run as the logged-in user (see release.md), which an elevated all-users install
+        // cannot reliably identify. Both are idempotent, so re-running on every update self-heals.
+        fs::path localPrograms = KnownFolder(FOLDERID_LocalAppData) / L"Programs" / kCompanyFolder;
+        if (dir == localPrograms) {
+            CreateUpgradeScheduledTask(exe);
+            RegisterUninstallEntry(dir, exe, newVersion);
+        }
     }
 
     if (updateMode) {
@@ -658,6 +728,48 @@ static bool VerifyManifestSignature(const std::string& manifest, const std::stri
 }
 
 // ------------------------------------------------------------------ HTTPS download (WinHTTP)
+// Resolves the proxy to use for `url` strictly from the current user's system (Internet Options /
+// GPO) configuration: WPAD auto-detect, an explicit auto-config (PAC) URL, or a static proxy with
+// its bypass list. Returns false for a direct connection when none applies. On success the caller
+// owns info.lpszProxy / info.lpszProxyBypass and must GlobalFree them (WinHTTP copies them when
+// they are handed to WINHTTP_OPTION_PROXY, so freeing straight after that call is correct).
+static bool ResolveSystemProxy(HINTERNET session, const std::wstring& url, WINHTTP_PROXY_INFO& info) {
+    ZeroMemory(&info, sizeof(info));
+    WINHTTP_CURRENT_USER_IE_PROXY_CONFIG ie{};
+    if (!WinHttpGetIEProxyConfigForCurrentUser(&ie)) return false; // No per-user config -> direct.
+
+    bool resolved = false;
+    // Auto-detect and/or PAC URL: let WinHTTP evaluate the script for this specific URL.
+    if (ie.fAutoDetect || ie.lpszAutoConfigUrl) {
+        WINHTTP_AUTOPROXY_OPTIONS opt{};
+        opt.dwFlags = (ie.lpszAutoConfigUrl ? WINHTTP_AUTOPROXY_CONFIG_URL : 0) |
+                      (ie.fAutoDetect ? WINHTTP_AUTOPROXY_AUTO_DETECT : 0);
+        opt.dwAutoDetectFlags = ie.fAutoDetect
+            ? (WINHTTP_AUTO_DETECT_TYPE_DHCP | WINHTTP_AUTO_DETECT_TYPE_DNS_A) : 0;
+        opt.lpszAutoConfigUrl = ie.lpszAutoConfigUrl;
+        opt.fAutoLogonIfChallenged = TRUE;
+        if (WinHttpGetProxyForUrl(session, url.c_str(), &opt, &info)) resolved = true;
+    }
+    // Static proxy (e.g. "proxy.corp:8080" or "http=...;https=...") pushed by GPO.
+    if (!resolved && ie.lpszProxy) {
+        auto dup = [](LPWSTR s) -> LPWSTR {
+            if (!s) return nullptr;
+            size_t n = (wcslen(s) + 1) * sizeof(wchar_t);
+            LPWSTR d = (LPWSTR)GlobalAlloc(GPTR, n);
+            if (d) memcpy(d, s, n);
+            return d;
+        };
+        info.dwAccessType = WINHTTP_ACCESS_TYPE_NAMED_PROXY;
+        info.lpszProxy = dup(ie.lpszProxy);
+        info.lpszProxyBypass = dup(ie.lpszProxyBypass);
+        resolved = info.lpszProxy != nullptr;
+    }
+    if (ie.lpszAutoConfigUrl) GlobalFree(ie.lpszAutoConfigUrl);
+    if (ie.lpszProxy) GlobalFree(ie.lpszProxy);
+    if (ie.lpszProxyBypass) GlobalFree(ie.lpszProxyBypass);
+    return resolved;
+}
+
 static bool HttpGet(const std::wstring& url, std::string& out, const fs::path* toFile) {
     out.clear();
     URL_COMPONENTS uc{ sizeof(uc) };
@@ -667,13 +779,28 @@ static bool HttpGet(const std::wstring& url, std::string& out, const fs::path* t
     if (!WinHttpCrackUrl(url.c_str(), 0, 0, &uc)) return false;
 
     bool ok = false;
-    HINTERNET session = WinHttpOpen(L"VishwakarmaUpdater/1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+    // The session default is direct; the actual proxy is resolved per URL from the user's system
+    // configuration and applied to the request below, so a proxy change takes effect immediately.
+    HINTERNET session = WinHttpOpen(L"VishwakarmaUpdater/1", WINHTTP_ACCESS_TYPE_NO_PROXY,
                                     WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     HINTERNET connect = session ? WinHttpConnect(session, host, uc.nPort, 0) : nullptr;
     HINTERNET request = connect ? WinHttpOpenRequest(connect, L"GET", path, nullptr,
                                       WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                       (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0)
                                 : nullptr;
+    if (request) {
+        // Route through the corporate proxy when the system is configured for one.
+        WINHTTP_PROXY_INFO proxyInfo{};
+        if (ResolveSystemProxy(session, url, proxyInfo)) {
+            WinHttpSetOption(request, WINHTTP_OPTION_PROXY, &proxyInfo, sizeof(proxyInfo));
+            if (proxyInfo.lpszProxy) GlobalFree(proxyInfo.lpszProxy);
+            if (proxyInfo.lpszProxyBypass) GlobalFree(proxyInfo.lpszProxyBypass);
+        }
+        // Let WinHTTP answer a 407 with the logged-in user's default credentials (NTLM/Negotiate),
+        // covering authenticating proxies transparently without any app-specific setting.
+        DWORD autoLogon = WINHTTP_AUTOLOGON_SECURITY_LEVEL_LOW;
+        WinHttpSetOption(request, WINHTTP_OPTION_AUTOLOGON_POLICY, &autoLogon, sizeof(autoLogon));
+    }
     if (request && WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                                       WINHTTP_NO_REQUEST_DATA, 0, 0, 0)
                 && WinHttpReceiveResponse(request, nullptr)) {
@@ -864,6 +991,81 @@ void StartSoftwareUpdateThread() {
             RunUpdateCheckOnce(currentVersion);
         }
     }).detach();
+}
+
+// ------------------------------------------------------------------ Background-update / uninstall
+// True if another Vishwakarma.exe is running (any besides this process). Used to avoid replacing
+// the exe out from under an active user; a running instance applies staged updates on next launch.
+static bool AnotherAppInstanceRunning() {
+    DWORD self = GetCurrentProcessId();
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return true; // Cannot tell: assume yes and skip applying.
+    PROCESSENTRY32W pe{ sizeof(pe) };
+    bool found = false;
+    if (Process32FirstW(snap, &pe)) {
+        do {
+            if (pe.th32ProcessID != self && _wcsicmp(pe.szExeFile, kAppExeName) == 0) {
+                found = true;
+                break;
+            }
+        } while (Process32NextW(snap, &pe));
+    }
+    CloseHandle(snap);
+    return found;
+}
+
+static void DeleteUpgradeScheduledTask() {
+    fs::path schtasks = System32Path(L"schtasks.exe");
+    std::wstring cmd = L"\"" + schtasks.wstring() + L"\" /Delete /F /TN " + kScheduledTaskName;
+    RunProcessHidden(schtasks, cmd, 30000);
+}
+
+int RunBackgroundUpdate() {
+    long long currentVersion = InstalledVersion();
+    if (currentVersion <= 0) return 0; // Developer / unpackaged build: nothing to do.
+
+    RunUpdateCheckOnce(currentVersion); // Download + verify + stage immediately (no random wait).
+
+    // Apply only when we are the sole instance, so we never overwrite the exe of a running app.
+    if (AnotherAppInstanceRunning()) return 0;
+    SoftwareUpdateOnAppLaunch(); // Launches the staged setup with --update, which replaces us.
+    return 0;
+}
+
+void RunUninstall() {
+    if (MessageBoxW(nullptr, L"Remove Mission Vishwakarma from this computer?",
+                    L"Vishwakarma Uninstall", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+
+    fs::path exeDir = CurrentExeDir();
+    std::error_code ec;
+
+    DeleteUpgradeScheduledTask();
+
+    fs::path desktop = KnownFolder(FOLDERID_Desktop);
+    if (!desktop.empty()) fs::remove(desktop / L"Vishwakarma.lnk", ec);
+
+    RegDeleteTreeW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MissionVishwakarma");
+
+    fs::remove_all(DataDir(), ec); // Updater state + staging area under %LOCALAPPDATA%.
+
+    // Acknowledge before spawning the self-deleter and exiting: the dialog must not keep the exe
+    // image locked while cmd.exe tries to remove the folder.
+    MessageBoxW(nullptr, L"Mission Vishwakarma has been removed.",
+                L"Vishwakarma Uninstall", MB_OK | MB_ICONINFORMATION);
+
+    // The install folder holds this running exe, which cannot delete itself. Hand the removal to a
+    // detached cmd.exe that waits (~2 s) for this process to exit, then deletes the folder.
+    fs::path cmdExe = System32Path(L"cmd.exe");
+    std::wstring line = L"\"" + cmdExe.wstring() +
+        L"\" /c ping 127.0.0.1 -n 3 >nul & rmdir /s /q \"" + exeDir.wstring() + L"\"";
+    STARTUPINFOW si{ sizeof(si) };
+    PROCESS_INFORMATION pi{};
+    if (CreateProcessW(cmdExe.c_str(), line.data(), nullptr, nullptr, FALSE,
+                       CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, nullptr, &si, &pi)) {
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
 }
 
 #endif // VISHWAKARMA_INSTALLER

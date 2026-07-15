@@ -621,6 +621,14 @@ float GetTopRibbonHeightPxForWindow(const SingleUIWindow* window);
 // WinMain: This was legacy name. New name is wWinMain with Unicode support.
 int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPWSTR lpCmdLine, _In_ int nCmdShow)
 {
+    // Headless command-line modes: the weekly scheduled task launches us with --background-update
+    // and "Apps & features" launches us with --uninstall. Both run without any window and exit
+    // before graphics start up, so none of the copy / render / engineering threads are created.
+    if (lpCmdLine) {
+        if (wcsstr(lpCmdLine, L"--background-update")) return RunBackgroundUpdate();
+        if (wcsstr(lpCmdLine, L"--uninstall")) { RunUninstall(); return 0; }
+    }
+
     #ifdef _DEBUG
         AllocateConsoleWindow();// Only allocate console in debug builds
     #endif

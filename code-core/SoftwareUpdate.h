@@ -14,3 +14,14 @@ bool SoftwareUpdateOnAppLaunch();
 // Starts the detached background thread which periodically (random 10 minutes to 10 hours)
 // fetches the signed release manifest and stages a newer setup for the next launch.
 void StartSoftwareUpdateThread();
+
+// Runs a single, immediate update cycle (download + verify + stage, then apply if no other
+// instance is running) and returns a process exit code. Used by the weekly scheduled task
+// which launches the application with --background-update. Opens no window and starts none
+// of the graphics / copy / engineering threads.
+int RunBackgroundUpdate();
+
+// Removes the application: the scheduled task, desktop shortcut, "Apps & features" entry,
+// per-user updater data and the install folder. Invoked via --uninstall (the command
+// registered as the Windows UninstallString).
+void RunUninstall();
