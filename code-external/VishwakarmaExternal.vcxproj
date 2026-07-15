@@ -47,6 +47,13 @@
     <VishwakarmaRoot>$(MSBuildThisFileDirectory)..\</VishwakarmaRoot>
     <OpenSSLSourceDir>$(MSBuildThisFileDirectory)openssl</OpenSSLSourceDir>
     <PocketPyDir>$(MSBuildThisFileDirectory)pocketpy</PocketPyDir>
+    <ProtobufSourceDir>$(MSBuildThisFileDirectory)protobuf</ProtobufSourceDir>
+    <!-- Config-derived so a Debug build produces build\protobuf-x64-debug (libprotobuf-lited.lib)
+         and a Release build produces build\protobuf-x64-release (libprotobuf-lite.lib). -->
+    <ProtobufBuildDir>$(VishwakarmaRoot)build\protobuf-x64-$(Configuration.ToLowerInvariant())</ProtobufBuildDir>
+    <ProtobufLibName Condition="'$(Configuration)'=='Debug'">libprotobuf-lited.lib</ProtobufLibName>
+    <ProtobufLibName Condition="'$(Configuration)'=='Release'">libprotobuf-lite.lib</ProtobufLibName>
+    <ProtobufLibPath>$(ProtobufBuildDir)\$(Configuration)\$(ProtobufLibName)</ProtobufLibPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(VishwakarmaRoot)build\$(Configuration)\External\</OutDir>
@@ -174,6 +181,15 @@
   <Target Name="BuildOpenSSL" BeforeTargets="ClCompile" Inputs="@(OpenSSLBuildInput)" Outputs="$(OpenSSLBuildDir)\libcrypto.lib;$(OpenSSLBuildDir)\libssl.lib">
     <Message Importance="high" Text="Building static OpenSSL $(Configuration)|$(Platform) libraries into $(OpenSSLBuildDir)" />
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(VishwakarmaRoot)code-miscellaneous\BuildOpenSSL.ps1&quot; -SourceDir &quot;$(OpenSSLSourceDir)&quot; -BuildDir &quot;$(OpenSSLBuildDir)&quot; -Configuration &quot;$(Configuration)&quot; -VcVarsAll &quot;$(VCInstallDir)Auxiliary\Build\vcvarsall.bat&quot;" />
+  </Target>
+  <!-- Post-build: build protoc + static protobuf-lite for the current Configuration|Platform.
+       Protobuf is a CMake build separate from this static lib, so it lives under
+       build\protobuf-x64-* and is skipped once present (delete that folder or run
+       BuildProtobuf.ps1 -Force to rebuild). Vishwakarma and VishwakarmaExtension both
+       depend on these products. -->
+  <Target Name="BuildProtobuf" AfterTargets="Build" Condition="!Exists('$(ProtobufLibPath)')">
+    <Message Importance="high" Text="Building static protobuf + protoc $(Configuration)|$(Platform) into $(ProtobufBuildDir)" />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(VishwakarmaRoot)code-miscellaneous\BuildProtobuf.ps1&quot; -SourceDir &quot;$(ProtobufSourceDir)&quot; -BuildDir &quot;$(ProtobufBuildDir)&quot; -Configuration &quot;$(Configuration)&quot; -Platform &quot;$(Platform)&quot;" />
   </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

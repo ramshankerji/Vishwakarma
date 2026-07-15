@@ -53,7 +53,7 @@ function Resolve-VsWhere {
 }
 
 function Resolve-MSBuild {
-    $cmd = Get-Command msbuild.exe -CommandType Application -ErrorAction SilentlyContinue
+    $cmd = Get-Command msbuild.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($cmd) { return $cmd.Source }
     $vswhere = Resolve-VsWhere
     if ($vswhere) {
