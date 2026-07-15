@@ -47,7 +47,7 @@ namespace fs = std::filesystem;
 static const wchar_t* kCompanyFolder = L"Mission Vishwakarma";
 static const wchar_t* kAppExeName = L"Vishwakarma.exe";
 static const wchar_t* kReleaseJsonName = L"Vishwakarma_release_details.json";
-static const wchar_t* kScheduledTaskName = L"VishwakarmaUpgrade"; // Weekly background updater.
+static const wchar_t* kScheduledTaskName = L"VishwakarmaUpgrade"; // Every-6-days background updater.
 static const wchar_t* kManifestUrl =
     L"https://github.com/ramshankerji/Vishwakarma/releases/download/nightly/Vishwakarma_release_details.json";
 static const wchar_t* kManifestSigUrl =
@@ -538,14 +538,16 @@ static void CreateDesktopShortcut(const fs::path& targetExe) {
     link->Release();
 }
 
-// Registers (or updates) the weekly per-user background-update task via schtasks.exe. Idempotent:
+// Registers (or updates) the per-user background-update task via schtasks.exe. Idempotent:
 // /F updates an existing "VishwakarmaUpgrade" task in place rather than creating a duplicate, which
 // also satisfies the "if present, just fix it" rule. /IT runs it only while the user is logged on,
-// /RL LIMITED with the user's own (non-elevated) token. Best effort; a failure is non-fatal.
+// /RL LIMITED with the user's own (non-elevated) token. /SC DAILY /MO 6 fires every 6 (not 7) days
+// so the weekday it lands on keeps rotating, spreading update checks across the whole week instead
+// of pinning them to one weekday. Best effort; a failure is non-fatal.
 static bool CreateUpgradeScheduledTask(const fs::path& appExe) {
     fs::path schtasks = System32Path(L"schtasks.exe");
     std::wstring cmd = L"\"" + schtasks.wstring() + L"\" /Create /F /TN " + kScheduledTaskName +
-        L" /SC WEEKLY /IT /RL LIMITED /TR \"\\\"" + appExe.wstring() + L"\\\" --background-update\"";
+        L" /SC DAILY /MO 6 /IT /RL LIMITED /TR \"\\\"" + appExe.wstring() + L"\\\" --background-update\"";
     return RunProcessHidden(schtasks, cmd, 30000) == 0;
 }
 
@@ -655,7 +657,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
         // application re-creates it on launch if it ever goes missing.
         AccountManager::EnsureInstallationKey();
 
-        // The weekly background-update task and the uninstall entry are per-user only: the task
+        // The background-update task and the uninstall entry are per-user only: the task
         // must run as the logged-in user (see release.md), which an elevated all-users install
         // cannot reliably identify. Both are idempotent, so re-running on every update self-heals.
         fs::path localPrograms = KnownFolder(FOLDERID_LocalAppData) / L"Programs" / kCompanyFolder;

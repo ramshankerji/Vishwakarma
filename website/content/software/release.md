@@ -139,3 +139,42 @@ Phase 1 is implemented in `code-core/SoftwareUpdate.cpp` / `.h` (single file, co
 **Signing keys.** Manifest signing uses Ed25519 key `ManifestSigner-01` (`code-miscellaneous/ManifestSigner-01.key`, password-encrypted; public key hardcoded in SoftwareUpdate.cpp). Authenticode uses `MV-CodeSigner-01.pfx`, which is NOT committed (`.gitignore` excludes `*.pfx`); CI receives it as base64 secret `RELEASE_SIGN_PFX_B64` and the shared password as secret `RELEASE_SIGN_PASSWORD`. Unsigned CI builds (secrets absent) produce no `.sig`, and clients correctly refuse to update from them.
 
 Not yet implemented (later phases as planned): peer-to-peer discovery and the 2^14 port listener, chunked/resumable downloads, rollback after failed launch (`lastRejectedBadVersion` is persisted but nothing sets it yet), delta updates, and key rotation.
+
+## Update Triggers, Scheduled Task and Command-Line Flags
+
+There are two independent update triggers, both of which ultimately run the same download / verify / stage logic in `code-core/SoftwareUpdate.cpp`:
+
+**1. In-app update thread (while the app is running).** Every launch of `Vishwakarma.exe` starts a background thread (`StartSoftwareUpdateThread`) that sleeps a random offset — spec says 10 minutes to 10 hours; the implementation picks a fresh random 10–600 minute delay (intentional jitter/spread) each cycle — then fetches the signed manifest, decides whether an update applies, and stages it. This covers users who leave the application open for long sessions. The thread is disabled for developer / unpackaged builds (version 0).
+
+**2. `VishwakarmaUpgrade` scheduled task (while the app is closed).** So that users who rarely leave the app open still receive updates, the installer registers a per-user Windows scheduled task that launches the app headless to perform one update check and exit. It is created (and idempotently repaired) on every per-user install/update — only for the default `%LocalAppData%\Programs\Mission Vishwakarma` location — by `CreateUpgradeScheduledTask`, and removed on uninstall by `DeleteUpgradeScheduledTask`.
+
+The task is registered with `schtasks.exe`:
+
+```
+schtasks /Create /F /TN VishwakarmaUpgrade /SC DAILY /MO 6 /IT /RL LIMITED /TR "\"...\Vishwakarma.exe\" --background-update"
+```
+
+- `/SC DAILY /MO 6` — fires **every 6 days**, not weekly. A 7-day cadence would always land on the same weekday; 6 days makes the weekday rotate through the week, spreading the fleet's update checks (and the resulting server load) across all seven days.
+- `/F` — overwrite an existing task in place, so re-running on each update self-heals rather than duplicating.
+- `/IT` — run only while the user is logged on (interactive).
+- `/RL LIMITED` — run with the user's own non-elevated token; no admin rights required.
+
+### Command-line flags
+
+Application executable — `Vishwakarma.exe` (handled in `code-core/Main.cpp` `wWinMain`, before any window or graphics thread starts):
+
+| Flag | Launched by | Effect |
+| --- | --- | --- |
+| `--background-update` | the `VishwakarmaUpgrade` scheduled task | Headless: run one update check (`RunBackgroundUpdate`) and exit. |
+| `--uninstall` | the Windows "Apps & features" uninstall entry | Headless: remove the install, desktop shortcut, scheduled task and registry entry (`RunUninstall`) and exit. |
+
+Setup executable — `Vishwakarma_UserSetup_win10_win11_x64.exe` (handled in `code-core/SoftwareUpdate.cpp` `wWinMain`):
+
+| Flag | Effect |
+| --- | --- |
+| *(none)* | Interactive per-user install into `%LocalAppData%\Programs\Mission Vishwakarma`; shows the license prompt and launches the app on completion. |
+| `--allUsers` | Try to install into `C:\Program Files\Mission Vishwakarma`; silently falls back to the per-user location if permission is denied. |
+| `--update` | Silent in-place update: skip the license prompt, swap the running binary and relaunch the new `Vishwakarma.exe`. This is how a staged update is applied on restart. |
+| `--no-launch` | Do not launch the application after the install finishes; intended for scripted installs. |
+
+Only one installer runs at a time (named mutex `Global\MissionVishwakarmaInstallerLock`, falling back to the `Local\` namespace).

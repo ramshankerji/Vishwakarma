@@ -27,9 +27,16 @@ jobs:
         submodules: false
 
     - name: Checkout submodules (shallow, pinned)
-      # External dependencies: only the pinned commit, depth 1, to keep checkout fast.
-      # Fetch in parallel with --jobs 8 to speed up the network operations.
-      run: git submodule update --init --recursive --depth 1 --jobs 8
+      # External dependencies: only the pinned commit, depth 1, to keep checkout fast,
+      # fetched in parallel with --jobs 8. We do NOT init recursively across the board:
+      # openssl carries a large tail of test/provider submodules (gost-engine,
+      # pkcs11-provider, tlsfuzzer, oqs-provider, ... which drag in boringssl-adjacent
+      # repos) and freetype carries "dlg", none of which our build compiles. Init the
+      # top level shallowly, then recurse only into msdf-atlas-gen (needs msdfgen +
+      # artery-font-format). This mirrors code-miscellaneous/InitSubmodules.ps1.
+      run: |
+        git submodule update --init --depth 1 --jobs 8
+        git submodule update --init --recursive --depth 1 --jobs 8 -- code-external/msdf-atlas-gen
 
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1

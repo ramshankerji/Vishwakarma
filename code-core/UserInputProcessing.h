@@ -128,7 +128,8 @@ enum class ACTION_TYPE : uint16_t { // Specifying uint16_t ensures that it is of
     BEGIN_TRANSFORM2D = 30026,  // Arm a Page2D selection transform; x = Cad2DTransformKind.
     INTERNAL_SUB_TAB_EXTRACTED = 30027, // objectId = extracted container; hand the inline band over.
     CREATE_ASSET2D_FROM_SELECTION = 30028, // Convert the 2D selection into a Asset2DDefinition + first insert.
-    BEGIN_ASSET_INSERT2D = 30029 // Arm asset-insert mode; each Page2D click places the selected asset.
+    BEGIN_ASSET_INSERT2D = 30029, // Arm asset-insert mode; each Page2D click places the selected asset.
+    TOGGLE_AUTO_RANDOM_GEOMETRY = 30030 // Flip the tab's autoGenerateRandomGeometry flag ON/OFF.
 };
 
 struct ACTION_DETAILS_OLD {

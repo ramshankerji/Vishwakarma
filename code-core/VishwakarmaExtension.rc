@@ -4,6 +4,10 @@
 #include <windows.h>
 #include "VersionGenerated.h"
 
+// Icon with lowest ID value placed first to ensure application icon
+// remains consistent on all systems. Same icon as Vishwakarma.exe.
+1 ICON "..\\code-core\\logo.ico"
+
 VS_VERSION_INFO VERSIONINFO
   FILEVERSION VW_FILEVERSION
   PRODUCTVERSION VW_FILEVERSION

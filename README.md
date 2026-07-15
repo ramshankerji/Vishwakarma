@@ -23,11 +23,13 @@ Please see our homepage https://mv.ramshanker.in for currently planned scope of 
 
 ## Getting Started for Developers. 
 If you are a user of our software, you should refer to our homepage. If you are a developer or just would like to contribute to some source code updates, start by installing the following softwares.  
-* Visual Studio Community Edition 2026 and Git.
-* Install git software. 
-* Install "cmake" and make it is added to PATH. i.e. can run command line.
-* Install Python programming language if not already available on the system.
-* Open Command prompt, navigate to a suitable folder and run command "git clone --recurse-submodules https://github.com/ramshankerji/Vishwakarma.git".
+* Visual Studio 2026 Community Edition. Or Professional/Enterprise Edition, if your organization can afford it!
+* Install git software. If you are behind a corporate proxy to access internet, you need to do proxy configuration inside git. Ask ChatGPT!
+* Install "cmake" and make sure it is added to PATH. i.e. can run command line.
+* Install Python programming language and make sure .py file are runnable on the system.
+* Install Perl programming language and make sure it is added to PATH (required for building some external dependencies).
+* Open Command prompt, navigate to a suitable folder and run command "git clone https://github.com/ramshankerji/Vishwakarma.git".
+* 1st Build must be done while connected to internet, this ensures all dependencies initialize from respective sources on internet.
 
 * Read https://mv.ramshanker.in/software/ for more details.
 

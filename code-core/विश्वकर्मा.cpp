@@ -1983,6 +1983,8 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 }
             } else if (nextWorkTODO.actionType == ACTION_TYPE::ZOOM_WINDOW_BEGIN) {
                 BeginZoomWindowMode(myTab);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::TOGGLE_AUTO_RANDOM_GEOMETRY) {
+                myTab->autoGenerateRandomGeometry = !myTab->autoGenerateRandomGeometry;
             }
         }
 

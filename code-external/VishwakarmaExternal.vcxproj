@@ -178,6 +178,21 @@
     <ClCompile Include="zlib\zutil.c" />
     <ClCompile Include="fast_float_wrapper.cpp" />
   </ItemGroup>
+  <!-- Pre-build: check out all git submodules on a fresh clone so the sources this
+       project (and every other) compiles are present. Runs before any dependency is
+       consumed; a fast no-op once submodules are initialized. -->
+  <Target Name="InitSubmodules" BeforeTargets="PrepareForBuild;BuildOpenSSL">
+    <Message Importance="high" Text="Ensuring git submodules are initialized" />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(VishwakarmaRoot)code-miscellaneous\InitSubmodules.ps1&quot; -RepoRoot &quot;$(VishwakarmaRoot).&quot;" />
+  </Target>
+  <!-- Pre-build: libpng's pnglibconf.h is a generated header (not checked in). Seed it
+       from the checked-in prebuilt so a fresh clone compiles libpng without running
+       libpng's own configure. Only when missing, so a customized header is left alone.
+       Mirrors the "Prepare libpng config header" step in .github\workflows\nightly.yml. -->
+  <Target Name="PrepareLibpngConfig" BeforeTargets="ClCompile" Condition="!Exists('$(MSBuildThisFileDirectory)libpng-code\pnglibconf.h')">
+    <Message Importance="high" Text="Seeding libpng-code\pnglibconf.h from prebuilt" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)libpng-code\scripts\pnglibconf.h.prebuilt" DestinationFiles="$(MSBuildThisFileDirectory)libpng-code\pnglibconf.h" />
+  </Target>
   <Target Name="BuildOpenSSL" BeforeTargets="ClCompile" Inputs="@(OpenSSLBuildInput)" Outputs="$(OpenSSLBuildDir)\libcrypto.lib;$(OpenSSLBuildDir)\libssl.lib">
     <Message Importance="high" Text="Building static OpenSSL $(Configuration)|$(Platform) libraries into $(OpenSSLBuildDir)" />
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(VishwakarmaRoot)code-miscellaneous\BuildOpenSSL.ps1&quot; -SourceDir &quot;$(OpenSSLSourceDir)&quot; -BuildDir &quot;$(OpenSSLBuildDir)&quot; -Configuration &quot;$(Configuration)&quot; -VcVarsAll &quot;$(VCInstallDir)Auxiliary\Build\vcvarsall.bat&quot;" />

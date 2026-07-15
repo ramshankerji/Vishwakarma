@@ -190,6 +190,7 @@ WordID,ShortWordName,English,Comments
 2914702845,ZOOM_MAX,Zoom Max,Zoom to fit all objects in the view
 3690481522,ZOOM_FOCUS,Zoom Focus,Zoom to fit the selected objects
 3213983172,ZOOM_WINDOW,Zoom Window,Zoom onto a rectangle defined by 2 clicks
+3149027561,TOGGLE_AUTO_RANDOM,Auto Random,Toggle automatic generation of random 3D and 2D demo shapes ON/OFF
 2826420556,VIEW_PROJECTION,View Projection,View Projection
 2633994874,VIEW_ISOMETRIC,View Isometric,View Isometric
 4186429141,VIEW_LEFT,View Left,View Left

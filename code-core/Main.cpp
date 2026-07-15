@@ -512,6 +512,8 @@ void ProcessPendingUIActions() {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::ZOOM_FOCUS_SELECTED);
         } else if (action.id == static_cast<uint32_t>(Commands::ZOOM_WINDOW)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::ZOOM_WINDOW_BEGIN);
+        } else if (action.id == static_cast<uint32_t>(Commands::TOGGLE_AUTO_RANDOM)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::TOGGLE_AUTO_RANDOM_GEOMETRY);
         } else if (action.id == static_cast<uint32_t>(Commands::IMPORT_STD)) {
             ExtensionCommunications::QueueImportStdCommand(GetActiveTabForUIAction());
         } else if (action.id == static_cast<uint32_t>(Commands::IMPORT_DXF)) {
@@ -630,7 +632,7 @@ float GetTopRibbonHeightPxForWindow(const SingleUIWindow* window);
 // WinMain: This was legacy name. New name is wWinMain with Unicode support.
 int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPWSTR lpCmdLine, _In_ int nCmdShow)
 {
-    // Headless command-line modes: the weekly scheduled task launches us with --background-update
+    // Headless command-line modes: the every-6-days scheduled task launches us with --background-update
     // and "Apps & features" launches us with --uninstall. Both run without any window and exit
     // before graphics start up, so none of the copy / render / engineering threads are created.
     if (lpCmdLine) {

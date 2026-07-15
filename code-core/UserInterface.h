@@ -484,6 +484,7 @@ constexpr UIControlDefinition AllUIControls[] = {
     { Commands::ZOOM_MAX,              UITextID::ZOOM_MAX, UIIconForCommand(Commands::ZOOM_MAX), 1, 3, 0, 0, true, true, 0 , 1 }, //Fit ALL objects of active Scene3D/Page2D.
     { Commands::ZOOM_FOCUS,            UITextID::ZOOM_FOCUS, UIIconForCommand(Commands::ZOOM_FOCUS), 1, 3, 1, 0, true, true, 0 , 1 }, //Fit selected objects (all if none selected).
     { Commands::ZOOM_WINDOW,           UITextID::ZOOM_WINDOW, UIIconForCommand(Commands::ZOOM_WINDOW), 1, 3, 2, 0, true, true, 0 , 1 }, //Two clicks define a rectangle to zoom onto.
+    { Commands::TOGGLE_AUTO_RANDOM,    UITextID::TOGGLE_AUTO_RANDOM, UIIconForCommand(Commands::TOGGLE_AUTO_RANDOM), 1, 3, 0, 0, true, true, 0 , 1 }, //Toggle auto-generation of random demo shapes ON/OFF.
 
     // ACTION GROUP 1: (2D) General
     // Subgroup : Create 2D Shapes

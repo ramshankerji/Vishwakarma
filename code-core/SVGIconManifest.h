@@ -100,6 +100,7 @@
     VISHWAKARMA_SVG_ICON(3089016617u, "icon_3089016617_edit_copy.svg") \
     VISHWAKARMA_SVG_ICON(3108688488u, "icon_3108688488_cutby_primitive.svg") \
     VISHWAKARMA_SVG_ICON(3133001911u, "icon_3133001911_support_pinned.svg") \
+    VISHWAKARMA_SVG_ICON(3149027561u, "icon_3149027561_toggle_auto_random.svg") \
     VISHWAKARMA_SVG_ICON(3150246791u, "icon_3150246791_properties_pane.svg") \
     VISHWAKARMA_SVG_ICON(3161340767u, "icon_3161340767_edit_fillet.svg") \
     VISHWAKARMA_SVG_ICON(3165697720u, "icon_3165697720_folder_visibility.svg") \
