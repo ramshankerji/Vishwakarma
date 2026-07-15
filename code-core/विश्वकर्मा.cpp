@@ -20,6 +20,7 @@ This thread is also responsible for engineering calculations, consistency of Dat
 #include "विश्वकर्मा.h"
 #include "डेटा.h"
 #include "डेटा-सामान्य-3D.h"
+#include "डेटा-पाइप.h"
 #include "PropertyPane.h"
 #include "ExtensionCommunications.h"
 #include "GPUPlatformSelector.h"
@@ -1089,6 +1090,34 @@ static bool CreatePrimitiveGeometryElement(DATASETTAB* targetTab, VishwakarmaSto
         object = shape;
         break;
     }
+    case VishwakarmaStorage::ObjectType::Elbow: {
+        ELBOW* shape = new (targetTab->tabNo) ELBOW();
+        shape->Randomize();
+        shape->center = placementPoint;
+        geometry = shape->GetGeometry();
+        object = shape;
+        break;
+    }
+    case VishwakarmaStorage::ObjectType::Tee: {
+        TEE* shape = new (targetTab->tabNo) TEE();
+        shape->Randomize();
+        const XMFLOAT3 offset = OffsetTo(MidPoint(shape->center1, shape->center2), placementPoint);
+        TranslatePoint(shape->center1, offset);
+        TranslatePoint(shape->center2, offset);
+        geometry = shape->GetGeometry();
+        object = shape;
+        break;
+    }
+    case VishwakarmaStorage::ObjectType::Flange: {
+        FLANGE* shape = new (targetTab->tabNo) FLANGE();
+        shape->Randomize();
+        const XMFLOAT3 offset = OffsetTo(MidPoint(shape->center1, shape->center2), placementPoint);
+        TranslatePoint(shape->center1, offset);
+        TranslatePoint(shape->center2, offset);
+        geometry = shape->GetGeometry();
+        object = shape;
+        break;
+    }
     default:
         return false;
     }
@@ -1410,9 +1439,9 @@ inline void addRandomGeometryElement(DATASETTAB* targetTab) {
     META_DATA* object = nullptr;
     VishwakarmaStorage::ObjectType objectType = VishwakarmaStorage::ObjectType::Unknown;
 
-    // Randomly select a shape type (0-7 for the 8 shapes available).
+    // Randomly select a shape type (0-13 for the 14 shapes available).
     // We use the GetRNG() helper function already available in "डेटा-सामान्य-3D.h".
-    std::uniform_int_distribution<int> shapeDist(0, 8);
+    std::uniform_int_distribution<int> shapeDist(0, 13);
     int shapeType = shapeDist(GetRNG());
 
     // Note: Ensure your shape constructors (new PYRAMID()) use the correct memoryGroupNo if needed.
@@ -1493,6 +1522,46 @@ inline void addRandomGeometryElement(DATASETTAB* targetTab) {
         geometry = shape->GetGeometry();
         object = shape;
         objectType = PIPE::storageObjectType;
+        break;
+    }
+    case 9: {
+        TORUS* shape = new (targetTab->tabNo) TORUS();
+        shape->Randomize();
+        geometry = shape->GetGeometry();
+        object = shape;
+        objectType = TORUS::storageObjectType;
+        break;
+    }
+    case 10: {
+        ELLIPSOID* shape = new (targetTab->tabNo) ELLIPSOID();
+        shape->Randomize();
+        geometry = shape->GetGeometry();
+        object = shape;
+        objectType = ELLIPSOID::storageObjectType;
+        break;
+    }
+    case 11: {
+        ELBOW* shape = new (targetTab->tabNo) ELBOW();
+        shape->Randomize();
+        geometry = shape->GetGeometry();
+        object = shape;
+        objectType = ELBOW::storageObjectType;
+        break;
+    }
+    case 12: {
+        TEE* shape = new (targetTab->tabNo) TEE();
+        shape->Randomize();
+        geometry = shape->GetGeometry();
+        object = shape;
+        objectType = TEE::storageObjectType;
+        break;
+    }
+    case 13: {
+        FLANGE* shape = new (targetTab->tabNo) FLANGE();
+        shape->Randomize();
+        geometry = shape->GetGeometry();
+        object = shape;
+        objectType = FLANGE::storageObjectType;
         break;
     }
     }

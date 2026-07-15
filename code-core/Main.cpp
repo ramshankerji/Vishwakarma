@@ -464,6 +464,15 @@ void ProcessPendingUIActions() {
         } else if (action.id == static_cast<uint32_t>(Commands::CREATE_ELLIPSOID)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_PRIMITIVE_CREATION3D,
                 static_cast<int>(VishwakarmaStorage::ToNumber(VishwakarmaStorage::ObjectType::Ellipsoid)));
+        } else if (action.id == static_cast<uint32_t>(Commands::CREATE_ELBOW)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_PRIMITIVE_CREATION3D,
+                static_cast<int>(VishwakarmaStorage::ToNumber(VishwakarmaStorage::ObjectType::Elbow)));
+        } else if (action.id == static_cast<uint32_t>(Commands::CREATE_T)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_PRIMITIVE_CREATION3D,
+                static_cast<int>(VishwakarmaStorage::ToNumber(VishwakarmaStorage::ObjectType::Tee)));
+        } else if (action.id == static_cast<uint32_t>(Commands::CREATE_FLANGE)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_PRIMITIVE_CREATION3D,
+                static_cast<int>(VishwakarmaStorage::ToNumber(VishwakarmaStorage::ObjectType::Flange)));
         } else if (action.id == static_cast<uint32_t>(Commands::CREATE_LINE)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_LINE_CREATION2D);
         } else if (action.id == static_cast<uint32_t>(Commands::CREATE_POLYLINE)) {

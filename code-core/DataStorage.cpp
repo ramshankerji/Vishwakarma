@@ -25,8 +25,10 @@
 #include "DataStorage_CONE.pb.h"
 #include "DataStorage_CUBOID.pb.h"
 #include "DataStorage_CYLINDER.pb.h"
+#include "DataStorage_ELBOW.pb.h"
 #include "DataStorage_ELLIPSOID.pb.h"
 #include "DataStorage_ELLIPSE2D.pb.h"
+#include "DataStorage_FLANGE.pb.h"
 #include "DataStorage_FOLDER.pb.h"
 #include "DataStorage_FRUSTUM_OF_CONE.pb.h"
 #include "DataStorage_FRUSTUM_OF_PYRAMID.pb.h"
@@ -39,6 +41,7 @@
 #include "DataStorage_PYRAMID.pb.h"
 #include "DataStorage_SCENE3D.pb.h"
 #include "DataStorage_SPHERE.pb.h"
+#include "DataStorage_TEE.pb.h"
 #include "DataStorage_TEXT2D.pb.h"
 #include "DataStorage_TORUS.pb.h"
 #include "ID.h"
@@ -46,6 +49,7 @@
 #include "sqlite3.h"
 #include "विश्वकर्मा.h"
 #include "डेटा-सामान्य-3D.h"
+#include "डेटा-पाइप.h"
 
 namespace {
 
@@ -387,6 +391,49 @@ bool EncodePipe(const PIPE& object, std::vector<uint8_t>& payload, std::string* 
     return SerializeMessage(message, payload, errorMessage);
 }
 
+bool EncodeElbow(const ELBOW& object, std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Elbow message;
+    WritePoint3(message.mutable_center(), object.center);
+    message.set_bend_radius(object.bendRadius);
+    message.set_outside_diameter(object.outsideDiameter);
+    message.set_inside_diameter(object.insideDiameter);
+    message.set_sweep_angle_radians(object.sweepAngleRadians);
+    WriteColor4(message.mutable_color_outer(), object.colorOuter);
+    WriteColor4(message.mutable_color_inner(), object.colorInner);
+    WriteColor4(message.mutable_color_cap(), object.colorCap);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
+bool EncodeTee(const TEE& object, std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Tee message;
+    WritePoint3(message.mutable_center1(), object.center1);
+    WritePoint3(message.mutable_center2(), object.center2);
+    message.set_main_outside_diameter(object.mainOutsideDiameter);
+    message.set_main_inside_diameter(object.mainInsideDiameter);
+    message.set_branch_angle_degrees(object.branchAngleDegrees);
+    message.set_branch_length(object.branchLength);
+    message.set_branch_outside_diameter(object.branchOutsideDiameter);
+    message.set_branch_inside_diameter(object.branchInsideDiameter);
+    WriteColor4(message.mutable_color_outer(), object.colorOuter);
+    WriteColor4(message.mutable_color_inner(), object.colorInner);
+    WriteColor4(message.mutable_color_cap(), object.colorCap);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
+bool EncodeFlange(const FLANGE& object, std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::Flange message;
+    WritePoint3(message.mutable_center1(), object.center1);
+    WritePoint3(message.mutable_center2(), object.center2);
+    message.set_flange_outer_diameter(object.flangeOuterDiameter);
+    message.set_bore_diameter(object.boreDiameter);
+    message.set_raised_face_diameter(object.raisedFaceDiameter);
+    message.set_raised_face_projection(object.raisedFaceProjection);
+    WriteColor4(message.mutable_color_face(), object.colorFace);
+    WriteColor4(message.mutable_color_rim(), object.colorRim);
+    WriteColor4(message.mutable_color_bore(), object.colorBore);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
 bool EncodeFolder(const FOLDER& object, std::vector<uint8_t>& payload, std::string* errorMessage) {
     pb::Folder message;
     message.set_name(FixedCStringToString(object.name, sizeof(object.name)));
@@ -682,6 +729,55 @@ bool DecodePipe(const std::vector<uint8_t>& payload, PIPE& object) {
     return true;
 }
 
+bool DecodeElbow(const std::vector<uint8_t>& payload, ELBOW& object) {
+    pb::Elbow message;
+    if (!ParseMessage(payload, message)) return false;
+
+    object.center = message.has_center() ? ReadPoint3(message.center()) : XMFLOAT3{};
+    object.bendRadius = message.bend_radius();
+    object.outsideDiameter = message.outside_diameter();
+    object.insideDiameter = message.inside_diameter();
+    object.sweepAngleRadians = message.sweep_angle_radians();
+    object.colorOuter = message.has_color_outer() ? ReadColor4(message.color_outer()) : DefaultColor4();
+    object.colorInner = message.has_color_inner() ? ReadColor4(message.color_inner()) : DefaultColor4();
+    object.colorCap = message.has_color_cap() ? ReadColor4(message.color_cap()) : DefaultColor4();
+    return true;
+}
+
+bool DecodeTee(const std::vector<uint8_t>& payload, TEE& object) {
+    pb::Tee message;
+    if (!ParseMessage(payload, message)) return false;
+
+    object.center1 = message.has_center1() ? ReadPoint3(message.center1()) : XMFLOAT3{};
+    object.center2 = message.has_center2() ? ReadPoint3(message.center2()) : XMFLOAT3{};
+    object.mainOutsideDiameter = message.main_outside_diameter();
+    object.mainInsideDiameter = message.main_inside_diameter();
+    object.branchAngleDegrees = message.branch_angle_degrees();
+    object.branchLength = message.branch_length();
+    object.branchOutsideDiameter = message.branch_outside_diameter();
+    object.branchInsideDiameter = message.branch_inside_diameter();
+    object.colorOuter = message.has_color_outer() ? ReadColor4(message.color_outer()) : DefaultColor4();
+    object.colorInner = message.has_color_inner() ? ReadColor4(message.color_inner()) : DefaultColor4();
+    object.colorCap = message.has_color_cap() ? ReadColor4(message.color_cap()) : DefaultColor4();
+    return true;
+}
+
+bool DecodeFlange(const std::vector<uint8_t>& payload, FLANGE& object) {
+    pb::Flange message;
+    if (!ParseMessage(payload, message)) return false;
+
+    object.center1 = message.has_center1() ? ReadPoint3(message.center1()) : XMFLOAT3{};
+    object.center2 = message.has_center2() ? ReadPoint3(message.center2()) : XMFLOAT3{};
+    object.flangeOuterDiameter = message.flange_outer_diameter();
+    object.boreDiameter = message.bore_diameter();
+    object.raisedFaceDiameter = message.raised_face_diameter();
+    object.raisedFaceProjection = message.raised_face_projection();
+    object.colorFace = message.has_color_face() ? ReadColor4(message.color_face()) : DefaultColor4();
+    object.colorRim = message.has_color_rim() ? ReadColor4(message.color_rim()) : DefaultColor4();
+    object.colorBore = message.has_color_bore() ? ReadColor4(message.color_bore()) : DefaultColor4();
+    return true;
+}
+
 bool DecodeFolder(const std::vector<uint8_t>& payload, FOLDER& object) {
     pb::Folder message;
     if (!ParseMessage(payload, message)) return false;
@@ -919,6 +1015,9 @@ std::string ObjectTypeName(ObjectType objectType) {
     case ObjectType::Arc2D: return "Arc2D";
     case ObjectType::Asset2DDefinition: return "Asset2DDefinition";
     case ObjectType::Asset2DInsert: return "Asset2DInsert";
+    case ObjectType::Elbow: return "Elbow";
+    case ObjectType::Tee: return "Tee";
+    case ObjectType::Flange: return "Flange";
     default: return "Unknown";
     }
 }
@@ -948,6 +1047,9 @@ bool ObjectTypeFromNumber(uint32_t value, ObjectType& objectType) {
     case 21: objectType = ObjectType::Ellipsoid; return true;
     case 22: objectType = ObjectType::Asset2DDefinition; return true;
     case 23: objectType = ObjectType::Asset2DInsert; return true;
+    case 24: objectType = ObjectType::Elbow; return true;
+    case 25: objectType = ObjectType::Tee; return true;
+    case 26: objectType = ObjectType::Flange; return true;
     default: objectType = ObjectType::Unknown; return false;
     }
 }
@@ -1013,6 +1115,12 @@ bool SerializeGeometryObject(const StoredGeometryObject3D& entry, std::vector<ui
         return EncodeTorus(*static_cast<const TORUS*>(entry.object), payload, errorMessage);
     case ObjectType::Ellipsoid:
         return EncodeEllipsoid(*static_cast<const ELLIPSOID*>(entry.object), payload, errorMessage);
+    case ObjectType::Elbow:
+        return EncodeElbow(*static_cast<const ELBOW*>(entry.object), payload, errorMessage);
+    case ObjectType::Tee:
+        return EncodeTee(*static_cast<const TEE*>(entry.object), payload, errorMessage);
+    case ObjectType::Flange:
+        return EncodeFlange(*static_cast<const FLANGE*>(entry.object), payload, errorMessage);
     default:
         SetError(errorMessage, "Unsupported object type during save.");
         return false;
@@ -1147,6 +1255,24 @@ bool DeserializeGeometryObject(ObjectType objectType, const std::vector<uint8_t>
         object = shape;
         break;
     }
+    case ObjectType::Elbow: {
+        ELBOW* shape = new (memoryGroupNo) ELBOW();
+        ok = DecodeElbow(payload, *shape);
+        object = shape;
+        break;
+    }
+    case ObjectType::Tee: {
+        TEE* shape = new (memoryGroupNo) TEE();
+        ok = DecodeTee(payload, *shape);
+        object = shape;
+        break;
+    }
+    case ObjectType::Flange: {
+        FLANGE* shape = new (memoryGroupNo) FLANGE();
+        ok = DecodeFlange(payload, *shape);
+        object = shape;
+        break;
+    }
     default:
         SetError(errorMessage, "Unsupported object type during load.");
         return false;
@@ -1199,6 +1325,15 @@ bool GeometryForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* obj
         return true;
     case ObjectType::Ellipsoid:
         geometry = static_cast<ELLIPSOID*>(object)->GetGeometry();
+        return true;
+    case ObjectType::Elbow:
+        geometry = static_cast<ELBOW*>(object)->GetGeometry();
+        return true;
+    case ObjectType::Tee:
+        geometry = static_cast<TEE*>(object)->GetGeometry();
+        return true;
+    case ObjectType::Flange:
+        geometry = static_cast<FLANGE*>(object)->GetGeometry();
         return true;
     default:
         return false;

@@ -33,6 +33,9 @@ enum class ObjectType : uint32_t {
     Ellipsoid = 21,
     Asset2DDefinition = 22,
     Asset2DInsert = 23,
+    Elbow = 24,
+    Tee = 25,
+    Flange = 26,
 };
 
 enum class LifecycleState : uint32_t {
@@ -66,7 +69,8 @@ constexpr uint32_t ToNumber(LifecycleState value) {
 constexpr bool IsGeometry3DObjectType(ObjectType value) {
     return (value >= ObjectType::Pyramid && value <= ObjectType::Pipe) ||
         value == ObjectType::Torus ||
-        value == ObjectType::Ellipsoid;
+        value == ObjectType::Ellipsoid ||
+        (value >= ObjectType::Elbow && value <= ObjectType::Flange);
 }
 
 constexpr bool IsLogicalObjectType(ObjectType value) {
@@ -116,6 +120,9 @@ inline const char* ObjectTypeDisplayName(ObjectType value) {
     case ObjectType::Arc2D: return "Arc2D";
     case ObjectType::Asset2DDefinition: return "Asset2DDefinition";
     case ObjectType::Asset2DInsert: return "Asset2DInsert";
+    case ObjectType::Elbow: return "Elbow";
+    case ObjectType::Tee: return "Tee";
+    case ObjectType::Flange: return "Flange";
     default: return "Unknown";
     }
 }

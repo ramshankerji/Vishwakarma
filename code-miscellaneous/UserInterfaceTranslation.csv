@@ -231,6 +231,7 @@ WordID,ShortWordName,English,Comments
 3996694081,CREATE_ELBOW,Create Elbow,Create Elbow
 4184007375,CREATE_T,Create T,Create T
 4183995726,CREATE_Y,Create Y,Create Y
+3072649185,CREATE_FLANGE,Create Flange,Create Flange
 2896880030,INSTRUMENT_PG,Instrument Pg,Instrument Pg
 2851619487,INSTRUMENT_TG,Instrument Tg,Instrument Tg
 2377130800,EDIT_EXTEND3D,Edit Extend3d,Edit Extend3d

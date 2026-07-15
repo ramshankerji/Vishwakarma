@@ -1,0 +1,21 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+import "DataStorage_Common3D.proto";
+
+option optimize_for = LITE_RUNTIME;
+
+message Flange {
+  Point3F center1 = 1;
+  Point3F center2 = 2;
+  float flange_outer_diameter = 3;
+  float bore_diameter = 4;
+  float raised_face_diameter = 5;
+  float raised_face_projection = 6;
+  Color4F color_face = 7;
+  Color4F color_rim = 8;
+  Color4F color_bore = 9;
+}

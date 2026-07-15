@@ -1,0 +1,20 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+import "DataStorage_Common3D.proto";
+
+option optimize_for = LITE_RUNTIME;
+
+message Elbow {
+  Point3F center = 1;
+  float bend_radius = 2;
+  float outside_diameter = 3;
+  float inside_diameter = 4;
+  float sweep_angle_radians = 5;
+  Color4F color_outer = 6;
+  Color4F color_inner = 7;
+  Color4F color_cap = 8;
+}
