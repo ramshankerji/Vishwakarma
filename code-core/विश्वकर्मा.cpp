@@ -1190,6 +1190,14 @@ static void ImportStdFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
 // the same copy-thread queue interactive 2D creation uses. Import policy: the
 // content goes into the *active* Page2D sub-tab only; abort when none is open
 // (the UI pre-checks too, but the state can change while the action is queued).
+// Owner for engineering-thread message boxes: with a null owner the box can open BEHIND the
+// main window, invisibly blocking this thread (and every queued action after it).
+static HWND FirstWindowHandleForEngineeringDialogs() {
+    uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
+    const uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+    return windowCount > 0 ? allWindows[windowList[0]].hWnd : nullptr;
+}
+
 static void ImportDxfFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
     uint64_t pageMemoryId = 0;
     if (Cad2DIsActivePage2D(*myTab)) {
@@ -1200,7 +1208,8 @@ static void ImportDxfFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
         ExtensionCommunications::ReleaseQueuedImportPath(payloadId);
         const char* message = "DXF import aborted: no Page2D is currently open.";
         std::cout << "[dxf-importer] " << message << std::endl;
-        MessageBoxA(nullptr, message, "DXF import", MB_OK | MB_ICONINFORMATION);
+        MessageBoxA(FirstWindowHandleForEngineeringDialogs(), message, "DXF import",
+            MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
         return;
     }
 
@@ -1209,9 +1218,21 @@ static void ImportDxfFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
         ExtensionCommunications::RunQueuedDxfImport(payloadId, error));
     if (!content) {
         std::cout << "[dxf-importer] " << error << "\n";
-        MessageBoxA(nullptr, error.c_str(), "DXF import failed", MB_OK | MB_ICONERROR);
+        MessageBoxA(FirstWindowHandleForEngineeringDialogs(), error.c_str(), "DXF import failed",
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
         return;
     }
+
+#ifdef _DEBUG
+    std::cout << "[dxf-import][dbg] received total="
+              << (content->lines.size() + content->texts.size() + content->polygons.size() +
+                  content->assetDefinitions.size() + content->assetInserts.size())
+              << " (lines=" << content->lines.size() << ", texts=" << content->texts.size()
+              << ", polygons=" << content->polygons.size()
+              << ", assetDefs=" << content->assetDefinitions.size()
+              << ", assetInserts=" << content->assetInserts.size()
+              << ") -> container " << pageMemoryId << std::endl;
+#endif
 
     for (const auto& line : content->lines) {
         Cad2DLineRecordCPU record{};
@@ -1321,6 +1342,12 @@ static void ImportDxfFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
               << content->texts.size() << " texts, " << content->polygons.size()
               << " polygons, " << definitionByKey.size() << " asset definitions and "
               << placedInserts << " inserts in the open Page2D." << std::endl; // Flush: rare event, aids diagnosis.
+
+#ifdef _DEBUG
+    // Queued after every element above: the copy thread reports counts + bounding box
+    // once the whole import has actually been ingested into the CPU records.
+    EnqueueCad2DIngestStatsReport(myTab->tabID, pageMemoryId);
+#endif
 }
 
 static void BeginPrimitive3DPlacement(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType) {

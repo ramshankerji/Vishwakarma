@@ -603,12 +603,19 @@ ImportedPage2DContent* RunQueuedDxfImport(uint64_t payloadId, std::string& error
     std::unique_ptr<std::wstring> path(reinterpret_cast<std::wstring*>(payloadId));
     if (!path || path->empty()) {
         error = "Import request carried no file path";
+        WriteImportResultMarker(kDxfImporter, "FAILED: " + error);
         return nullptr;
     }
 
     WorkerProcess worker;
-    if (!SpawnImportWorker(worker, kDxfImporter, error)) return nullptr;
-    if (!SendImportRequest(worker, *path, error)) return nullptr;
+    if (!SpawnImportWorker(worker, kDxfImporter, error)) {
+        WriteImportResultMarker(kDxfImporter, "FAILED: " + error.substr(0, 500));
+        return nullptr;
+    }
+    if (!SendImportRequest(worker, *path, error)) {
+        WriteImportResultMarker(kDxfImporter, "FAILED: " + error.substr(0, 500));
+        return nullptr;
+    }
 
     auto content = std::make_unique<ImportedPage2DContent>();
     content->sourceFile = *path;

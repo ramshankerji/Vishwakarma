@@ -407,6 +407,35 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 << std::setprecision(1) << elapsed << L" seconds)" << std::endl;
             frameCount = 0;// Reset counters
             lastFpsTime = currentTime;
+
+            // 2D render-state heartbeat: what each tab's Page2D snapshot holds on the GPU and
+            // where its input view is looking. Bridges "records ingested" and "pixels visible".
+            uint16_t* fpsTabList = publishedTabIndexes.load(std::memory_order_acquire);
+            const uint16_t fpsTabCount = publishedTabCount.load(std::memory_order_acquire);
+            for (uint16_t t = 0; t < fpsTabCount; ++t) {
+                DATASETTAB& fpsTab = allTabs[fpsTabList[t]];
+                if (!fpsTab.cad2d) continue;
+                Cad2DPageSnapshot* snapshot =
+                    fpsTab.cad2d->activeSnapshot.load(std::memory_order_acquire);
+                if (!snapshot || snapshot->pages.empty()) continue;
+                const int inputSlot = InputViewSlot(fpsTab);
+                const int viewSlot = (inputSlot >= 0 && inputSlot < MV_MAX_SUBTABS) ? inputSlot : 0;
+                const Cad2DViewState& view = fpsTab.cad2d->views[viewSlot];
+                std::cout << "[cad2d][dbg] tab=" << fpsTabList[t]
+                          << " inputSlot=" << inputSlot
+                          << " view center=(" << view.centerXCU.load(std::memory_order_acquire)
+                          << ", " << view.centerYCU.load(std::memory_order_acquire)
+                          << ") zoom=" << view.zoomPixelsPerCU.load(std::memory_order_acquire)
+                          << " gpuPages:";
+                for (const Cad2DPageGPU* page : snapshot->pages) {
+                    if (!page) continue;
+                    std::cout << " {container=" << page->containerMemoryId
+                              << " lines=" << page->lineCount
+                              << " curves=" << page->curveCount
+                              << " textIdx=" << page->textIndexCount << "}";
+                }
+                std::cout << std::endl;
+            }
         }
 #endif
 

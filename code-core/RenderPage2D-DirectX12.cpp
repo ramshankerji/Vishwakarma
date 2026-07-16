@@ -733,6 +733,79 @@ void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow
     }
 }
 
+#ifdef _DEBUG
+// Diagnostics for the ReportIngestStats sentinel: per-type record counts and the bounding box
+// of one container's live records. storage.cpuRecordsMutex must already be held by the caller.
+static void ReportCad2DIngestStatsLocked(const TabCad2DStorage& storage, uint64_t containerMemoryId) {
+    double minX = 0.0, minY = 0.0, maxX = 0.0, maxY = 0.0;
+    bool hasBounds = false;
+    auto include = [&](double x, double y) {
+        if (!hasBounds) { minX = maxX = x; minY = maxY = y; hasBounds = true; return; }
+        minX = (std::min)(minX, x); maxX = (std::max)(maxX, x);
+        minY = (std::min)(minY, y); maxY = (std::max)(maxY, y);
+    };
+    auto wanted = [&](bool isDeleted, uint64_t recContainer) {
+        return !isDeleted && recContainer == containerMemoryId;
+    };
+
+    size_t lines = 0, polylines = 0, polygons = 0, circles = 0, ellipses = 0, arcs = 0, texts = 0;
+    for (const Cad2DLineRecordCPU& r : storage.lineRecords) {
+        if (!wanted(r.isDeleted, r.containerMemoryId)) continue;
+        ++lines;
+        include(r.x1, r.y1); include(r.x2, r.y2);
+    }
+    for (const Cad2DPolylineRecordCPU& r : storage.polylineRecords) {
+        if (!wanted(r.isDeleted, r.containerMemoryId)) continue;
+        ++polylines;
+        for (const Cad2DPoint2D& p : r.points) include(p.x, p.y);
+    }
+    for (const Cad2DPolygonRecordCPU& r : storage.polygonRecords) {
+        if (!wanted(r.isDeleted, r.containerMemoryId)) continue;
+        ++polygons;
+        include(r.centerX - r.radius, r.centerY - r.radius);
+        include(r.centerX + r.radius, r.centerY + r.radius);
+    }
+    for (const Cad2DCircleRecordCPU& r : storage.circleRecords) {
+        if (!wanted(r.isDeleted, r.containerMemoryId)) continue;
+        ++circles;
+        include(r.centerX - r.radius, r.centerY - r.radius);
+        include(r.centerX + r.radius, r.centerY + r.radius);
+    }
+    for (const Cad2DEllipseRecordCPU& r : storage.ellipseRecords) {
+        if (!wanted(r.isDeleted, r.containerMemoryId)) continue;
+        ++ellipses;
+        const double radius = (std::max)(std::abs(r.radiusX), std::abs(r.radiusY));
+        include(r.centerX - radius, r.centerY - radius);
+        include(r.centerX + radius, r.centerY + radius);
+    }
+    for (const Cad2DArcRecordCPU& r : storage.arcRecords) {
+        if (!wanted(r.isDeleted, r.containerMemoryId)) continue;
+        ++arcs;
+        const double radius = (std::max)(std::abs(r.radiusX), std::abs(r.radiusY));
+        include(r.centerX - radius, r.centerY - radius);
+        include(r.centerX + radius, r.centerY + radius);
+    }
+    for (const Cad2DTextRecordCPU& r : storage.textRecords) {
+        if (!wanted(r.isDeleted, r.containerMemoryId)) continue;
+        ++texts;
+        include(r.x, r.y); include(r.x, r.y + (double)r.textHeightCU);
+    }
+
+    std::cout << "[cad2d][dbg] ingest complete, container " << containerMemoryId
+              << ": total=" << (lines + polylines + polygons + circles + ellipses + arcs + texts)
+              << " (lines=" << lines << ", polylines=" << polylines << ", polygons=" << polygons
+              << ", circles=" << circles << ", ellipses=" << ellipses << ", arcs=" << arcs
+              << ", texts=" << texts << ")";
+    if (hasBounds) {
+        std::cout << " bbox CU X[" << minX << " .. " << maxX << "] Y[" << minY << " .. " << maxY
+                  << "] size " << (maxX - minX) << " x " << (maxY - minY);
+    } else {
+        std::cout << " (no live records)";
+    }
+    std::cout << std::endl;
+}
+#endif
+
 void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
     if (batch.empty()) return;
 
@@ -756,137 +829,78 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
         std::vector<Cad2DTextRecordCPU> texts;
         {
             std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
+            // objectId -> record index per type: a batch of K commands costs O(records + K)
+            // instead of one linear scan of the whole record vector per command (imports
+            // enqueue tens of thousands of elements at once).
+            auto buildIndex = [](const auto& records) {
+                std::unordered_map<uint64_t, size_t> index;
+                index.reserve(records.size());
+                for (size_t i = 0; i < records.size(); ++i) index.emplace(records[i].objectId, i);
+                return index;
+            };
+            auto lineIndex = buildIndex(storage.lineRecords);
+            auto polylineIndex = buildIndex(storage.polylineRecords);
+            auto polygonIndex = buildIndex(storage.polygonRecords);
+            auto circleIndex = buildIndex(storage.circleRecords);
+            auto ellipseIndex = buildIndex(storage.ellipseRecords);
+            auto arcIndex = buildIndex(storage.arcRecords);
+            auto textIndex = buildIndex(storage.textRecords);
+            std::unordered_set<uint64_t> knownIds(tab.allIDsInThisTab.begin(),
+                tab.allIDsInThisTab.end());
+
+            // Insert-or-update; an update keeps the already-assigned persistedId /
+            // persistedParentId when the incoming record carries none.
+            auto upsert = [&](auto& records, auto& index, const auto& incoming) {
+                auto found = index.find(incoming.objectId);
+                if (found == index.end()) {
+                    index.emplace(incoming.objectId, records.size());
+                    records.push_back(incoming);
+                    if (knownIds.insert(incoming.objectId).second) {
+                        tab.allIDsInThisTab.push_back(incoming.objectId);
+                    }
+                    return;
+                }
+                auto updated = incoming;
+                auto& existing = records[found->second];
+                if (updated.persistedId == 0) updated.persistedId = existing.persistedId;
+                if (updated.persistedParentId == 0) updated.persistedParentId = existing.persistedParentId;
+                existing = std::move(updated);
+            };
+
             for (const CommandToCopyThread2D& command : commands) {
                 if (command.containerMemoryId == 0) continue;
-                if (command.type == CommandToCopyThread2DType::AddLine) {
-                    auto existing = std::find_if(storage.lineRecords.begin(), storage.lineRecords.end(),
-                        [&](const Cad2DLineRecordCPU& line) {
-                            return line.objectId == command.line.objectId;
-                        });
-                    if (existing == storage.lineRecords.end()) {
-                        storage.lineRecords.push_back(command.line);
-                        if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(),
-                            command.line.objectId) == tab.allIDsInThisTab.end()) {
-                            tab.allIDsInThisTab.push_back(command.line.objectId);
-                        }
+                switch (command.type) {
+                case CommandToCopyThread2DType::AddLine:
+#ifdef _DEBUG
+                    // Corruption checkpoint: was the record still sane when it crossed the queue?
+                    if (std::abs(command.line.x1) > 1.0e8 || std::abs(command.line.y1) > 1.0e8 ||
+                        std::abs(command.line.x2) > 1.0e8 || std::abs(command.line.y2) > 1.0e8) {
+                        std::cout << "[cad2d][dbg] OUTLIER AT INGEST line objectId="
+                                  << command.line.objectId << " container="
+                                  << command.line.containerMemoryId << " (" << command.line.x1
+                                  << ", " << command.line.y1 << ") -> (" << command.line.x2
+                                  << ", " << command.line.y2 << ")" << std::endl;
                     }
-                    else {
-                        *existing = command.line;
-                    }
-                }
-                else if (command.type == CommandToCopyThread2DType::AddPolyline) {
-                    auto existing = std::find_if(storage.polylineRecords.begin(), storage.polylineRecords.end(),
-                        [&](const Cad2DPolylineRecordCPU& polyline) {
-                            return polyline.objectId == command.polyline.objectId;
-                        });
-                    if (existing == storage.polylineRecords.end()) {
-                        storage.polylineRecords.push_back(command.polyline);
-                        if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(),
-                            command.polyline.objectId) == tab.allIDsInThisTab.end()) {
-                            tab.allIDsInThisTab.push_back(command.polyline.objectId);
-                        }
-                    }
-                    else {
-                        Cad2DPolylineRecordCPU updated = command.polyline;
-                        if (updated.persistedId == 0) updated.persistedId = existing->persistedId;
-                        if (updated.persistedParentId == 0) updated.persistedParentId = existing->persistedParentId;
-                        *existing = std::move(updated);
-                    }
-                }
-                else if (command.type == CommandToCopyThread2DType::AddPolygon) {
-                    auto existing = std::find_if(storage.polygonRecords.begin(), storage.polygonRecords.end(),
-                        [&](const Cad2DPolygonRecordCPU& polygon) {
-                            return polygon.objectId == command.polygon.objectId;
-                        });
-                    if (existing == storage.polygonRecords.end()) {
-                        storage.polygonRecords.push_back(command.polygon);
-                        if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(),
-                            command.polygon.objectId) == tab.allIDsInThisTab.end()) {
-                            tab.allIDsInThisTab.push_back(command.polygon.objectId);
-                        }
-                    }
-                    else {
-                        Cad2DPolygonRecordCPU updated = command.polygon;
-                        if (updated.persistedId == 0) updated.persistedId = existing->persistedId;
-                        if (updated.persistedParentId == 0) updated.persistedParentId = existing->persistedParentId;
-                        *existing = updated;
-                    }
-                }
-                else if (command.type == CommandToCopyThread2DType::AddCircle) {
-                    auto existing = std::find_if(storage.circleRecords.begin(), storage.circleRecords.end(),
-                        [&](const Cad2DCircleRecordCPU& circle) {
-                            return circle.objectId == command.circle.objectId;
-                        });
-                    if (existing == storage.circleRecords.end()) {
-                        storage.circleRecords.push_back(command.circle);
-                        if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(),
-                            command.circle.objectId) == tab.allIDsInThisTab.end()) {
-                            tab.allIDsInThisTab.push_back(command.circle.objectId);
-                        }
-                    }
-                    else {
-                        Cad2DCircleRecordCPU updated = command.circle;
-                        if (updated.persistedId == 0) updated.persistedId = existing->persistedId;
-                        if (updated.persistedParentId == 0) updated.persistedParentId = existing->persistedParentId;
-                        *existing = updated;
-                    }
-                }
-                else if (command.type == CommandToCopyThread2DType::AddEllipse) {
-                    auto existing = std::find_if(storage.ellipseRecords.begin(), storage.ellipseRecords.end(),
-                        [&](const Cad2DEllipseRecordCPU& ellipse) {
-                            return ellipse.objectId == command.ellipse.objectId;
-                        });
-                    if (existing == storage.ellipseRecords.end()) {
-                        storage.ellipseRecords.push_back(command.ellipse);
-                        if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(),
-                            command.ellipse.objectId) == tab.allIDsInThisTab.end()) {
-                            tab.allIDsInThisTab.push_back(command.ellipse.objectId);
-                        }
-                    }
-                    else {
-                        Cad2DEllipseRecordCPU updated = command.ellipse;
-                        if (updated.persistedId == 0) updated.persistedId = existing->persistedId;
-                        if (updated.persistedParentId == 0) updated.persistedParentId = existing->persistedParentId;
-                        *existing = updated;
-                    }
-                }
-                else if (command.type == CommandToCopyThread2DType::AddArc) {
-                    auto existing = std::find_if(storage.arcRecords.begin(), storage.arcRecords.end(),
-                        [&](const Cad2DArcRecordCPU& arc) {
-                            return arc.objectId == command.arc.objectId;
-                        });
-                    if (existing == storage.arcRecords.end()) {
-                        storage.arcRecords.push_back(command.arc);
-                        if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(),
-                            command.arc.objectId) == tab.allIDsInThisTab.end()) {
-                            tab.allIDsInThisTab.push_back(command.arc.objectId);
-                        }
-                    }
-                    else {
-                        Cad2DArcRecordCPU updated = command.arc;
-                        if (updated.persistedId == 0) updated.persistedId = existing->persistedId;
-                        if (updated.persistedParentId == 0) updated.persistedParentId = existing->persistedParentId;
-                        *existing = updated;
-                    }
-                }
-                else if (command.type == CommandToCopyThread2DType::AddText) {
-                    auto existing = std::find_if(storage.textRecords.begin(), storage.textRecords.end(),
-                        [&](const Cad2DTextRecordCPU& text) {
-                            return text.objectId == command.text.objectId;
-                        });
-                    if (existing == storage.textRecords.end()) {
-                        storage.textRecords.push_back(command.text);
-                        if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(),
-                            command.text.objectId) == tab.allIDsInThisTab.end()) {
-                            tab.allIDsInThisTab.push_back(command.text.objectId);
-                        }
-                    }
-                    else {
-                        Cad2DTextRecordCPU updated = command.text;
-                        if (updated.persistedId == 0) updated.persistedId = existing->persistedId;
-                        if (updated.persistedParentId == 0) updated.persistedParentId = existing->persistedParentId;
-                        *existing = std::move(updated);
-                    }
+#endif
+                    upsert(storage.lineRecords, lineIndex, command.line); break;
+                case CommandToCopyThread2DType::AddPolyline:
+                    upsert(storage.polylineRecords, polylineIndex, command.polyline); break;
+                case CommandToCopyThread2DType::AddPolygon:
+                    upsert(storage.polygonRecords, polygonIndex, command.polygon); break;
+                case CommandToCopyThread2DType::AddCircle:
+                    upsert(storage.circleRecords, circleIndex, command.circle); break;
+                case CommandToCopyThread2DType::AddEllipse:
+                    upsert(storage.ellipseRecords, ellipseIndex, command.ellipse); break;
+                case CommandToCopyThread2DType::AddArc:
+                    upsert(storage.arcRecords, arcIndex, command.arc); break;
+                case CommandToCopyThread2DType::AddText:
+                    upsert(storage.textRecords, textIndex, command.text); break;
+#ifdef _DEBUG
+                case CommandToCopyThread2DType::ReportIngestStats:
+                    ReportCad2DIngestStatsLocked(storage, command.containerMemoryId); break;
+#endif
+                default:
+                    break; // SelectionRefresh: no geometry; its presence alone forces the rebuild below.
                 }
             }
             lines = storage.lineRecords;

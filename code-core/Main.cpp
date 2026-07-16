@@ -602,6 +602,13 @@ DATASETTAB* GetActiveTabFromHwnd(HWND hWnd) {
 }
 
 void AllocateConsoleWindow() {
+    // Launched from a terminal with stdout captured (pipe / file): keep the inherited
+    // handles so the diagnostics land in the captor instead of a fresh console window.
+    const DWORD stdoutType = GetFileType(GetStdHandle(STD_OUTPUT_HANDLE));
+    if (stdoutType == FILE_TYPE_PIPE || stdoutType == FILE_TYPE_DISK) {
+        std::ios::sync_with_stdio(true);
+        return;
+    }
     AllocConsole();// Allocate a console for this GUI application
     FILE* pCout;// Redirect stdout, stdin, stderr to console
     FILE* pCin;

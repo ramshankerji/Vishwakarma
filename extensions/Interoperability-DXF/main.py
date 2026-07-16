@@ -415,6 +415,25 @@ def resolve_block_geometry(doc, name, cache, visiting=None, depth=0):
     return result
 
 
+def geometry_bbox(geometry):
+    """Bounding box (min_x, min_y, max_x, max_y) of resolved block geometry
+    (lines, texts, polygons) in the block frame; None when empty."""
+    lines, texts, polygons = geometry
+    xs, ys = [], []
+    for x1, y1, x2, y2 in lines:
+        xs += (x1, x2)
+        ys += (y1, y2)
+    for t in texts:
+        xs.append(t[0])
+        ys.append(t[1])
+    for cx, cy, radius, _n, _rot in polygons:
+        xs += (cx - radius, cx + radius)
+        ys += (cy - radius, cy + radius)
+    if not xs:
+        return None
+    return min(xs), min(ys), max(xs), max(ys)
+
+
 def array_cells(insert):
     """Yield the insertion points of an INSERT's rectangular array (usually one
     cell). Spacings live in the block frame, so each cell offset gets the
@@ -454,6 +473,7 @@ def run() -> None:
     # host bakes that transform into the instance's member geometry.
     block_cache = {}
     definitions = {}        # block name -> definition dict (built lazily)
+    bbox_by_key = {}        # definition key -> block-frame geometry bbox
     asset_inserts = []      # (key, x, y, sx, sy, rotation_deg), recentered below
     next_key = 1
     for insert in model_inserts:
@@ -480,6 +500,7 @@ def run() -> None:
                 'key': next_key, 'name': name,
                 'base_x': base[0], 'base_y': base[1],
                 'lines': geometry[0], 'texts': geometry[1], 'polygons': geometry[2]}
+            bbox_by_key[next_key] = geometry_bbox(geometry)
             next_key += 1
         key = definitions[name]['key']
         for cx, cy in array_cells(insert):
@@ -490,10 +511,23 @@ def run() -> None:
     # Definitions are created lazily by their first insert, so every one is used.
     definition_list = list(definitions.values())
 
-    # Recenter model geometry and the asset insert points together, so block
-    # instances keep their position relative to the plain drawing. Master
+    # Recenter model geometry and the asset instances together, so block
+    # instances keep their position relative to the plain drawing. Each
+    # instance's extents proxy is its block bbox pushed through the placement
+    # transform: the bare insert point can sit far from the actual geometry
+    # when the block base point is away from its drawn content. Master
     # geometry, base points and the instance transforms stay in the block frame.
-    anchors = [(x, y) for _k, x, y, _sx, _sy, _rot in asset_inserts]
+    defs_by_key = {d['key']: d for d in definition_list}
+    anchors = []
+    for key, cx, cy, sx, sy, rot in asset_inserts:
+        definition = defs_by_key[key]
+        min_x, min_y, max_x, max_y = bbox_by_key[key]
+        theta = math.radians(rot)
+        cos_r, sin_r = math.cos(theta), math.sin(theta)
+        for px, py in ((min_x, min_y), (min_x, max_y), (max_x, min_y), (max_x, max_y)):
+            qx = (px - definition['base_x']) * sx
+            qy = (py - definition['base_y']) * sy
+            anchors.append((cx + qx * cos_r - qy * sin_r, cy + qx * sin_r + qy * cos_r))
     offset_x, offset_y = converter.recenter(extra_points=anchors)
     if offset_x or offset_y:
         asset_inserts = [(k, x + offset_x, y + offset_y, sx, sy, rot)

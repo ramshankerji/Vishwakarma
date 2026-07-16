@@ -212,7 +212,9 @@ enum class CommandToCopyThread2DType : uint8_t {
     AddCircle = 4,
     AddEllipse = 5,
     AddArc = 6,
-    SelectionRefresh = 7 // No geometry; forces a page rebuild so selection flags re-apply.
+    SelectionRefresh = 7, // No geometry; forces a page rebuild so selection flags re-apply.
+    ReportIngestStats = 8 // Debug diagnostics: print the container's record counts + bbox once
+                          // every command queued before it has been ingested.
 };
 
 // GPU record 'flags' bit set for the currently selected 2D objects; the 2D vertex shaders read it
@@ -330,6 +332,7 @@ void EnqueueCad2DEllipse(uint64_t tabID, uint64_t containerMemoryId, Cad2DEllips
 void EnqueueCad2DArc(uint64_t tabID, uint64_t containerMemoryId, Cad2DArcRecordCPU arc);
 void EnqueueCad2DText(uint64_t tabID, uint64_t containerMemoryId, Cad2DTextRecordCPU text);
 void EnqueueCad2DSelectionRefresh(uint64_t tabID, uint64_t containerMemoryId);
+void EnqueueCad2DIngestStatsReport(uint64_t tabID, uint64_t containerMemoryId);
 bool HasPendingCad2DCopyCommands();
 void PopAllCad2DCopyCommands(std::vector<CommandToCopyThread2D>& outCommands);
 

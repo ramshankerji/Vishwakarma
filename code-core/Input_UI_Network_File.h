@@ -8,6 +8,7 @@
 
 #include "UserInputProcessing.h"
 #include "ExtensionCommunications.h"
+#include "RenderPage2D.h" // Cad2DFindTargetPage2DMemoryId for the DXF auto-import dev hook.
 
 
 extern std::atomic<bool> shutdownSignal; // Global flag to signal all threads to shut down.
@@ -64,6 +65,50 @@ void FileInputThread() {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
+
+#ifdef _DEBUG
+    // Dev/testing hook (Debug only): activate the default Page2D, import a DXF into it,
+    // then fit the view — exercises the whole 2D import pipeline and its console
+    // diagnostics without any GUI interaction.
+    wchar_t autoImportDxf[MAX_PATH] = {};
+    if (GetEnvironmentVariableW(L"VISHWAKARMA_AUTO_IMPORT_DXF", autoImportDxf, MAX_PATH) > 0) {
+        for (int attempt = 0; attempt < 300 && !shutdownSignal; ++attempt) {
+            if (publishedTabCount.load(std::memory_order_acquire) > 0) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (publishedTabCount.load(std::memory_order_acquire) > 0) {
+            uint16_t* list = publishedTabIndexes.load(std::memory_order_acquire);
+            DATASETTAB& tab = allTabs[list[0]];
+            uint64_t pageMemoryId = 0;
+            for (int attempt = 0; attempt < 300 && !shutdownSignal; ++attempt) {
+                pageMemoryId = Cad2DFindTargetPage2DMemoryId(tab);
+                if (pageMemoryId != 0) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            if (pageMemoryId != 0 && tab.todoCPUQueue) {
+                ACTION_DETAILS open{};
+                open.actionType = ACTION_TYPE::OPEN_INTERNAL_SUB_TAB;
+                open.source = INPUT_SOURCE::SYSTEM;
+                open.objectId = pageMemoryId;
+                open.timestamp = GetTickCount64();
+                tab.todoCPUQueue->push(open);
+                ExtensionCommunications::QueueImportDxfFile(&tab, autoImportDxf);
+                // Give the worker + copy-thread ingest time to finish, then fit the view.
+                for (int i = 0; i < 300 && !shutdownSignal; ++i) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+                ACTION_DETAILS zoom{};
+                zoom.actionType = ACTION_TYPE::ZOOM_MAX_EXTENTS;
+                zoom.source = INPUT_SOURCE::SYSTEM;
+                zoom.timestamp = GetTickCount64();
+                tab.todoCPUQueue->push(zoom);
+                std::cout << "FILE: auto-import DXF queued with zoom-extents." << std::endl;
+            } else {
+                std::cout << "FILE: auto-import DXF found no Page2D." << std::endl;
+            }
+        }
+    }
+#endif
     std::cout << "FILE: Initial bulk load complete." << std::endl;
 
     while(!shutdownSignal){
