@@ -37,7 +37,7 @@ _SHAPE_CHANGING_SPECS = {"T", "D", "LD", "SD", "RA", "CM"}
 def designation_for(member_profile) -> str:
     """Vishwakarma designation for one member_profile_by_member record, or ""."""
     if not member_profile or member_profile.get("profile_type") != "TABLE":
-        return ""  # PRIS / TAPERED / UPTABLE / GENERAL -> placeholder pipe.
+        return ""  # PRIS / TAPERED / UPTABLE / GENERAL -> placeholder pipe (but see parametric_for).
     tokens = str(member_profile.get("profile_name", "")).split()
     if not tokens:
         return ""
@@ -51,6 +51,40 @@ def designation_for(member_profile) -> str:
     else:
         name = tokens[0].upper()  # Lenient: tolerate a missing ST spec.
     return VISHWAKARMA_DESIGNATION_BY_STD_NAME.get(name, name)
+
+
+# STAAD prismatic parameter keys we understand. YB/ZB define prismatic tee /
+# trapezoid shapes that RECT/CIRC cannot represent — such members stay
+# placeholder pipes rather than silently dropping their taper.
+_PRISMATIC_KEYS = {"YD", "ZD", "YB", "ZB"}
+
+
+def parametric_for(member_profile):
+    """(designation, parameter1, parameter2) in SI meters for one PRIS record,
+    or None when the member is not a plain rectangular/circular prismatic.
+
+    STAAD convention: `PRIS YD y ZD z` is a rectangle y deep (local y) by z
+    wide; `PRIS YD y` alone is a solid circle of diameter y. Values arrive
+    already unit-converted by the parser (values_si). OCT/HEX have no STAAD
+    spelling, so they are never produced here.
+    """
+    if not member_profile or member_profile.get("profile_type") != "PRIS":
+        return None
+    values = member_profile.get("values_si") or member_profile.get("values") or []
+    found = {}
+    for token, value in zip(values, values[1:]):
+        if isinstance(token, str) and token.upper() in _PRISMATIC_KEYS \
+                and isinstance(value, (int, float)):
+            found[token.upper()] = float(value)
+    if "YB" in found or "ZB" in found:
+        return None
+    yd = found.get("YD", 0.0)
+    if yd <= 0.0:
+        return None  # AX/IZ-only prismatics carry no outline.
+    zd = found.get("ZD", 0.0)
+    if zd > 0.0:
+        return ("RECT", yd, zd)  # parameter1 = depth YD, parameter2 = width ZD.
+    return ("CIRC", yd, 0.0)
 
 
 VISHWAKARMA_DESIGNATION_BY_STD_NAME = {

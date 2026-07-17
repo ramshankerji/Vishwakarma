@@ -29,6 +29,9 @@ struct ImportedMember {
     // Vishwakarma catalog designation, already mapped from the STAAD name by the
     // worker (profile_mapping.py). Empty = unmapped; drawn as a placeholder pipe.
     std::string profileDesignation;
+    // Parametric-family section dimensions (PRIS YD/ZD), SI meters; 0 = unset.
+    double userParameter1 = 0.0;
+    double userParameter2 = 0.0;
 };
 
 struct ImportedStructuralModel {

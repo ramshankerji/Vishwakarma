@@ -30,6 +30,19 @@ def _std_si_to_vishwakarma_node(node_id, x_m, y_m, z_m):
     return (node_id, float(x_m), -float(z_m), float(y_m))
 
 
+def _member_entry(member_id, start_id, end_id, profile):
+    # Rolled section by name first; else a parametric prismatic (PRIS YD/ZD)
+    # with its dimensions; else empty designation -> host placeholder pipe.
+    designation = profile_mapping.designation_for(profile)
+    if designation:
+        return (member_id, start_id, end_id, designation)
+    parametric = profile_mapping.parametric_for(profile)
+    if parametric:
+        designation, parameter1, parameter2 = parametric
+        return (member_id, start_id, end_id, designation, parameter1, parameter2)
+    return (member_id, start_id, end_id, "")
+
+
 def run() -> None:
     channel = vk.HostChannel()
     request = channel.recv_import_request()
@@ -51,17 +64,18 @@ def run() -> None:
     ]
     known_node_ids = {node[0] for node in nodes}
     members = [
-        (member_id, start_id, end_id,
-         profile_mapping.designation_for(model.member_profile_by_member.get(member_id)))
+        _member_entry(member_id, start_id, end_id,
+                      model.member_profile_by_member.get(member_id))
         for member_id, (start_id, end_id) in model.members.items()
         if _valid_id(member_id) and start_id in known_node_ids and end_id in known_node_ids
     ]
 
     skipped_members = len(model.members) - len(members)
     mapped_members = sum(1 for member in members if member[3])
+    parametric_members = sum(1 for member in members if len(member) > 4)
     channel.send_log(
         f"Parsed '{request.file_name}': {len(nodes)} nodes, {len(members)} members"
-        f" ({mapped_members} with profile names)"
+        f" ({mapped_members} with profile names, {parametric_members} of them parametric)"
         + (f" ({skipped_members} members skipped: missing/invalid node refs)" if skipped_members else "")
     )
 

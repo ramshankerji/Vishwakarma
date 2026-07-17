@@ -59,7 +59,8 @@ class HostChannel:
 
     def send_geometry_batch(self, nodes, members) -> None:
         """nodes: iterable of (id, x, y, z);
-        members: iterable of (id, a, b) or (id, a, b, profile_designation)."""
+        members: iterable of (id, a, b), (id, a, b, profile_designation) or
+        (id, a, b, designation, parameter1, parameter2) — parameters SI meters."""
         message = _pb.WorkerToHost()
         batch = message.create_geometry_batch
         for node_id, x, y, z in nodes:
@@ -75,6 +76,9 @@ class HostChannel:
             member.end_node_id = entry[2]
             if len(entry) > 3 and entry[3]:
                 member.profile_designation = entry[3]
+            if len(entry) > 5:
+                member.user_parameter1 = entry[4]
+                member.user_parameter2 = entry[5]
         self._send(message)
 
     def send_result(self, success: bool, error: str = "",

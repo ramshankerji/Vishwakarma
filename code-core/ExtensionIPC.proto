@@ -52,6 +52,9 @@ message StructuralMember {
   // the STAAD table name by the worker (profile_mapping.py). Empty = no rolled
   // section mapped; the host draws such members as placeholder pipes.
   string profile_designation = 4;
+  // Parametric-family section dimensions (PRIS YD/ZD), SI meters; 0 = unset.
+  double user_parameter1 = 5;
+  double user_parameter2 = 6;
 }
 
 message CreateGeometryBatch {

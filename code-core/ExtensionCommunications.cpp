@@ -334,8 +334,11 @@ bool AppendValidatedBatch(const vishwakarma::extension::v1::CreateGeometryBatch&
         // Overlong designations are certainly garbage: treat as unmapped rather than fail the import.
         std::string designation = member.profile_designation();
         if (designation.size() > kMaxProfileDesignationBytes) designation.clear();
+        // Bad parameters degrade to 0 (= catalog default dimensions), never fail the import.
+        auto safeParameter = [](double value) { return std::isfinite(value) && value > 0.0 ? value : 0.0; };
         model.members.push_back({ member.member_id(), member.start_node_id(), member.end_node_id(),
-            std::move(designation) });
+            std::move(designation),
+            safeParameter(member.user_parameter1()), safeParameter(member.user_parameter2()) });
     }
     return true;
 }

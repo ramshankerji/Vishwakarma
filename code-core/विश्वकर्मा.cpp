@@ -1202,6 +1202,8 @@ static void ImportStdFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
             shape->point1 = start->second;
             shape->point2 = end->second;
             shape->profileId = profile->id;
+            shape->userParameter1 = static_cast<float>(member.userParameter1 * 1000.0); // Wire meters -> stored mm.
+            shape->userParameter2 = static_cast<float>(member.userParameter2 * 1000.0);
             shape->colorMain = memberColor;
             shape->colorInner = memberColor;
             shape->colorCap = memberColor;
