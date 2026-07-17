@@ -1,0 +1,10 @@
+id,key,status,superseded_by,country,code,series,designation,alt_designation,d,t,mass,availability
+0x8AFDA08182,ASTMA501:HSS 6.625x0.280,active,,USA,ASTM A501,HSS,HSS 6.625x0.280,,168.3,7.1,28.3,current
+0x7D2E8E4948,EN10210:CHS 114.3x5,active,,Europe,EN 10210,CHS,CHS 114.3x5,,114.3,5.0,13.5,current
+0x4FA6ECAD93,EN10210:CHS 219.1x8,active,,Europe,EN 10210,CHS,CHS 219.1x8,,219.1,8.0,41.6,current
+0xF95F967225,EN10210:CHS 323.9x10,active,,Europe,EN 10210,CHS,CHS 323.9x10,,323.9,10.0,77.4,current
+0x0BB3BF062D,EN10210:CHS 48.3x3.2,active,,Europe,EN 10210,CHS,CHS 48.3x3.2,,48.3,3.2,3.56,current
+0x19925297DD,EN10210:CHS 508x12.5,active,,Europe,EN 10210,CHS,CHS 508x12.5,,508.0,12.5,153,current
+0x8C1394E8CA,IS1161:NB 100 H,active,,India,IS 1161,NB,NB 100 H,,114.3,5.4,14.5,current
+0x3B3E9043CD,IS1161:NB 150 M,active,,India,IS 1161,NB,NB 150 M,,165.1,4.8,19.0,current
+0x5D385C9121,IS1161:NB 50 M,active,,India,IS 1161,NB,NB 50 M,,60.3,3.6,5.03,current

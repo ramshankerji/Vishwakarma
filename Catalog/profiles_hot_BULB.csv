@@ -1,0 +1,7 @@
+id,key,status,superseded_by,country,code,series,designation,alt_designation,h,t,bulb_h,r1,mass,availability
+0xA40CB4A5E0,EN10067:HP 100x6,active,,Europe,EN 10067,HP,HP 100x6,,100,6,17,5,5.7,current
+0xEFD5DAE7D7,EN10067:HP 160x8,active,,Europe,EN 10067,HP,HP 160x8,,160,8,24,6,12.4,current
+0x18E2E42E1F,EN10067:HP 200x10,active,,Europe,EN 10067,HP,HP 200x10,,200,10,28,7,19.0,current
+0xA3B5178DDA,EN10067:HP 320x13,active,,Europe,EN 10067,HP,HP 320x13,,320,13,43,9,40.6,current
+0xED647639D2,EN10067:HP 430x20,active,,Europe,EN 10067,HP,HP 430x20,,430,20,55,11,82.5,current
+0xD0EEB15E92,IS1863:ISBF 200x10,active,,India,IS 1863,ISBF,ISBF 200x10,,200,10,28,7,19.0,current

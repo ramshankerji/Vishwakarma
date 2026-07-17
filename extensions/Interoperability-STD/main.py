@@ -17,7 +17,6 @@ import InteroperabilityWithSTDFile as std_reader
 
 BATCH_SIZE = 5000
 UINT32_MAX = 0xFFFFFFFF
-VISHWAKARMA_UNITS_PER_METER = 1000.0
 
 
 def _valid_id(value) -> bool:
@@ -25,9 +24,9 @@ def _valid_id(value) -> bool:
 
 
 def _std_si_to_vishwakarma_node(node_id, x_m, y_m, z_m):
-    # Reader coordinates are meters; host geometry uses millimeters.
-    scale = VISHWAKARMA_UNITS_PER_METER
-    return (node_id, float(x_m) * scale, -float(z_m) * scale, float(y_m) * scale)
+    # Both sides are SI meters (ExtensionIPC.proto); only the axes change:
+    # STAAD Y-up -> Vishwakarma Z-up.
+    return (node_id, float(x_m), -float(z_m), float(y_m))
 
 
 def run() -> None:

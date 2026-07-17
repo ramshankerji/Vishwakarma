@@ -1,0 +1,8 @@
+id,key,status,superseded_by,country,code,series,designation,alt_designation,h,b_head,b_foot,tw,mass,availability
+0x9154933ED6,ASCE:ASCE 60,active,,USA,ASCE / AREMA,ASCE,ASCE 60,,108,60,108,14,29.8,current
+0xFFD926E4D6,DIN536:A100,active,,Europe,DIN 536-1,A,A100,,95,100,200,60,74.3,current
+0x0A38DF8C19,DIN536:A120,active,,Europe,DIN 536-1,A,A120,,105,120,220,72,100,current
+0x95DF0CB182,DIN536:A65,active,,Europe,DIN 536-1,A,A65,,75,65,175,38,43.1,current
+0x772E5DDA5A,EN13674:60E1,active,,Europe,EN 13674-1,E,60E1,,172,72,150,16.5,60.2,current
+0xE060280A20,IS3443:CR100,active,,India,IS 3443,CR,CR100,,150,100,150,38,88.7,current
+0xC3A2BAA3A3,IS3443:CR80,active,,India,IS 3443,CR,CR80,,130,80,130,32,63.8,current

@@ -1,0 +1,10 @@
+id,key,status,superseded_by,country,code,series,designation,alt_designation,a,b,mass,availability
+0xC9E89E8FFD,EN10058:FL 100x10,active,,Europe,EN 10058,FLAT,FL 100x10,,100,10,7.85,current
+0xF219202BAD,EN10058:FL 50x6,active,,Europe,EN 10058,FLAT,FL 50x6,,50,6,2.36,current
+0xAC18D7DF03,EN10059:SQ 40,active,,Europe,EN 10059,SQUARE,SQ 40,,40,,12.6,current
+0x1359030AA8,EN10060:RD 20,active,,Europe,EN 10060,ROUND,RD 20,,20,,2.47,current
+0x89DD3700F3,EN10060:RD 50,active,,Europe,EN 10060,ROUND,RD 50,,50,,15.4,current
+0x1329E1D797,EN10061:HEX 32,active,,Europe,EN 10061,HEX,HEX 32,,32,,6.96,current
+0xF03F8E84F5,GOST2590:RD 12,active,,Russia,GOST 2590-2006,ROUND,RD 12,,12,,0.888,current
+0x34311467CA,IS1730:ISF 100x8,active,,India,IS 1730/1732,FLAT,ISF 100x8,,100,8,6.28,current
+0xFA986AC029,IS1730:ISRO 25,active,,India,IS 1730/1732,ROUND,ISRO 25,,25,,3.85,current
