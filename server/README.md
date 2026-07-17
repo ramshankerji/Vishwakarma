@@ -85,8 +85,12 @@ The systemd unit (`deploy/mv-telemetry.service`) runs gunicorn via
 `gunicorn.conf.py` (loopback bind, request-size limits, worker recycling) under a
 strict sandbox: read-only filesystem except `/var/lib/mv-telemetry`, no new
 privileges, no capabilities, and a `@system-service` syscall filter. Audit it with
-`systemd-analyze security mv-telemetry`; smoke-test with
-`curl -sS http://127.0.0.1:8000/api/health` (expects `ok`).
+`systemd-analyze security mv-telemetry`. In production mode `SECURE_SSL_REDIRECT`
+is on, so a plain-HTTP loopback request is 301-redirected to https; smoke-test by
+simulating the tunnel's forwarded-proto header:
+`curl -sS -H 'X-Forwarded-Proto: https' http://127.0.0.1:8000/api/health` (expects
+`ok`). The definitive check is `curl https://mv-server.ramshanker.in/api/health`
+once the tunnel is up.
 
 ## Cloudflare tunnel
 
@@ -94,7 +98,13 @@ TLS terminates at Cloudflare; the tunnel forwards plain HTTP to gunicorn on
 loopback, so no inbound firewall ports are required.
 
 ```bash
-# Install cloudflared for arm64, then authenticate and create the tunnel:
+# Install cloudflared (check arch with: dpkg --print-architecture).
+# 64-bit Pi OS (arm64); use cloudflared-linux-arm.deb for 32-bit (armhf):
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb -o /tmp/cloudflared.deb
+sudo dpkg -i /tmp/cloudflared.deb
+cloudflared --version
+
+# Authenticate and create the tunnel:
 cloudflared tunnel login
 cloudflared tunnel create mv-server
 cloudflared tunnel route dns mv-server mv-server.ramshanker.in
@@ -103,6 +113,7 @@ cloudflared tunnel route dns mv-server mv-server.ramshanker.in
 sudo mkdir -p /etc/cloudflared
 sudo cp /opt/vishwakarma/server/deploy/cloudflared-config.yml.example /etc/cloudflared/config.yml
 sudo nano /etc/cloudflared/config.yml
+# Paste the JSON file path shown earlier by cloudflare in above file. To save Ctrl+X
 sudo cloudflared service install
 sudo systemctl enable --now cloudflared
 ```
@@ -115,14 +126,11 @@ the tunnel needs no open ports.
 ## Regenerating the command name mapping
 
 `api/commands.py` maps ribbon command IDs to names for the dashboard and is generated
-from `code-core/ListOfCommands.h`. Regenerate after adding commands:
+from `code-core/ListOfCommands.h`. Regenerate after adding commands with:
 
-```python
-import re, io
-src = io.open('code-core/ListOfCommands.h', encoding='utf-8').read()
-pairs = re.findall(r'^\s*([A-Z0-9_]+)\s*=\s*(\d{10})\s*,', src, re.M)
-out = ['# Generated from code-core/ListOfCommands.h - command id to name mapping.',
-       '# Regenerate when new commands are added (see server/README.md).', '', 'COMMAND_NAMES = {']
-out += ['    %s: "%s",' % (num, name) for name, num in pairs] + ['}']
-io.open('server/api/commands.py', 'w', encoding='utf-8', newline='\n').write('\n'.join(out) + '\n')
+```bash
+python code-miscellaneous/command_names_generator.py
 ```
+
+The script resolves paths relative to the repository, so it can be run from any
+directory.
