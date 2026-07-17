@@ -743,7 +743,8 @@ constexpr UIControlDefinition AllUIControls[] = {
     // ACTION GROUP 12: Extensions
     // Subgroup : General
     // All Active Extensions (This will be dynamic in future, but we can hardcode few for now)
-    { Commands::SCRIPT_PANNEL,          UITextID::SCRIPT_PANNEL, U'x', 1, 1, 0, 0, true, true, 12 , 23 }
+    { Commands::SCRIPT_PANNEL,          UITextID::SCRIPT_PANNEL, U'x', 1, 1, 0, 0, true, true, 12 , 23 },
+    { Commands::SOFTWARE_UPDATE_CHECK,  UITextID::SOFTWARE_UPDATE_CHECK, UIIconForCommand(Commands::SOFTWARE_UPDATE_CHECK), 1, 1, 0, 0, true, true, 12 , 23 }
 };
 
 constexpr size_t TotalUIControls = std::size(AllUIControls);

@@ -521,6 +521,8 @@ void ProcessPendingUIActions() {
             ExtensionCommunications::QueueImportStdCommand(GetActiveTabForUIAction());
         } else if (action.id == static_cast<uint32_t>(Commands::IMPORT_DXF)) {
             ExtensionCommunications::QueueImportDxfCommand(GetActiveTabForUIAction());
+        } else if (action.id == static_cast<uint32_t>(Commands::SOFTWARE_UPDATE_CHECK)) {
+            RequestImmediateSoftwareUpdateCheck(); // Wakes the update thread; no-op for dev builds.
         } else if (action.id == kPropertyCommitUIAction) {
             // p1 = (tabIndex << 8) | fieldIndex, p2 = objectMemoryId, p3 = double value bits.
             const uint32_t tabIndex = static_cast<uint32_t>(action.p1 >> 8);

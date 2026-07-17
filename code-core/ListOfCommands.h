@@ -255,6 +255,8 @@ enum class Commands : uint32_t {
 
     PROPERTIES_PANE = 3150246791, // Right-side icon bar toggle for the object properties pane.
 
+    SOFTWARE_UPDATE_CHECK = 3271869050, // Run the software-update check/download cycle right now.
+
     // Add more future actions here with gaps if needed (e.g. 0x0000E000+)
 
     INVALID = 0xFFFFFFFF

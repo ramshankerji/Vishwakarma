@@ -687,6 +687,13 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
 
 extern std::atomic<bool> shutdownSignal; // Defined in Main.cpp
 
+std::atomic<bool> g_softwareUpdateStagedForRestart{ false };
+static std::atomic<bool> g_immediateCheckRequested{ false };
+
+void RequestImmediateSoftwareUpdateCheck() {
+    g_immediateCheckRequested.store(true, std::memory_order_relaxed);
+}
+
 // ------------------------------------------------------------------ Crypto (OpenSSL, static)
 static std::string Sha256HexOfFile(const fs::path& p) {
     std::ifstream f(p, std::ios::binary);
@@ -977,20 +984,33 @@ bool SoftwareUpdateOnAppLaunch() {
     return false;
 }
 
+// True when the staging area holds a newer setup awaiting the next launch. Same cheap
+// intactness test as RunUpdateCheckOnce; the SHA-256 is re-verified at apply time anyway.
+static bool IsUpdateStagedForRestart(long long currentVersion) {
+    std::string marker;
+    if (!ReadFileBytes(StagedMarkerPath(), marker)) return false;
+    if (JsonInt(marker, "version", 0) <= currentVersion) return false;
+    return fs::exists(StagingDir() / Utf8ToWide(JsonString(marker, "fileName")));
+}
+
 void StartSoftwareUpdateThread() {
     long long currentVersion = InstalledVersion();
     if (currentVersion <= 0) return; // Developer / unpackaged build.
     std::thread([currentVersion]() {
         std::mt19937 rng{ std::random_device{}() };
-        std::uniform_int_distribution<int> minutes(10, 600); // Spec: 10 minutes to 10 hours.
+        std::uniform_int_distribution<int> minutes(10, 240); // Spec: 10 minutes to 4 hours.
         while (!shutdownSignal.load(std::memory_order_relaxed)) {
             long long remainingSeconds = (long long)minutes(rng) * 60;
-            while (remainingSeconds > 0 && !shutdownSignal.load(std::memory_order_relaxed)) {
+            while (remainingSeconds > 0 && !shutdownSignal.load(std::memory_order_relaxed) &&
+                   !g_immediateCheckRequested.load(std::memory_order_relaxed)) {
                 Sleep(5000);
                 remainingSeconds -= 5;
             }
             if (shutdownSignal.load(std::memory_order_relaxed)) return;
+            g_immediateCheckRequested.store(false, std::memory_order_relaxed);
             RunUpdateCheckOnce(currentVersion);
+            g_softwareUpdateStagedForRestart.store(IsUpdateStagedForRestart(currentVersion),
+                std::memory_order_relaxed);
         }
     }).detach();
 }

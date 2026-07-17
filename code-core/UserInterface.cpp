@@ -20,6 +20,7 @@
 #include "SVGIconRenderer.h"
 #include "ImprovementData.h"
 #include "PropertyPane.h"
+#include "SoftwareUpdate.h"
 #include "CrockfordBase32.h"
 #include "fast_float/fast_float.h"
 #include <array>
@@ -2118,5 +2119,23 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
         const float iconY = std::clamp(
             input.mouseY + cursorIconGap, 0.0f, std::max(0.0f, H - cursorIconSize));
         PushIcon(ctx, iconX, iconY, cursorIconSize, cursorIconSize, cursorIcon, 0xFF000000u, uiRes);
+    }
+
+    // "Restart to Update" toast: the update thread has downloaded, verified and staged a newer
+    // setup; it gets applied on the next launch (SoftwareUpdateOnAppLaunch). Bottom-right corner,
+    // purely informational. Symmetric grey/white colours are channel-order agnostic.
+    if (g_softwareUpdateStagedForRestart.load(std::memory_order_relaxed)) {
+        const char32_t* toastText = LocalizedUIString(UITextID::RestartToUpdate);
+        const float toastPaddingXPx = 3.0f * pixelsPerMMx;
+        const float toastMarginPx = 3.0f * pixelsPerMMy;
+        const float toastHeightPx = buttonHeightPx;
+        const float toastTextWidthPx = MeasureUIStringWidth(toastText, uiTextScale);
+        const float toastWidthPx = toastTextWidthPx + 2.0f * toastPaddingXPx;
+        const float toastX = W - toastWidthPx - toastMarginPx;
+        const float toastY = H - toastHeightPx - toastMarginPx;
+        PushRoundedRectangle(ctx, toastX, toastY, toastWidthPx, toastHeightPx,
+            roundedCornerRadiusPx, 0xFF333333u, uiRes);
+        pushTextClipped(toastX + toastPaddingXPx, textBaselineY(toastY, toastHeightPx, uiTextScale),
+            toastText, toastTextWidthPx + 1.0f, 0xFFFFFFFFu, uiTextScale);
     }
 }

@@ -92,6 +92,7 @@ WordID,ShortWordName,English,Comments
 1051,ImportDWG,Import DWG,Import DWG file
 1053,ExportSTD,Export STD,Export standard file
 1055,ExportDWG,Export DWG,Export DWG file
+1057,RestartToUpdate,Restart to Update,Bottom-right toast shown while a downloaded update waits for the next app restart
 2974120935,PROJECT_OPEN,Project Open,Project Open
 3662721928,PROJECT_SAVE,Project Save,Project Save
 3244059276,PROJECT_PRINT,Print,Print visible 2D page or 3D scene image to printer
@@ -293,6 +294,7 @@ WordID,ShortWordName,English,Comments
 2358406449,EXPORT_STD,Export Std,Export Std
 2858667348,EXPORT_DWG,Export Dwg,Export Dwg
 4099564531,SCRIPT_PANNEL,Script Pannel,Script Pannel
+3271869050,SOFTWARE_UPDATE_CHECK,Check Update,Run the software-update check/download cycle right now
 4294967295,INVALID,Invalid,Invalid
 1400,Properties,Properties,Right-side object properties pane.
 1401,PropObjectType,Object Type,Properties pane row label.

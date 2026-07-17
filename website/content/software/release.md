@@ -50,7 +50,7 @@ Content of Vishwakarma_release_details.json
 
 ## Philosophy
 
-Every time an app launches, it will launch an update service thread. Update thread will calculate and update offset delta time between 10 minutes and 10 hours, when that much time passes,  it will:
+Every time an app launches, it will launch an update service thread. Update thread will calculate and update offset delta time between 10 minutes and 4 hours, when that much time passes,  it will:
 -Fetch signed manifest
 -Decide whether update applies
 -Download package from server or peers
@@ -144,7 +144,7 @@ Not yet implemented (later phases as planned): peer-to-peer discovery and the 2^
 
 There are two independent update triggers, both of which ultimately run the same download / verify / stage logic in `code-core/SoftwareUpdate.cpp`:
 
-**1. In-app update thread (while the app is running).** Every launch of `Vishwakarma.exe` starts a background thread (`StartSoftwareUpdateThread`) that sleeps a random offset — spec says 10 minutes to 10 hours; the implementation picks a fresh random 10–600 minute delay (intentional jitter/spread) each cycle — then fetches the signed manifest, decides whether an update applies, and stages it. This covers users who leave the application open for long sessions. The thread is disabled for developer / unpackaged builds (version 0).
+**1. In-app update thread (while the app is running).** Every launch of `Vishwakarma.exe` starts a background thread (`StartSoftwareUpdateThread`) that sleeps a random offset — spec says 10 minutes to 4 hours; the implementation picks a fresh random 10–240 minute delay (intentional jitter/spread) each cycle — then fetches the signed manifest, decides whether an update applies, and stages it. The Check Update ribbon button (last ribbon group) skips the remaining wait and runs the cycle immediately. This covers users who leave the application open for long sessions. The thread is disabled for developer / unpackaged builds (version 0). Once a cycle leaves a verified newer setup staged, the app shows a "Restart to Update" toast in the bottom-right corner of every window.
 
 **2. `VishwakarmaUpgrade` scheduled task (while the app is closed).** So that users who rarely leave the app open still receive updates, the installer registers a per-user Windows scheduled task that launches the app headless to perform one update check and exit. It is created (and idempotently repaired) on every per-user install/update — only for the default `%LocalAppData%\Programs\Mission Vishwakarma` location — by `CreateUpgradeScheduledTask`, and removed on uninstall by `DeleteUpgradeScheduledTask`.
 

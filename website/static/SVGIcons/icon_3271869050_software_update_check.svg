@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Update-check cycle arc, arrowhead at its top-right end -->
+    <path d="M52 32c0 11-9 20-20 20S12 43 12 32s9-20 20-20c6 0 12 3 15 7" stroke="#0984E3"/>
+    <path d="M47 10v9h-9" stroke="#0984E3"/>
+    <!-- Incoming update: download arrow into the cycle -->
+    <path d="M32 22v16M25 31l7 7 7-7"/>
+  </g>
+</svg>

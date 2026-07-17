@@ -112,6 +112,7 @@
     VISHWAKARMA_SVG_ICON(3234551993u, "icon_3234551993_create_reports.svg") \
     VISHWAKARMA_SVG_ICON(3244059276u, "icon_3244059276_project_print.svg") \
     VISHWAKARMA_SVG_ICON(3265605728u, "icon_3265605728_edit_explode.svg") \
+    VISHWAKARMA_SVG_ICON(3271869050u, "icon_3271869050_software_update_check.svg") \
     VISHWAKARMA_SVG_ICON(3276532146u, "icon_3276532146_support_fixed.svg") \
     VISHWAKARMA_SVG_ICON(3320946139u, "icon_3320946139_edit_parameter.svg") \
     VISHWAKARMA_SVG_ICON(3332664091u, "icon_3332664091_create_point.svg") \
