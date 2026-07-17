@@ -1,0 +1,13 @@
+# Install to /etc/cloudflared/config.yml. TLS terminates at Cloudflare; the
+# tunnel forwards plain HTTP to gunicorn on loopback. No inbound ports needed.
+tunnel: __TUNNEL_ID__
+credentials-file: /etc/cloudflared/__TUNNEL_ID__.json
+
+ingress:
+  - hostname: mv-server.ramshanker.in
+    service: http://127.0.0.1:8000
+    originRequest:
+      httpHostHeader: mv-server.ramshanker.in
+      connectTimeout: 10s
+      noHappyEyeballs: true
+  - service: http_status:404

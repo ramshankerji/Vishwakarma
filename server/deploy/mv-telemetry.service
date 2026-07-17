@@ -1,0 +1,46 @@
+[Unit]
+Description=Mission Vishwakarma telemetry server (gunicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mvtelemetry
+Group=mvtelemetry
+WorkingDirectory=/opt/vishwakarma/server
+EnvironmentFile=/etc/mv-telemetry.env
+Environment=PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+ExecStart=/opt/vishwakarma/server/venv/bin/gunicorn -c gunicorn.conf.py improvement_server.wsgi
+Restart=on-failure
+RestartSec=5
+
+# ---------------------------------------------------------------- Sandboxing
+# The whole filesystem is read-only except the SQLite state directory. If a
+# directive below ever blocks a needed operation, `journalctl -u mv-telemetry`
+# and `systemd-analyze security mv-telemetry` will show which one.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/mv-telemetry
+ProtectKernelTuning=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
