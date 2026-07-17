@@ -1,0 +1,18 @@
+// Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
+syntax = "proto3";
+
+package vishwakarma.storage;
+
+import "DataStorage_Common3D.proto";
+
+option optimize_for = LITE_RUNTIME;
+
+message LineMember {
+  Point3F point1 = 1;
+  Point3F point2 = 2;
+  uint64 profile_id = 3;  // Steel profile catalog id (SteelProfileCatalog.h).
+  Color4F color_main = 4;
+  Color4F color_inner = 5;
+  Color4F color_cap = 6;
+}

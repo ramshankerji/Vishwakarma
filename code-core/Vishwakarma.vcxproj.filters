@@ -73,6 +73,9 @@
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_LINE2D.pb.cc">
       <Filter>code-core</Filter>
     </ClCompile>
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_LINE_MEMBER.pb.cc">
+      <Filter>code-core</Filter>
+    </ClCompile>
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PAGE2D.pb.cc">
       <Filter>code-core</Filter>
     </ClCompile>
@@ -294,6 +297,9 @@
     <ClInclude Include="SVGIconManifest.h">
       <Filter>code-core</Filter>
     </ClInclude>
+    <ClInclude Include="SteelProfileCatalog.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
     <ClInclude Include="SVGIconRenderer.h">
       <Filter>code-core</Filter>
     </ClInclude>
@@ -370,6 +376,9 @@
       <Filter>code-core</Filter>
     </None>
     <None Include="DataStorage_FLANGE.proto">
+      <Filter>code-core</Filter>
+    </None>
+    <None Include="DataStorage_LINE_MEMBER.proto">
       <Filter>code-core</Filter>
     </None>
     <None Include="DataStorage_ELLIPSE2D.proto">

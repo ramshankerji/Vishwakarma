@@ -21,6 +21,7 @@ This thread is also responsible for engineering calculations, consistency of Dat
 #include "डेटा.h"
 #include "डेटा-सामान्य-3D.h"
 #include "डेटा-पाइप.h"
+#include "डेटा-संरचना.h"
 #include "PropertyPane.h"
 #include "ExtensionCommunications.h"
 #include "GPUPlatformSelector.h"
@@ -1118,6 +1119,16 @@ static bool CreatePrimitiveGeometryElement(DATASETTAB* targetTab, VishwakarmaSto
         object = shape;
         break;
     }
+    case VishwakarmaStorage::ObjectType::LineMember: {
+        LINE_MEMBER* shape = new (targetTab->tabNo) LINE_MEMBER();
+        shape->Randomize();
+        const XMFLOAT3 offset = OffsetTo(MidPoint(shape->point1, shape->point2), placementPoint);
+        TranslatePoint(shape->point1, offset);
+        TranslatePoint(shape->point2, offset);
+        geometry = shape->GetGeometry();
+        object = shape;
+        break;
+    }
     default:
         return false;
     }
@@ -1466,9 +1477,9 @@ inline void addRandomGeometryElement(DATASETTAB* targetTab) {
     META_DATA* object = nullptr;
     VishwakarmaStorage::ObjectType objectType = VishwakarmaStorage::ObjectType::Unknown;
 
-    // Randomly select a shape type (0-13 for the 14 shapes available).
+    // Randomly select a shape type (0-14 for the 15 shapes available).
     // We use the GetRNG() helper function already available in "डेटा-सामान्य-3D.h".
-    std::uniform_int_distribution<int> shapeDist(0, 13);
+    std::uniform_int_distribution<int> shapeDist(0, 14);
     int shapeType = shapeDist(GetRNG());
 
     // Note: Ensure your shape constructors (new PYRAMID()) use the correct memoryGroupNo if needed.
@@ -1589,6 +1600,14 @@ inline void addRandomGeometryElement(DATASETTAB* targetTab) {
         geometry = shape->GetGeometry();
         object = shape;
         objectType = FLANGE::storageObjectType;
+        break;
+    }
+    case 14: {
+        LINE_MEMBER* shape = new (targetTab->tabNo) LINE_MEMBER();
+        shape->Randomize();
+        geometry = shape->GetGeometry();
+        object = shape;
+        objectType = LINE_MEMBER::storageObjectType;
         break;
     }
     }

@@ -473,6 +473,9 @@ void ProcessPendingUIActions() {
         } else if (action.id == static_cast<uint32_t>(Commands::CREATE_FLANGE)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_PRIMITIVE_CREATION3D,
                 static_cast<int>(VishwakarmaStorage::ToNumber(VishwakarmaStorage::ObjectType::Flange)));
+        } else if (action.id == static_cast<uint32_t>(Commands::CREATE_LINE_MEMBER)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_PRIMITIVE_CREATION3D,
+                static_cast<int>(VishwakarmaStorage::ToNumber(VishwakarmaStorage::ObjectType::LineMember)));
         } else if (action.id == static_cast<uint32_t>(Commands::CREATE_LINE)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::BEGIN_LINE_CREATION2D);
         } else if (action.id == static_cast<uint32_t>(Commands::CREATE_POLYLINE)) {

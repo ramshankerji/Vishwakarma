@@ -647,6 +647,7 @@ constexpr UIControlDefinition AllUIControls[] = {
     { Commands::CREATE_T,               UITextID::CREATE_T, U'x', 1, 3, 1, 0, true, true, 4 , 11 },
     { Commands::CREATE_Y,               UITextID::CREATE_Y, U'x', 1, 3, 2, 0, true, true, 4 , 11 },
     { Commands::CREATE_FLANGE,          UITextID::CREATE_FLANGE, U'x', 1, 3, 0, 0, true, true, 4 , 11 },
+    { Commands::CREATE_LINE_MEMBER,     UITextID::CREATE_LINE_MEMBER, U'x', 1, 3, 1, 0, true, true, 4 , 11 },
     { Commands::INSTRUMENT_PG,          UITextID::INSTRUMENT_PG, U'x', 1, 3, 0, 0, true, true, 4 , 11 },
     { Commands::INSTRUMENT_TG,          UITextID::INSTRUMENT_TG, U'x', 1, 3, 1, 0, true, true, 4 , 11 },
 

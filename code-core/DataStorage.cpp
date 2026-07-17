@@ -33,6 +33,7 @@
 #include "DataStorage_FRUSTUM_OF_CONE.pb.h"
 #include "DataStorage_FRUSTUM_OF_PYRAMID.pb.h"
 #include "DataStorage_LINE2D.pb.h"
+#include "DataStorage_LINE_MEMBER.pb.h"
 #include "DataStorage_PAGE2D.pb.h"
 #include "DataStorage_PARALLELEPIPED.pb.h"
 #include "DataStorage_PIPE.pb.h"
@@ -50,6 +51,7 @@
 #include "विश्वकर्मा.h"
 #include "डेटा-सामान्य-3D.h"
 #include "डेटा-पाइप.h"
+#include "डेटा-संरचना.h"
 
 namespace {
 
@@ -434,6 +436,17 @@ bool EncodeFlange(const FLANGE& object, std::vector<uint8_t>& payload, std::stri
     return SerializeMessage(message, payload, errorMessage);
 }
 
+bool EncodeLineMember(const LINE_MEMBER& object, std::vector<uint8_t>& payload, std::string* errorMessage) {
+    pb::LineMember message;
+    WritePoint3(message.mutable_point1(), object.point1);
+    WritePoint3(message.mutable_point2(), object.point2);
+    message.set_profile_id(object.profileId);
+    WriteColor4(message.mutable_color_main(), object.colorMain);
+    WriteColor4(message.mutable_color_inner(), object.colorInner);
+    WriteColor4(message.mutable_color_cap(), object.colorCap);
+    return SerializeMessage(message, payload, errorMessage);
+}
+
 bool EncodeFolder(const FOLDER& object, std::vector<uint8_t>& payload, std::string* errorMessage) {
     pb::Folder message;
     message.set_name(FixedCStringToString(object.name, sizeof(object.name)));
@@ -778,6 +791,19 @@ bool DecodeFlange(const std::vector<uint8_t>& payload, FLANGE& object) {
     return true;
 }
 
+bool DecodeLineMember(const std::vector<uint8_t>& payload, LINE_MEMBER& object) {
+    pb::LineMember message;
+    if (!ParseMessage(payload, message)) return false;
+
+    object.point1 = message.has_point1() ? ReadPoint3(message.point1()) : XMFLOAT3{};
+    object.point2 = message.has_point2() ? ReadPoint3(message.point2()) : XMFLOAT3{};
+    object.profileId = message.profile_id();
+    object.colorMain = message.has_color_main() ? ReadColor4(message.color_main()) : DefaultColor4();
+    object.colorInner = message.has_color_inner() ? ReadColor4(message.color_inner()) : DefaultColor4();
+    object.colorCap = message.has_color_cap() ? ReadColor4(message.color_cap()) : DefaultColor4();
+    return true;
+}
+
 bool DecodeFolder(const std::vector<uint8_t>& payload, FOLDER& object) {
     pb::Folder message;
     if (!ParseMessage(payload, message)) return false;
@@ -1018,6 +1044,7 @@ std::string ObjectTypeName(ObjectType objectType) {
     case ObjectType::Elbow: return "Elbow";
     case ObjectType::Tee: return "Tee";
     case ObjectType::Flange: return "Flange";
+    case ObjectType::LineMember: return "LineMember";
     default: return "Unknown";
     }
 }
@@ -1050,6 +1077,7 @@ bool ObjectTypeFromNumber(uint32_t value, ObjectType& objectType) {
     case 24: objectType = ObjectType::Elbow; return true;
     case 25: objectType = ObjectType::Tee; return true;
     case 26: objectType = ObjectType::Flange; return true;
+    case 27: objectType = ObjectType::LineMember; return true;
     default: objectType = ObjectType::Unknown; return false;
     }
 }
@@ -1121,6 +1149,8 @@ bool SerializeGeometryObject(const StoredGeometryObject3D& entry, std::vector<ui
         return EncodeTee(*static_cast<const TEE*>(entry.object), payload, errorMessage);
     case ObjectType::Flange:
         return EncodeFlange(*static_cast<const FLANGE*>(entry.object), payload, errorMessage);
+    case ObjectType::LineMember:
+        return EncodeLineMember(*static_cast<const LINE_MEMBER*>(entry.object), payload, errorMessage);
     default:
         SetError(errorMessage, "Unsupported object type during save.");
         return false;
@@ -1273,6 +1303,12 @@ bool DeserializeGeometryObject(ObjectType objectType, const std::vector<uint8_t>
         object = shape;
         break;
     }
+    case ObjectType::LineMember: {
+        LINE_MEMBER* shape = new (memoryGroupNo) LINE_MEMBER();
+        ok = DecodeLineMember(payload, *shape);
+        object = shape;
+        break;
+    }
     default:
         SetError(errorMessage, "Unsupported object type during load.");
         return false;
@@ -1334,6 +1370,9 @@ bool GeometryForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* obj
         return true;
     case ObjectType::Flange:
         geometry = static_cast<FLANGE*>(object)->GetGeometry();
+        return true;
+    case ObjectType::LineMember:
+        geometry = static_cast<LINE_MEMBER*>(object)->GetGeometry();
         return true;
     default:
         return false;

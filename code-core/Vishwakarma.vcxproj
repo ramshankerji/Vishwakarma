@@ -99,7 +99,8 @@ FT_STATIC;LUNASVG_BUILD_STATIC;PLUTOVG_BUILD_STATIC;%(PreprocessorDefinitions)</
       <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateVersionHeader.ps1" -OutDir "$(IntDir)."
 call "$(ProjectDir)..\code-miscellaneous\msdf_atlas_generator.bat"
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateDataStorageProtobuf.ps1" -OutputDir "$(IntDir)GeneratedProtobuf"
-python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)SVGIconManifest.h" "$(ProjectDir)..\website\static\SVGIcons" "$(IntDir)SVGIconEmbeddedData.generated.h"</Command>
+python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)SVGIconManifest.h" "$(ProjectDir)..\website\static\SVGIcons" "$(IntDir)SVGIconEmbeddedData.generated.h"
+python "$(ProjectDir)..\code-miscellaneous\steel_profile_embedder.py" "$(ProjectDir)..\Catalog" "$(IntDir)SteelProfileCatalogEmbedded.generated.h"</Command>
     </PreBuildEvent>
     <PostBuildEvent>
       <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\DeployExtensions.ps1" -OutDir "$(OutDir)."</Command>
@@ -137,7 +138,8 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
       <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateVersionHeader.ps1" -OutDir "$(IntDir)."
 call "$(ProjectDir)..\code-miscellaneous\msdf_atlas_generator.bat"
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\GenerateDataStorageProtobuf.ps1" -OutputDir "$(IntDir)GeneratedProtobuf"
-python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)SVGIconManifest.h" "$(ProjectDir)..\website\static\SVGIcons" "$(IntDir)SVGIconEmbeddedData.generated.h"</Command>
+python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)SVGIconManifest.h" "$(ProjectDir)..\website\static\SVGIcons" "$(IntDir)SVGIconEmbeddedData.generated.h"
+python "$(ProjectDir)..\code-miscellaneous\steel_profile_embedder.py" "$(ProjectDir)..\Catalog" "$(IntDir)SteelProfileCatalogEmbedded.generated.h"</Command>
     </PreBuildEvent>
     <PostBuildEvent>
       <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)..\code-miscellaneous\DeployExtensions.ps1" -OutDir "$(OutDir)."</Command>
@@ -166,6 +168,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FRUSTUM_OF_CONE.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_FRUSTUM_OF_PYRAMID.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_LINE2D.pb.cc" />
+    <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_LINE_MEMBER.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PAGE2D.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PARALLELEPIPED.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_PIPE.pb.cc" />
@@ -242,6 +245,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <ClInclude Include="PrinterController.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="SoftwareUpdate.h" />
+    <ClInclude Include="SteelProfileCatalog.h" />
     <ClInclude Include="SVGIconManifest.h" />
     <ClInclude Include="SVGIconRenderer.h" />
     <ClInclude Include="TextureSaver.h" />
@@ -271,6 +275,7 @@ python "$(ProjectDir)..\code-miscellaneous\svg_icon_embedder.py" "$(ProjectDir)S
     <None Include="DataStorage_FRUSTUM_OF_CONE.proto" />
     <None Include="DataStorage_FRUSTUM_OF_PYRAMID.proto" />
     <None Include="DataStorage_LINE2D.proto" />
+    <None Include="DataStorage_LINE_MEMBER.proto" />
     <None Include="DataStorage_PAGE2D.proto" />
     <None Include="DataStorage_PARALLELEPIPED.proto" />
     <None Include="DataStorage_PIPE.proto" />
