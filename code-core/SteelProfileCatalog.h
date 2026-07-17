@@ -19,6 +19,8 @@ enum class SteelProfileFamily : uint8_t {
     Rail,
     RHS,
     Tee,
+    Parametric, // RC beam/column sections; outline picked by `series` (RECT/CIRC/OCT/HEX),
+                // dimensions from LINE_MEMBER::userParameter1/2 (CSV row = defaults).
 };
 
 struct SteelProfileRecord {
@@ -34,6 +36,7 @@ struct SteelProfileRecord {
     const char* designation;     // Canonical name: "ISMB 400", "W12X26", ...
     const char* altDesignation;  // Alias in another system; "" otherwise.
     // Geometry straight from the CSVs, millimeters. Fields a family does not use stay 0.
+    // PARAMETRIC defaults reuse h,b (RECT), d (CIRC) and a (OCT/HEX across flats).
     float h, b, tw, tf, r1, r2, flangeSlope; // I / CHANNEL / TEE (tf at gauge point (b-tw)/4)
     float a, t, t2;                          // ANGLE legs a,b x t (t2: JIS L-UT); BAR dims a,b
     float d;                                 // CHS outside diameter

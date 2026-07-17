@@ -15,12 +15,15 @@
 // compile-time embedded steel profile catalog (SteelProfileCatalog.h) via profileId.
 struct LINE_MEMBER : public META_DATA {
     static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::LineMember;
-    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
+    static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kGeometry3DLineMemberSchemaVersion;
 
     //Mandatory Fields
     XMFLOAT3 point1 = {}, point2 = {}; // Member axis end points, SI meters.
     uint64_t profileId = 0;            // Steel profile catalog id, [2^32, 2^40) band.
     XMHALF4 colorMain = {}, colorInner = {}, colorCap = {}; // Inner shows on hollow sections (CHS).
+    // Parametric-family section dimensions, millimeters; 0 = use the catalog row's defaults.
+    // RECT: 1 = depth h, 2 = width b. CIRC: 1 = diameter. OCT/HEX: 1 = across flats.
+    float userParameter1 = 0.0f, userParameter2 = 0.0f;
 
     //Optional Fields
     uint64_t optionalFieldsFlags = 0;  // Bit-mask for up to 64 Optional Fields - 8 Bytes.
@@ -271,6 +274,25 @@ inline GeometryData LINE_MEMBER::GetGeometry() {
         Rect(-bFoot * 0.5f, -h * 0.5f, bFoot * 0.5f, -h * 0.5f + footT);
         Rect(-bHead * 0.5f, h * 0.5f - headT, bHead * 0.5f, h * 0.5f);
         Rect(-tw * 0.5f, -h * 0.5f + footT, tw * 0.5f, h * 0.5f - headT);
+        break;
+    }
+    case SteelProfileFamily::Parametric: {
+        // RC beam/column sections: dimensions come from the member's user parameters
+        // (millimeters; 0 = the catalog row's defaults), the series picks the outline.
+        if (std::strcmp(profile->series, "RECT") == 0) {
+            const float h = (userParameter1 > 0.0f ? userParameter1 : profile->h) * s; // Depth, section +y.
+            const float b = (userParameter2 > 0.0f ? userParameter2 : profile->b) * s; // Width.
+            Rect(-b * 0.5f, -h * 0.5f, b * 0.5f, h * 0.5f);
+        } else if (std::strcmp(profile->series, "CIRC") == 0) {
+            const float d = (userParameter1 > 0.0f ? userParameter1 : profile->d) * s;
+            Polygon(d * 0.5f, 24, 0.0f); // Same fidelity as BAR ROUND.
+        } else if (std::strcmp(profile->series, "OCT") == 0) {
+            const float af = (userParameter1 > 0.0f ? userParameter1 : profile->a) * s; // Across flats.
+            Polygon(af * 0.5f / cosf(XM_PI / 8.0f), 8, XM_PI / 8.0f); // Flats land top/bottom and left/right.
+        } else if (std::strcmp(profile->series, "HEX") == 0) {
+            const float af = (userParameter1 > 0.0f ? userParameter1 : profile->a) * s; // Across flats.
+            Polygon(af / sqrtf(3.0f), 6, 0.0f); // Flats land top and bottom, like BAR HEX.
+        }
         break;
     }
     }

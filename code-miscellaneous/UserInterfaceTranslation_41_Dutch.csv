@@ -328,3 +328,5 @@ WordID,ShortWordName,English,Human,Comments,Grok,ChatGPT,Gemini,Claude
 1431,PropTopRadius,Top Radius,Top Radius,Properties pane field label.,,,,
 1432,PropOutsideDiameter,Outside Diameter,Outside Diameter,Properties pane field label.,,,,
 1433,PropInsideDiameter,Inside Diameter,Inside Diameter,Properties pane field label.,,,,
+1434,PropParameter1,Parameter 1 (mm),Parameter 1 (mm),Properties pane field label. LINE_MEMBER parametric section dimension.,,,,
+1435,PropParameter2,Parameter 2 (mm),Parameter 2 (mm),Properties pane field label. LINE_MEMBER parametric section dimension.,,,,

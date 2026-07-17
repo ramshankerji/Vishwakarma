@@ -328,3 +328,5 @@ WordID,ShortWordName,English,Comments
 1431,PropTopRadius,Top Radius,Properties pane field label.
 1432,PropOutsideDiameter,Outside Diameter,Properties pane field label.
 1433,PropInsideDiameter,Inside Diameter,Properties pane field label.
+1434,PropParameter1,Parameter 1 (mm),Properties pane field label. LINE_MEMBER parametric section dimension.
+1435,PropParameter2,Parameter 2 (mm),Properties pane field label. LINE_MEMBER parametric section dimension.

@@ -15,4 +15,7 @@ message LineMember {
   Color4F color_main = 4;
   Color4F color_inner = 5;
   Color4F color_cap = 6;
+  // v2: Parametric-family section dimensions, millimeters; 0 = catalog defaults.
+  float user_parameter1 = 7;
+  float user_parameter2 = 8;
 }

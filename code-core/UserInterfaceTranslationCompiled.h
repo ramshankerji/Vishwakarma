@@ -133,6 +133,8 @@ enum class UITextID : uint32_t
     PropTopRadius = 1431,
     PropOutsideDiameter = 1432,
     PropInsideDiameter = 1433,
+    PropParameter1 = 1434,
+    PropParameter2 = 1435,
     LINE_ELEMENT_COLUMN = 2162683985,
     SELECT_LINES = 2198107607,
     IMPORT_STD = 2209549389,

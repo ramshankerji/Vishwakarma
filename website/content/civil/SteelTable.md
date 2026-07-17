@@ -202,3 +202,24 @@ tolerance and material standards.
 - **Cold-formed thin-gauge** (lipped C/Z purlins, sigma, top-hat — IS 811, AISI S100,
   EN 10162, AS/NZS 4600) — different parameter world (base thickness + bend radii + lips)
   and largely manufacturer-specific; will get its own `profiles_cold_*` design pass.
+
+## 7. Parametric sections (`profiles_parametric.csv`)
+
+Reinforced-concrete beams and columns are not rolled products — every member can have its
+own dimensions. They still live in the same catalog so that one `profileId` mechanism
+serves every member, but the family works differently:
+
+1. **One CSV file, one family** (`Parametric`), one row per shape. The `series` column
+   picks the outline — the same trick `profiles_hot_bar.csv` uses: **RECT** (rectangle),
+   **CIRC** (solid circle), **OCT** (octagon), **HEX** (hexagon).
+2. **Dimensions come from the member, not the row.** Each LINE_MEMBER stores
+   `userParameter1/2` (float32, millimeters). RECT: 1 = depth, 2 = width. CIRC: 1 =
+   diameter. OCT/HEX: 1 = across flats. A parameter of **0 means "use the catalog row's
+   default dimensions"** (`h`/`b`/`d`/`a` columns), so an unconfigured member still renders.
+3. `mass` is the identity-check mass of the *default* dimensions at 2500 kg/m³ concrete.
+4. STAAD interoperability: `.std` `PRIS YD ZD` prismatic members import as RECT and
+   `PRIS YD` (alone) as CIRC, parameters carried over; prismatic tees/trapezoids (`YB`/`ZB`)
+   stay placeholder pipes.
+5. **Future parametric shapes** (I with user flange/web, Z, …) are new rows + new `series`
+   values in this same file; shapes needing more than two dimensions will add
+   `userParameter3/4…` to the member storage when they arrive.

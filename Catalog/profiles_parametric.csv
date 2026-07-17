@@ -1,0 +1,5 @@
+id,key,status,superseded_by,country,code,series,designation,alt_designation,h,b,d,a,mass,availability
+0xD21A53F97D,PARAMETRIC:CIRC,active,,Global,PARAMETRIC,CIRC,CIRC,,,,450,,397.6,current
+0xC208164210,PARAMETRIC:HEX,active,,Global,PARAMETRIC,HEX,HEX,,,,,450,438.4,current
+0x4B197DEB41,PARAMETRIC:OCT,active,,Global,PARAMETRIC,OCT,OCT,,,,,450,419.4,current
+0xAA17BDBD81,PARAMETRIC:RECT,active,,Global,PARAMETRIC,RECT,RECT,,450,300,,,337.5,current

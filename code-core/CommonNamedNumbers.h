@@ -47,6 +47,7 @@ enum class LifecycleState : uint32_t {
 };
 
 constexpr uint16_t kGeometry3DMvpSchemaVersion = 1;
+constexpr uint16_t kGeometry3DLineMemberSchemaVersion = 2; // v2: added user_parameter1/2.
 constexpr uint16_t kLogicalElementSchemaVersion = 1;
 constexpr uint16_t kGeometry2DLineSchemaVersion = 1;
 constexpr uint16_t kGeometry2DPolylineSchemaVersion = 1;

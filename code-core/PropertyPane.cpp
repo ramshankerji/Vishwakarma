@@ -10,6 +10,7 @@
 // Include डेटा.h first so this TU matches the working order in DataStorage.cpp / विश्वकर्मा.cpp.
 #include "डेटा.h"
 #include "डेटा-सामान्य-3D.h" // SPHERE, CYLINDER, ... and META_DATA
+#include "डेटा-संरचना.h"     // LINE_MEMBER
 
 #include <cmath> // std::isfinite
 
@@ -138,6 +139,27 @@ const PropertyFieldDescriptor kFrustumOfConeFields[] = {
         [](META_DATA* o, float v) { static_cast<FRUSTUM_OF_CONE*>(o)->topRadius = v; }, PropertyFieldKind::Float32, 7, true },
 };
 
+// LINE_MEMBER: P1 X/Y/Z, P2 X/Y/Z (meters), Parameter 1/2 (parametric section dims,
+// millimeters; 0 = the catalog row's defaults, so zero stays editable-legal).
+const PropertyFieldDescriptor kLineMemberFields[] = {
+    { UITextID::PropPoint1X, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->point1.x; },
+        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->point1.x = v; }, PropertyFieldKind::Float32, 0, false },
+    { UITextID::PropPoint1Y, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->point1.y; },
+        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->point1.y = v; }, PropertyFieldKind::Float32, 1, false },
+    { UITextID::PropPoint1Z, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->point1.z; },
+        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->point1.z = v; }, PropertyFieldKind::Float32, 2, false },
+    { UITextID::PropPoint2X, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->point2.x; },
+        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->point2.x = v; }, PropertyFieldKind::Float32, 3, false },
+    { UITextID::PropPoint2Y, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->point2.y; },
+        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->point2.y = v; }, PropertyFieldKind::Float32, 4, false },
+    { UITextID::PropPoint2Z, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->point2.z; },
+        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->point2.z = v; }, PropertyFieldKind::Float32, 5, false },
+    { UITextID::PropParameter1, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->userParameter1; },
+        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->userParameter1 = v; }, PropertyFieldKind::Float32, 6, false },
+    { UITextID::PropParameter2, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->userParameter2; },
+        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->userParameter2 = v; }, PropertyFieldKind::Float32, 7, false },
+};
+
 // Copies the pre-edit field values and applies the edited value at editIndex, so cross-field rules
 // evaluate the hypothetical post-edit state.
 void CopyWithEdit(float* dst, const float* src, uint8_t count, uint8_t editIndex, float newValue) {
@@ -168,6 +190,14 @@ bool CrossPipe(const float* values, uint8_t count, uint8_t editIndex, float newV
     return PointsDistinct(f, 0, 3);
 }
 
+// LINE_MEMBER: the axis end points must not coincide; parameters (fields 6, 7) must not go
+// negative (0 is legal — it means "use the catalog row's default dimensions").
+bool CrossLineMember(const float* values, uint8_t count, uint8_t editIndex, float newValue) {
+    float f[8]; CopyWithEdit(f, values, count, editIndex, newValue);
+    if (f[6] < 0.0f || f[7] < 0.0f) return false;
+    return PointsDistinct(f, 0, 3);
+}
+
 } // namespace
 
 const PropertyTypeDescriptor kPropertyTables[] = {
@@ -178,6 +208,7 @@ const PropertyTypeDescriptor kPropertyTables[] = {
     { ObjectType::Ellipsoid, kEllipsoidFields, static_cast<uint8_t>(std::size(kEllipsoidFields)), nullptr },
     { ObjectType::Pipe, kPipeFields, static_cast<uint8_t>(std::size(kPipeFields)), CrossPipe },
     { ObjectType::FrustumOfCone, kFrustumOfConeFields, static_cast<uint8_t>(std::size(kFrustumOfConeFields)), CrossTwoPoints },
+    { ObjectType::LineMember, kLineMemberFields, static_cast<uint8_t>(std::size(kLineMemberFields)), CrossLineMember },
     // PYRAMID, CUBOID, PARALLELEPIPED, FRUSTUM_OF_PYRAMID are vertex-list types: no table in the
     // MVP, so FindPropertyTable() returns nullptr and the pane shows Type + ID only.
 };

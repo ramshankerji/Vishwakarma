@@ -444,6 +444,8 @@ bool EncodeLineMember(const LINE_MEMBER& object, std::vector<uint8_t>& payload, 
     WriteColor4(message.mutable_color_main(), object.colorMain);
     WriteColor4(message.mutable_color_inner(), object.colorInner);
     WriteColor4(message.mutable_color_cap(), object.colorCap);
+    message.set_user_parameter1(object.userParameter1);
+    message.set_user_parameter2(object.userParameter2);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -801,6 +803,8 @@ bool DecodeLineMember(const std::vector<uint8_t>& payload, LINE_MEMBER& object) 
     object.colorMain = message.has_color_main() ? ReadColor4(message.color_main()) : DefaultColor4();
     object.colorInner = message.has_color_inner() ? ReadColor4(message.color_inner()) : DefaultColor4();
     object.colorCap = message.has_color_cap() ? ReadColor4(message.color_cap()) : DefaultColor4();
+    object.userParameter1 = message.user_parameter1(); // proto3 default 0 = catalog defaults (v1 files).
+    object.userParameter2 = message.user_parameter2();
     return true;
 }
 
@@ -1085,6 +1089,9 @@ bool ObjectTypeFromNumber(uint32_t value, ObjectType& objectType) {
 uint16_t DefaultSchemaVersionForObjectType(ObjectType objectType) {
     if (VishwakarmaStorage::IsLogicalObjectType(objectType)) {
         return VishwakarmaStorage::kLogicalElementSchemaVersion;
+    }
+    if (objectType == ObjectType::LineMember) {
+        return VishwakarmaStorage::kGeometry3DLineMemberSchemaVersion;
     }
     if (objectType == ObjectType::Asset2DDefinition) {
         return VishwakarmaStorage::kAsset2DDefinitionSchemaVersion;
@@ -1385,7 +1392,7 @@ void AppendObjectToTab(DATASETTAB& tab, ObjectType objectType, META_DATA* object
     if (!tab.storageObjectsMutex) tab.storageObjectsMutex = std::make_unique<std::mutex>();
 
     object->dataType = static_cast<uint16_t>(VishwakarmaStorage::ToNumber(objectType));
-    object->schemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
+    object->schemaVersion = DefaultSchemaVersionForObjectType(objectType);
 
     GeometryData geometry;
     if (GeometryForObject(objectType, object, geometry)) {
@@ -2311,7 +2318,7 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         row.objectType = entry.objectType;
         row.schemaVersion = entry.object->schemaVersion != 0
             ? entry.object->schemaVersion
-            : VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
+            : DefaultSchemaVersionForObjectType(entry.objectType);
         row.lifecycleState = LifecycleForObject(*entry.object);
         row.payload = std::move(payload);
         rows.push_back(std::move(row));
