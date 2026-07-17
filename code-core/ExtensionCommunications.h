@@ -26,6 +26,9 @@ struct ImportedMember {
     uint32_t id = 0;
     uint32_t startNodeId = 0;
     uint32_t endNodeId = 0;
+    // Vishwakarma catalog designation, already mapped from the STAAD name by the
+    // worker (profile_mapping.py). Empty = unmapped; drawn as a placeholder pipe.
+    std::string profileDesignation;
 };
 
 struct ImportedStructuralModel {

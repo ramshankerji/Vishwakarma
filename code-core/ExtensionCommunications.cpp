@@ -35,6 +35,7 @@ constexpr uint64_t  kMaxStdFileBytes   = 512ull * 1024 * 1024; // Host refuses l
 constexpr uint32_t  kMaxMessageBytes   = 64u * 1024 * 1024;    // Per worker->host message.
 constexpr size_t    kMaxImportedNodes  = 2'000'000;
 constexpr size_t    kMaxImportedMembers= 4'000'000;
+constexpr size_t    kMaxProfileDesignationBytes = 64; // Longest catalog designation is ~20 bytes.
 constexpr size_t    kMaxImported2DLines    = 4'000'000;
 constexpr size_t    kMaxImported2DTexts    = 500'000;
 constexpr size_t    kMaxImported2DPolygons = 500'000;
@@ -330,7 +331,11 @@ bool AppendValidatedBatch(const vishwakarma::extension::v1::CreateGeometryBatch&
             error = "Worker sent an invalid member (zero id)";
             return false;
         }
-        model.members.push_back({ member.member_id(), member.start_node_id(), member.end_node_id() });
+        // Overlong designations are certainly garbage: treat as unmapped rather than fail the import.
+        std::string designation = member.profile_designation();
+        if (designation.size() > kMaxProfileDesignationBytes) designation.clear();
+        model.members.push_back({ member.member_id(), member.start_node_id(), member.end_node_id(),
+            std::move(designation) });
     }
     return true;
 }

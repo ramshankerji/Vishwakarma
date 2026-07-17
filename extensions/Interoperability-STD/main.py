@@ -14,6 +14,7 @@ import traceback
 
 import vishwakarma_api as vk
 import InteroperabilityWithSTDFile as std_reader
+import profile_mapping
 
 BATCH_SIZE = 5000
 UINT32_MAX = 0xFFFFFFFF
@@ -50,14 +51,17 @@ def run() -> None:
     ]
     known_node_ids = {node[0] for node in nodes}
     members = [
-        (member_id, start_id, end_id)
+        (member_id, start_id, end_id,
+         profile_mapping.designation_for(model.member_profile_by_member.get(member_id)))
         for member_id, (start_id, end_id) in model.members.items()
         if _valid_id(member_id) and start_id in known_node_ids and end_id in known_node_ids
     ]
 
     skipped_members = len(model.members) - len(members)
+    mapped_members = sum(1 for member in members if member[3])
     channel.send_log(
         f"Parsed '{request.file_name}': {len(nodes)} nodes, {len(members)} members"
+        f" ({mapped_members} with profile names)"
         + (f" ({skipped_members} members skipped: missing/invalid node refs)" if skipped_members else "")
     )
 

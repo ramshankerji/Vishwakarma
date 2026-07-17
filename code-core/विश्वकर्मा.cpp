@@ -1137,9 +1137,10 @@ static bool CreatePrimitiveGeometryElement(DATASETTAB* targetTab, VishwakarmaSto
     return true;
 }
 
-// Materializes a validated STAAD import (nodes as spheres, members as pipes).
-// Runs on the engineering thread — the only writer of model data. The IPC and
-// validation live in ExtensionCommunications.cpp.
+// Materializes a validated STAAD import: nodes as spheres, profile-mapped members as
+// LINE_MEMBERs, remaining members as placeholder pipes. Runs on the engineering
+// thread — the only writer of model data. The IPC and validation live in
+// ExtensionCommunications.cpp.
 static void ImportStdFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
     std::string error;
     std::unique_ptr<ExtensionCommunications::ImportedStructuralModel> model(
@@ -1154,8 +1155,18 @@ static void ImportStdFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
     if (sceneMemoryId != 0) OpenInternalSubTab(myTab, sceneMemoryId);
 
     constexpr float kNodeRadius = 0.12f;            // Meters; import coordinates are SI.
-    constexpr float kMemberOutsideDiameter = 0.25f; // Placeholder until profiles are mapped.
+    constexpr float kMemberOutsideDiameter = 0.25f; // For members without a mapped profile.
     constexpr float kMemberInsideDiameter = 0.10f;
+
+    // Designation -> catalog row for profile-mapped members. All STAAD-name mapping happens
+    // worker-side (profile_mapping.py); this is only an exact lookup into the embedded
+    // catalog. Duplicate designations across codes (JIS/KS mirrors) keep the first row —
+    // identical geometry by design.
+    std::unordered_map<std::string, const SteelProfileRecord*> profileByDesignation;
+    profileByDesignation.reserve(kSteelProfileCount);
+    for (uint32_t i = 0; i < kSteelProfileCount; ++i) {
+        profileByDesignation.emplace(kSteelProfiles[i].designation, &kSteelProfiles[i]);
+    }
     const XMHALF4 nodeColor(0.85f, 0.25f, 0.15f, 1.0f);
     const XMHALF4 memberColor(0.35f, 0.55f, 0.85f, 1.0f);
 
@@ -1171,7 +1182,7 @@ static void ImportStdFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
         RegisterGeneratedGeometryElement(myTab, SPHERE::storageObjectType, shape, shape->GetGeometry());
     }
 
-    size_t createdMembers = 0;
+    size_t createdLineMembers = 0, createdPipes = 0;
     for (const auto& member : model->members) {
         const auto start = nodePositions.find(member.startNodeId);
         const auto end = nodePositions.find(member.endNodeId);
@@ -1180,6 +1191,24 @@ static void ImportStdFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
         const float dy = end->second.y - start->second.y;
         const float dz = end->second.z - start->second.z;
         if (dx * dx + dy * dy + dz * dz < 1e-8f) continue; // Zero-length member: no axis.
+
+        const SteelProfileRecord* profile = nullptr;
+        if (!member.profileDesignation.empty()) {
+            const auto found = profileByDesignation.find(member.profileDesignation);
+            if (found != profileByDesignation.end()) profile = found->second;
+        }
+        if (profile) {
+            LINE_MEMBER* shape = new (myTab->tabNo) LINE_MEMBER();
+            shape->point1 = start->second;
+            shape->point2 = end->second;
+            shape->profileId = profile->id;
+            shape->colorMain = memberColor;
+            shape->colorInner = memberColor;
+            shape->colorCap = memberColor;
+            RegisterGeneratedGeometryElement(myTab, LINE_MEMBER::storageObjectType, shape, shape->GetGeometry());
+            ++createdLineMembers;
+            continue;
+        }
 
         PIPE* shape = new (myTab->tabNo) PIPE();
         shape->center1 = start->second;
@@ -1190,11 +1219,12 @@ static void ImportStdFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
         shape->colorInner = memberColor;
         shape->colorCap = memberColor;
         RegisterGeneratedGeometryElement(myTab, PIPE::storageObjectType, shape, shape->GetGeometry());
-        ++createdMembers;
+        ++createdPipes;
     }
 
-    std::cout << "[std-importer] Created " << model->nodes.size() << " node spheres and "
-              << createdMembers << " member pipes." << std::endl; // Flush: rare event, aids diagnosis.
+    std::cout << "[std-importer] Created " << model->nodes.size() << " node spheres, "
+              << createdLineMembers << " profile members and "
+              << createdPipes << " placeholder pipes." << std::endl; // Flush: rare event, aids diagnosis.
 }
 
 // Materializes a validated DXF import into the currently open Page2D through

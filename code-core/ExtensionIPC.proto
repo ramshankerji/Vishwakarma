@@ -48,6 +48,10 @@ message StructuralMember {
   uint32 member_id = 1;
   uint32 start_node_id = 2;
   uint32 end_node_id = 3;
+  // Vishwakarma catalog designation (SteelProfileCatalog.h), already mapped from
+  // the STAAD table name by the worker (profile_mapping.py). Empty = no rolled
+  // section mapped; the host draws such members as placeholder pipes.
+  string profile_designation = 4;
 }
 
 message CreateGeometryBatch {
