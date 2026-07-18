@@ -317,8 +317,12 @@ void CleanupReleasedTabs() {
         DATASETTAB& tab = allTabs[tabID];
         if (tab.closeRequested.load(std::memory_order_acquire) &&
             tab.engineeringReleased.load(std::memory_order_acquire)) {
-            gpu.CleanupTabResources(tab.dx);
-            if (tab.cad2d) CleanupCad2DTabResources(*tab.cad2d);
+            // GPU teardown is handed to the copy thread (fence-gated): it owns tab.dx matrix
+            // writes, the RCU geometry pages and the cad2d records, and one of its iterations
+            // may still be walking the pre-close published tab list. Releasing here would race.
+            tab.gpuReleaseState.store(1, std::memory_order_release);
+            gPendingTabGpuReleases.fetch_add(1, std::memory_order_release);
+            toCopyThreadCV.notify_one();
             tab.closeRequested.store(false, std::memory_order_release);
             tab.engineeringReleased.store(false, std::memory_order_release);
             closeQueuedTabs[tabID] = false;
@@ -720,7 +724,9 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
         D3D12_COMMAND_QUEUE_DESC queueDesc = {};
         queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
         queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-        gpu.device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&screen.commandQueue));
+        // ThrowIfFailed: a silently null queue surfaces much later as an inscrutable
+        // "Device interface cannot be NULL" from CreateSwapChainForHwnd. Fail at the source.
+        ThrowIfFailed(gpu.device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&screen.commandQueue)));
     }
 
     // SETUP TABS (The Data) CRITICAL: Resize first to prevent pointer invalidation when threads start!
@@ -819,6 +825,9 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     //threads.emplace_back(GpuRenderThread, 0, 60);  // Monitor 1 at 60Hz
     //threads.emplace_back(GpuRenderThread, 1, 144); // Monitor 2 at 144Hz
     RestartRenderThreads();// Initial Render Thread Launch (Not a monitor topology change, just startup)
+    // Graphics startup complete: topology-change messages (WM_DISPLAYCHANGE / WM_DPICHANGED) may
+    // now trigger RestartRenderThreads. Written and read on this (UI) thread only.
+    gpu.isGPUEngineInitialized = true;
 
     MSG msg = {};// Main message loop:
 
@@ -1368,6 +1377,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
     case WM_DISPLAYCHANGE: // Resolution change OR When user adds or disconnects a new monitor.
     case WM_DPICHANGED:    // Scale change, When user manually changes screen resolution through windows settings.
+        // Before startup completes, RestartRenderThreads would call BuildMonitorIconAtlas, which
+        // waits INFINITE on the copy fence - and GpuCopyThread may not exist yet. That deadlock
+        // leaves a zombie process holding the D3D12 device (subsequent launches then fail at
+        // CreateCommandQueue). Startup runs RestartRenderThreads itself, so early messages are moot.
+        if (!gpu.isGPUEngineInitialized) break;
         std::wcout << L"WM_DISPLAYCHANGE / WM_DPICHANGED received. Restarting render threads." << std::endl;
         /* This IS a topology change. Monitor details may have changed. But Geometry belonging to tabs persists!
         Monitor addition / removal is very rare event. 1 event each couple hours average is already conservative.

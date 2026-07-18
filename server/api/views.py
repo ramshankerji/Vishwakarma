@@ -151,8 +151,7 @@ def stats(request):
 
     totals = UsageRecord.objects.aggregate(
         open_seconds=Sum("open_seconds"), focus_seconds=Sum("focus_seconds"),
-        left=Sum("left_clicks"), middle=Sum("middle_clicks"), right=Sum("right_clicks"),
-        keys=Sum("key_presses"), records=Count("id"))
+        records=Count("id"))
 
     def top_counts(queryset, field, limit=8):
         rows = (queryset.exclude(**{field: ""}).values(field)
@@ -186,8 +185,6 @@ def stats(request):
         "active_30d": Installation.objects.filter(last_seen__gte=month_ago).count(),
         "open_hours": round((totals["open_seconds"] or 0) / 3600, 1),
         "focus_hours": round((totals["focus_seconds"] or 0) / 3600, 1),
-        "clicks": (totals["left"] or 0) + (totals["middle"] or 0) + (totals["right"] or 0),
-        "keys": totals["keys"] or 0,
         "records": totals["records"] or 0,
         "os_list": top_counts(hardware, "os_name"),
         "cpu_list": top_counts(hardware, "cpu_name"),

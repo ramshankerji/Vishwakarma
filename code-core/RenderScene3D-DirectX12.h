@@ -12,6 +12,7 @@
 struct DX12ResourcesPerWindow;
 struct GeometryPage;
 struct CommandToCopyThread;
+struct DATASETTAB; // विश्वकर्मा.h
 
 // Scene3D background clear. SceneTopUIHeightPx is the reserved top-UI band height in pixels;
 // ClearSceneSkyGradient fills the scene area below it with the vertical sky gradient.
@@ -29,3 +30,9 @@ std::unique_ptr<GeometryPage> CreateNewPage(uint64_t containerMemoryId);
 void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator>& commandAllocator,
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList>& commandList);
+
+// Copy-thread-only: full teardown of one closed tab's Scene3D geometry (active + retired pages,
+// snapshots, and this thread's objectID->page bookkeeping). Called by GpuCopyThread once every
+// monitor's render fence has passed the tab's release fence, and by its shutdown path after the
+// render threads are joined. Never call from the UI thread.
+void ReleaseTabGpuGeometry(DATASETTAB& tab);

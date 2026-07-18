@@ -454,7 +454,18 @@ void GpuCopyThread() {
         uint32_t write = gUploadQueue.writeIndex.load(std::memory_order_acquire);
         while (read < write)  {
             UploadRequest& req = gUploadQueue.requests[read % MAX_UPLOAD_REQUESTS];
-            if (req.type == UploadType::Texture2D) { ProcessTextureUpload(req); }
+            if (req.type == UploadType::Texture2D) {
+                try { ProcessTextureUpload(req); }
+                catch (const HrException& e) {
+                    std::cerr << "Copy thread: texture upload failed, hr=0x"
+                        << std::hex << e.Error() << std::dec << std::endl;
+                    // Unblock any CPU thread waiting on this upload's reserved fence value
+                    // (UploadUIAtlasTexture / BuildMonitorIconAtlas wait INFINITE on it).
+                    if (req.completionFence) {
+                        gpu.copyFence->Signal(req.completionFence->load(std::memory_order_acquire));
+                    }
+                }
+            }
             read++;
             gUploadQueue.readIndex.store(read, std::memory_order_release);
         }
@@ -470,13 +481,14 @@ void GpuCopyThread() {
         {
             std::unique_lock<std::mutex> lock(toCopyThreadMutex);
 
-            // Wake up if there is Geometry OR Texture Uploads OR Shutdown
+            // Wake up if there is Geometry OR Texture Uploads OR a Tab release OR Shutdown
             toCopyThreadCV.wait(lock, [&] {
                 bool hasGeometry = !commandToCopyThreadQueue.empty();
-                bool hasTextures = gUploadQueue.readIndex.load(std::memory_order_relaxed) 
+                bool hasTextures = gUploadQueue.readIndex.load(std::memory_order_relaxed)
                     < gUploadQueue.writeIndex.load(std::memory_order_relaxed);
                 bool hasCad2D = HasPendingCad2DCopyCommands();
-                return hasGeometry || hasTextures || hasCad2D || shutdownSignal;
+                bool hasTabRelease = gPendingTabGpuReleases.load(std::memory_order_relaxed) > 0;
+                return hasGeometry || hasTextures || hasCad2D || hasTabRelease || shutdownSignal;
                 });
 
             while (!commandToCopyThreadQueue.empty()) {
@@ -486,14 +498,30 @@ void GpuCopyThread() {
         } // lock released here. We have a local batch of commands to process without holding the lock.
         if (shutdownSignal) break; // Exit if shutdown was signaled while waiting.
 
-        std::vector<CommandToCopyThread2D> cad2DBatch;
-        PopAllCad2DCopyCommands(cad2DBatch);
-        if (!cad2DBatch.empty()) {
-            ProcessCad2DCopyBatch(cad2DBatch);
+        // A fence-gated tab release keeps the CV predicate true while render fences catch up to
+        // the tag; pace the loop so those 1-2 frames don't spin this thread at 100% CPU.
+        if (batch.empty() && gPendingTabGpuReleases.load(std::memory_order_acquire) > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(8));
         }
 
-        // 3D geometry batch: RCU page cloning/building/publish moved to RenderScene3D-DirectX12.cpp.
-        ProcessScene3DCopyBatch(batch, commandAllocator, commandList);
+        std::vector<CommandToCopyThread2D> cad2DBatch;
+        PopAllCad2DCopyCommands(cad2DBatch);
+        // An allocation failure (e.g. VRAM exhaustion) inside a batch must not abort the process:
+        // this thread has no other exception handler, so an uncaught HrException == std::terminate.
+        // The failed batch is dropped (logged); rendering continues from the last published snapshot.
+        try {
+            if (!cad2DBatch.empty()) {
+                ProcessCad2DCopyBatch(cad2DBatch);
+            }
+            // 3D geometry batch: RCU page cloning/building/publish moved to RenderScene3D-DirectX12.cpp.
+            ProcessScene3DCopyBatch(batch, commandAllocator, commandList);
+        }
+        catch (const HrException& e) {
+            std::cerr << "Copy thread: geometry batch failed, hr=0x" << std::hex << e.Error()
+                << std::dec << ". Batch dropped (" << batch.size() << " 3D / "
+                << cad2DBatch.size() << " 2D commands)." << std::endl;
+            commandList->Close(); // May be left open by the throw; Close so the next Reset is legal.
+        }
 
         /* UpdateSubresources may introduce ResourceBarriers internally ! Which is not allowed on Copy Queues.
         with the raw copy command, which is safe because our buffers are already created
@@ -563,6 +591,45 @@ void GpuCopyThread() {
                 if (allTabs[tabList[i]].cad2d) {
                     PruneCad2DRetiredResources(*allTabs[tabList[i]].cad2d, safeRetireFence);
                 }
+
+#ifdef _DEBUG
+                // Retire-backlog sentinel: with healthy pruning this stays in single digits.
+                // Sustained growth means some monitor's fence stopped advancing again.
+                const size_t retireBacklog =
+                    storage.retiredPages.size() + storage.retiredSnapshots.size();
+                if (retireBacklog > 128 && retireBacklog % 128 == 0) {
+                    std::cout << "[gpu][warn] tab " << tabList[i] << " retire backlog="
+                              << retireBacklog << " safeRetireFence=" << safeRetireFence << std::endl;
+                }
+#endif
+            }
+
+            // Fence-gated teardown of closed tabs (requested by CleanupReleasedTabs on the UI
+            // thread). Runs here because this thread owns all per-tab GPU state; safeRetireFence
+            // guarantees no monitor still executes a frame referencing the tab's resources.
+            // Closed tabs are unpublished, so the per-tab loop above never visits them.
+            if (gPendingTabGpuReleases.load(std::memory_order_acquire) > 0) {
+                for (uint16_t t = 0; t < MV_MAX_TABS; ++t) {
+                    DATASETTAB& closingTab = allTabs[t];
+                    const uint8_t releaseState =
+                        closingTab.gpuReleaseState.load(std::memory_order_acquire);
+                    if (releaseState == 1) {
+                        // Tag with the current global fence; every monitor must complete past
+                        // this before the tab's GPU resources can be destroyed.
+                        closingTab.gpuReleaseFence =
+                            gpu.renderFenceValue.load(std::memory_order_acquire);
+                        closingTab.gpuReleaseState.store(2, std::memory_order_release);
+                    }
+                    else if (releaseState == 2 && closingTab.gpuReleaseFence <= safeRetireFence) {
+                        ReleaseTabGpuGeometry(closingTab);          // Pages + snapshots (VRAM)
+                        if (closingTab.cad2d) CleanupCad2DTabResources(*closingTab.cad2d);
+                        gpu.CleanupTabResources(closingTab.dx);     // Upload heaps, matrix buffer, PSOs
+                        cpu.notifyTabClosed(closingTab.tabNo); // CPU arena chunks
+                        closingTab.gpuReleaseState.store(0, std::memory_order_release);
+                        gPendingTabGpuReleases.fetch_sub(1, std::memory_order_release);
+                        std::wcout << L"Closed tab " << t << L": GPU + arena memory released." << std::endl;
+                    }
+                }
             }
         } // End of cleanup section.
     } // End of while (!shutdownSignal)
@@ -572,10 +639,9 @@ void GpuCopyThread() {
     auto tabList = publishedTabIndexes.load(std::memory_order_acquire);
     auto tabCount = publishedTabCount.load(std::memory_order_acquire);
     for (uint16_t i = 0; i < tabCount; ++i) {
-        TabGeometryStorage& storage = allTabs[tabList[i]].geometry;
-        for (auto& rs : storage.retiredSnapshots) { delete rs.snapshot; }
-        storage.retiredSnapshots.clear();
-        storage.retiredPages.clear();
+        // Render threads are joined before shutdownSignal is set, so releasing the ACTIVE pages
+        // (not just retired ones) is safe here and keeps the debug-layer live-object report clean.
+        ReleaseTabGpuGeometry(allTabs[tabList[i]]);
         if (allTabs[tabList[i]].cad2d) {
             ReleaseCad2DRetiredResources(*allTabs[tabList[i]].cad2d);
         }

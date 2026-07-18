@@ -390,6 +390,15 @@ void GpuRenderThread(int monitorId, int refreshRate) {
         else { // Idle handling
             // If I have no windows, I just wait (maybe for a VSync or sleep). Maybe we are running without a monitor !
             // This fulfills "waiting for some windows to be dragged into it" ?
+            // Keep this monitor's renderFence advancing even while idle: GpuCopyThread prunes retired
+            // pages/snapshots at min(GetCompletedValue) across monitors, so a fence that stops moving
+            // (windows migrated away or closed) would pin safeRetireFence forever and every later
+            // retirement would accumulate unbounded (VRAM exhaustion). Queue is empty here, so the
+            // signal completes almost immediately. Do NOT touch currentFenceValue: that tracks
+            // threadRes.fence (allocator throttle + thread cleanup), which idles along with us.
+            const UINT64 idleFenceValue = gpu.renderFenceValue.fetch_add(1);
+            threadRes.commandQueue->Signal(gpu.screens[monitorId].renderFence.Get(), idleFenceValue);
+            gpu.screens[monitorId].renderFenceValue = idleFenceValue;
             std::this_thread::sleep_for(std::chrono::milliseconds(16));
         }
 
@@ -1098,7 +1107,9 @@ void RestartRenderThreads() { // The "Safe" Restart Function. Runs for initial r
             // NEW MONITOR (or first run). Create a new Queue.
             D3D12_COMMAND_QUEUE_DESC queueDesc = {};
             queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-            gpu.device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&gpu.screens[i].commandQueue));
+            // ThrowIfFailed: a silently null queue surfaces later as an inscrutable
+            // "Device interface cannot be NULL" from CreateSwapChainForHwnd. Fail at the source.
+            ThrowIfFailed(gpu.device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&gpu.screens[i].commandQueue)));
             ThrowIfFailed(gpu.device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gpu.screens[i].renderFence)));
             gpu.screens[i].renderFenceValue = 1;
             gpu.screens[i].renderFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);

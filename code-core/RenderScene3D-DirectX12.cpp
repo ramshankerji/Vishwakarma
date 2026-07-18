@@ -83,11 +83,14 @@ std::unique_ptr<GeometryPage> CreateNewPage(uint64_t containerMemoryId)
 
     CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);
     auto desc = CD3DX12_RESOURCE_DESC::Buffer(page->pageSize);
-    gpu.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&page->buffer));
+    // ThrowIfFailed: a silent failure here (VRAM exhaustion) returns a page with null buffers,
+    // which crashes later at CopyResource with no indication of the real cause. The copy thread
+    // catches this exception and drops the batch instead of aborting.
+    ThrowIfFailed(gpu.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&page->buffer)));
     auto indirectDesc = CD3DX12_RESOURCE_DESC::Buffer(65536 * sizeof(IndirectCommand));
-    gpu.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &indirectDesc,
-        D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&page->indirectBuffer));
+    ThrowIfFailed(gpu.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &indirectDesc,
+        D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&page->indirectBuffer)));
 
     static std::atomic<uint64_t> totalPages = 0; //Telemetry helper / counter.
     //std::wcout << "New page allocated. New Page Counter: " << ++totalPages << std::endl;
@@ -208,6 +211,40 @@ void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
     //std::lock_guard<std::mutex> lock(tabRes.objectsOnGPUMutex);
 }
 
+// Copy-thread-private bookkeeping: maps each objectID to the VRAM page (raw ptr) that currently
+// owns it. Persists across batches: exactly one copy thread exists for the process lifetime.
+// File scope (not function-static) so ReleaseTabGpuGeometry can purge a closed tab's entries.
+struct ObjectLocation {
+    GeometryPage* page;   // page where object currently resides
+    uint32_t slot;        // index in page->objects
+};
+static std::unordered_map<uint64_t, ObjectLocation> objectLocation;
+
+// Copy-thread-only: full teardown of one closed tab's Scene3D geometry. GpuCopyThread calls this
+// once every monitor's render fence has passed the tab's release fence (no submitted frame can
+// still reference these pages), and again from its shutdown path after render threads joined.
+void ReleaseTabGpuGeometry(DATASETTAB& tab) {
+    TabGeometryStorage& storage = tab.geometry;
+
+    // Purge this tab's entries from the location map: the pages they point to are destroyed
+    // below, and tab slots are never reused within a session, so the ids never come back.
+    std::unordered_set<const GeometryPage*> ownedPages;
+    for (const auto& page : storage.activePages) ownedPages.insert(page.get());
+    for (const auto& retired : storage.retiredPages) ownedPages.insert(retired.page.get());
+    for (auto it = objectLocation.begin(); it != objectLocation.end();) {
+        if (ownedPages.count(it->second.page)) it = objectLocation.erase(it);
+        else ++it;
+    }
+
+    GeometryPageSnapshot* snapshot =
+        storage.activeSnapshot.exchange(nullptr, std::memory_order_acq_rel);
+    delete snapshot;
+    for (auto& retired : storage.retiredSnapshots) delete retired.snapshot;
+    storage.retiredSnapshots.clear();
+    storage.retiredPages.clear(); // unique_ptr<GeometryPage> releases the VRAM buffers.
+    storage.activePages.clear();
+}
+
 // 3D-geometry half of the copy thread: applies one drained batch of ADD/MODIFY/REMOVE commands
 // to the per-tab GeometryPages (RCU clone -> mutate -> publish), then atomically publishes the
 // new page snapshot. Mirrors ProcessCad2DCopyBatch (RenderPage2D-DirectX12.cpp). The COPY-type
@@ -241,7 +278,16 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
 
                 if (it != storage.activePages.end()) { // Move the old page into the retirement queue
                     storage.retiredPages.push_back({ std::move(*it), currentRenderFence });
-                    *it = std::move(replacementPages[i]);// Slot the replacement page into the exact same position
+                    if (replacementPages[i]->objectCount == 0) {
+                        // Empty-page GC: every object in this clone was deleted or relocated.
+                        // It was never published (snapshot is built below from activePages) and
+                        // its only GPU work, the Pass-2 clone copy, has already been fence-waited,
+                        // so dropping it frees its ~5.5 MB now instead of parking a dead page in
+                        // activePages forever (pages have no compaction yet).
+                        storage.activePages.erase(it);
+                    } else {
+                        *it = std::move(replacementPages[i]);// Slot the replacement page into the exact same position
+                    }
                 }
             }
             for (auto& newPage : newPagesToAppend) { // Append new pages
@@ -266,13 +312,6 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             TODO: Add page count to telemetry.*/
         };
 
-    struct ObjectLocation {
-        GeometryPage* page;   // page where object currently resides
-        uint32_t slot;        // index in page->objects
-    };
-    // Copy-thread-private bookkeeping: objectIndex maps each. objectID to which VRAM page (raw ptr) currently owns it.
-    // Persists across batches: exactly one copy thread exists for the process lifetime.
-    static std::unordered_map<uint64_t, ObjectLocation> objectLocation;
     uint64_t fenceValue = 0;
 
         uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
@@ -646,13 +685,15 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     if (cloneIt != clonedPages.end()) workPage = cloneIt->second.get();
                     else workPage = oldPage;   // page created this batch
 
-                    rec = workPage->objects[slotIndex];
+                    // Must be a pointer into the page (like the MODIFY path above): a by-value copy
+                    // here would mark only the copy deleted and the object would keep drawing.
+                    oldRec = &(workPage->objects[slotIndex]);
 
                     // Soft-delete: mark the slot; IndirectBuffer rebuild will skip it
-                    rec.isDeleted = true;
-                    workPage->holeBytes += rec.vertexSize + rec.indexSize;
+                    oldRec->isDeleted = true;
+                    workPage->holeBytes += oldRec->vertexSize + oldRec->indexSize;
                     workPage->objectCount--;
-                    tabRes.freeMatrixSlots.push_back(rec.matrixIndex); // Free the matrix slot for reuse
+                    tabRes.freeMatrixSlots.push_back(oldRec->matrixIndex); // Free the matrix slot for reuse
                     objectLocation.erase(locIt);// Remove from local bookkeeping
                     break;
                 

@@ -218,6 +218,13 @@ struct DATASETTAB {
     DataTreeView::State dataTreeView;
     std::atomic<bool> closeRequested{ false };
     std::atomic<bool> engineeringReleased{ false };
+    // Tab-close GPU teardown handshake. The UI thread (CleanupReleasedTabs) requests with 1 after
+    // the engineering thread has exited; GpuCopyThread tags the global render fence (2) and does
+    // the actual release once every monitor's fence has passed it. All per-tab GPU state (dx
+    // matrix writes, RCU geometry pages, cad2d records) is copy-thread-owned, so the release
+    // must never run on the UI thread (a copy iteration may hold the pre-close published list).
+    std::atomic<uint8_t> gpuReleaseState{ 0 }; // 0 = none, 1 = requested, 2 = fence-tagged
+    uint64_t gpuReleaseFence = 0;              // Written/read by the copy thread only.
     
     DATASETTAB() {
         userInputQueue = std::make_unique<ThreadSafeQueueCPU>();

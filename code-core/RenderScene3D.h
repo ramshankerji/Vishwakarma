@@ -6,6 +6,7 @@
 // cross-platform ABI contract.
 
 #pragma once
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
@@ -152,3 +153,8 @@ inline ThreadSafeQueueGPU g_gpuCommandQueue;
 inline std::mutex toCopyThreadMutex;
 inline std::condition_variable toCopyThreadCV;
 inline std::queue<CommandToCopyThread> commandToCopyThreadQueue;
+
+// Number of closed tabs whose GPU teardown is pending on the copy thread (fence-gated).
+// UI thread increments (CleanupReleasedTabs) and notifies the CV; GpuCopyThread tags each
+// request with the global render fence and decrements after performing the release.
+inline std::atomic<uint32_t> gPendingTabGpuReleases{ 0 };
