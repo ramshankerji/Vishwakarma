@@ -477,6 +477,26 @@ python "$(ProjectDir)..\code-miscellaneous\steel_profile_embedder.py" "$(Project
       <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(IntDir)Shader2D_TextPixel.h</HeaderFileOutput>
       <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_2dTextPixelShader</VariableName>
     </FxCompile>
+    <FxCompile Include="ShaderSkyGradientVertex.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Vertex</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(IntDir)ShaderSkyGradientVertex.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">g_skyGradientVertexShader</VariableName>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Vertex</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(IntDir)ShaderSkyGradientVertex.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_skyGradientVertexShader</VariableName>
+    </FxCompile>
+    <FxCompile Include="ShaderSkyGradientPixel.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(IntDir)ShaderSkyGradientPixel.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">g_skyGradientPixelShader</VariableName>
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
+      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">6.0</ShaderModel>
+      <HeaderFileOutput Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(IntDir)ShaderSkyGradientPixel.h</HeaderFileOutput>
+      <VariableName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">g_skyGradientPixelShader</VariableName>
+    </FxCompile>
   </ItemGroup>
   <Target Name="ValidatePrebuiltProtobuf" BeforeTargets="PrepareForBuild">
     <Error Condition="'$(Configuration)|$(Platform)'=='Debug|x64' And !Exists('$(VishwakarmaRoot)build\protobuf-x64-debug\Debug\libprotobuf-lited.lib')" Text="Prebuilt Debug protobuf library not found at $(VishwakarmaRoot)build\protobuf-x64-debug\Debug\libprotobuf-lited.lib. Build code-external\protobuf once into build\protobuf-x64-debug before building Vishwakarma; project .proto files still regenerate every app build." />

@@ -205,7 +205,8 @@ void GpuRenderThread(int monitorId, int refreshRate) {
 
             threadRes.commandList->OMSetRenderTargets(1, &rttHandle, FALSE, &dsvHandle);
 
-            const float clearColor[] = { kSceneSkyTopR, kSceneSkyTopG, kSceneSkyTopB, 1.0f };// Clear
+            // Must stay equal to the RTT's baked clear value (below) to keep the fast clear.
+            const float clearColor[] = { kCad2DBackgroundR, kCad2DBackgroundG, kCad2DBackgroundB, 1.0f };
             threadRes.commandList->ClearRenderTargetView(rttHandle, clearColor, 0, nullptr);
             threadRes.commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
@@ -251,7 +252,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                         gpu.uiResources, monitorId, activeInternalSubTabMemoryId, renderSlot);
                 }
                 else {
-                    ClearSceneSkyGradient(threadRes.commandList.Get(), winRes, rttHandle, monitorId);
+                    ClearSceneSkyGradient(threadRes.commandList.Get(), winRes, monitorId);
                     gpu.RenderScene3D(threadRes.commandList.Get(), winRes, tabRes, tab.geometry,
                         monitorId, activeInternalSubTabMemoryId);// Renders geometry.
 
@@ -573,7 +574,7 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
     auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(gpu.rttFormat, dx.WindowWidth, dx.WindowHeight,
         1, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
     D3D12_CLEAR_VALUE clearValue{ .Format = gpu.rttFormat,
-        .Color = {kSceneSkyTopR, kSceneSkyTopG, kSceneSkyTopB, 1.0f} }; //C++20 allows this beauty!
+        .Color = {kCad2DBackgroundR, kCad2DBackgroundG, kCad2DBackgroundB, 1.0f} }; //C++20 allows this beauty!
 
     for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; i++) {
         CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
@@ -731,7 +732,7 @@ void शंकर::ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UI
     CD3DX12_CPU_DESCRIPTOR_HANDLE rttRtvHandle(dx.rttRtvHeap->GetCPUDescriptorHandleForHeapStart());
     CD3DX12_CPU_DESCRIPTOR_HANDLE rttSrvHandle(dx.rttSrvHeap->GetCPUDescriptorHandleForHeapStart());
     D3D12_CLEAR_VALUE clearValue{ .Format = gpu.rttFormat,
-        .Color = {kSceneSkyTopR, kSceneSkyTopG, kSceneSkyTopB, 1.0f} };
+        .Color = {kCad2DBackgroundR, kCad2DBackgroundG, kCad2DBackgroundB, 1.0f} };
 
     for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; i++) {
         auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(gpu.rttFormat,

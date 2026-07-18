@@ -134,6 +134,7 @@ void CreateCubePipeline(DX12ResourcesPerTab& tabRes) {
         &signature, &error));
     ThrowIfFailed(gpu.device->CreateRootSignature(0, signature->GetBufferPointer(),
         signature->GetBufferSize(), IID_PPV_ARGS(&sel.cubeRootSignature)));
+    sel.cubeRootSignature->SetName(L"Selection3D Cube");
 
     const D3D12_INPUT_ELEMENT_DESC cubeLayout[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },

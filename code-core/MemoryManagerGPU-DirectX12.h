@@ -423,7 +423,12 @@ public:
     DXGI_FORMAT rttFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
     DX12ResourcesUI uiResources;
-    
+
+    // Scene3D sky background pipeline. Device-wide (no per-window or per-tab state): created once by
+    // InitSkyGradientResources before the render threads start, then only read while recording.
+    ComPtr<ID3D12RootSignature> skyGradientRootSignature;
+    ComPtr<ID3D12PipelineState> skyGradientPSO;
+
     //Following to be added latter.
     //ID3D12DescriptorHeapMgr    ← Global descriptor allocator
     //Shader& PSO Cache         ← Shared by all threads

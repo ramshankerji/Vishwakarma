@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "colors.h"
 #include "MemoryManagerGPU-DirectX12.h"
 #include "UserInterface-DirectX12.h"
 #include "UserInterface.h"
@@ -398,6 +399,7 @@ void InitCad2DTabResources(TabCad2DStorage& storage) {
         SerializeRootSignature(rootDesc, signature);
         ThrowIfFailed(gpu.device->CreateRootSignature(0, signature->GetBufferPointer(),
             signature->GetBufferSize(), IID_PPV_ARGS(&storage.dx.lineRootSignature)));
+        storage.dx.lineRootSignature->SetName(L"Cad2D Line");
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
         psoDesc.InputLayout = { nullptr, 0 };
@@ -449,6 +451,7 @@ void InitCad2DTabResources(TabCad2DStorage& storage) {
         SerializeRootSignature(rootDesc, signature);
         ThrowIfFailed(gpu.device->CreateRootSignature(0, signature->GetBufferPointer(),
             signature->GetBufferSize(), IID_PPV_ARGS(&storage.dx.curveRootSignature)));
+        storage.dx.curveRootSignature->SetName(L"Cad2D Curve");
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
         psoDesc.InputLayout = { nullptr, 0 };
@@ -506,6 +509,7 @@ void InitCad2DTabResources(TabCad2DStorage& storage) {
         SerializeRootSignature(rootDesc, signature);
         ThrowIfFailed(gpu.device->CreateRootSignature(0, signature->GetBufferPointer(),
             signature->GetBufferSize(), IID_PPV_ARGS(&storage.dx.textRootSignature)));
+        storage.dx.textRootSignature->SetName(L"Cad2D Text");
 
         D3D12_INPUT_ELEMENT_DESC inputLayout[] = {
             { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
@@ -644,7 +648,7 @@ void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow
 
     CD3DX12_CPU_DESCRIPTOR_HANDLE rttHandle(winRes.rttRtvHeap->GetCPUDescriptorHandleForHeapStart(),
         winRes.frameIndex, gpu.rtvDescriptorSize);
-    const float cadBackground[] = { 230.0f / 255.0f, 230.0f / 255.0f, 230.0f / 255.0f, 1.0f };
+    const float cadBackground[] = { kCad2DBackgroundR, kCad2DBackgroundG, kCad2DBackgroundB, 1.0f };
     commandList->ClearRenderTargetView(rttHandle, cadBackground, 0, nullptr);
 
     const Cad2DViewState& view = storage.views[viewSlot]; // Per-view pan/zoom of the shown Page2D.

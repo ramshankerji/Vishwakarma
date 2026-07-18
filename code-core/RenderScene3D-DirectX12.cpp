@@ -6,6 +6,8 @@
 #include "UserInterface-DirectX12.h"
 #include "ShaderSceneVertex.h"
 #include "ShaderScenePixel.h"
+#include "ShaderSkyGradientVertex.h"
+#include "ShaderSkyGradientPixel.h"
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -19,9 +21,16 @@ extern std::atomic<uint64_t> atlasFence;
 
 namespace {
 
-    float LerpFloat(float a, float b, float t) {
-        return a + (b - a) * t;
-    }
+    // Root constants for the sky pipeline (b0). Layout must match the cbuffer in
+    // ShaderSkyGradient*.hlsl: HLSL packs each float3 + trailing float into one 16-byte register.
+    struct SkyGradientConstants {
+        float topColor[3];
+        float ndcTopY;
+        float horizonColor[3];
+        float padding0;
+    };
+    static_assert(sizeof(SkyGradientConstants) == 8 * sizeof(float),
+        "SkyGradientConstants must stay 8 root constants wide");
 } // namespace
 
 int SceneTopUIHeightPx(int monitorId, const DX12ResourcesPerWindow& winRes) {
@@ -45,31 +54,75 @@ int SceneTopUIHeightPx(int monitorId, const DX12ResourcesPerWindow& winRes) {
     return std::clamp(topUITotalHeightPx, 0, winRes.WindowHeight);
 }
 
+void InitSkyGradientResources(ID3D12Device* device) {
+    if (!device || gpu.skyGradientPSO) return;
+
+    // Everything the two shaders need fits in root constants, so there is no descriptor heap, no
+    // constant buffer and no vertex buffer to bind before the draw.
+    CD3DX12_ROOT_PARAMETER1 rootParam;
+    rootParam.InitAsConstants(sizeof(SkyGradientConstants) / sizeof(float), 0, 0,
+        D3D12_SHADER_VISIBILITY_ALL);
+
+    CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootDesc;
+    rootDesc.Init_1_1(1, &rootParam, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE);
+
+    ComPtr<ID3DBlob> signature;
+    ComPtr<ID3DBlob> errorBlob;
+    HRESULT hr = D3DX12SerializeVersionedRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1_1,
+        &signature, &errorBlob);
+    if (FAILED(hr)) {
+        if (errorBlob)
+            std::cerr << "Sky Gradient Root Signature Serialization Failed:\n"
+            << (char*)errorBlob->GetBufferPointer() << std::endl;
+        ThrowIfFailed(hr);
+    }
+    ThrowIfFailed(device->CreateRootSignature(0, signature->GetBufferPointer(),
+        signature->GetBufferSize(), IID_PPV_ARGS(&gpu.skyGradientRootSignature)));
+    gpu.skyGradientRootSignature->SetName(L"Sky Gradient");
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.pRootSignature = gpu.skyGradientRootSignature.Get();
+    psoDesc.VS = CD3DX12_SHADER_BYTECODE(g_skyGradientVertexShader, sizeof(g_skyGradientVertexShader));
+    psoDesc.PS = CD3DX12_SHADER_BYTECODE(g_skyGradientPixelShader, sizeof(g_skyGradientPixelShader));
+    psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    // The sky is the background: no blending, and depth is neither tested nor written. DSVFormat
+    // still has to match the depth buffer the compositor has bound while this draws.
+    psoDesc.DepthStencilState.DepthEnable = FALSE;
+    psoDesc.DepthStencilState.StencilEnable = FALSE;
+    psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = gpu.rttFormat;
+    psoDesc.SampleDesc.Count = 1;
+
+    ThrowIfFailed(device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&gpu.skyGradientPSO)));
+    std::wcout << L"Sky gradient pipeline initialized\n";
+}
+
 void ClearSceneSkyGradient(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
-    D3D12_CPU_DESCRIPTOR_HANDLE rttHandle, int monitorId) {
+    int monitorId) {
     if (!commandList || winRes.WindowWidth <= 0 || winRes.WindowHeight <= 0) return;
+    // The compositor already cleared the whole RTT to the sky-top colour, so bailing out here
+    // degrades to a flat sky rather than an undefined background.
+    if (!gpu.skyGradientPSO || !gpu.skyGradientRootSignature) return;
 
     const int topUI = SceneTopUIHeightPx(monitorId, winRes);
-    const int sceneHeight = winRes.WindowHeight - topUI;
-    if (sceneHeight <= 0) return;
+    if (winRes.WindowHeight - topUI <= 0) return;
 
-    const int bandCount = (std::min)(kSceneSkyGradientBands, sceneHeight);
-    for (int band = 0; band < bandCount; ++band) {
-        const LONG y0 = static_cast<LONG>(topUI + (sceneHeight * band) / bandCount);
-        const LONG y1 = static_cast<LONG>(topUI + (sceneHeight * (band + 1)) / bandCount);
-        if (y1 <= y0) continue;
+    SkyGradientConstants constants{
+        { kSceneSkyTopR, kSceneSkyTopG, kSceneSkyTopB },
+        1.0f - 2.0f * static_cast<float>(topUI) / static_cast<float>(winRes.WindowHeight),
+        { kSceneSkyHorizonR, kSceneSkyHorizonG, kSceneSkyHorizonB },
+        0.0f };
 
-        const float t = (static_cast<float>(band) + 0.5f) / static_cast<float>(bandCount);
-        const float smoothT = t * t * (3.0f - 2.0f * t);
-        const float skyColor[] = {
-            LerpFloat(kSceneSkyTopR, kSceneSkyHorizonR, smoothT),
-            LerpFloat(kSceneSkyTopG, kSceneSkyHorizonG, smoothT),
-            LerpFloat(kSceneSkyTopB, kSceneSkyHorizonB, smoothT),
-            1.0f
-        };
-        const D3D12_RECT rect = { 0, y0, static_cast<LONG>(winRes.WindowWidth), y1 };
-        commandList->ClearRenderTargetView(rttHandle, skyColor, 1, &rect);
-    }
+    commandList->SetGraphicsRootSignature(gpu.skyGradientRootSignature.Get());
+    commandList->SetPipelineState(gpu.skyGradientPSO.Get());
+    commandList->SetGraphicsRoot32BitConstants(0, sizeof(constants) / sizeof(float), &constants, 0);
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    commandList->DrawInstanced(4, 1, 0, 0);
 }
 
 

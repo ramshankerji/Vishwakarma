@@ -192,6 +192,7 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
     D3DX12SerializeVersionedRootSignature(&rootSignatureDesc, featureData.HighestVersion, &signature, &error);
     gpu.device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(),
         IID_PPV_ARGS(&tabRes.rootSignature));
+    if (tabRes.rootSignature) tabRes.rootSignature->SetName(L"Scene3D");
 
     /* Note that The root signature is like a function declaration. It defines the interface but doesn't
     contain actual data. Now that we have declared the data layout, time to prepare for movement
@@ -306,11 +307,27 @@ void शंकर::CleanupTabResources(DX12ResourcesPerTab& tabRes) {
 
     tabRes.rootSignature.Reset();
     tabRes.pipelineState.Reset();
+    tabRes.commandSignature.Reset();
 
     std::wcout << "Cleaned up Tab Geometry Resources." << std::endl;
 }
 
 void शंकर::CleanupD3DGlobal() {
+    // 0. Per-monitor resources. gpu.screens[] outlives the render threads (queues deliberately
+    // survive thread restarts), so nothing else ever releases these. Safe here because every render
+    // thread has already exited; the icon atlas / SRV heap are otherwise only released by the
+    // RestartRenderThreads rebuild path, which shutdown does not go through.
+    for (OneMonitorController& screen : screens) {
+        screen.uiSrvHeap.Reset();
+        screen.uiIconAtlasTexture.Reset();
+        screen.renderFence.Reset();
+        if (screen.renderFenceEvent) {
+            CloseHandle(screen.renderFenceEvent);
+            screen.renderFenceEvent = nullptr;
+        }
+        screen.commandQueue.Reset();
+    }
+
     // 1. Sync and Cleanup Copy Engine
     if (copyCommandQueue && copyFence) {
         // Simple wait: Signal and wait for it
@@ -341,8 +358,10 @@ void शंकर::CleanupD3DGlobal() {
     // Optional: Report Live Objects
     ComPtr<IDXGIDebug1> dxgiDebug;
     if (SUCCEEDED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&dxgiDebug)))) {
+        // DETAIL (not SUMMARY): prints each survivor's address and debug name instead of a bare
+        // per-type count, so a leak points at the object that caused it. Names come from SetName().
         dxgiDebug->ReportLiveObjects(DXGI_DEBUG_ALL,
-            DXGI_DEBUG_RLO_FLAGS(DXGI_DEBUG_RLO_SUMMARY | DXGI_DEBUG_RLO_IGNORE_INTERNAL));
+            DXGI_DEBUG_RLO_FLAGS(DXGI_DEBUG_RLO_DETAIL | DXGI_DEBUG_RLO_IGNORE_INTERNAL));
     }
 #endif
 

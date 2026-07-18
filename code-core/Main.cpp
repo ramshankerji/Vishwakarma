@@ -814,6 +814,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
 
     InitUIResources(gpu.uiResources, gpu.device.Get()); //Prepare and upload UI resources (e.g. fonts, icons) to GPU.
     //Above function depends on GpuCopyThread, hence it can't be done earlier.
+    InitSkyGradientResources(gpu.device.Get()); //Scene3D background pipeline, read by every render thread.
     std::wcout << L"Hello...." << std::endl;
     // LAUNCH 3 ENGINEERING THREADS (One per Tab). Main logic thread. The ringmaster of the application.
 	// TODO: 3 Initial threads is during development. Final application will have dynamic thread management.
@@ -880,6 +881,8 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     }
 
     CleanupUIResources(gpu.uiResources);
+    gpu.skyGradientPSO.Reset();
+    gpu.skyGradientRootSignature.Reset();
     gpu.CleanupD3DGlobal();// Global Cleanup
     
     //Cleanup Freetype library.

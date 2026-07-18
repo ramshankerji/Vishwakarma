@@ -14,11 +14,14 @@ struct GeometryPage;
 struct CommandToCopyThread;
 struct DATASETTAB; // विश्वकर्मा.h
 
-// Scene3D background clear. SceneTopUIHeightPx is the reserved top-UI band height in pixels;
-// ClearSceneSkyGradient fills the scene area below it with the vertical sky gradient.
+// Scene3D background. SceneTopUIHeightPx is the reserved top-UI band height in pixels;
+// ClearSceneSkyGradient fills the scene area below it with the vertical sky gradient, drawn as one
+// quad through the pipeline InitSkyGradientResources creates (call it once, before render threads
+// start). It draws into whatever render target the caller has bound.
 int  SceneTopUIHeightPx(int monitorId, const DX12ResourcesPerWindow& winRes);
+void InitSkyGradientResources(ID3D12Device* device);
 void ClearSceneSkyGradient(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
-    D3D12_CPU_DESCRIPTOR_HANDLE rttHandle, int monitorId);
+    int monitorId);
 
 // A fresh 4 MB double-ended geometry page (COMMON state) for the given container. Foundation's
 // GpuCopyThread and the Scene3D copy path both allocate through here.

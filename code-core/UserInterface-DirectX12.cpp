@@ -31,6 +31,27 @@ bool SubmitTextureUpload(const TextureUploadDesc& desc,
     return true;
 }
 
+// Both UI/text root signatures declare their SRV range as all UI_MAX_ATLAS_TEXTURES descriptors with
+// DESCRIPTOR_RANGE_FLAG_NONE, i.e. DESCRIPTORS_STATIC: every slot must hold a valid view before the
+// table is bound, even the ones no shader samples. Point the not-yet-used slots at the English atlas;
+// a real atlas uploaded into one of them later simply overwrites the alias.
+static void FillSpareAtlasSlots(ID3D12DescriptorHeap* heap, ID3D12Resource* englishAtlasTexture,
+    ID3D12Device* device, uint32_t firstSpareSlot) {
+    if (!heap || !englishAtlasTexture || !device) return;
+
+    const UINT inc = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = 1;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+
+    for (uint32_t slot = firstSpareSlot; slot < UI_MAX_ATLAS_TEXTURES; ++slot) {
+        CD3DX12_CPU_DESCRIPTOR_HANDLE handle(heap->GetCPUDescriptorHandleForHeapStart(), slot, inc);
+        device->CreateShaderResourceView(englishAtlasTexture, &srvDesc, handle);
+    }
+}
+
 bool UploadUIAtlasTexture(DX12ResourcesUI& uiRes, ID3D12Device* device, uint32_t atlasSlot,
     const AtlasBitmap& atlas) {
     if (!device || atlasSlot >= UI_MAX_ATLAS_TEXTURES || atlas.width <= 0 || atlas.height <= 0 ||
@@ -125,6 +146,9 @@ void BuildMonitorIconAtlas(DX12ResourcesUI& uiRes, ID3D12Device* device, int mon
         UI_ICON_ATLAS_SLOT, inc);
     device->CreateShaderResourceView(screen.uiIconAtlasTexture.Get(), &srvDesc, iconHandle);
 
+    FillSpareAtlasSlots(screen.uiSrvHeap.Get(), uiRes.uiAtlasTextures[UI_ENGLISH_ATLAS_SLOT].Get(),
+        device, UI_FIRST_DYNAMIC_SCRIPT_ATLAS_SLOT);
+
     char debugName[64];
     std::snprintf(debugName, sizeof(debugName), "icon_atlas_debug_%d.bmp", monitorId);
     SaveToBmp(debugName, iconAtlas.pixels.data(), iconAtlas.width, iconAtlas.height, iconAtlas.bytesPerPixel);
@@ -176,6 +200,7 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
 
     ThrowIfFailed(device->CreateRootSignature(0, signature->GetBufferPointer(),
         signature->GetBufferSize(), IID_PPV_ARGS(&uiRes.uiRootSignature)));
+    uiRes.uiRootSignature->SetName(L"UI Overlay");
     
     // Create SRV descriptor heap (1 texture)
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
@@ -274,6 +299,12 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
     
     device->CreateShaderResourceView(uiRes.uiAtlasTextures[UI_ENGLISH_ATLAS_SLOT].Get(), &srvDesc,
         uiRes.srvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    // This shared heap is only ever bound by the print path (PrinterController::Record2DDraws), which
+    // draws text and no icons — so the icon slot stays aliased here too. Icons come from the
+    // per-monitor heaps built by BuildMonitorIconAtlas, which own a real icon SRV at UI_ICON_ATLAS_SLOT.
+    FillSpareAtlasSlots(uiRes.srvHeap.Get(), uiRes.uiAtlasTextures[UI_ENGLISH_ATLAS_SLOT].Get(),
+        device, UI_ENGLISH_ATLAS_SLOT + 1);
 
     std::wcout << L"Shared English MSDF atlas uploaded: slot " << UI_ENGLISH_ATLAS_SLOT
         << L" (per-monitor icon atlases built by RestartRenderThreads)\n";
