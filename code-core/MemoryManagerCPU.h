@@ -130,7 +130,10 @@ struct CPU_RAM_4MB : CHUNK_METADATA {
     // This operation is now thread-safe at the chunk level.
 	std::byte* Allocate(uint32_t size); //uint32_t because maximum allocation size is 4MB only.
     // Frees a previously allocated block of memory, coalescing with adjacent free blocks.
-    void Free(std::byte* ptrToFree);
+    // totalSize = header (POINTER_OVERHEAD_BYTES) + user size, i.e. exactly what Allocate carved.
+    // राम::Free reads it from the block header and passes it down; the header layout is राम's
+    // convention, so this struct never parses it itself.
+    void Free(std::byte* ptrToFree, uint32_t totalSize);
     
 };
 static_assert(sizeof(CPU_RAM_4MB) == 4194304, "CPU_RAM_4MB must be exactly 4MB (4194304 bytes)");
@@ -182,25 +185,33 @@ inline std::byte* CPU_RAM_4MB::Allocate(uint32_t size) {
                 if (currentFreeListIndex >= freeByteRangesCount && freeByteRangesCount > 0) {
                     currentFreeListIndex = 0;
                 }
-                else { // Block is larger, so shrink it.
-                    freeByteRangesList[i].startOffset += size;
-                    freeByteRangesList[i].freeBytes -= size;
-                    currentFreeListIndex = i;// Update the hint** to this block, as it still has free space.
-                }
-                totalFreeSpace -= size;
-                return &dataBytes[offset];
             }
+            else { // Block is larger, so shrink it from the front (mirrors the fast path).
+                // This else was previously attached to the index-wrap check above: larger blocks
+                // were never allocated from (forcing needless new 4 MB chunks), and an exact fit
+                // also shrink-mutated whatever entry had shifted into slot i - with a uint32
+                // underflow fabricating a ~4 GB free range when that entry was smaller than size.
+                freeByteRangesList[i].startOffset += size;
+                freeByteRangesList[i].freeBytes -= size;
+                currentFreeListIndex = i;// Update the hint to this block, as it still has free space.
+            }
+            totalFreeSpace -= size;
+            return &dataBytes[offset];
         }
     }
     return nullptr; // No suitable block found.
 }
 
-inline void CPU_RAM_4MB::Free(std::byte* ptrToFree) {
+inline void CPU_RAM_4MB::Free(std::byte* ptrToFree, uint32_t totalSize) {
     if (ptrToFree == nullptr) return; //Safety in case there is error in upstream logic and we received null to be released.
+    if (totalSize == 0) return;
     std::lock_guard<std::mutex> lock(chunkMutex); // Lock only this chunk
-    uint64_t size = reinterpret_cast<uint64_t> (ptrToFree + 8);
-    
-    uint32_t offset = static_cast<std::byte*>(ptrToFree) - dataBytes;
+    // totalSize comes from the caller (राम::Free reads the 8-byte header preceding the user
+    // pointer). The old code here reinterpret_cast the POINTER VALUE as the size - every free
+    // corrupted the free list with an address-sized "size".
+    const uint32_t size = totalSize;
+
+    uint32_t offset = static_cast<uint32_t>(ptrToFree - dataBytes);
     // Find the insertion point to keep the list sorted by offset.
     uint32_t insertIndex = 0;
     while (insertIndex < freeByteRangesCount && freeByteRangesList[insertIndex].startOffset < offset) {
@@ -415,9 +426,9 @@ inline void राम::Free(std::byte* userPtr) {
         ptrdiff_t offset_from_start = actualPtr - chunkPoolStart;
         uint64_t chunk_index = offset_from_start / SMALL_ALLOCATOR_CHUNK_SIZE;
         CPU_RAM_4MB* targetChunk = reinterpret_cast<CPU_RAM_4MB*>(chunkPoolStart + chunk_index * SMALL_ALLOCATOR_CHUNK_SIZE);
-        uint64_t originalSize = *reinterpret_cast<uint64_t*>(actualPtr);
+        uint64_t originalSize = *reinterpret_cast<uint64_t*>(actualPtr); // Header written by Allocate.
         uint64_t totalSize = POINTER_OVERHEAD_BYTES + originalSize;
-        targetChunk->Free(actualPtr);
+        targetChunk->Free(actualPtr, static_cast<uint32_t>(totalSize));
     }
     else if (actualPtr >= largeBlockPoolStart && actualPtr < endOfReservedSpace) {
         freeInLargePool(actualPtr);
@@ -439,6 +450,9 @@ inline void राम::notifyTabClosed(uint32_t memoryGroupNo) {
         }
         tabToChunksMap.erase(it);
     }
+    // Drop the allocation hint unconditionally: it points into a chunk that is now decommitted.
+    // Without this, the next allocation for this group would lock a mutex in unbacked memory.
+    activeChunks.erase(memoryGroupNo);
     // A similar loop would be needed for large allocations belonging to the tab.
 }
 
@@ -446,15 +460,17 @@ inline CPU_RAM_4MB* राम::getNewChunkForTab(uint32_t memoryGroupNo) {
     // Assumes globalMemoryAllocationMutex is already held
     CPU_RAM_4MB* newChunk = nullptr;
     if (!freeChunks.empty()) {
-        // Reuse a previously de-committed chunk
-        newChunk = freeChunks.front();
-        freeChunks.pop_front();
-        newChunk->reset(memoryGroupNo); // Reset its metadata
-
-        if (!VirtualMemory::commit_memory(newChunk, SMALL_ALLOCATOR_CHUNK_SIZE)) {
-            freeChunks.push_front(newChunk); // Commit failed, put it back
-            return nullptr;
+        // Reuse a previously de-committed chunk. Commit FIRST: after decommit_memory the range
+        // is reserved but unbacked, so any write before commit_memory is an access violation
+        // (the old code called reset() first). Then construct in place exactly like the fresh
+        // path below - the decommit/recommit cycle zero-filled the storage, so the chunk's
+        // std::mutex must be constructed anew, never reused.
+        CPU_RAM_4MB* recycled = freeChunks.front();
+        if (!VirtualMemory::commit_memory(recycled, SMALL_ALLOCATOR_CHUNK_SIZE)) {
+            return nullptr; // Chunk stays in freeChunks for a later attempt.
         }
+        freeChunks.pop_front();
+        newChunk = new (recycled) CPU_RAM_4MB(memoryGroupNo); // Placement new
     } else { // Allocate a brand new chunk
         if ((chunkPoolStart + nextChunkOffset + SMALL_ALLOCATOR_CHUNK_SIZE) > largeBlockPoolStart) {
             std::cerr << "Error: Out of reserved space for small memory chunks." << std::endl;
