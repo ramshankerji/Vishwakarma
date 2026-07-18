@@ -52,9 +52,20 @@ struct UIIconAtlasMetadata {
     std::vector<char32_t> mixedIconCodepoints{};
 };
 
-static UIIconAtlasMetadata gIconAtlasMetadata{};
+// Per-monitor icon CPU bundle. UVs depend on the monitor's icon cell size (DPI-dependent), so this is
+// stored one-per-monitor instead of as a single global. BuildIconAtlas fills one; BuildUIOverlay points
+// the frame's UIDrawContext at the right one via ctx.iconData.
+struct IconAtlasCPU {
+    std::unordered_map<char32_t, Glyph> iconGlyphLookup; // private-use codepoints -> atlas UVs
+    UIIconAtlasMetadata metadata;
+};
 
-constexpr int kIconCellSize = 24;
+static IconAtlasCPU gMonitorIconAtlas[MV_MAX_MONITORS];
+
+IconAtlasCPU& MonitorIconAtlasCPU(int monitorId) { return gMonitorIconAtlas[monitorId]; }
+
+// Reference cell size the procedural dummy icons were authored against; real cells scale from it.
+constexpr int kIconReferenceCellSize = 24;
 constexpr int kIconCellGap = 4;
 constexpr int kIconStartY = 48;
 constexpr int kIconAtlasMinDimension = 256;
@@ -194,43 +205,43 @@ static void CopyRenderedSVGIconToAtlas(AtlasBitmap& atlas, const SVGIconRenderer
     }
 }
 
-static bool TryReserveIconCell(int iconIndex, int atlasW, int atlasH, int& outX, int& outY) {
-    const int cellsPerRow = (atlasW + kIconCellGap) / (kIconCellSize + kIconCellGap);
+static bool TryReserveIconCell(int iconIndex, int atlasW, int atlasH, int cellSize, int& outX, int& outY) {
+    const int cellsPerRow = (atlasW + kIconCellGap) / (cellSize + kIconCellGap);
     if (cellsPerRow <= 0) return false;
 
-    outX = (iconIndex % cellsPerRow) * (kIconCellSize + kIconCellGap);
-    outY = kIconStartY + (iconIndex / cellsPerRow) * (kIconCellSize + kIconCellGap);
-    return outX + kIconCellSize <= atlasW && outY + kIconCellSize <= atlasH;
+    outX = (iconIndex % cellsPerRow) * (cellSize + kIconCellGap);
+    outY = kIconStartY + (iconIndex / cellsPerRow) * (cellSize + kIconCellGap);
+    return outX + cellSize <= atlasW && outY + cellSize <= atlasH;
 }
 
-static void StoreIconCellGlyph(char32_t codepoint, int x, int y, int atlasW, int atlasH,
-    bool includeInFallbackPool = true) {
+static void StoreIconCellGlyph(IconAtlasCPU& out, char32_t codepoint, int x, int y, int atlasW, int atlasH,
+    int cellSize, bool includeInFallbackPool = true) {
     Glyph glyph{};
     glyph.uvMinX = (float)x / atlasW;
     glyph.uvMinY = (float)y / atlasH;
-    glyph.uvMaxX = (float)(x + kIconCellSize) / atlasW;
-    glyph.uvMaxY = (float)(y + kIconCellSize) / atlasH;
-    glyph.width = kIconCellSize;
-    glyph.height = kIconCellSize;
-    glyph.advanceX = kIconCellSize;
-    iconGlyphLookup[codepoint] = glyph;
+    glyph.uvMaxX = (float)(x + cellSize) / atlasW;
+    glyph.uvMaxY = (float)(y + cellSize) / atlasH;
+    glyph.width = cellSize;
+    glyph.height = cellSize;
+    glyph.advanceX = cellSize;
+    out.iconGlyphLookup[codepoint] = glyph;
     if (includeInFallbackPool) {
-        gIconAtlasMetadata.mixedIconCodepoints.push_back(codepoint);
+        out.metadata.mixedIconCodepoints.push_back(codepoint);
     }
 }
 
-static int ComputeIconAtlasDimension(size_t iconCount) {
+static int ComputeIconAtlasDimension(size_t iconCount, int cellSize) {
     const size_t iconsToPlace = std::max<size_t>(iconCount, 1u);
     int dimension = kIconAtlasMinDimension;
 
     while (dimension < kIconAtlasMaxDimension) {
-        const int cellsPerRow = (dimension + kIconCellGap) / (kIconCellSize + kIconCellGap);
+        const int cellsPerRow = (dimension + kIconCellGap) / (cellSize + kIconCellGap);
         if (cellsPerRow > 0) {
             const size_t rows =
                 (iconsToPlace + static_cast<size_t>(cellsPerRow) - 1u) / static_cast<size_t>(cellsPerRow);
             const size_t requiredHeight = static_cast<size_t>(kIconStartY) +
-                (rows - 1u) * static_cast<size_t>(kIconCellSize + kIconCellGap) +
-                static_cast<size_t>(kIconCellSize);
+                (rows - 1u) * static_cast<size_t>(cellSize + kIconCellGap) +
+                static_cast<size_t>(cellSize);
             if (requiredHeight <= static_cast<size_t>(dimension)) return dimension;
         }
 
@@ -240,11 +251,16 @@ static int ComputeIconAtlasDimension(size_t iconCount) {
     return kIconAtlasMaxDimension;
 }
 
-AtlasBitmap BuildIconAtlas() { // Called by the platform InitUIResources; declared in UserInterface.h.
-    constexpr int proceduralIconDrawSize = 20;
+// Builds an icon atlas whose cells are `iconCellSizePx` px (the monitor's on-screen icon size) and fills
+// `out` with the matching UVs + metadata. Called per monitor by the platform BuildMonitorIconAtlas.
+AtlasBitmap BuildIconAtlas(int iconCellSizePx, IconAtlasCPU& out) {
+    const int cellSize = std::max(1, iconCellSizePx);
+    // Procedural dummy icons were authored in a 24 px reference cell; scale their coordinates to fit.
+    auto S = [cellSize](int v) { return (int)std::lround((double)v * cellSize / (double)kIconReferenceCellSize); };
+
     const std::vector<SVGIconRenderer::RenderedSVGIcon> svgIcons =
-        SVGIconRenderer::RenderEmbeddedSVGIcons(kIconCellSize);
-    const int atlasDimension = ComputeIconAtlasDimension(4u + svgIcons.size());
+        SVGIconRenderer::RenderEmbeddedSVGIcons(cellSize);
+    const int atlasDimension = ComputeIconAtlasDimension(4u + svgIcons.size(), cellSize);
     const int atlasW = atlasDimension;
     const int atlasH = atlasDimension;
 
@@ -256,53 +272,56 @@ AtlasBitmap BuildIconAtlas() { // Called by the platform InitUIResources; declar
 
     // The source rounded rectangle is split into 9 texture regions at draw time.
     // Destination corners are resized to ~2 mm in screen space by PushRoundedRectangle.
-    GenerateRoundedRectangleNineSlice(atlas, 0, 0, 32, 8, gIconAtlasMetadata.roundedRectangle);
+    GenerateRoundedRectangleNineSlice(atlas, 0, 0, 32, 8, out.metadata.roundedRectangle);
 
-    iconGlyphLookup.clear();
-    gIconAtlasMetadata.mixedIconCodepoints.clear();
+    out.iconGlyphLookup.clear();
+    out.metadata.mixedIconCodepoints.clear();
 
     std::array<int, 4> iconXs{};
     std::array<int, 4> iconYs{};
     int nextIconIndex = 0;
     for (int i = 0; i < 4; ++i) {
-        if (!TryReserveIconCell(nextIconIndex, atlasW, atlasH, iconXs[i], iconYs[i])) continue;
-        StoreIconCellGlyph(gIconAtlasMetadata.dummyIconCodepoints[i], iconXs[i], iconYs[i], atlasW, atlasH);
+        if (!TryReserveIconCell(nextIconIndex, atlasW, atlasH, cellSize, iconXs[i], iconYs[i])) continue;
+        StoreIconCellGlyph(out, out.metadata.dummyIconCodepoints[i], iconXs[i], iconYs[i], atlasW, atlasH, cellSize);
         ++nextIconIndex;
     }
 
     // Dummy icon 0: plus
-    FillRect(atlas, iconXs[0] + 10, iconYs[0] + 4, 4, 16, 255);
-    FillRect(atlas, iconXs[0] + 4, iconYs[0] + 10, 16, 4, 255);
+    FillRect(atlas, iconXs[0] + S(10), iconYs[0] + S(4), S(4), S(16), 255);
+    FillRect(atlas, iconXs[0] + S(4), iconYs[0] + S(10), S(16), S(4), 255);
 
     // Dummy icon 1: folder-like block
-    FillRect(atlas, iconXs[1] + 4, iconYs[1] + 8, 16, 11, 255);
-    FillRect(atlas, iconXs[1] + 6, iconYs[1] + 5, 7, 4, 255);
+    FillRect(atlas, iconXs[1] + S(4), iconYs[1] + S(8), S(16), S(11), 255);
+    FillRect(atlas, iconXs[1] + S(6), iconYs[1] + S(5), S(7), S(4), 255);
 
-    // Dummy icon 2: ring
-    for (int y = 0; y < proceduralIconDrawSize; ++y) {
-        for (int x = 0; x < proceduralIconDrawSize; ++x) {
-            const float dx = (float)x + 0.5f - 10.0f;
-            const float dy = (float)y + 0.5f - 10.0f;
+    // Dummy icon 2: ring (drawn to fill the cell, radii scaled from the 24 px reference)
+    const float ringCenter = cellSize * 0.5f;
+    const float ringInner = 5.0f * cellSize / (float)kIconReferenceCellSize;
+    const float ringOuter = 8.0f * cellSize / (float)kIconReferenceCellSize;
+    for (int y = 0; y < cellSize; ++y) {
+        for (int x = 0; x < cellSize; ++x) {
+            const float dx = (float)x + 0.5f - ringCenter;
+            const float dy = (float)y + 0.5f - ringCenter;
             const float d = std::sqrt(dx * dx + dy * dy);
-            if (d >= 5.0f && d <= 8.0f) {
-                SetAtlasCoverage(atlas, iconXs[2] + 2 + x, iconYs[2] + 2 + y, 255);
+            if (d >= ringInner && d <= ringOuter) {
+                SetAtlasCoverage(atlas, iconXs[2] + x, iconYs[2] + y, 255);
             }
         }
     }
 
     // Dummy icon 3: 2x2 grid
-    FillRect(atlas, iconXs[3] + 4, iconYs[3] + 4, 7, 7, 255);
-    FillRect(atlas, iconXs[3] + 13, iconYs[3] + 4, 7, 7, 255);
-    FillRect(atlas, iconXs[3] + 4, iconYs[3] + 13, 7, 7, 255);
-    FillRect(atlas, iconXs[3] + 13, iconYs[3] + 13, 7, 7, 255);
+    FillRect(atlas, iconXs[3] + S(4), iconYs[3] + S(4), S(7), S(7), 255);
+    FillRect(atlas, iconXs[3] + S(13), iconYs[3] + S(4), S(7), S(7), 255);
+    FillRect(atlas, iconXs[3] + S(4), iconYs[3] + S(13), S(7), S(7), 255);
+    FillRect(atlas, iconXs[3] + S(13), iconYs[3] + S(13), S(7), S(7), 255);
 
     for (const SVGIconRenderer::RenderedSVGIcon& svgIcon : svgIcons) {
         int cellX = 0;
         int cellY = 0;
-        if (!TryReserveIconCell(nextIconIndex, atlasW, atlasH, cellX, cellY)) break;
+        if (!TryReserveIconCell(nextIconIndex, atlasW, atlasH, cellSize, cellX, cellY)) break;
 
-        CopyRenderedSVGIconToAtlas(atlas, svgIcon, cellX, cellY, kIconCellSize);
-        StoreIconCellGlyph(SVGIconRenderer::IconForID(svgIcon.id), cellX, cellY, atlasW, atlasH, false);
+        CopyRenderedSVGIconToAtlas(atlas, svgIcon, cellX, cellY, cellSize);
+        StoreIconCellGlyph(out, SVGIconRenderer::IconForID(svgIcon.id), cellX, cellY, atlasW, atlasH, cellSize, false);
         ++nextIconIndex;
     }
 
@@ -402,6 +421,10 @@ static void ClampTopRibbonScroll(UITopRibbonLayout& layout, float viewportWidth)
 }
 
 void PrecomputeTopRibbonLayout(UITopRibbonLayout& layout, float monitorDPIX, float monitorDPIY) {
+    // Floor the layout DPI so coarse monitors scale the whole ribbon up instead of minifying it.
+    monitorDPIX = std::max(monitorDPIX, UI_MIN_LAYOUT_DPI);
+    monitorDPIY = std::max(monitorDPIY, UI_MIN_LAYOUT_DPI);
+
     const float previousScroll = layout.scrollOffsetPx;
     layout = UITopRibbonLayout{};
 
@@ -615,6 +638,7 @@ static void PushTexturedQuad(UIDrawContext& ctx, float x, float y, float w, floa
 void PushRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h, float radiusPx,
     uint32_t color, DX12ResourcesUI& uiRes) {
     if (w <= 0.0f || h <= 0.0f) return;
+    if (!ctx.iconData) return; // nine-slice regions live in the per-monitor icon metadata
     if (ctx.vertexCount + 36 > uiRes.maxVertices) return;
     if (ctx.indexCount + 54 > uiRes.maxIndices) return;
 
@@ -627,34 +651,35 @@ void PushRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h
         for (int col = 0; col < 3; ++col) {
             PushTexturedQuad(ctx, xCuts[col], yCuts[row],
                 xCuts[col + 1] - xCuts[col], yCuts[row + 1] - yCuts[row],
-                gIconAtlasMetadata.roundedRectangle.regions[row][col],
+                ctx.iconData->metadata.roundedRectangle.regions[row][col],
                 UI_ICON_ATLAS_SLOT, color, uiRes);
         }
     }*/
 	// Unrolled the above loops for better performance (fewer function calls, better instruction-level parallelism)
     PushTexturedQuad(ctx, xCuts[0], yCuts[0], xCuts[1] - xCuts[0], yCuts[1] - yCuts[0],
-        gIconAtlasMetadata.roundedRectangle.regions[0][0], UI_ICON_ATLAS_SLOT, color, uiRes);
+        ctx.iconData->metadata.roundedRectangle.regions[0][0], UI_ICON_ATLAS_SLOT, color, uiRes);
     PushTexturedQuad(ctx, xCuts[1], yCuts[0], xCuts[2] - xCuts[1], yCuts[1] - yCuts[0],
-        gIconAtlasMetadata.roundedRectangle.regions[0][1], UI_ICON_ATLAS_SLOT, color, uiRes);
+        ctx.iconData->metadata.roundedRectangle.regions[0][1], UI_ICON_ATLAS_SLOT, color, uiRes);
     PushTexturedQuad(ctx, xCuts[2], yCuts[0], xCuts[3] - xCuts[2], yCuts[1] - yCuts[0],
-        gIconAtlasMetadata.roundedRectangle.regions[0][2], UI_ICON_ATLAS_SLOT, color, uiRes);
+        ctx.iconData->metadata.roundedRectangle.regions[0][2], UI_ICON_ATLAS_SLOT, color, uiRes);
     PushTexturedQuad(ctx, xCuts[0], yCuts[1], xCuts[1] - xCuts[0], yCuts[2] - yCuts[1],
-        gIconAtlasMetadata.roundedRectangle.regions[1][0], UI_ICON_ATLAS_SLOT, color, uiRes);
+        ctx.iconData->metadata.roundedRectangle.regions[1][0], UI_ICON_ATLAS_SLOT, color, uiRes);
     PushTexturedQuad(ctx, xCuts[1], yCuts[1], xCuts[2] - xCuts[1], yCuts[2] - yCuts[1],
-        gIconAtlasMetadata.roundedRectangle.regions[1][1], UI_ICON_ATLAS_SLOT, color, uiRes);
+        ctx.iconData->metadata.roundedRectangle.regions[1][1], UI_ICON_ATLAS_SLOT, color, uiRes);
     PushTexturedQuad(ctx, xCuts[2], yCuts[1], xCuts[3] - xCuts[2], yCuts[2] - yCuts[1],
-        gIconAtlasMetadata.roundedRectangle.regions[1][2], UI_ICON_ATLAS_SLOT, color, uiRes);
+        ctx.iconData->metadata.roundedRectangle.regions[1][2], UI_ICON_ATLAS_SLOT, color, uiRes);
     PushTexturedQuad(ctx, xCuts[0], yCuts[2], xCuts[1] - xCuts[0], yCuts[3] - yCuts[2],
-        gIconAtlasMetadata.roundedRectangle.regions[2][0], UI_ICON_ATLAS_SLOT, color, uiRes);
+        ctx.iconData->metadata.roundedRectangle.regions[2][0], UI_ICON_ATLAS_SLOT, color, uiRes);
     PushTexturedQuad(ctx, xCuts[1], yCuts[2], xCuts[2] - xCuts[1], yCuts[3] - yCuts[2],
-        gIconAtlasMetadata.roundedRectangle.regions[2][1], UI_ICON_ATLAS_SLOT, color, uiRes);
+        ctx.iconData->metadata.roundedRectangle.regions[2][1], UI_ICON_ATLAS_SLOT, color, uiRes);
     PushTexturedQuad(ctx, xCuts[2], yCuts[2], xCuts[3] - xCuts[2], yCuts[3] - yCuts[2],
-        gIconAtlasMetadata.roundedRectangle.regions[2][2], UI_ICON_ATLAS_SLOT, color, uiRes);
+        ctx.iconData->metadata.roundedRectangle.regions[2][2], UI_ICON_ATLAS_SLOT, color, uiRes);
 }
 
 void PushTopRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h, float radiusPx,
     uint32_t color, DX12ResourcesUI& uiRes) {
     if (w <= 0.0f || h <= 0.0f) return;
+    if (!ctx.iconData) return; // nine-slice regions live in the per-monitor icon metadata
     if (ctx.vertexCount + 24 > uiRes.maxVertices) return;
     if (ctx.indexCount + 36 > uiRes.maxIndices) return;
 
@@ -664,28 +689,32 @@ void PushTopRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, floa
 
     // Row 0 (Top part with rounded corners)
     PushTexturedQuad(ctx, xCuts[0], yCuts[0], xCuts[1] - xCuts[0], yCuts[1] - yCuts[0],
-        gIconAtlasMetadata.roundedRectangle.regions[0][0], UI_ICON_ATLAS_SLOT, color, uiRes);
+        ctx.iconData->metadata.roundedRectangle.regions[0][0], UI_ICON_ATLAS_SLOT, color, uiRes);
     PushTexturedQuad(ctx, xCuts[1], yCuts[0], xCuts[2] - xCuts[1], yCuts[1] - yCuts[0],
-        gIconAtlasMetadata.roundedRectangle.regions[0][1], UI_ICON_ATLAS_SLOT, color, uiRes);
+        ctx.iconData->metadata.roundedRectangle.regions[0][1], UI_ICON_ATLAS_SLOT, color, uiRes);
     PushTexturedQuad(ctx, xCuts[2], yCuts[0], xCuts[3] - xCuts[2], yCuts[1] - yCuts[0],
-        gIconAtlasMetadata.roundedRectangle.regions[0][2], UI_ICON_ATLAS_SLOT, color, uiRes);
+        ctx.iconData->metadata.roundedRectangle.regions[0][2], UI_ICON_ATLAS_SLOT, color, uiRes);
 
     // Row 1 (Bottom part with sharp corners utilizing the flat middle row)
     PushTexturedQuad(ctx, xCuts[0], yCuts[1], xCuts[1] - xCuts[0], yCuts[2] - yCuts[1],
-        gIconAtlasMetadata.roundedRectangle.regions[1][0], UI_ICON_ATLAS_SLOT, color, uiRes);
+        ctx.iconData->metadata.roundedRectangle.regions[1][0], UI_ICON_ATLAS_SLOT, color, uiRes);
     PushTexturedQuad(ctx, xCuts[1], yCuts[1], xCuts[2] - xCuts[1], yCuts[2] - yCuts[1],
-        gIconAtlasMetadata.roundedRectangle.regions[1][1], UI_ICON_ATLAS_SLOT, color, uiRes);
+        ctx.iconData->metadata.roundedRectangle.regions[1][1], UI_ICON_ATLAS_SLOT, color, uiRes);
     PushTexturedQuad(ctx, xCuts[2], yCuts[1], xCuts[3] - xCuts[2], yCuts[2] - yCuts[1],
-        gIconAtlasMetadata.roundedRectangle.regions[1][2], UI_ICON_ATLAS_SLOT, color, uiRes);
+        ctx.iconData->metadata.roundedRectangle.regions[1][2], UI_ICON_ATLAS_SLOT, color, uiRes);
 }
 
 static void PushIcon(UIDrawContext& ctx, float x, float y, float w, float h, char32_t iconCodepoint,
     uint32_t color, DX12ResourcesUI& uiRes) {
-    auto iconIt = iconGlyphLookup.find(iconCodepoint);
-    if (iconIt == iconGlyphLookup.end()) return;
+    if (!ctx.iconData) return;
+    auto iconIt = ctx.iconData->iconGlyphLookup.find(iconCodepoint);
+    if (iconIt == ctx.iconData->iconGlyphLookup.end()) return;
     const Glyph& glyph = iconIt->second;
     UIAtlasRegion icon{ glyph.uvMinX, glyph.uvMinY, glyph.uvMaxX, glyph.uvMaxY };
-    PushTexturedQuad(ctx, x, y, w, h, icon, UI_ICON_ATLAS_SLOT, color, uiRes);
+    // Snap to whole pixels: the icon atlas is rasterised 1:1 to the on-screen size, so any fractional
+    // origin/size would resample and smear an otherwise pixel-exact glyph.
+    PushTexturedQuad(ctx, std::round(x), std::round(y), std::round(w), std::round(h),
+        icon, UI_ICON_ATLAS_SLOT, color, uiRes);
 }
 
 // Returns true if clicked this frame
@@ -884,7 +913,18 @@ int BuildUIDropdown(UIDrawContext& ctx, DX12ResourcesUI& uiRes, const UIInput& i
 // UI geometry and emits UIActions. The caller binds the pipeline and draws ctx afterwards.
 void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI& uiRes,
     UITopRibbonLayout& topRibbonLayout, float monitorDPIX, float monitorDPIY, const UIInput& input,
-    uint64_t activeInternalSubTabMemoryId) {
+    uint64_t activeInternalSubTabMemoryId, int monitorId) {
+    // Floor the layout DPI identically to PrecomputeTopRibbonLayout so the dirty-check below compares
+    // clamped-vs-clamped and every pixelsPerMM conversion in this function stays consistent.
+    monitorDPIX = std::max(monitorDPIX, UI_MIN_LAYOUT_DPI);
+    monitorDPIY = std::max(monitorDPIY, UI_MIN_LAYOUT_DPI);
+
+    // Point this frame's draw context at the icon lookup/metadata built for this monitor (its UVs match
+    // the monitor's icon cell size). PushIcon / PushRoundedRectangle read ctx.iconData.
+    if (monitorId >= 0 && monitorId < MV_MAX_MONITORS) {
+        ctx.iconData = &gMonitorIconAtlas[monitorId];
+    }
+
     // Any click inside this window makes its active tab the routing context for ribbon commands
     // (ProcessPendingUIActions reads it). Needed once tabs live in more than one window.
     const int windowSlot = static_cast<int>(&window - allWindows);
@@ -1162,14 +1202,14 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
     if (plusHovered) {
         PushRoundedRectangle(ctx, plusX, (tabBarHeightPx - plusSize) * 0.5f, plusSize, plusSize, roundedCornerRadiusPx,
             0xFF444444, uiRes);
-        if (!gIconAtlasMetadata.mixedIconCodepoints.empty()) {
+        if (ctx.iconData && !ctx.iconData->metadata.mixedIconCodepoints.empty()) {
             PushIcon(ctx, plusX + (plusSize - iconSizePx) * 0.5f, (tabBarHeightPx - iconSizePx) * 0.5f,
-                iconSizePx, iconSizePx, gIconAtlasMetadata.mixedIconCodepoints[0], 0xFFFFFFFF, uiRes);
+                iconSizePx, iconSizePx, ctx.iconData->metadata.mixedIconCodepoints[0], 0xFFFFFFFF, uiRes);
         }
     } else {
-        if (!gIconAtlasMetadata.mixedIconCodepoints.empty()) {
+        if (ctx.iconData && !ctx.iconData->metadata.mixedIconCodepoints.empty()) {
             PushIcon(ctx, plusX + (plusSize - iconSizePx) * 0.5f, (tabBarHeightPx - iconSizePx) * 0.5f,
-                iconSizePx, iconSizePx, gIconAtlasMetadata.mixedIconCodepoints[0], uiActiveColors.tabBackgroundText, uiRes);
+                iconSizePx, iconSizePx, ctx.iconData->metadata.mixedIconCodepoints[0], uiActiveColors.tabBackgroundText, uiRes);
         }
     }
     if (plusHovered && input.leftButtonPressedThisFrame) {
@@ -1257,7 +1297,8 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
         const bool hasDedicatedSVGIcon =
             resolvedIconChar != SVGIconRenderer::NoIcon &&
             SVGIconRenderer::HasEmbeddedSVGIcon(iconID) &&
-            iconGlyphLookup.find(resolvedIconChar) != iconGlyphLookup.end();
+            ctx.iconData &&
+            ctx.iconData->iconGlyphLookup.find(resolvedIconChar) != ctx.iconData->iconGlyphLookup.end();
         const bool controlVisible = btnX + btnWidth >= 0.0f && btnX <= W;
         bool hovered = false;
 
@@ -1324,11 +1365,11 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
             const uint32_t dedicatedIconColor = ctrl.isEnabled ? 0xFFFFFFFF : uiActiveColors.actionIconDisabled;
             PushIcon(ctx, iconX, iconY, iconSizePx, iconSizePx, resolvedIconChar, dedicatedIconColor, uiRes);
         }
-        else if (!gIconAtlasMetadata.mixedIconCodepoints.empty()) {
+        else if (ctx.iconData && !ctx.iconData->metadata.mixedIconCodepoints.empty()) {
             const uint32_t randomIconIndex =
-                ((uint32_t)ctrl.action ^ (uint32_t)i) % (uint32_t)gIconAtlasMetadata.mixedIconCodepoints.size();
+                ((uint32_t)ctrl.action ^ (uint32_t)i) % (uint32_t)ctx.iconData->metadata.mixedIconCodepoints.size();
             PushIcon(ctx, iconX, iconY, iconSizePx, iconSizePx,
-                gIconAtlasMetadata.mixedIconCodepoints[randomIconIndex], iconColor, uiRes);
+                ctx.iconData->metadata.mixedIconCodepoints[randomIconIndex], iconColor, uiRes);
         }
 
         if (ctrl.showText) {

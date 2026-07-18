@@ -163,6 +163,11 @@ constexpr float UI_BUTTON_HEIGHT_MM = 3.0f; // Text is 2.5mm.
 constexpr float UI_BUTTON_WIDTH_MM = 8.0f;
 constexpr float UI_BUTTON_GAP_MM = 1.0f;
 constexpr float UI_ICON_SIZE_MM = 4.0f;
+// Minimum DPI used for ALL DPI->pixel UI layout math. On coarse monitors (e.g. 92 DPI) the true
+// physical size would minify icons/text below legibility; clamping the layout DPI to this floor
+// drives the whole ribbon as if it were 127 DPI (where UI_ICON_SIZE_MM == 20 px), so icons, text and
+// bands scale up together and nothing clips. Monitors already above this are unaffected.
+constexpr float UI_MIN_LAYOUT_DPI = 127.0f;
 constexpr float UI_GROUP_GAP_MM = 5.0f; // We would rather keep it 2 pixel fixed width.
 constexpr float UI_BUTTON_CORNER_RADIUS_MM = 2.0f;
 
@@ -194,7 +199,8 @@ struct Glyph { // Store glyph info: Glyph metadata (Phase 4B)
 
 // Use char32_t for full UTF-32 Unicode support (necessary for all languages)
 inline std::unordered_map<char32_t, Glyph> glyphLookup; // Lookup table.
-inline std::unordered_map<char32_t, Glyph> iconGlyphLookup; // Private-use codepoints for monochrome UI icons.
+// The icon glyph lookup (private-use codepoints for monochrome UI icons) is per monitor now: its UVs
+// depend on the monitor's icon cell size, which varies with DPI. It lives inside IconAtlasCPU below.
 extern std::string charset;
 
 struct AtlasBitmap {
@@ -816,16 +822,25 @@ struct UITopRibbonLayout {
 
 struct DX12ResourcesUI; // Platform GPU resources; full definition in UserInterface-<Platform>.h.
 struct SingleUIWindow;  // विश्वकर्मा.h
+struct IconAtlasCPU;    // Per-monitor icon glyph lookup + metadata; defined in UserInterface.cpp.
 
 struct UIDrawContext { // Draw context
     UIVertex* vertexPtr;
     uint16_t* indexPtr;
     uint32_t vertexCount, indexCount;
+    // Icon lookup/metadata for the monitor this frame is being recorded for. Set by BuildUIOverlay;
+    // read by PushIcon / PushRoundedRectangle. Never dereferenced when null.
+    const IconAtlasCPU* iconData = nullptr;
 };
 
-// CPU-side atlas bitmap builders (MSDF font + icons). Uploaded by the platform InitUIResources.
-AtlasBitmap BuildIconAtlas();
+// CPU-side atlas bitmap builders (MSDF font + icons). Uploaded by the platform InitUIResources /
+// BuildMonitorIconAtlas. The icon atlas cell size (px) is per monitor; BuildIconAtlas fills `out`.
+AtlasBitmap BuildIconAtlas(int iconCellSizePx, IconAtlasCPU& out);
 AtlasBitmap BuildMSDFFontAtlas();
+
+// Storage accessor for a monitor's icon CPU bundle (lookup + metadata). The array lives in
+// UserInterface.cpp; the platform half writes it via BuildIconAtlas and BuildUIOverlay reads it.
+IconAtlasCPU& MonitorIconAtlasCPU(int monitorId);
 
 void PrecomputeTopRibbonLayout(UITopRibbonLayout& layout, float monitorDPIX, float monitorDPIY);
 
@@ -848,4 +863,4 @@ int BuildUIDropdown(UIDrawContext& ctx, DX12ResourcesUI& uiRes, const UIInput& i
 // with the frame's UI geometry and emits UIActions; the platform wrapper draws ctx afterwards.
 void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI& uiRes,
     UITopRibbonLayout& topRibbonLayout, float monitorDPIX, float monitorDPIY, const UIInput& input,
-    uint64_t activeInternalSubTabMemoryId);
+    uint64_t activeInternalSubTabMemoryId, int monitorId);

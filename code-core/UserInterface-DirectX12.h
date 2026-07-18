@@ -50,7 +50,12 @@ void CleanupUIResources(DX12ResourcesUI& uiRes);
 bool UploadUIAtlasTexture(DX12ResourcesUI& uiRes, ID3D12Device* device, uint32_t atlasSlot,
     const AtlasBitmap& atlas);
 
+// (Re)builds monitor `monitorId`'s icon atlas at its DPI-floored icon cell size and (re)creates that
+// monitor's SRV heap (English@0 shared, icon@1 this monitor). Call from RestartRenderThreads while the
+// render threads are joined; the old atlas must already be drained + released (see RestartRenderThreads).
+void BuildMonitorIconAtlas(DX12ResourcesUI& uiRes, ID3D12Device* device, int monitorId);
+
 void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmdList,
     DX12ResourcesUI& uiRes, UITopRibbonLayout& topRibbonLayout,
     float monitorDPIX, float monitorDPIY, const UIInput& input,
-    uint64_t activeInternalSubTabMemoryId);
+    uint64_t activeInternalSubTabMemoryId, int monitorId);

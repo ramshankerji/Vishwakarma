@@ -704,12 +704,18 @@ void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow
         gpu.copyFence && gpu.copyFence->GetCompletedValue() >= atlasFence.load(std::memory_order_acquire);
     if (!textAtlasReady || !storage.dx.textRootSignature || !storage.dx.textPSO) return;
 
+    // Bind this monitor's UI SRV heap. Page2D text only samples the English MSDF atlas (slot 0), which
+    // is present in every monitor's heap; the heap is (re)built by BuildMonitorIconAtlas.
+    ID3D12DescriptorHeap* monitorSrvHeap =
+        (monitorId >= 0 && monitorId < MV_MAX_MONITORS) ? gpu.screens[monitorId].uiSrvHeap.Get() : nullptr;
+    if (!monitorSrvHeap) return;
+
     commandList->SetGraphicsRootSignature(storage.dx.textRootSignature.Get());
     commandList->SetPipelineState(storage.dx.textPSO.Get());
-    ID3D12DescriptorHeap* heaps[] = { uiResources.srvHeap.Get(), uiResources.samplerHeap.Get() };
+    ID3D12DescriptorHeap* heaps[] = { monitorSrvHeap, uiResources.samplerHeap.Get() };
     commandList->SetDescriptorHeaps(_countof(heaps), heaps);
     commandList->SetGraphicsRootConstantBufferView(0, viewCBV);
-    commandList->SetGraphicsRootDescriptorTable(1, uiResources.srvHeap->GetGPUDescriptorHandleForHeapStart());
+    commandList->SetGraphicsRootDescriptorTable(1, monitorSrvHeap->GetGPUDescriptorHandleForHeapStart());
     commandList->SetGraphicsRootDescriptorTable(2, uiResources.samplerHeap->GetGPUDescriptorHandleForHeapStart());
 
     for (Cad2DPageGPU* page : snapshot->pages) {

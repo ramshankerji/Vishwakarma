@@ -101,8 +101,8 @@ echo [Pre-Build] Baking MSDF Atlas for NotoSans...
     -format png ^
     -imageout "%BUILD_DIR%\NotoSansMSDF.png" ^
     -json "%BUILD_DIR%\NotoSansMSDF.json" ^
-    -size 32 ^
-    -pxrange 4
+    -size 48 ^
+    -pxrange 6
 
 if errorlevel 1 (
     echo [ERROR] msdf-atlas-gen failed to generate the atlas.

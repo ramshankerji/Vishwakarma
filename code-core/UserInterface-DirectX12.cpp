@@ -6,6 +6,7 @@
 
 #include "UserInterface-DirectX12.h"
 #include <algorithm>
+#include <cstdio>
 #include <d3dcompiler.h>
 #include "ShaderUIVertex.h"
 #include "ShaderUIPixel.h"
@@ -66,6 +67,69 @@ bool UploadUIAtlasTexture(DX12ResourcesUI& uiRes, ID3D12Device* device, uint32_t
         atlasSlot, device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV));
     device->CreateShaderResourceView(uiRes.uiAtlasTextures[atlasSlot].Get(), &srvDesc, srvHandle);
     return true;
+}
+
+void BuildMonitorIconAtlas(DX12ResourcesUI& uiRes, ID3D12Device* device, int monitorId) {
+    if (!device || monitorId < 0 || monitorId >= MV_MAX_MONITORS) return;
+    OneMonitorController& screen = gpu.screens[monitorId];
+
+    // Icon cell size = this monitor's on-screen icon px. PrecomputeTopRibbonLayout (run by
+    // RestartRenderThreads just before us) already floored the DPI, so iconSizePx is >= 20 on coarse
+    // monitors. Fall back defensively if the layout has not been computed yet.
+    int cellSize = static_cast<int>(screen.topRibbonLayout.iconSizePx);
+    if (cellSize <= 0) cellSize = 20;
+
+    // Build the CPU atlas and fill this monitor's icon glyph lookup + metadata.
+    AtlasBitmap iconAtlas = BuildIconAtlas(cellSize, MonitorIconAtlasCPU(monitorId));
+
+    // Upload into this monitor's icon texture via the copy-queue path, then CPU-block until ready.
+    // Caller must have already drained + released any previous atlas for this monitor (RestartRenderThreads),
+    // so this write does not free a texture the GPU is still reading.
+    TextureUploadDesc desc = {};
+    desc.width = iconAtlas.width;
+    desc.height = iconAtlas.height;
+    desc.format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.pixels = iconAtlas.pixels.data();
+    desc.rowPitch = iconAtlas.width * iconAtlas.bytesPerPixel;
+
+    std::atomic<uint64_t> uploadFence = 0;
+    SubmitTextureUpload(desc, &screen.uiIconAtlasTexture, &uploadFence);
+    uint64_t atlasReadyFence = gpu.copyFenceValue.fetch_add(1, std::memory_order_relaxed);
+    uploadFence.store(atlasReadyFence, std::memory_order_release);
+    toCopyThreadCV.notify_one();
+    if (gpu.copyFence->GetCompletedValue() < atlasReadyFence) {
+        ThrowIfFailed(gpu.copyFence->SetEventOnCompletion(atlasReadyFence, gpu.copyFenceEvent));
+        WaitForSingleObject(gpu.copyFenceEvent, INFINITE);
+    }
+
+    // (Re)create this monitor's shader-visible SRV heap: English @ slot 0 (shared texture uploaded by
+    // InitUIResources) + icon @ slot 1 (this monitor's texture). Sized for future dynamic script atlases.
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+    heapDesc.NumDescriptors = UI_MAX_ATLAS_TEXTURES;
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ThrowIfFailed(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&screen.uiSrvHeap)));
+
+    const UINT inc = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MipLevels = 1;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE englishHandle(screen.uiSrvHeap->GetCPUDescriptorHandleForHeapStart(),
+        UI_ENGLISH_ATLAS_SLOT, inc);
+    device->CreateShaderResourceView(uiRes.uiAtlasTextures[UI_ENGLISH_ATLAS_SLOT].Get(), &srvDesc, englishHandle);
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE iconHandle(screen.uiSrvHeap->GetCPUDescriptorHandleForHeapStart(),
+        UI_ICON_ATLAS_SLOT, inc);
+    device->CreateShaderResourceView(screen.uiIconAtlasTexture.Get(), &srvDesc, iconHandle);
+
+    char debugName[64];
+    std::snprintf(debugName, sizeof(debugName), "icon_atlas_debug_%d.bmp", monitorId);
+    SaveToBmp(debugName, iconAtlas.pixels.data(), iconAtlas.width, iconAtlas.height, iconAtlas.bytesPerPixel);
+
+    std::wcout << L"Icon atlas built for monitor " << monitorId << L" (cell " << cellSize << L" px)\n";
 }
 
 void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
@@ -177,16 +241,16 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
     std::wcout << L"UI Resources Initialized (Phase 4A)\n";
     
     AtlasBitmap englishAtlas = BuildMSDFFontAtlas();
-    AtlasBitmap iconAtlas = BuildIconAtlas();
-    
+    // The icon atlas is per monitor now (its cell size scales with DPI). It is built + uploaded and its
+    // SRV heap created by BuildMonitorIconAtlas from RestartRenderThreads. InitUIResources only handles
+    // the shared, DPI-independent English MSDF atlas below.
+
     TextureUploadDesc desc = {};
     desc.width = englishAtlas.width;
     desc.height = englishAtlas.height;
     desc.format = DXGI_FORMAT_R8G8B8A8_UNORM;
     desc.pixels = englishAtlas.pixels.data();
     desc.rowPitch = englishAtlas.width * englishAtlas.bytesPerPixel;
-
-    int bytesPerPixel = iconAtlas.bytesPerPixel;
 
     SubmitTextureUpload(desc, &uiRes.uiAtlasTextures[UI_ENGLISH_ATLAS_SLOT], &atlasFence);// Enqueue the upload through upload queue
     // RESERVED FENCE VALUE FOR THIS UPLOAD (this is the key change)
@@ -211,12 +275,8 @@ void InitUIResources( DX12ResourcesUI& uiRes, ID3D12Device* device) {
     device->CreateShaderResourceView(uiRes.uiAtlasTextures[UI_ENGLISH_ATLAS_SLOT].Get(), &srvDesc,
         uiRes.srvHeap->GetCPUDescriptorHandleForHeapStart());
 
-    SaveToBmp("icon_atlas_debug.bmp", iconAtlas.pixels.data(),
-        iconAtlas.width, iconAtlas.height, bytesPerPixel);
-    UploadUIAtlasTexture(uiRes, device, UI_ICON_ATLAS_SLOT, iconAtlas);
-
-    std::wcout << L"Mandatory UI atlases uploaded: English slot " << UI_ENGLISH_ATLAS_SLOT
-        << L", icon slot " << UI_ICON_ATLAS_SLOT << L"\n";
+    std::wcout << L"Shared English MSDF atlas uploaded: slot " << UI_ENGLISH_ATLAS_SLOT
+        << L" (per-monitor icon atlases built by RestartRenderThreads)\n";
 }
 
 // Cleanup
@@ -260,9 +320,15 @@ static void EnsureWindowUIBuffers(DX12ResourcesPerWindow& winRes, ID3D12Graphics
 // This is also responsible for all relevant DirectX12 configurations required for rendering User Interface.
 void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX12ResourcesUI& uiRes,
     UITopRibbonLayout& topRibbonLayout, float monitorDPIX, float monitorDPIY, const UIInput& input,
-    uint64_t activeInternalSubTabMemoryId) {
+    uint64_t activeInternalSubTabMemoryId, int monitorId) {
 
     if (!cmd) return; //Defensive check.
+    if (monitorId < 0 || monitorId >= MV_MAX_MONITORS) return;
+
+    // This monitor's icon atlas + SRV heap (English@0 shared, icon@1 this monitor). Built by
+    // BuildMonitorIconAtlas in RestartRenderThreads; if not ready yet, skip UI this frame.
+    ID3D12DescriptorHeap* monitorSrvHeap = gpu.screens[monitorId].uiSrvHeap.Get();
+    if (!monitorSrvHeap) return;
 
     EnsureWindowUIBuffers(window.dx, cmd, uiRes);
     if (!window.dx.pUIVertexDataBegin || !window.dx.pUIIndexDataBegin ||
@@ -275,12 +341,12 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
     cmd->SetGraphicsRootSignature(uiRes.uiRootSignature.Get());
 
     // Bind descriptor heap
-    ID3D12DescriptorHeap* heaps[] = { uiRes.srvHeap.Get(), uiRes.samplerHeap.Get() };
+    ID3D12DescriptorHeap* heaps[] = { monitorSrvHeap, uiRes.samplerHeap.Get() };
     cmd->SetDescriptorHeaps(_countof(heaps), heaps);
 
-    // Bind the descriptor table (which contains t0 + s0)    
+    // Bind the descriptor table (which contains t0 + s0)
     // Root Parameter 1 = SRV table// must match rootParams[1]
-    cmd->SetGraphicsRootDescriptorTable(1, uiRes.srvHeap->GetGPUDescriptorHandleForHeapStart());
+    cmd->SetGraphicsRootDescriptorTable(1, monitorSrvHeap->GetGPUDescriptorHandleForHeapStart());
     // Root Parameter 2 = Sampler table
     cmd->SetGraphicsRootDescriptorTable(2, uiRes.samplerHeap->GetGPUDescriptorHandleForHeapStart());
     // Bind this window's ortho constant buffer (still root parameter 0)
@@ -303,7 +369,7 @@ void RenderUIOverlay(SingleUIWindow& window, ID3D12GraphicsCommandList* cmd, DX1
 
     // Portable widget/hit-test half (UserInterface.cpp): fills ctx and emits UIActions.
     BuildUIOverlay(window, ctx, uiRes, topRibbonLayout, monitorDPIX, monitorDPIY, input,
-        activeInternalSubTabMemoryId);
+        activeInternalSubTabMemoryId, monitorId);
 
     // DRAW ALL UI GEOMETRY
     if (ctx.indexCount == 0) return;

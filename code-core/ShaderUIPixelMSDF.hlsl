@@ -45,7 +45,7 @@ float4 main(PSInput input) : SV_TARGET {
     // MSDF specific crispness derivative math
     float2 dx = ddx(input.uv * texSize);
     float2 dy = ddy(input.uv * texSize);
-    float toPixels = 8.0 * rsqrt(dot(dx, dx) + dot(dy, dy)); // 8.0 accounts for pxRange scaling
+    float toPixels = 8.0 * rsqrt(dot(dx, dx) + dot(dy, dy)); // ~pxRange*sqrt(2); atlas baked at -pxrange 6
     
     float sigDist = sd - 0.5;
     float alpha = clamp(sigDist * toPixels + 0.5, 0.0, 1.0);

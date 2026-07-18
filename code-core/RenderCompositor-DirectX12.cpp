@@ -293,7 +293,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                         gpu.screens[monitorId].topRibbonLayout,
                         static_cast<float>(gpu.screens[monitorId].physicalDpiX),
                         static_cast<float>(gpu.screens[monitorId].physicalDpiY),
-                        inputSnapshot, activeInternalSubTabMemoryId);
+                        inputSnapshot, activeInternalSubTabMemoryId, monitorId);
                 }
 
                 // Service any pending click/scroll pick request. Runs after the UI (it renders into
@@ -1047,6 +1047,23 @@ void RestartRenderThreads() { // The "Safe" Restart Function. Runs for initial r
     for (auto& t : renderThreads) { if (t.joinable()) t.join(); }
     renderThreads.clear();
 
+    // Drain each monitor's GPU work and release its old icon atlas + SRV heap BEFORE re-enumerating.
+    // Threads are joined, but the render loop only waited two frames back, so the last submitted frame
+    // may still be reading the atlas. gpu.screens still maps to the OLD topology here, so each fence
+    // pairs with its own texture. After this, slots are clean and BuildMonitorIconAtlas rebuilds fresh.
+    for (int i = 0; i < gpu.currentMonitorCount; i++) {
+        OneMonitorController& s = gpu.screens[i];
+        if (s.uiIconAtlasTexture && s.renderFence && s.renderFenceEvent) {
+            const UINT64 waitValue = s.renderFenceValue;
+            if (s.renderFence->GetCompletedValue() < waitValue) {
+                s.renderFence->SetEventOnCompletion(waitValue, s.renderFenceEvent);
+                WaitForSingleObject(s.renderFenceEvent, INFINITE);
+            }
+        }
+        s.uiIconAtlasTexture.Reset();
+        s.uiSrvHeap.Reset();
+    }
+
     std::wcout << "RestartRenderThreads called. Analyzing..." << std::endl;
     // Capture OLD topology to salvage queues. TODO: Remove garbage values in case monitor count decreased.
     OneMonitorController oldScreens[MV_MAX_MONITORS];
@@ -1096,6 +1113,10 @@ void RestartRenderThreads() { // The "Safe" Restart Function. Runs for initial r
 
         PrecomputeTopRibbonLayout(gpu.screens[i].topRibbonLayout,
             static_cast<float>(gpu.screens[i].physicalDpiX), static_cast<float>(gpu.screens[i].physicalDpiY));
+
+        // Build this monitor's icon atlas at its (DPI-floored) icon cell size and (re)create its SRV
+        // heap. Threads are joined and old atlases were drained above, so this is a safe rebuild point.
+        BuildMonitorIconAtlas(gpu.uiResources, gpu.device.Get(), i);
     }
 
     uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);

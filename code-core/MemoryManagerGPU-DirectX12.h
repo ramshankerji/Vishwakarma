@@ -324,6 +324,13 @@ struct OneMonitorController { // Variables stored per monitor.
     uint64_t renderFenceValue = 0; // Last value signalled (written by render thread)
     // Above is intentionally NOT std::atomic since gpu.renderFenceValue is the std::atomic serving all monitors.
     HANDLE renderFenceEvent = nullptr;
+
+    // Per-monitor UI icon atlas. The icon cell size scales with this monitor's (DPI-floored) layout, so
+    // each monitor owns its own icon texture plus a shader-visible SRV heap (slot 0 = shared English MSDF
+    // texture, slot 1 = this monitor's icon texture). (Re)built by BuildMonitorIconAtlas and released +
+    // rebuilt on DPI / topology change. Bound by RenderUIOverlay and RenderPage2D for this monitor.
+    ComPtr<ID3D12Resource>       uiIconAtlasTexture;
+    ComPtr<ID3D12DescriptorHeap> uiSrvHeap;
 };
 
 // CommandToCopyThreadType / CommandToCopyThread moved to RenderScene3D.h (portable).
