@@ -49,10 +49,16 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(VishwakarmaRoot)build\$(Configuration)\</OutDir>
     <IntDir>$(VishwakarmaRoot)build\$(Configuration)\Intermediate\</IntDir>
+    <!-- protobuf/absl headers compile into our translation units and emit narrowing warnings
+         (C4267/C4244/C4018) that are theirs to fix, not ours. They must be listed here and NOT in
+         AdditionalIncludeDirectories: a directory reached through /I is not treated as external,
+         which would defeat ExternalWarningLevel below. code-core itself stays at Level3. -->
+    <ExternalIncludePath>..\code-external\protobuf\src;..\code-external\protobuf\third_party\utf8_range;..\build\protobuf-x64-debug\_deps\absl-src;..\build\protobuf-x64-release\_deps\absl-src;$(ExternalIncludePath)</ExternalIncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(VishwakarmaRoot)build\$(Configuration)\</OutDir>
     <IntDir>$(VishwakarmaRoot)build\$(Configuration)\Intermediate\</IntDir>
+    <ExternalIncludePath>..\code-external\protobuf\src;..\code-external\protobuf\third_party\utf8_range;..\build\protobuf-x64-release\_deps\absl-src;..\build\protobuf-x64-debug\_deps\absl-src;$(ExternalIncludePath)</ExternalIncludePath>
   </PropertyGroup>
   <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ProtobufLibrary Include="$(VishwakarmaRoot)build\protobuf-x64-debug\Debug\libprotobuf-lited.lib" />
@@ -78,19 +84,22 @@
       <PreprocessorDefinitions>FT2_BUILD_LIBRARY;
 FT_STATIC;LUNASVG_BUILD_STATIC;PLUTOVG_BUILD_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(IntDir);$(IntDir)GeneratedProtobuf;..\code-external\protobuf\src;..\code-external\protobuf\third_party\utf8_range;..\build\protobuf-x64-debug\_deps\absl-src;..\build\protobuf-x64-release\_deps\absl-src;..\build\openssl-x64-debug\include;..\code-external\openssl\include;..\code-external\DirectX-Headers\include\directx;..\code-external\zlib;..\code-external\sqlite;..\code-core;..\code-external;..\code-external\fast_float\include;..\code-external\libpng-code;..\code-external\freetype\include;..\code-external\lunasvg\include;..\code-external\lunasvg\source;..\code-external\lunasvg\plutovg\include;..\code-external\lunasvg\plutovg\source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(IntDir);$(IntDir)GeneratedProtobuf;..\build\openssl-x64-debug\include;..\code-external\openssl\include;..\code-external\DirectX-Headers\include\directx;..\code-external\zlib;..\code-external\sqlite;..\code-core;..\code-external;..\code-external\fast_float\include;..\code-external\libpng-code;..\code-external\freetype\include;..\code-external\lunasvg\include;..\code-external\lunasvg\source;..\code-external\lunasvg\plutovg\include;..\code-external\lunasvg\plutovg\source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>preCompiledHeadersWindows.h</PrecompiledHeaderFile>
-      <AdditionalOptions>/FS /utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/FS /utf-8 /external:templates- %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>Shcore.lib;Comdlg32.lib;Ws2_32.lib;Gdi32.lib;Advapi32.lib;Crypt32.lib;User32.lib;$(VishwakarmaRoot)build\$(Configuration)\External\VishwakarmaExternal.lib;freetype.lib;$(ProtobufAdditionalDependencies);%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>..\code-external\freetype\build\Release;..\code-external\freetype\objs\x64\Release Static\;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <!-- freetype.lib is a Release /MT build linked into this /MTd config; its LIBCMT directive conflicts with LIBCMTD (LNK4098). CRT symbols resolve from LIBCMTD instead. -->
+      <IgnoreSpecificDefaultLibraries>LIBCMT;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
     </Link>
     <ResourceCompile>
       <AdditionalIncludeDirectories>..\code-core;$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -115,13 +124,14 @@ python "$(ProjectDir)..\code-miscellaneous\steel_profile_embedder.py" "$(Project
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>LUNASVG_BUILD_STATIC;PLUTOVG_BUILD_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(IntDir);$(IntDir)GeneratedProtobuf;..\code-external\protobuf\src;..\code-external\protobuf\third_party\utf8_range;..\build\protobuf-x64-release\_deps\absl-src;..\build\protobuf-x64-debug\_deps\absl-src;..\build\openssl-x64-release\include;..\code-external\openssl\include;..\code-external\DirectX-Headers\include\directx;..\code-external\zlib;..\code-external\sqlite;..\code-core;..\code-external;..\code-external\fast_float\include;..\code-external\libpng-code;..\code-external\freetype\include;..\code-external\lunasvg\include;..\code-external\lunasvg\source;..\code-external\lunasvg\plutovg\include;..\code-external\lunasvg\plutovg\source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(IntDir);$(IntDir)GeneratedProtobuf;..\build\openssl-x64-release\include;..\code-external\openssl\include;..\code-external\DirectX-Headers\include\directx;..\code-external\zlib;..\code-external\sqlite;..\code-core;..\code-external;..\code-external\fast_float\include;..\code-external\libpng-code;..\code-external\freetype\include;..\code-external\lunasvg\include;..\code-external\lunasvg\source;..\code-external\lunasvg\plutovg\include;..\code-external\lunasvg\plutovg\source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <PrecompiledHeaderFile>preCompiledHeadersWindows.h</PrecompiledHeaderFile>
-      <AdditionalOptions>/FS /utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/FS /utf-8 /external:templates- %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>

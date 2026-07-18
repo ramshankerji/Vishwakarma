@@ -236,8 +236,8 @@ inline AtlasBitmap BuildFontAtlas() {
         }
 
         // Copy bitmap
-        for (int y = 0; y < g->bitmap.rows; y++) {
-            for (int x = 0; x < g->bitmap.width; x++) {
+        for (int y = 0; y < (int)g->bitmap.rows; y++) {
+            for (int x = 0; x < (int)g->bitmap.width; x++) {
                 int dst = (penY + y) * atlasW + (penX + x);
                 atlas.pixels[dst] = g->bitmap.buffer[y * g->bitmap.pitch + x];
             }

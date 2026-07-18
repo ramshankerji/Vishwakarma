@@ -6,8 +6,6 @@
 // You need a good dose of prior C++ knowledge and Computer Fundamentals before learning DirectX12.
 // Expect to read at least 2 times before you start grasping it !
 
-//Tell the HLSL compiler to include debug information into the shader blob.
-#define D3DCOMPILE_DEBUG 1 //TODO: Remove from production build.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>   // MUST be before d3d12.h
 #include <d3d12.h> //Main DirectX12 API. Included from %WindowsSdkDir\Include%WindowsSDKVersion%\\um

@@ -7,6 +7,8 @@ website/Server
 # Ignore HUGO build files.
 website/public
 website/.hugo_build.lock
+icon_atlas_debug_0.bmp
+icon_atlas_debug_1.bmp
 build/
 AGENTS.override.md
 GEMINI.local.md

@@ -32,16 +32,16 @@ When we are ready to accept monetary contribution, **sponsorship** is likely to 
 
 Sponsorship will not buy ownership of the project, exclusive features, or control over the roadmap. Sponsored development should benefit the wider community.
 
-## Temporary Hardware Support
+## Temporary Hardware/AI Support
 Mission Vishwakarma development requires suitable hardware for compilation, debugging, graphics development, CAD/CAM performance validation, and compatibility testing.
 
 I am currently planning to assemble a customized computer optimized for Mission Vishwakarma development and testing.
 
-If you would like to support development through hardware instead of money, you may consider purchasing suitable items from the Amazon India wishlist:
+If you would like to support development through hardware instead of money, get in touch with Ram.
 
-[Mission Vishwakarma Computer](https://www.amazon.in/hz/wishlist/ls/187X1N84QNEJT)
+I am also looking for AI sponsors! Consider gifting a Claude Max 5x/20x subscription. This helps write the code a lot faster.
 
-This is temporary hardware support for development purposes. We are not currently accepting monetary donations.
+This is temporary hardware/AI support for development purposes. We are not currently accepting monetary donations.
 
 ## Support
 Our goal is to make the software as self-service as possible.  

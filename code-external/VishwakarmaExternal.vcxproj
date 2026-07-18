@@ -128,6 +128,10 @@
       <!-- Vendored third-party amalgamation we don't modify: /sdl elevates
            PocketPy's intentional unsigned-negation bit tricks (C4146) to errors. -->
       <SDLCheck>false</SDLCheck>
+      <!-- Same reason: upstream's py_i64/size_t -> int narrowing (C4244/C4267) emits
+           ~200 warnings per build in code we never edit. Per-file so the wrappers we
+           do own elsewhere in this project keep Level3. -->
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
     </ClCompile>
     <ClCompile Include="sqlite\sqlite3.c" />
     <ClCompile Include="lunasvg\source\graphics.cpp" />
@@ -177,6 +181,17 @@
     <ClCompile Include="zlib\uncompr.c" />
     <ClCompile Include="zlib\zutil.c" />
     <ClCompile Include="fast_float_wrapper.cpp" />
+  </ItemGroup>
+  <!-- Vendored SVG renderer (lunasvg + its bundled plutovg) we don't modify: upstream's
+       int/float and size_t narrowing emits ~70 warnings (C4244/C4267/C4018) every build.
+       Updated as a group rather than per file so a version bump that adds sources stays
+       quiet. Scoped to lunasvg on purpose: sqlite3.c and our own fast_float_wrapper.cpp
+       keep Level3. Must stay after the ItemGroup above, since Update only reaches items
+       that are already defined. -->
+  <ItemGroup>
+    <ClCompile Update="lunasvg\**\*.cpp;lunasvg\**\*.c">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
   </ItemGroup>
   <!-- Pre-build: check out all git submodules on a fresh clone so the sources this
        project (and every other) compiles are present. Runs before any dependency is

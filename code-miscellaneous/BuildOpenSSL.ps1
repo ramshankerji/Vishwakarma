@@ -76,7 +76,7 @@ $disableFlags = @(
 $command = @(
     "call `"$vcVarsAllPath`" x64",
     "`"$perlPath`" `"$configureScript`" VC-WIN64A $configureMode no-shared no-pinshared no-asm no-apps no-tests no-makedepend $disableFlags --prefix=`"$installPath`" --openssldir=`"$opensslDir`"",
-    "nmake build_libs"
+    "nmake /NOLOGO /S build_libs"
 ) -join " && "
 
 $localeVariables = @("LC_ALL", "LC_CTYPE", "LANG")

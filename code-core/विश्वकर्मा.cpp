@@ -1707,7 +1707,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         auto inputStart = std::chrono::steady_clock::now();
 		bool isOrbiting = false, isPanning = false; // Track if we are in orbit/panning based on mouse state and modifiers.
         float distance = 0.0;
-        float dx, dy, dz, vx, vy, vz;
+        float dx, dy, vx, vy, vz;
 
         while (myTab->userInputQueue->try_pop(input)) {
             inputCount++;
