@@ -318,9 +318,14 @@ void ResolveAndPublish(PickPassContext& ctx, DX12ResourcesPerTab& tabRes, TabGeo
                         (obj.minZ + obj.maxZ) * 0.5f, 1.0f);
                     // The stored per-object matrix is transpose(world); XMVector3Transform mirrors
                     // the vertex shader's mul(pos, world), so this yields the world-space center.
-                    if (matrixIndex < tabRes.matrixCapacity && tabRes.pWorldMatrixDataBegin) {
+                    // Mirrors, capacity first: the copy thread regrows the table, and the snapshot
+                    // acquire-load above orders these reads (see DX12ResourcesPerTab).
+                    const uint32_t matrixCapacity =
+                        tabRes.matrixCapacityShared.load(std::memory_order_acquire);
+                    UINT8* matrixData = tabRes.worldMatrixDataShared.load(std::memory_order_acquire);
+                    if (matrixIndex < matrixCapacity && matrixData) {
                         XMMATRIX worldMat = XMLoadFloat4x4(reinterpret_cast<const XMFLOAT4X4*>(
-                            tabRes.pWorldMatrixDataBegin + matrixIndex * sizeof(XMFLOAT4X4)));
+                            matrixData + matrixIndex * sizeof(XMFLOAT4X4)));
                         worldCG = XMVector3Transform(localCenter, worldMat);
                     } else {
                         worldCG = localCenter;
@@ -393,7 +398,10 @@ void RecordSelectionOverlays(ID3D12GraphicsCommandList* commandList, DX12Resourc
             commandList->SetGraphicsRootSignature(tabRes.rootSignature.Get());
             commandList->SetPipelineState(tabRes.selection3D.highlightPSO.Get());
             commandList->SetGraphicsRootConstantBufferView(0, winRes.constantBuffer->GetGPUVirtualAddress());
-            commandList->SetGraphicsRootShaderResourceView(1, tabRes.worldMatrixBuffer->GetGPUVirtualAddress());
+            // Mirror, not the ComPtr: the copy thread regrows the table; the snapshot loaded
+            // above orders this read (see DX12ResourcesPerTab mirror comments).
+            commandList->SetGraphicsRootShaderResourceView(1,
+                tabRes.worldMatrixVAShared.load(std::memory_order_acquire));
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
             for (GeometryPage* pagePtr : snapshot->pages) {
@@ -527,10 +535,13 @@ void ServicePick(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow&
     commandList->SetGraphicsRootSignature(tabRes.rootSignature.Get());
     commandList->SetPipelineState(tabRes.selection3D.pickPSO.Get());
     commandList->SetGraphicsRootConstantBufferView(0, winRes.constantBuffer->GetGPUVirtualAddress());
-    commandList->SetGraphicsRootShaderResourceView(1, tabRes.worldMatrixBuffer->GetGPUVirtualAddress());
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     GeometryPageSnapshot* snapshot = storage.activeSnapshot.load(std::memory_order_acquire);
+    // Matrix-table VA bound AFTER the snapshot acquire-load: the copy thread regrows the table,
+    // and the snapshot publish order guarantees address/capacity consistency (mirror comments).
+    commandList->SetGraphicsRootShaderResourceView(1,
+        tabRes.worldMatrixVAShared.load(std::memory_order_acquire));
     if (snapshot) {
         for (GeometryPage* pagePtr : snapshot->pages) {
             if (!pagePtr) continue;

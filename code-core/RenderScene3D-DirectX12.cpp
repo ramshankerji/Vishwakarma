@@ -138,7 +138,9 @@ void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
     // Set root descriptor table. No longer used.
     // Bind directly using GPU Virtual Addresses!
     commandList->SetGraphicsRootConstantBufferView(0, winRes.constantBuffer->GetGPUVirtualAddress());
-    commandList->SetGraphicsRootShaderResourceView(1, tabRes.worldMatrixBuffer->GetGPUVirtualAddress());
+    // Matrix-table VA (t0) is bound below, AFTER the snapshot acquire-load: the copy thread can
+    // regrow the table, and the snapshot publish order guarantees a snapshot referencing the new
+    // capacity is only visible together with the new buffer address (see DX12ResourcesPerTab).
 
     // Create named variables (l‑values)
     // Viewport starts at y = topUITotalHeightPx and has reduced height
@@ -172,6 +174,8 @@ void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
     // PAGE-BASED RENDERING (Solid Opaque Only)
     GeometryPageSnapshot* snapshot = storage.activeSnapshot.load(std::memory_order_acquire);
     if (snapshot) {
+        commandList->SetGraphicsRootShaderResourceView(1,
+            tabRes.worldMatrixVAShared.load(std::memory_order_acquire));
         for (GeometryPage* pagePtr : snapshot->pages) {
             GeometryPage& page = *pagePtr;
             if (!page.published.load(std::memory_order_acquire)) continue;
@@ -242,7 +246,74 @@ void ReleaseTabGpuGeometry(DATASETTAB& tab) {
     for (auto& retired : storage.retiredSnapshots) delete retired.snapshot;
     storage.retiredSnapshots.clear();
     storage.retiredPages.clear(); // unique_ptr<GeometryPage> releases the VRAM buffers.
+    storage.retiredBuffers.clear(); // Outgrown matrix buffers.
     storage.activePages.clear();
+}
+
+// Copy-thread-only: double the per-tab world-matrix table when it is full. The old buffer goes
+// onto storage.retiredBuffers (still mapped: in-flight frames may bind its VA and the pick
+// resolve may read its pointer) and is freed by the safeRetireFence sweep. The render-thread
+// mirrors are republished LAST, so readers holding stale values still hit a live buffer, and any
+// snapshot referencing the new capacity is published after the new values (see the mirror
+// comments in DX12ResourcesPerTab). Throws HrException on allocation failure; GpuCopyThread's
+// batch try/catch drops the batch and the old table stays valid.
+static void GrowMatrixTable(DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage) {
+    const uint32_t oldCapacity = tabRes.matrixCapacity;
+    const uint32_t newCapacity = oldCapacity * 2;
+
+    ComPtr<ID3D12Resource> newBuffer;
+    auto matrixDesc = CD3DX12_RESOURCE_DESC::Buffer(
+        static_cast<uint64_t>(newCapacity) * sizeof(DirectX::XMFLOAT4X4));
+    CD3DX12_HEAP_PROPERTIES uploadProps(D3D12_HEAP_TYPE_UPLOAD);
+    ThrowIfFailed(gpu.device->CreateCommittedResource(&uploadProps, D3D12_HEAP_FLAG_NONE,
+        &matrixDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&newBuffer)));
+
+    UINT8* newData = nullptr;
+    CD3DX12_RANGE readRange(0, 0);
+    ThrowIfFailed(newBuffer->Map(0, &readRange, reinterpret_cast<void**>(&newData)));
+    // Both buffers are persistently mapped upload heaps: a plain CPU memcpy carries every
+    // existing matrix over. No GPU copy, no fence needed for the data itself.
+    memcpy(newData, tabRes.pWorldMatrixDataBegin, oldCapacity * sizeof(DirectX::XMFLOAT4X4));
+
+    // Old buffer: keep alive (and mapped) until every monitor's fence passes this value.
+    storage.retiredBuffers.push_back({ tabRes.worldMatrixBuffer,
+        gpu.renderFenceValue.load(std::memory_order_acquire) });
+
+    // Copy-thread-private fields.
+    tabRes.worldMatrixBuffer = newBuffer;
+    tabRes.pWorldMatrixDataBegin = newData;
+    tabRes.matrixCapacity = newCapacity;
+
+    // Keep the per-tab srvHeap descriptor (created by InitD3DPerTab, not used by the current
+    // root-SRV draw paths) pointing at the live buffer instead of dangling on the retired one.
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvView = {};
+    srvView.Format = DXGI_FORMAT_UNKNOWN;
+    srvView.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    srvView.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvView.Buffer.FirstElement = 0;
+    srvView.Buffer.NumElements = newCapacity;
+    srvView.Buffer.StructureByteStride = sizeof(DirectX::XMFLOAT4X4);
+    gpu.device->CreateShaderResourceView(tabRes.worldMatrixBuffer.Get(), &srvView,
+        tabRes.srvHeap->GetCPUDescriptorHandleForHeapStart());
+
+    // Publish to render threads last: pointer, then VA, then capacity (capacity gates indices).
+    tabRes.worldMatrixDataShared.store(newData, std::memory_order_release);
+    tabRes.worldMatrixVAShared.store(newBuffer->GetGPUVirtualAddress(), std::memory_order_release);
+    tabRes.matrixCapacityShared.store(newCapacity, std::memory_order_release);
+
+    std::wcout << L"World-matrix table grown: " << oldCapacity << L" -> " << newCapacity
+        << L" slots (" << (newCapacity * sizeof(DirectX::XMFLOAT4X4) / 1024) << L" KB)." << std::endl;
+}
+
+// Copy-thread-only: next free matrix slot, doubling the table when it is full.
+static uint32_t AllocateMatrixSlot(DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage) {
+    if (!tabRes.freeMatrixSlots.empty()) {
+        const uint32_t slot = tabRes.freeMatrixSlots.back();
+        tabRes.freeMatrixSlots.pop_back();
+        return slot;
+    }
+    if (tabRes.matrixCount >= tabRes.matrixCapacity) GrowMatrixTable(tabRes, storage);
+    return tabRes.matrixCount++;
 }
 
 // 3D-geometry half of the copy thread: applies one drained batch of ADD/MODIFY/REMOVE commands
@@ -576,13 +647,7 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                         break; // Exit this case, process next command
                     }
 
-                    if (!tabRes.freeMatrixSlots.empty()) {
-                        matrixIndex = tabRes.freeMatrixSlots.back();
-                        tabRes.freeMatrixSlots.pop_back();
-                    } else {
-                        matrixIndex = tabRes.matrixCount++;
-                        if (matrixIndex >= tabRes.matrixCapacity) matrixIndex = 0; // TODO: handle growth
-                    }
+                    matrixIndex = AllocateMatrixSlot(tabRes, storage); // Doubles the table when full.
 
                     // Copy transposed world matrix to upload buffer
                     worldMat = XMLoadFloat4x4(&geo->worldMatrix);
@@ -649,13 +714,7 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                         AcquireAppendPage(targetContainerMemoryId, newVertexBytes, newIndexBytes);
 
                     // Allocate a fresh matrix slot for the relocated geometry
-                    if (!tabRes.freeMatrixSlots.empty()) {
-                        matrixIndex = tabRes.freeMatrixSlots.back();
-                        tabRes.freeMatrixSlots.pop_back();
-                    } else {
-                        matrixIndex = tabRes.matrixCount++;
-                        if (matrixIndex >= tabRes.matrixCapacity) matrixIndex = 0; // TODO: Overflow safety. Improve latter.
-                    }
+                    matrixIndex = AllocateMatrixSlot(tabRes, storage); // Doubles the table when full.
                     // Free the old matrix slot
                     worldMat = XMLoadFloat4x4(&geo->worldMatrix);
                     tabRes.freeMatrixSlots.push_back(oldRec->matrixIndex);

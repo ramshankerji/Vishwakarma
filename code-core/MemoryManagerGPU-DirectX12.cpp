@@ -125,6 +125,13 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
     ThrowIfFailed(tabRes.worldMatrixBuffer->Map(0, &readRange,
         reinterpret_cast<void**>(&tabRes.pWorldMatrixDataBegin)));
 
+    // Publish the render-thread mirrors (see DX12ResourcesPerTab). GrowMatrixTable republishes
+    // them whenever the copy thread doubles the table.
+    tabRes.worldMatrixDataShared.store(tabRes.pWorldMatrixDataBegin, std::memory_order_release);
+    tabRes.worldMatrixVAShared.store(tabRes.worldMatrixBuffer->GetGPUVirtualAddress(),
+        std::memory_order_release);
+    tabRes.matrixCapacityShared.store(tabRes.matrixCapacity, std::memory_order_release);
+
     // SRV on per-tab shader-visible heap (already declared in struct)
     D3D12_DESCRIPTOR_HEAP_DESC srvDesc = {};
     srvDesc.NumDescriptors = 1;
@@ -288,6 +295,9 @@ void शंकर::CleanupTabResources(DX12ResourcesPerTab& tabRes) {
         tabRes.pWorldMatrixDataBegin = nullptr;
     }
     tabRes.worldMatrixBuffer.Reset();
+    tabRes.worldMatrixVAShared.store(0, std::memory_order_release);
+    tabRes.worldMatrixDataShared.store(nullptr, std::memory_order_release);
+    tabRes.matrixCapacityShared.store(0, std::memory_order_release);
     tabRes.freeMatrixSlots.clear();
     tabRes.matrixCount = 0;
 
@@ -586,6 +596,13 @@ void GpuCopyThread() {
                         return rp.retireFence <= safeRetireFence;
                         // unique_ptr destructs automatically on removal
                     }), storage.retiredPages.end()
+                );
+
+                // Retire outgrown world-matrix buffers (GrowMatrixTable): same fence rule.
+                storage.retiredBuffers.erase(std::remove_if(
+                    storage.retiredBuffers.begin(), storage.retiredBuffers.end(),
+                    [&](const auto& rb) { return rb.retireFence <= safeRetireFence; }),
+                    storage.retiredBuffers.end()
                 );
 
                 if (allTabs[tabList[i]].cad2d) {

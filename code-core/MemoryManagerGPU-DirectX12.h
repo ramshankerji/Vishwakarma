@@ -148,8 +148,13 @@ struct TabGeometryStorage {
     // Cleanup queues for the Copy thread
     struct RetiredSnapshot { GeometryPageSnapshot* snapshot; uint64_t retireFence; };
     struct RetiredPage { std::unique_ptr<GeometryPage> page; uint64_t retireFence; };
+    // Outgrown world-matrix buffers (GrowMatrixTable). Kept alive - still mapped - until every
+    // monitor's fence passes retireFence: in-flight frames may bind the old VA and the pick
+    // resolve may still read the old mapped pointer. Final Release unmaps implicitly.
+    struct RetiredBuffer { Microsoft::WRL::ComPtr<ID3D12Resource> buffer; uint64_t retireFence; };
     std::vector<RetiredSnapshot> retiredSnapshots;
     std::vector<RetiredPage> retiredPages;
+    std::vector<RetiredBuffer> retiredBuffers;
 
     /* TODO: RCU version of all of the following vectors need to be developed. Only 1st done so far.
     std::vector<std::unique_ptr<GeometryPage>> opaquePages; // Opaque geometry pages
@@ -186,13 +191,25 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
     // Copy thread will update the following map whenever it adds/removes/modifies an object on GPU.
     std::map<uint64_t, GpuResourceVertexIndexInfo> objectsOnGPU;
 
-    //Copy thread owns/writes following variables exclusively. Render threads only read it. Without Lock.
+    //Copy thread owns/writes following variables exclusively. Render threads must NOT touch them:
+    //the copy thread regrows (doubles) the table when full, so the ComPtr/pointer/capacity here can
+    //change mid-session. Render threads read the *Shared atomic mirrors below instead.
     ComPtr<ID3D12Resource> worldMatrixBuffer; // TODO: Doublebuffer it per frame.
     UINT8 * pWorldMatrixDataBegin = nullptr;
-    uint32_t               matrixCapacity = 4096; 
+    uint32_t               matrixCapacity = 4096;
     uint32_t               matrixCount = 0;
 	std::vector<uint32_t>  freeMatrixSlots;   // free-list for matrix indices.
     //To enable re-use of slots when objects are removed.
+
+    // Lock-free mirrors for RENDER-thread reads (scene/highlight/pick bind the VA each frame; the
+    // pick resolve reads the mapped pointer + capacity). GrowMatrixTable republishes them only
+    // AFTER pushing the old buffer onto storage.retiredBuffers, so a reader holding stale values
+    // still dereferences a live (retired-but-alive) buffer. Readers must load the snapshot first:
+    // a snapshot referencing matrixIndex >= old capacity is published after these stores, so the
+    // snapshot acquire-load guarantees visibility of the matching (or newer) mirror values.
+    std::atomic<D3D12_GPU_VIRTUAL_ADDRESS> worldMatrixVAShared{ 0 };
+    std::atomic<UINT8*>   worldMatrixDataShared{ nullptr };
+    std::atomic<uint32_t> matrixCapacityShared{ 0 };
 
 	// Initially rootSignature & pipelineState were in PerWindow, but now moved here, 
     // when adding commandSignature and indirect drawing infrastructure.
