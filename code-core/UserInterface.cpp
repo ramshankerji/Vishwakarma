@@ -822,7 +822,8 @@ void PushWidgetText(UIDrawContext& ctx, DX12ResourcesUI& uiRes, float x, float b
         const float ypos = std::floor(baselineY - (float)g.bearingY * textScale + 0.5f);
         const float glyphWidth = (float)g.width * textScale;
         const float glyphHeight = (float)g.height * textScale;
-        if (xpos + glyphWidth > textRight) break;
+        // Unsnapped clip edge, matching BuildUIOverlay's pushTextClipped — see the note there.
+        if (cursorX + (float)g.bearingX * textScale + glyphWidth > textRight + 0.5f) break;
         if (ctx.vertexCount + 4 > uiRes.maxVertices || ctx.indexCount + 6 > uiRes.maxIndices) return;
 
         uint16_t base = ctx.vertexCount;
@@ -1023,9 +1024,13 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
             float ypos = std::floor(y - (float)g.bearingY * scale + 0.5f);
             float glyphWidth = (float)g.width * scale;
             float glyphHeight = (float)g.height * scale;
-            float glyphRight = xpos + glyphWidth;
+            // Clip on the unsnapped ink edge, the way MeasureUIStringWidth() measured it. Testing the
+            // snapped xpos instead loses the last glyph of any label drawn into a box sized from that
+            // measurement: the rounding above can nudge it half a pixel past the edge. Half a pixel of
+            // tolerance covers glyphs whose ink overhangs their own advance.
+            float glyphRight = cursorX + (float)g.bearingX * scale + glyphWidth;
 
-            if (glyphRight > textRight) break;
+            if (glyphRight > textRight + 0.5f) break;
             if (ctx.vertexCount + 4 > uiRes.maxVertices) return;
             if (ctx.indexCount + 6 > uiRes.maxIndices) return;
 
