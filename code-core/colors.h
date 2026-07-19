@@ -3,6 +3,12 @@
 // This file hosts all cross-platform colur defintions and constants.
 #pragma once
 
+#include <cstdint>
+
+// Label / icon colour for UI controls whose command is not yet wired to any handler.
+// Deliberately dull, so an un-implemented button reads as inert without being invisible.
+constexpr uint32_t kUIDisabledTextGray = 0xFF9E9E9E; //rgba(158, 158, 158)
+
 // Sky background, drawn as one gradient quad by ClearSceneSkyGradient (Scene3D only).
 constexpr float kSceneSkyTopR = 0.62f;
 constexpr float kSceneSkyTopG = 0.82f;

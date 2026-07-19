@@ -22,6 +22,7 @@
 #include "PropertyPane.h"
 #include "SoftwareUpdate.h"
 #include "CrockfordBase32.h"
+#include "colors.h"
 #include "fast_float/fast_float.h"
 #include <array>
 #include <bit>
@@ -1334,13 +1335,6 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
                 }
             }
 
-            if (!ctrl.isEnabled) { // Gray-out overlay for disabled controls
-                if (controlVisible && !hasDedicatedSVGIcon) {
-                    float highlightWidth = ctrl.showText ? iconReservedWidthPx : btnWidth;
-                    PushRoundedRectangle(ctx, btnX, btnY, highlightWidth, btnHeight, roundedCornerRadiusPx,
-                        0xAA333333, uiRes);
-                }
-            }
         }
         else if (ctrl.type == 3) {
             // Future textbox
@@ -1377,7 +1371,7 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
             float textWidth = btnWidth - textStartOffsetPx - textEndInsetPx;
             uint32_t textColor = 0xFFFFFFFF; // default hovered/active color (white)
             if (!hovered) {
-                textColor = ctrl.isEnabled ? uiActiveColors.actionText : 0xAA888888;
+                textColor = ctrl.isEnabled ? uiActiveColors.actionText : kUIDisabledTextGray;
             }
             pushTextClipped(textX, textBaselineY(btnY, btnHeight, uiTextScale),
                 label, textWidth, textColor, uiTextScale);

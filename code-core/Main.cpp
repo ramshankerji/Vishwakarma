@@ -436,6 +436,11 @@ void ProcessPendingUIActions() {
             OpenStorageFileInNewTab();
         } else if (action.id == static_cast<uint32_t>(Commands::PROJECT_PRINT)) {
             PrintActiveTab();
+        } else if (action.id == static_cast<uint32_t>(Commands::PROJECT_CLOSE)) {
+            // Same path as the tab band's 'x': a no-op while only one tab is left.
+            if (DATASETTAB* tab = GetActiveTabForUIAction()) {
+                RequestCloseEngineeringTab(static_cast<uint16_t>(tab->tabNo));
+            }
         } else if (action.id == static_cast<uint32_t>(Commands::FOLDER_VISIBILITY)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::DATA_TREE_TOGGLE_VISIBILITY);
         } else if (action.id == static_cast<uint32_t>(Commands::CREATE_FOLDER)) {

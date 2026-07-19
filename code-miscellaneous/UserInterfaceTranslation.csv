@@ -85,7 +85,7 @@ WordID,ShortWordName,English,Comments
 1037,CreatePiping,Piping,Create piping system
 1039,LoadCase,Load Case,Define load case
 1041,CodeIS456,IS456,Indian concrete design code
-1043,GeneralDrawing,Drawing,Create general drawing
+1043,GeneralDrawing,Drawing,GA Drawing
 1045,ImportSTD,Import STD,Import standard file
 1047,ImportCII,Import CII,Import CII format
 1049,ImportDXF,Import DXF,Import DXF file
@@ -98,8 +98,8 @@ WordID,ShortWordName,English,Comments
 3244059276,PROJECT_PRINT,Print,Print visible 2D page or 3D scene image to printer
 2769288455,PROJECT_CLOSE,Project Close,Project Close
 3583994253,CREATE_FOLDER,Create Folder,Create Folder
-3534410448,CREATE_PAGE2D,Create Page2d,Create Page2d
-2618728952,CREATE_SCENE3D,Create Scene3d,Create Scene3d
+3534410448,CREATE_PAGE2D,Create Page2D,Create Page2d
+2618728952,CREATE_SCENE3D,Create Scene3D,Create Scene3d
 3165697720,FOLDER_VISIBILITY,Folder Visibility,Folder Visibility
 3494793623,SEARCH_BOX,Search Box,Search Box
 2671908760,SEARCH_NORMAL,Search Normal,Search Normal
@@ -145,15 +145,15 @@ WordID,ShortWordName,English,Comments
 3161340767,EDIT_FILLET,Fillet,Fillet
 2918679699,EDIT_CHAMFER,Chamfer,Chamfer
 3265605728,EDIT_EXPLODE,Explode,Explode
-3932640333,CREATE_VVESSEL2D,Create Vvessel2d,Create Vvessel2d
-2801144044,CREATE_HVESSEL2D,Create Hvessel2d,Create Hvessel2d
-2689559792,CREATE_EXCHANGER2D,Create Exchanger2d,Create Exchanger2d
-2434967661,CREATE_FILTER2D,Create Filter2d,Create Filter2d
-3554460308,CREATE_PUMP2D,Create Pump2d,Create Pump2d
-3432407186,CREATE_AIRCOOLER2D,Create Aircooler2d,Create Aircooler2d
-3483474747,CREATE_COMPRESSOR2D,Create Compressor2d,Create Compressor2d
-2840747433,CREATE_PIPE2D,Create Pipe2d,Create Pipe2d
-4085157423,CREATE_INSTRUMENT2D,Create Instrument2d,Create Instrument2d
+3932640333,CREATE_VVESSEL2D,VVessel2D,Create Vvessel2d
+2801144044,CREATE_HVESSEL2D,HVessel2D,Create Hvessel2d
+2689559792,CREATE_EXCHANGER2D,Exchanger2D,Create Exchanger2d
+2434967661,CREATE_FILTER2D,Filter2D,Create Filter2d
+3554460308,CREATE_PUMP2D,Pump2D,Create Pump2d
+3432407186,CREATE_AIRCOOLER2D,AirCooler2D,Create Aircooler2d
+3483474747,CREATE_COMPRESSOR2D,Compressor2D,Create Compressor2d
+2840747433,CREATE_PIPE2D,Pipe2D,Create Pipe2d
+4085157423,CREATE_INSTRUMENT2D,Instrument2D,Create Instrument2d
 3320946139,EDIT_PARAMETER,Edit Parameter,Edit Parameter
 3361645481,CREATE_CUBOID,Cuboid,Cuboid
 4171461298,CREATE_CYLINDER,Cylinder,Cylinder
@@ -175,11 +175,11 @@ WordID,ShortWordName,English,Comments
 2852057700,HOLE_CIRCULAR,Hole Circular,Hole Circular
 3190847058,HOLE_RECTANGULAR,Hole Rectangular,Hole Rectangular
 4019205572,HOLE_POLYGONAL,Hole Polygonal,Hole Polygonal
-3333840376,CREATE_GRID3D,Create Grid3d,Create Grid3d
-2667784792,CREATE_VIEW_3D,Create View 3d,Create View 3d
+3333840376,CREATE_GRID3D,Create Grid3D,Create Grid3d
+2667784792,CREATE_VIEW_3D,Create View 3D,Create View 3d
 3408573092,CREATE_TEMP_CLIP,Create Temp Clip,Create Temp Clip
 2473419054,DELETE_TEMP_CLIP,Delete Temp Clip,Delete Temp Clip
-3454235754,VIEW3D_TYPE,View3d Type,View3d Type
+3454235754,VIEW3D_TYPE,View3D Type,View3d Type
 2491991578,HIDE_SELECTED,Hide Selected,Hide Selected
 2748113010,HIDE_UNSELECTED,Hide Unselected,Hide Unselected
 2362776882,HIDE_RESET,Hide Reset,Hide Reset
@@ -200,22 +200,22 @@ WordID,ShortWordName,English,Comments
 3882203228,VIEW_BACK,View Back,View Back
 3177379064,VIEW_BOTTOM,View Bottom,View Bottom
 3769120672,VIEW_TOP,View Top,View Top
-4206004955,CREATE_STRUCTURE,Create Structure,Create Structure
-2846452397,CREATE_VVESSEL3D,Create Vvessel3d,Create Vvessel3d
-2779695561,CREATE_HVESSEL3D,Create Hvessel3d,Create Hvessel3d
-3011627523,CREATE_EXCHANGER3D,Create Exchanger3d,Create Exchanger3d
-3673637717,CREATE_FILTER3D,Create Filter3d,Create Filter3d
-3930566817,CREATE_PUMP3D,Create Pump3d,Create Pump3d
-3550911706,CREATE_AIRCOOLER3D,Create Aircooler3d,Create Aircooler3d
-3581600724,CREATE_COMPRESSOR3D,Create Compressor3d,Create Compressor3d
-3656690872,CREATE_PIPING3D,Create Piping3d,Create Piping3d
-2162683985,LINE_ELEMENT_COLUMN,Line Element Column,Line Element Column
-3930718075,LINE_ELEMENT_BEAM,Line Element Beam,Line Element Beam
-3988350268,CONCRETE_SLAB_POLY,Concrete Slab Poly,Concrete Slab Poly
-3864828924,CONCRETE_SLAB_RECT,Concrete Slab Rect,Concrete Slab Rect
-2734326432,LINE_ELEMENT_WALL,Line Element Wall,Line Element Wall
-3704887219,CONCRETE_DOME,Concrete Dome,Concrete Dome
-3039129324,CREATE_PILE,Create Pile,Create Pile
+4206004955,CREATE_STRUCTURE,Structure,Create Structure
+2846452397,CREATE_VVESSEL3D,VVessel3D,Create Vvessel3d
+2779695561,CREATE_HVESSEL3D,HVessel3D,Create Hvessel3d
+3011627523,CREATE_EXCHANGER3D,Exchanger3D,Create Exchanger3d
+3673637717,CREATE_FILTER3D,Filter3D,Create Filter3d
+3930566817,CREATE_PUMP3D,Pump3D,Create Pump3d
+3550911706,CREATE_AIRCOOLER3D,Aircooler3D,Create Aircooler3d
+3581600724,CREATE_COMPRESSOR3D,Compressor3D,Create Compressor3d
+3656690872,CREATE_PIPING3D,Piping3D,Create Piping3d
+2162683985,LINE_ELEMENT_COLUMN,Line-Column,Line Element Column
+3930718075,LINE_ELEMENT_BEAM,Line-Beam,Line Element Beam
+3988350268,CONCRETE_SLAB_POLY,RCC Slab Poly,Concrete Slab Poly
+3864828924,CONCRETE_SLAB_RECT,RCC Slab Rect,Concrete Slab Rect
+2734326432,LINE_ELEMENT_WALL,Line-Wall,Line Element Wall
+3704887219,CONCRETE_DOME,RCC Dome,Concrete Dome
+3039129324,CREATE_PILE,Pile,Create Pile
 2359984007,RF_SINGLE,Rf Single,Rf Single
 3553900289,RF_REBAR_SET,Rf Rebar Set,Rf Rebar Set
 3477044202,RF_COUPLER,Rf Coupler,Rf Coupler
@@ -227,18 +227,18 @@ WordID,ShortWordName,English,Comments
 2887127434,GRATING_POLY,Grating Poly,Grating Poly
 3063610067,BOLT_GROUP_RECT,Bolt Group Rect,Bolt Group Rect
 3343758252,BOLT_GROUP_CIRCULAR,Bolt Group Circular,Bolt Group Circular
-3483719548,CREATE_PIPING,Create Piping,Create Piping
-2321563062,CREATE_SPOOL,Create Spool,Create Spool
-3680627270,CREATE_VALVE,Create Valve,Create Valve
-3996694081,CREATE_ELBOW,Create Elbow,Create Elbow
-4184007375,CREATE_T,Create T,Create T
-4183995726,CREATE_Y,Create Y,Create Y
-3072649185,CREATE_FLANGE,Create Flange,Create Flange
-3905024746,CREATE_LINE_MEMBER,Create Line Member,Create Line Member
-2896880030,INSTRUMENT_PG,Instrument Pg,Instrument Pg
-2851619487,INSTRUMENT_TG,Instrument Tg,Instrument Tg
-2377130800,EDIT_EXTEND3D,Edit Extend3d,Edit Extend3d
-3509948575,EDIT_STRETCH3D,Edit Stretch3d,Edit Stretch3d
+3483719548,CREATE_PIPING,Piping Parts,Create Piping
+2321563062,CREATE_SPOOL,Spool,Create Spool
+3680627270,CREATE_VALVE,Valve,Create Valve
+3996694081,CREATE_ELBOW,Elbow,Create Elbow
+4184007375,CREATE_T,Tee,Create T
+4183995726,CREATE_Y,Tee-Y,Create Y
+3072649185,CREATE_FLANGE,Flange,Create Flange
+3905024746,CREATE_LINE_MEMBER,Line Member?,Create Line Member
+2896880030,INSTRUMENT_PG,Pressure Gauze,Instrument Pg
+2851619487,INSTRUMENT_TG,Temp. Gauze,Instrument Tg
+2377130800,EDIT_EXTEND3D,Extend 3D,Edit Extend3d
+3509948575,EDIT_STRETCH3D,Stretch 3D,Edit Stretch3d
 2718248390,LOAD_CASE,Load Case,Load Case
 2313464443,LOAD_COMBINATIONS,Load Combinations,Load Combinations
 3676278939,LOAD_SELF_WEIGHT,Load Self Weight,Load Self Weight
@@ -251,16 +251,16 @@ WordID,ShortWordName,English,Comments
 3600999792,LOAD_WIND_IS875,Load Wind Is875,Load Wind Is875
 4066943494,LOAD_SEISMIC_IS1893,Load Seismic Is1893,Load Seismic Is1893
 3085722453,LOAD_SNOW_IS875,Load Snow Is875,Load Snow Is875
-3276532146,SUPPORT_FIXED,Support Fixed,Support Fixed
-3133001911,SUPPORT_PINNED,Support Pinned,Support Pinned
-2961511288,SUPPORT_ROLLER,Support Roller,Support Roller
-4043003874,SUPPORT_PARTIAL,Support Partial,Support Partial
-2704148806,SUPPORT_FUNCTIONAL,Support Functional,Support Functional
-3714475761,ANALYSIS_3D_FRAME,Analysis 3d Frame,Analysis 3d Frame
-3019869714,ANALYSIS_STATIC,Analysis Static,Analysis Static
-3827302734,ANALYSIS_SPECTRUM,Analysis Spectrum,Analysis Spectrum
-2269955686,ANALYSIS_TIME_HISTORY,Analysis Time History,Analysis Time History
-3899852618,ANALYSIS_THERMAL,Analysis Thermal,Analysis Thermal
+3276532146,SUPPORT_FIXED,Fixed,Support Fixed
+3133001911,SUPPORT_PINNED,Pinned,Support Pinned
+2961511288,SUPPORT_ROLLER,Roller,Support Roller
+4043003874,SUPPORT_PARTIAL,Partial,Support Partial
+2704148806,SUPPORT_FUNCTIONAL,Functional,Support Functional
+3714475761,ANALYSIS_3D_FRAME,3D Frame,Analysis 3d Frame
+3019869714,ANALYSIS_STATIC,Static,Analysis Static
+3827302734,ANALYSIS_SPECTRUM,Spectrum,Analysis Spectrum
+2269955686,ANALYSIS_TIME_HISTORY,Time History,Analysis Time History
+3899852618,ANALYSIS_THERMAL,Thermal,Analysis Thermal
 4004139340,CODE_CIVIL_IS456_LSD,IS456 LSD,IS456 LSD
 3404812258,CODE_CIVIL_IS456_WSD,IS456 WSD,IS456 WSD
 3217166961,CODE_CIVIL_IS13920,IS13920,IS13920
@@ -274,12 +274,12 @@ WordID,ShortWordName,English,Comments
 3753813637,CODE_CIVIL_EUROCODE3,Eurocode3,Eurocode3
 3601170139,CODE_CIVIL_GB50017,GB50017,GB50017
 3811570028,CODE_MECH_ASME_VIII,ASME VIII,ASME VIII
-3811158475,CREATE_PAGE,Create Page,Create Page
-4290228579,GENERAL_DRAWING,General Drawing,General Drawing
-2901120378,GENERAL_SHEET,General Sheet,General Sheet
-2635018789,GENERAL_3D2DGA,General 3d2dga,General 3d2dga
-2494567870,GENERAL_ASSEMBLY,General Assembly,General Assembly
-3736434677,GENERAL_ISOMETRIC,General Isometric,General Isometric
+3811158475,CREATE_PAGE,Page,Create Page
+4290228579,GENERAL_DRAWING,Drawing,General Drawing
+2901120378,GENERAL_SHEET,Sheet,General Sheet
+2635018789,GENERAL_3D2DGA,3D-to-2D GA,General 3d2dga
+2494567870,GENERAL_ASSEMBLY,Assembly Drawing,General Assembly
+3736434677,GENERAL_ISOMETRIC,Icometric Drawing,General Isometric
 2938400871,GENERAL_TABLES,General Tables,General Tables
 2281954899,SEQUENCE_PLAY,Sequence Play,Sequence Play
 2470232457,STATUS_VISUALIZE,Status Visualize,Status Visualize
