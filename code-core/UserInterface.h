@@ -862,6 +862,11 @@ int BuildUIDropdown(UIDrawContext& ctx, DX12ResourcesUI& uiRes, const UIInput& i
     UIDropdownState& state, float x, float y, float width, float rowHeightPx, float textScale,
     const char* const* items, int itemCount, int selectedIndex);
 
+// Launch splash trigger. wWinMain stores GetTickCount64() once, after the GPU engine and every
+// monitor's icon atlas are up; BuildUIOverlay draws the credit card until 5 s later, then clears
+// this back to 0. 0 = nothing to draw.
+extern std::atomic<uint64_t> g_splashOverlayStartTick;
+
 // Portable half of RenderUIOverlay: widget layout + hit-testing for the whole overlay. Fills ctx
 // with the frame's UI geometry and emits UIActions; the platform wrapper draws ctx afterwards.
 void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI& uiRes,

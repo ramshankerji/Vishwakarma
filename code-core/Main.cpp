@@ -834,6 +834,10 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     // Graphics startup complete: topology-change messages (WM_DISPLAYCHANGE / WM_DPICHANGED) may
     // now trigger RestartRenderThreads. Written and read on this (UI) thread only.
     gpu.isGPUEngineInitialized = true;
+    // Icon atlases are built (RestartRenderThreads above), so the splash's rounded background can be
+    // tessellated. Set here, not inside RestartRenderThreads, which also runs on monitor topology
+    // changes and would otherwise re-show the splash every time a monitor is plugged in.
+    g_splashOverlayStartTick.store(GetTickCount64(), std::memory_order_relaxed);
 
     MSG msg = {};// Main message loop:
 

@@ -909,6 +909,18 @@ int BuildUIDropdown(UIDrawContext& ctx, DX12ResourcesUI& uiRes, const UIInput& i
     return selected;
 }
 
+// Launch splash (drawn at the very end of BuildUIOverlay below). Its own colour constant so it can
+// be tuned without touching ribbon hover. This is #ffeaa7 written ABGR (0xAABBGGRR), the packing
+// ShaderUIPixel.hlsl decodes; a literal 0xFFFFEAA7 here would come out pale blue instead.
+constexpr uint32_t kSplashBackgroundColor = 0xFFA7EAFFu;
+constexpr uint32_t kSplashTextColor = 0xFF000000u; // Black: symmetric, so channel-order agnostic.
+constexpr uint64_t kSplashDurationMs = 5000ULL;
+// icon_1_logo.svg, embedded via SVGIconManifest.h and rasterised into every monitor's icon atlas.
+// Drawn with a white vertex colour so the atlas keeps the logo's own tricolour (shader multiplies).
+constexpr char32_t kSplashLogoCodepoint = SVGIconRenderer::IconForID(1u);
+
+std::atomic<uint64_t> g_splashOverlayStartTick{ 0 };
+
 // Portable half of RenderUIOverlay (UserInterface-<Platform>.cpp): lays out and hit-tests every
 // widget (tab bands, ribbon, data tree, property pane, cursor icons), fills ctx with the frame's
 // UI geometry and emits UIActions. The caller binds the pipeline and draws ctx afterwards.
@@ -2172,5 +2184,64 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
             roundedCornerRadiusPx, 0xFF333333u, uiRes);
         pushTextClipped(toastX + toastPaddingXPx, textBaselineY(toastY, toastHeightPx, uiTextScale),
             toastText, toastTextWidthPx + 1.0f, 0xFFFFFFFFu, uiTextScale);
+    }
+
+    // Launch splash: a centred credit card shown for the first kSplashDurationMs of the run, from
+    // the moment the GPU engine and every monitor's icon atlas came up (wWinMain sets the tick).
+    // Purely informational — no hover, no click, no dismissal; it simply stops being drawn. Pushed
+    // last so it lands on top of everything else in the frame's single draw call. English only:
+    // two of the lines are URLs and one is a proper name, so there is nothing to localize.
+    const uint64_t splashStartTick = g_splashOverlayStartTick.load(std::memory_order_relaxed);
+    if (splashStartTick != 0) {
+        if (GetTickCount64() - splashStartTick >= kSplashDurationMs) {
+            g_splashOverlayStartTick.store(0, std::memory_order_relaxed); // Expired: skip every later frame.
+        } else {
+            static constexpr const char32_t* splashLines[] = {
+                U"Developed with Love by Team INDIA",
+                U"Lead by Ram Shanker",
+                U"https://mv.ramshanker.in",
+                U"https://github.com/ramshankerji/Vishwakarma",
+            };
+            constexpr size_t splashLineCount = std::size(splashLines);
+
+            // 20 px at the UI_MIN_LAYOUT_DPI reference, scaling with DPI like every other UI dimension.
+            const float splashTextHeightPx = std::round(20.0f * monitorDPIY / UI_MIN_LAYOUT_DPI);
+            const float splashTextScale = TextScaleForHeight(splashTextHeightPx);
+            const float splashLineHeightPx = splashTextHeightPx * 1.6f; // Text height plus leading.
+            const float splashPaddingXPx = splashTextHeightPx * 1.5f;
+            const float splashPaddingYPx = splashTextHeightPx * 0.8f;
+
+            float splashLineWidthPx[splashLineCount] = {};
+            float splashWidestLinePx = 0.0f;
+            for (size_t i = 0; i < splashLineCount; ++i) {
+                splashLineWidthPx[i] = MeasureUIStringWidth(splashLines[i], splashTextScale);
+                splashWidestLinePx = std::max(splashWidestLinePx, splashLineWidthPx[i]);
+            }
+
+            const float splashHeightPx =
+                splashLineHeightPx * (float)splashLineCount + 2.0f * splashPaddingYPx;
+            // A logo flanks the text on both sides at 40 % of the card height, sitting on the card's
+            // horizontal centreline. Layout is [pad][logo][pad][text][pad][logo][pad].
+            const float splashLogoSizePx = std::round(splashHeightPx * 0.4f);
+            const float splashWidthPx =
+                splashWidestLinePx + 2.0f * splashLogoSizePx + 4.0f * splashPaddingXPx;
+            const float splashX = std::round((W - splashWidthPx) * 0.5f);
+            const float splashY = std::round((H - splashHeightPx) * 0.5f);
+
+            PushRoundedRectangle(ctx, splashX, splashY, splashWidthPx, splashHeightPx,
+                roundedCornerRadiusPx * 2.0f, kSplashBackgroundColor, uiRes);
+            const float splashLogoY = splashY + (splashHeightPx - splashLogoSizePx) * 0.5f;
+            PushIcon(ctx, splashX + splashPaddingXPx, splashLogoY,
+                splashLogoSizePx, splashLogoSizePx, kSplashLogoCodepoint, 0xFFFFFFFFu, uiRes);
+            PushIcon(ctx, splashX + splashWidthPx - splashPaddingXPx - splashLogoSizePx, splashLogoY,
+                splashLogoSizePx, splashLogoSizePx, kSplashLogoCodepoint, 0xFFFFFFFFu, uiRes);
+            for (size_t i = 0; i < splashLineCount; ++i) {
+                const float lineY = splashY + splashPaddingYPx + splashLineHeightPx * (float)i;
+                const float lineX = std::round(splashX + (splashWidthPx - splashLineWidthPx[i]) * 0.5f);
+                pushTextClipped(lineX, textBaselineY(lineY, splashLineHeightPx, splashTextScale),
+                    splashLines[i], splashLineWidthPx[i] + 1.0f, kSplashTextColor, splashTextScale,
+                    i == 0);
+            }
+        }
     }
 }
