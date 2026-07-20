@@ -341,3 +341,243 @@ Per the locked decision, edit state stays on the UI thread, but drafts can flow 
 3. **Friendlier display formatting** (fixed decimals per unit category) may come later — if it
    does, the *edit seed* must stay the `to_chars` round-trip string; only the at-rest display
    may be shortened.
+
+---
+
+## Next iteration (planned): proto-numbered property descriptors
+
+Everything below this line is the design for the NEXT property-pane iteration. Decisions are
+locked; implementation has not started. It streamlines the descriptor system above so that
+**every property carries a numeric ID equal to its field number in the type's `.proto` file**,
+a full property type system, and an optional numeric range — so a non-CS developer can add an
+object type or property by editing one file section and following one mechanical rule.
+
+Architecture fact this design builds on (verified): the in-memory object definitions are the
+C++ structs (`डेटा-सामान्य-3D.h`, `डेटा-पाइप.h`, `डेटा-संरचना.h`) — **not** the protos. Protos are
+storage-only: `DataStorage.cpp` hand-copies struct fields into generated protobuf-lite messages
+and stores the blob in SQLite. Today proto field numbers appear nowhere in C++; the struct↔proto
+correspondence exists only in the statement order of the hand-written `EncodeXxx`/`DecodeXxx`
+functions, with nothing enforcing it. This iteration makes proto field numbers the stable,
+compile-time-enforced property IDs.
+
+### Locked decisions of this iteration
+
+1. **Unroll composite proto fields in the .proto files.** Singular `Point3F`/`Color4F` message
+   fields become flat scalars, each with its own field number → property ID ↔ proto number is
+   exactly 1:1. This is a BREAKING storage change, accepted pre-release: no migration; old
+   `.yyy` files fail to load with a clear error (a load gate turns silent mis-decode into an
+   explicit message).
+2. **Property ID = proto field number**, `uint16_t` in the descriptor, enforced by
+   `static_assert` against the protoc-generated `k<Field>FieldNumber` constants.
+3. **Property tables move next to their structs** in the data headers, as `inline constexpr`
+   arrays — struct + properties visible in one place. `PropertyPane.cpp` shrinks to the
+   registry, lookup, validation, and the static_assert block.
+4. **Full `PropertyKind` enum now, phased activation**: `Bool, Uint, Int, Float, Double,
+   Utf8String`. This iteration keeps only Float editable end-to-end (pixel-identical UX);
+   the enum and accessor signatures are final so tables never churn when later kinds activate.
+5. **Numeric range replaces `mustBePositive`**: inclusive `minValue`/`maxValue` doubles per
+   field (radii use a "smallest positive" constant). Cross-field validators stay.
+6. **Labels stay `UITextID`** (localized via `UserInterfaceTranslation.csv` +
+   `UserInterfaceTranslationCompiler.py`).
+7. **The edit protocol keys on propertyID** (stable identity end-to-end) instead of the array
+   index; the `fieldIndex` descriptor member is deleted.
+
+### Proto unroll rule and new field layouts
+
+Mechanical rule, applied to all 3D/fitting protos in one pass (a single storage break): keep
+each message's declaration order; `Point3F foo` → `float foo_x, foo_y, foo_z` (3 numbers);
+`Color4F bar` → `float bar_r, bar_g, bar_b, bar_a` (4 numbers); plain scalars keep 1 number;
+`repeated` fields stay composite (vertex lists); renumber sequentially from 1. Colors unroll
+too — one uniform rule; `Point3F`/`Color4F` in `DataStorage_Common3D.proto` remain only for
+`repeated` use. Each proto gains the comment: *"Field numbers are permanent property IDs:
+never renumber or reuse them; only append new fields."*
+
+New layouts (field = number):
+
+- **Sphere**: center_x/y/z = 1-3, radius = 4, color_r/g/b/a = 5-8
+- **Cylinder**: p1 1-3, p2 4-6, radius = 7, color_base 8-11, color_top 12-15, color_incline 16-19
+- **Cone**: apex 1-3, base_center 4-6, radius = 7, color_base 8-11, color_incline 12-15
+- **Torus**: center 1-3, major_radius = 4, minor_radius = 5, color 6-9
+- **Ellipsoid**: center 1-3, radius_x = 4, radius_y = 5, radius_z = 6, color 7-10
+- **Pipe**: center1 1-3, center2 4-6, outside_diameter = 7, inside_diameter = 8,
+  color_outer 9-12, color_inner 13-16, color_cap 17-20
+- **FrustumOfCone**: bottom_center 1-3, top_center 4-6, bottom_radius = 7, top_radius = 8,
+  color_base 9-12, color_top 13-16, color_incline 17-20
+- **Elbow**: center 1-3, bend_radius = 4, outside_diameter = 5, inside_diameter = 6,
+  sweep_angle_radians = 7, color_outer 8-11, color_inner 12-15, color_cap 16-19
+- **Tee**: center1 1-3, center2 4-6, main_outside_diameter = 7, main_inside_diameter = 8,
+  branch_angle_degrees = 9, branch_length = 10, branch_outside_diameter = 11,
+  branch_inside_diameter = 12, color_outer 13-16, color_inner 17-20, color_cap 21-24
+- **Flange**: center1 1-3, center2 4-6, flange_outer_diameter = 7, bore_diameter = 8,
+  raised_face_diameter = 9, raised_face_projection = 10, color_face 11-14, color_rim 15-18,
+  color_bore 19-22
+- **LineMember**: point1 1-3, point2 4-6, profile_id = 7 (uint64), color_main 8-11,
+  color_inner 12-15, color_cap 16-19, user_parameter1 = 20, user_parameter2 = 21
+- **Cuboid**: vertices = 1 (repeated, unchanged), color_r/g/b/a = 2-5
+- **Parallelepiped**: vertices = 1, color 2-5
+- **FrustumOfPyramid**: vertices = 1, color_base 2-5, color_top 6-9, color_incline 10-13
+- **Pyramid** (all repeated), **Folder/Page2D/Scene3D** (no composites), and all 2D protos:
+  unchanged.
+
+Protos whose singular composites disappear drop the now-unused `DataStorage_Common3D.proto`
+import (11 files); the three vertex-list types above keep it.
+
+### The new descriptor
+
+```cpp
+enum class PropertyKind : uint8_t { Bool, Uint, Int, Float, Double, Utf8String };
+// This iteration renders/edits only Float; the enum is complete so tables never churn.
+
+inline constexpr double kNoMinLimit = -std::numeric_limits<double>::infinity();
+inline constexpr double kNoMaxLimit =  std::numeric_limits<double>::infinity();
+inline constexpr double kMinPositive = FLT_MIN; // "> 0" for float-backed fields.
+
+struct PropertyFieldDescriptor {
+    uint16_t  propertyID;             // == field number in DataStorage_<TYPE>.proto. Stable forever.
+    UITextID  labelStringID;
+    PropertyKind kind;
+    double (*get)(const META_DATA*);  // numeric kinds; set() casts to the stored type
+    void   (*set)(META_DATA*, double);// engineering thread only
+    double    minValue;               // inclusive range (replaces mustBePositive)
+    double    maxValue;
+};
+```
+
+- Accessors become `double`-based: one migration covers Bool/Uint/Int/Float/Double later
+  (`Utf8String` gets its own accessor pair as trailing members in its phase). Documented limit:
+  uint64 values above 2^53 lose precision through a double — revisit if a real ID field ever
+  exceeds it (`profile_id` catalog ids do not).
+- `fieldIndex` is deleted — array position serves the snapshot arrays; the protocol uses
+  `propertyID`.
+- `PropertyTypeDescriptor` keeps its shape; `validateCrossField` becomes
+  `(const double* values, uint8_t count, uint8_t editIndex, double newValue)`.
+- `ValidatePropertyEdit`: `std::isfinite(v) && minValue <= v && v <= maxValue` + cross-field
+  rule. `CrossLineMember` drops its `>= 0` part (now per-field `minValue = 0.0`).
+- `UserInterfaceTranslationCompiled.h` is enum-only (~350 lines) — safe to reach the data
+  headers via `PropertyPane.h`, which keeps forward-declaring `META_DATA` (no include cycle).
+
+### Tables live next to their structs
+
+Declared `inline constexpr` immediately below each struct (C++20 is already the project
+standard; captureless-lambda → function-pointer conversion is constexpr). Example, in
+`डेटा-सामान्य-3D.h` below `SPHERE`:
+
+```cpp
+// Properties pane declaration. propertyID = field number in DataStorage_SPHERE.proto
+// (enforced by static_asserts in PropertyPane.cpp).
+inline constexpr PropertyFieldDescriptor kSphereProperties[] = {
+    { 1, UITextID::PropCenterX, PropertyKind::Float,
+      [](const META_DATA* o) -> double { return static_cast<const SPHERE*>(o)->center.x; },
+      [](META_DATA* o, double v) { static_cast<SPHERE*>(o)->center.x = static_cast<float>(v); },
+      kNoMinLimit, kNoMaxLimit },
+    // ... center_y = 2, center_z = 3 ...
+    { 4, UITextID::PropRadius, PropertyKind::Float, /* get/set */, kMinPositive, kNoMaxLimit },
+};
+```
+
+Cross-field validators (`CrossTwoPoints`, `CrossTorus`, `CrossPipe`, `CrossLineMember`) move
+as `inline` functions next to the tables they serve, so a type's whole property story sits in
+one file section. Affected headers: `डेटा-सामान्य-3D.h` (Sphere, Cylinder, Cone, Torus,
+Ellipsoid, Pipe, FrustumOfCone), `डेटा-संरचना.h` (LineMember). `PropertyPane.cpp` retains only:
+`kPropertyTables[]` registry (one line per type), `FindPropertyTable`, `ValidatePropertyEdit`,
+and the static_assert block.
+
+### Compile-time ID enforcement
+
+`PropertyPane.cpp` includes the generated pb headers it needs (bare-name include —
+`$(IntDir)GeneratedProtobuf` is already on the include path, exactly as `DataStorage.cpp`
+does) and asserts every entry:
+
+```cpp
+static_assert(kSphereProperties[0].propertyID == pb::Sphere::kCenterXFieldNumber);
+static_assert(kSphereProperties[3].propertyID == pb::Sphere::kRadiusFieldNumber);
+```
+
+Contingency: if MSVC rejects constexpr-lambda tables, fall back to `inline const` tables plus
+a parallel `constexpr uint16_t kSpherePropertyIDs[]` used by the asserts.
+
+### Edit protocol switches to propertyID
+
+- `UserInterface.cpp` commit: `p1 = (uint64_t(tabIndex) << 16) | propertyID` (was `<< 8 |
+  fieldIndex`); `focusedFieldKey` hashes propertyID.
+- `Main.cpp` routing unpacks the `uint16` and forwards it in the same
+  `MODIFY_OBJECT_PROPERTY` slot.
+- `विश्वकर्मा.cpp ModifyObjectProperty` resolves propertyID → table entry (short scan of ≤ 24
+  entries), then the flow is unchanged: re-validate, `set()`, `dataVersion++`,
+  `GeometryForObject`, MODIFY push.
+
+### Storage changes
+
+- `CommonNamedNumbers.h`: `kGeometry3DMvpSchemaVersion` 1 → 2,
+  `kGeometry3DLineMemberSchemaVersion` 2 → 3 (struct `storageSchemaVersion` constants follow).
+- `DataStorage.cpp`: the 14 affected Encode/Decode pairs become per-scalar
+  `message.set_center_x(...)` / `message.center_x()` calls; colors keep the half↔float
+  per-component conversion. `WritePoint3/ReadPoint3/WriteColor4/ReadColor4/DefaultColor4`
+  remain only for the repeated-field paths (Pyramid/Cuboid/Parallelepiped/FrustumOfPyramid).
+- Load gate in `DeserializeGeometryObject`: stored `schema_version` older than the type's
+  current constant → fail the load through the existing `errorMessage` path with a clear
+  "saved by an older pre-release build; format no longer supported" message.
+- `GenerateDataStorageProtobuf.ps1` and the vcxproj need no change (the proto file set is
+  unchanged).
+
+### Renderer notes
+
+- Snapshot array becomes `double[]`.
+- **Float-kind values must be formatted via `std::to_chars` on `static_cast<float>(value)`** —
+  formatting a float-backed value as double would print noise digits (`0.30000001192…`) and
+  break the seeded-string round-trip guarantee.
+- Parse path is unchanged: buffer → double → validate range → commit payload already carries
+  `std::bit_cast<uint64_t>(double)`; `set()` casts to the stored type.
+
+### Explicitly unchanged (behavior-preservation checklist)
+
+- Pane visuals, row set, and Float-only editing UX (same rows, same formatting, same
+  validation outcomes).
+- C++ struct memory layouts — zero struct changes; `META_DATA` untouched.
+- Selection flow, draft-validation reservation, input guards, copy-thread MODIFY protocol.
+- SQLite schema, 2D record model, logical objects.
+- `optionalFieldsFlags` / Optional64: untouched — per-proto-field property IDs are exactly the
+  key the future presence system needs, so "many properties Optional, highly compact layout"
+  plugs into this ID scheme without rework.
+
+### Implementation order
+
+1. Rewrite the 14 protos per the layouts above.
+2. Bump the two schema-version constants in `CommonNamedNumbers.h`.
+3. Rewrite the Encode/Decode pairs in `DataStorage.cpp`; add the load gate.
+4. Redesign `PropertyPane.h` (kind enum, range constants, new descriptor, double-based
+   signatures).
+5. Add tables + validators next to the structs; delete the old tables from `PropertyPane.cpp`.
+6. Rebuild `PropertyPane.cpp`: registry + lookup + validation + static_asserts.
+7. Update `UserInterface.cpp` (double snapshots, float-cast formatting, propertyID key),
+   `Main.cpp` routing, `UserInterface.h` payload comment, `विश्वकर्मा.cpp ModifyObjectProperty`.
+8. Update this document (move this section into the main body as-built) and add a one-line
+   note in `storage.md` §12 that 3D payload protos use flat scalars.
+
+### Verification (Windows build)
+
+- Build regenerates protos automatically (pre-build protoc step).
+- Create all 15 wired types → save → reopen → geometry identical.
+- Edit Sphere radius + center end-to-end: geometry updates, pane re-reads the applied value.
+- Reject 0/negative radius, NaN, `inside >= outside` on Pipe (red flash).
+- A `.yyy` saved by a previous build fails to load with the clear version message.
+- Typing in a field still suppresses shortcuts ('P' spawns no pyramid).
+
+### Phased roadmap (after this iteration)
+
+| Phase | Deliverable |
+|---|---|
+| 2 | Bool/Uint/Int/Double editable end-to-end (the u64 payload already fits); LineMember `profile_id` row; Elbow/Tee/Flange tables + UITextIDs; grow the 8-slot validator/snapshot buffers (Tee needs 12) |
+| 3 | Utf8String kind: `name` proto fields + persistence (append new field numbers, schema bump), string commit channel UI→engineering, string accessor pair on the descriptor |
+| 4 | Logical objects (Folder name/short_code) — pane reacts to data-tree selection, not just 3D picking |
+| 5 | Optional64 presence integration: presence bit per proto-field ID, pane renders unset state |
+
+### Risks / notes
+
+- Old `.yyy` files become unreadable — accepted (pre-release); the load gate turns silent
+  mis-decode into an explicit error.
+- Devanagari headers must remain UTF-8 (repo rule) — edits touch `डेटा-सामान्य-3D.h` /
+  `डेटा-संरचना.h`.
+- `double` accessors cap exact integers at 2^53 — irrelevant while only floats are editable;
+  documented for phase 2's `profile_id`.
+- constexpr-lambda tables are standard C++20; the fallback above covers a compiler objection.
