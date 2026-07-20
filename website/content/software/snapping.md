@@ -26,12 +26,13 @@ Snapping is the mechanism that converts an imprecise cursor pixel into an **exac
 5. **Ambient snap is always on and always succeeds.** Every click therefore lands on a defined value, never on 16 digits of float noise. It is priority 0 with an unbounded aperture, so it is the guaranteed fallback of the resolution rule.
 6. **Priority 0 is the coarsest level, 15 the finest.** 0 is the ambient grid (widest aperture, always eligible); 15 is a member end or a piping connection point (narrowest aperture, wins outright when in range). Aperture decreases monotonically as priority rises.
 7. **Objects export their own snap points.** A single dispatch `SnapPointsForObject(objectType, object, out)` mirrors the existing `GeometryForObject(...)`. Adding a new intelligent object means adding one case there — no changes to the snap engine.
-8. **The 3D work plane is an explicit axis-aligned plane, defaulting to horizontal.** The plane is named by its normal axis and an offset along that normal; the default is normal Z, i.e. the horizontal plane. **The view/focal plane is discarded** — a plane that rotates with the camera is not a construction reference. An oblique plane picked off a future object surface is planned but not in the first implementation.
+8. **The 3D work plane is an explicit axis-aligned plane, defaulting to horizontal.** The plane is named by its normal axis and an offset along that normal; the default is normal Z, i.e. the horizontal plane. **The view/focal plane is discarded as a construction reference** — a plane that rotates with the camera is not one. It survives only in the Zoom Window navigation path (decision 14). An oblique plane picked off a future object surface is planned but not in the first implementation.
 9. **The work plane belongs to the view (sub-tab slot), not to the Scene3D, and is not persisted.** A view will eventually be able to load *several* Scene3D containers at once, so the plane cannot belong to any one of them. It is working context like the camera — which already lives per view in `InternalSubTab` — and it is rebuilt from the default on every open.
 10. **Right-click opens the snap palette** in both worlds. It is not AutoCAD's "repeat last command"; **Space** carries that role instead.
 11. **Ortho ships in both idioms.** A persistent CAD-style toggle on **F8**, and Blender-style per-operation axis constraints on **X / Y / Z**. They are two front-ends onto the same direction-constraint mechanism.
 12. **Snap-from-object is never implicit.** It is entered only by explicitly choosing it from the right-click palette. With it off — the normal case — resolution is always the priority-then-distance rule of §5 across every candidate.
 13. **Snapping never silently moves an existing object.** It only ever affects the *point being entered*. Editing an existing coordinate through the properties pane bypasses snapping entirely.
+14. **Raw coordinate consumers stay raw.** Both chokepoint functions have a caller that must never see a snapped point. In 2D it is the selection fallback: `Cad2DHandleSelectionClick` hit-tests with a ~6 px tolerance measured from the cursor, and a point already pulled up to 24 px toward some object's endpoint would select the wrong object. In 3D it is Zoom Window: `ZoomSceneToWindow` resolves the rectangle center through `Scene3DPlacementPointFromInput` today, and for *navigation* the focal plane is the right plane — recentering onto a work plane far below the viewed objects would send the camera flying. So snapping is layered as a wrapper over the raw mapping; selection and navigation keep calling the raw form (§3).
 
 ## 3. What we build on (the existing chokepoints)
 
@@ -39,10 +40,10 @@ The codebase already funnels every "user clicked somewhere in the world" event t
 
 | World | Function | Today | With snapping |
 |---|---|---|---|
-| 2D | `Page2DCoordinateFromInput(tab, input, outX, outY)` in `RenderPage2D.cpp` | maps pixel → ComputerUnit in `double` | resolves the snap and returns the snapped point + the fired snap record |
-| 3D | `Scene3DPlacementPointFromInput(tab, input, outPoint)` in `विश्वकर्मा.cpp` | ray-casts onto the focal plane through `camera.target` | resolves against object snap points first, falls back to the work plane |
+| 2D | `Page2DCoordinateFromInput(tab, input, outX, outY)` in `RenderPage2D.cpp` | maps pixel → ComputerUnit in `double` | unchanged (stays the raw mapping); a new `Page2DSnappedPointFromInput(tab, input, outX, outY, SnapResult* = nullptr)` wraps it and resolves the snap |
+| 3D | `Scene3DPlacementPointFromInput(tab, input, outPoint)` in `विश्वकर्मा.cpp` | ray-casts onto the focal plane through `camera.target` | becomes the snapped resolver — object snap points first, work-plane fallback; its current focal-plane math moves to a raw `Scene3DFocalPointFromInput` |
 
-All eleven 2D creation/transform call sites already follow the pattern `if (Page2DCoordinateFromInput(tab, input, x, y)) { Handle…Click(tab, x, y); }`, so line/polyline/polygon/circle/ellipse/arc/text creation, asset insert, and all five `Cad2DTransformKind` tools inherit snapping at once. Likewise 3D primitive placement inherits it through the single call in `HandlePrimitive3DPlacementInput`.
+Ten 2D call sites follow the pattern `if (Page2DCoordinateFromInput(tab, input, x, y)) { Handle…Click(tab, x, y); }`. Nine are tools — line/polyline/polygon/circle/ellipse/arc/text creation, asset insert, and the single transform site serving all five `Cad2DTransformKind` tools — and switching those nine to the snapped wrapper gives every tool snapping at once. The tenth is the selection fallback, which keeps the raw call per locked decision 14. In 3D, primitive placement inherits snapping through the single call in `HandlePrimitive3DPlacementInput`; the other existing caller, `ZoomSceneToWindow`, switches to the raw focal-plane variant. The names are chosen so the diff is minimal on each side: in 2D the raw function keeps its name (its surviving caller is selection), in 3D the placement function keeps its name (its surviving caller is placement).
 
 Other reusable pieces:
 
@@ -81,6 +82,8 @@ struct SnapResult {
 
 `secondObjectId` exists because an intersection is inferred from *two* objects and the caller (and the marker tooltip) needs both.
 
+One `uint64_t objectId` field serves both worlds without translation: the 2D CPU records already carry the same object ids as the 3D storage (`Cad2DLineRecordCPU::objectId` and siblings), so a `SnapPoint` is identical in shape whether it came from a 2D record or a 3D object.
+
 ## 5. The resolution rule
 
 This is the part of the specification that needs stating precisely, because the obvious implementation is wrong.
@@ -101,6 +104,7 @@ Consequences worth noting:
 
 - Priority is a property of the **point**, not of the object, so one object can export a priority-14 endpoint and a priority-6 nearest-on-curve point.
 - Apertures are **logical pixels scaled by the monitor's DPI**. On a 4K panel a fixed device-pixel aperture feels half the size; the DPI plumbing already exists per monitor.
+- Cursor distance is measured in **screen pixels**, never in world units. 2D converts CU offsets through the view zoom; 3D projects each candidate snap point through the camera and compares in pixels — a candidate that projects behind the camera is discarded. Comparing in world units would make the aperture zoom-dependent, which is exactly wrong.
 
 **Priority → aperture is linear for now.** The right curve can only be found by trial and error on real drawings, so the first implementation uses the simplest mapping that satisfies the monotonic requirement, expressed as two constants rather than a hand-tuned sixteen-entry table:
 
@@ -177,6 +181,11 @@ Perpendicular, Parallel, Tangent and Intersection are derived against the anchor
 
 Snapping turns a per-*click* O(n) scan into a per-*mouse-move* one. An imported DXF can carry 100 000+ records, and holding `cpuRecordsMutex` at input rate also competes with the copy thread's ingest. This is understood and accepted for the MVP: **phase 1 ships the linear scan.**
 
+Two cheap mitigations ship from day one, in both worlds, because they cost nothing:
+
+- **Coalesce mouse moves.** A high-polling-rate mouse delivers MOUSEMOVE at up to 1000 Hz; resolving each one buys nothing the screen can show. Store the latest cursor position and resolve at most once per frame.
+- **Skip hover while navigating.** While a camera interaction is in progress (2D middle-button pan; 3D orbit/pan via middle button or Alt+left), the cursor is not picking a point — suspend hover resolution entirely and clear the marker.
+
 The optimisation, when it comes, is **frame-to-frame coherence** rather than a new index structure: the cursor moves a few pixels between frames, so the previous frame's candidate set, its distances, and the resolved level are nearly always still valid. Carry that state forward, re-test only what the cursor movement could have invalidated, and rebuild fully only when the view pans/zooms or the records change. This is cheaper to build and to reason about than a spatial hash, and it exploits the one property that is always true of mouse input — continuity. A spatial index remains the fallback if measurement later shows coherence alone is not enough.
 
 ## 9. Snap sources — 3D, and the work plane
@@ -206,14 +215,17 @@ Only the few objects named by Stage A are expanded, so the cost is bounded regar
 
 `LINE_MEMBER` endpoints and piping connection points take priority 15, above generic geometry. **This ranking is the whole point of intelligent objects** — the snap engine stays generic and the semantics live in each object's own export function.
 
+One accepted imprecision: a candidate object's *far-side* points (the hidden corners of a visible cuboid) project inside the aperture too and are offered like any other. The object itself is visible — that is what Stage A guarantees — but per-point occlusion filtering would need another GPU pass, and drafting practice actually wants the hidden corner more often than not. Phase 1 accepts this knowingly.
+
 **The work plane.** A screen ray does not determine a 3D point, and the ambient grid can only round *within* a plane. The work plane is therefore explicit state, not inferred:
 
 - It is **axis-aligned**, named by its **normal axis** (`x`, `y` or `z`) plus an **offset** along that normal. `z` with offset 0 is the horizontal plane through the origin.
 - **Default: normal `z`, i.e. horizontal.** Structural and plant work is floor-based and the camera is Z-up, so this is the plane the user means the overwhelming majority of the time.
 - **It is owned by the view, not by the Scene3D, and is never written to file.** A view will eventually host several Scene3D containers at once, so the plane cannot belong to any single one of them. It lives in `InternalSubTab` next to that view's `CameraState` — same ownership, same lifetime, same lock-free publication to the render thread — and resets to the default whenever a slot is (re)assigned, exactly as `Cad2DViewState::Reset` already does for 2D pan/zoom.
 - **`o` (oblique)** — a plane picked off an existing object surface. Reserved in the UI, not implemented in phase 1.
-- The **view/focal plane is discarded.** Today's `Scene3DPlacementPointFromInput` resolves onto the focal plane through `camera.target`, which rotates with the camera and is therefore useless as a construction reference. It is replaced by the work plane.
+- The **view/focal plane is discarded from the placement path.** Today's `Scene3DPlacementPointFromInput` resolves onto the focal plane through `camera.target`, which rotates with the camera and is therefore useless as a construction reference. Placement resolves onto the work plane instead; Zoom Window keeps the focal-plane math through the raw `Scene3DFocalPointFromInput` (decision 14).
 - The ambient grid rounds only the **two in-plane coordinates**. The third is the plane's own offset and is exact by definition — it is never rounded.
+- A ray nearly **parallel to the work plane**, or one that meets it **behind the camera**, resolves to nothing and the click is ignored — the same behaviour as today's degenerate-ray guard in `Scene3DPlacementPointFromInput`. No clamping, no guessing.
 
 ## 10. Ambient grid arithmetic
 
@@ -266,7 +278,7 @@ Ortho and an explicit axis constraint are mutually exclusive; the last one the u
 
 ## 12. Settings: storage, propagation, threading
 
-The snap set is a **32-bit mask, one bit per snap kind** — cheap to store, cheap to publish, and 32 kinds is comfortably more than §6 needs.
+The snap set is a **32-bit mask, one bit per snap kind** — cheap to store, cheap to publish, and 32 kinds is comfortably more than §6 needs. Bit *n* is `SnapKind` value *n*. The `AmbientGrid` bit is ignored (always on, decision 5), and `Ortho` appears in the enum only because `SnapKind` doubles as the marker-glyph selector — ortho and axis locks are keyboard state in `SnapContext`, not mask bits.
 
 **Storage.** File-global defaults go in the existing `file_info` key/value table of the `.yyy` SQLite (`DataStorage.cpp`) as key `snap_defaults` — no schema change, forward compatible. Per-container values are new fields on `PAGE2D` / `SCENE3D` (डेटा.h) and their protos, with `kLogicalElementSchemaVersion` bumped; v1 files decode as 0 and fall back to the file default. Propagation is exactly as specified: file default → copied into each Page2D / Scene3D on creation and on load → thereafter local and independently editable.
 
@@ -282,6 +294,8 @@ The snap set is a **32-bit mask, one bit per snap kind** — cheap to store, che
 
 **Publication to the render thread.** The engineering thread writes a `SnapHoverState` (snapped point, kind, screen position, the sub-tab slot it belongs to) as plain data; the render thread reads it each frame and draws the marker. One frame stale is fine, matching the camera contract stated in `UserInputProcessing.h`.
 
+`SnapHoverState` flows in one direction only. A click never reads it back — the chokepoint re-runs the same resolution synchronously at click time, so the committed coordinate is computed from the click's own pixel, never from a stale hover. (The 3D *candidate set* may be a frame stale per decision 2; the coordinate never is.)
+
 ## 13. User interface
 
 **Ribbon toggles.** A new "Snap" subgroup, one icon per snap kind. This needs a capability the ribbon does not have yet: `AllUIControls[]` controls are all momentary buttons with hover and pressed tints but **no latched "currently on" state** (`TOGGLE_AUTO_RANDOM` is a momentary button too). Add a control type or a state hook so a toggled-on snap renders with a persistent highlight. Each new button also needs the full eight-file treatment: `Commands` enum id, `UserInterfaceTranslation.csv` row plus regenerated `UserInterfaceTranslationCompiled.*`, `AllUIControls[]` row with `isEnabled = true`, a hand-authored `website/static/SVGIcons/icon_<id>_<slug>.svg`, its `SVGIconManifest.h` entry, and the `ProcessPendingUIActions` dispatch. Every snap icon is new artwork; the pre-build embedder compiles them into the binary automatically.
@@ -295,14 +309,14 @@ The snap set is a **32-bit mask, one bit per snap kind** — cheap to store, che
 
 **Hover marker.** A distinct glyph per snap kind (square = end, triangle = mid, circle = center, X = intersection, ⟂ = perpendicular …) drawn at the snapped screen position, plus a short text label after a brief hover delay. Without this the user cannot tell *which* snap fired and will not trust the feature — it is not polish, it is the feature.
 
-**Keyboard.** Adopt the industry-standard function keys so muscle memory transfers: **F3** master object-snap toggle, **F8** ortho, **F9** grid-object snap, **F10** polar/angle, **F11** object-snap tracking. Note that F9 governs the *grid object*, not the ambient grid — the ambient grid has no toggle by design (locked decision 5), so the master F3 switch turns off the object snaps and leaves ambient rounding in place. Plus `X`/`Y`/`Z` axis constraints during an operation (§11), and a hold-to-suppress modifier that temporarily disables all snapping — indispensable in congested areas, and the exact inverse of Snap-from-object.
+**Keyboard.** Adopt the industry-standard function keys so muscle memory transfers: **F3** master object-snap toggle, **F8** ortho, **F9** grid-object snap, **F10** polar/angle, **F11** object-snap tracking. Note that F9 governs the *grid object*, not the ambient grid — the ambient grid has no toggle by design (locked decision 5), so the master F3 switch turns off the object snaps and leaves ambient rounding in place. Plus `X`/`Y`/`Z` axis constraints during an operation (§11), and **hold Shift** to temporarily suppress all object snaps (ambient rounding stays) — indispensable in congested areas, and the exact inverse of Snap-from-object. Shift is free during placement in both worlds: today it matters only while the middle button pans in 3D, and never with the left button. It composes with the §11 plane constraints without ambiguity: suppression is the *held* state, `Shift+X/Y/Z` is a discrete keydown that still means the plane constraint. All of these keys are currently unhandled — the input loops consume ESC and one placeholder mapping (`'P'`), nothing else — so nothing needs remapping.
 
 ## 14. Module ownership
 
 - **`Snap.h`** — `SnapKind`, `SnapPoint`, `SnapResult`, `SnapContext`, the aperture table, the mask bit layout, `niceRound125`. Platform-agnostic, no graphics headers.
 - **`Snap.cpp`** — the resolution loop, the ambient grid, the derived snaps (perpendicular / parallel / tangent / intersection), and the 2D candidate gathering over `TabCad2DStorage`. CPU only.
 - **`Snap3D.cpp`** — `SnapPointsForObject` dispatch over `tab.storageObjects3D`, the work-plane state and math, and the ray/plane resolution. CPU only; deliberately does **not** include the geometry-page snapshot, so it stays free of `MemoryManagerGPU-DirectX12.h` and needs no `-DirectX12` variant.
-- **Small edits elsewhere:** the id-set readback in `Selection3D-DirectX12.cpp` (`PickPurpose::SnapHover`); the two chokepoint functions in `RenderPage2D.cpp` and `विश्वकर्मा.cpp`; the mouse-move hooks in both input loops; settings fields in `डेटा.h` + the two protos + `DataStorage.cpp`; the marker, palette and ribbon toggles in `UserInterface.cpp`; `ClearLineCreationState` / `CleanupCad2DTabResources` for the temporary mask and axis lock.
+- **Small edits elsewhere:** the id-set readback in `Selection3D-DirectX12.cpp` (`PickPurpose::SnapHover`); the chokepoint split of §3 in `RenderPage2D.cpp` and `विश्वकर्मा.cpp` (snapped wrappers for the tool call sites; selection and Zoom Window stay on the raw functions); the mouse-move hooks in both input loops; settings fields in `डेटा.h` + the two protos + `DataStorage.cpp`; the marker, palette and ribbon toggles in `UserInterface.cpp`; `ClearLineCreationState` / `CleanupCad2DTabResources` for the temporary mask and axis lock.
 
 ## 15. Staged implementation
 
@@ -313,7 +327,8 @@ Each stage is independently verifiable and independently useful.
                                 Zoom in 10x; the step subdivides through the 1-2-5 sequence.
 2. Hover marker + label      -> marker tracks the cursor and visibly jumps to the snapped point.
 3. 2D End/Mid/Center/        -> each kind demonstrably wins near its own feature; priority
-   Quadrant/Nearest             order observable by approaching a circle's center vs its edge.
+   Quadrant/Nearest/            order observable by approaching a circle's center vs its edge.
+   Insertion                    (Insertion is nearly free: the records carry the point already.)
 4. Ortho (F8) + SnapContext  -> a line from an existing point is exactly axis-aligned; the
                                 anchor comes from whichever tool is running.
 5. Settings + persistence    -> toggle, save, reopen: state survives. New Page2D inherits the
@@ -339,8 +354,8 @@ Stages 1–4 are the ones that make the application feel like CAD.
 
 - Aperture by priority: linear, `kApertureMaxPx = 24` at level 1 down to `kApertureMinPx = 10` at level 15; level 0 unbounded. Logical pixels, DPI-scaled. Expected to be re-tuned by trial on real drawings (§5).
 - Target ambient grid step ≈ 15 logical px on screen; nice sequence 1-2-5; floor 0.001 mm (2D) / 0.001 m (3D).
-- Enabled by default: AmbientGrid, End, Mid, Center, Quadrant, Intersection, MemberEnd, MemberMid. Off by default: Nearest, Parallel, TextBounds (Nearest fires almost everywhere and drowns the others).
-- Ortho off by default, F8 to toggle.
+- Default mask, stated completely so no kind is left ambiguous: **every implemented kind on, except Nearest, Parallel and TextBounds off** (Nearest fires almost everywhere and drowns the others; TextBounds is blocked anyway). So on: AmbientGrid, End, Mid, Center, Quadrant, Perpendicular, Tangent, Intersection, Insertion, EdgeMid, FaceCenter, MemberEnd, MemberMid, ObjectDefined.
+- Ortho off by default, F8 to toggle. Hold-to-suppress: Shift.
 - Work plane: normal `z`, offset 0.
 - Marker size 9 px, hover label after 400 ms.
 - 3D pick box for snap hover: 25 px (vs 5 px for click selection).

@@ -27,13 +27,10 @@ Visual Studio Code extension for code editing of templates.
 Open format translator. ( IFC / DWF etc.)  
 Distributed Analysis / Resource Utilization.  
 ISO 15926 export integration.  
-Google Chrome crash reporting link ingegration.  
-Jango based log / profile / extension managemet server.  
+Google Chrome crash reporting link ingegration.   
 Newsletter E-mails.  
 Live Pie Chart of Code-Core vs Code-External. Daily tracking.  
-Digitally signed binary. By some Foundation.  
-Auto updating binary. Similar to Google Chrome.  
-New release every Monday.  
+Digitally signed binary. By some Foundation.    
 Valgrind Testing Server.  
 Cloudflare Turnsite Captch for Login Pages.  
 OLED Screen Compatiblity. https://github.com/microsoft/PowerToys/issues/25595   
@@ -47,4 +44,4 @@ PUblic Experience Profile / Levels / Medals.
 Engineer should be able to study design alternatives.  
 
 **Compleated**  
-Only major features shall be listed here.  
+Anything which gets completed, is removed from this list. We will have corresponding design document instead.
