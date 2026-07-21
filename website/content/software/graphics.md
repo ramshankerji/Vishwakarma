@@ -33,6 +33,8 @@ Vertex layout is common to all geometry:
 - Initial development is on `R8G8B8A8`; when we implement HDR later we will upgrade. Some hardware may not support HDR, so keep both versions of the shaders.
 - Whether to load HDR or SDR shaders is decided at application startup. If the graphics card supports HDR and at least one monitor is HDR-capable, switch to HDR. Once HDR is ON, the application keeps HDR shaders even if the HDR monitor disconnects — until the app closes.
 
+*As implemented:* the 24-byte layout is live — position `R32G32B32_FLOAT` (12) + normal `R8G8B8A8_SNORM` (4) + color `R16G16B16A16_FLOAT` (8). Vertex color has been FP16 from day one, so the vertex format needs **no** change for HDR; the pending HDR work is entirely on the output side (render-target format, tonemap pass, swap chain) — see Phase 5.
+
 ### Lighting
 
 Initially, **hemispheric ambient lighting**:
@@ -84,11 +86,11 @@ The copy queue prepares `newPage` (vertex buffer, index buffer, `ExecuteIndirect
 - All page swaps are atomic.
 - Old pages are destroyed only after all queues retire.
 
-There are multiple views per tab. Each view maintains a double-buffered pair of `ExecuteIndirect` command buffers. When an object is deleted, the copy thread receives the command from the engineering thread, updates the next double buffer and records the hole in the vertex/index buffer (except for the currently filling head buffer).
+There are multiple views per tab. *As implemented*, the `ExecuteIndirect` argument buffer is per **page** (one, not per-view double-buffered) and is regenerated whenever a page is cloned; a delete soft-marks the placement record (`isDeleted`) and the next rebuild drops it. Per-view argument buffers proved unnecessary — a view filters at draw time by the page's container ID, issuing an argument count of 0 for inactive containers.
 
 **Free-list allocator:** maintain a CPU-side segregated free list, per tab. The allocator knows, e.g., "I have a 12 KB middle gap in Page 3 and a 40 KB middle gap in Page 8." When a 10 KB request comes in, it immediately returns "Page 3" — no iterating through page objects. If the free list says no existing page can accommodate the geometry, create a new heap / placed-resource buffer. The free list tracks only middle empty space, not internal holes from deleted objects; aggregate holes are tracked per page and defragmented occasionally.
 
-When a buffer accumulates more than 25% holes, it creates a new defragmented buffer and switches over once complete (for new geometry additions). At most one buffer is defragmented at a time (between two frames). Since the max page size is 64 MB, this does not produce a high-latency stall while running async with the copy thread.
+When a buffer accumulates more than 25% holes, it creates a new defragmented buffer and switches over once complete (for new geometry additions). At most one buffer is defragmented at a time (between two frames). Since pages are 4 MB, this does not produce a high-latency stall while running async with the copy thread.
 
 **Root signature:** the constants (View/Proj matrix) go in root constants or a very fast descriptor table, as these don't change between pages. Only the VBV/IBV and the EI argument buffer change per batch/page.
 
@@ -115,6 +117,8 @@ The industry-standard solution for normals is not 16-bit floats but **packed 10-
 - **Precision:** 10 bits gives 2¹⁰ = 1024 steps. Since normals lie between −1.0 and 1.0, that's ~0.002 precision — visually indistinguishable from 32-bit floats for lighting, even in high-end CAD.
 - Vertex-shader normalization: `Normal = Input.Normal * 2.0 - 1.0`.
 
+*As implemented:* we shipped `DXGI_FORMAT_R8G8B8A8_SNORM` instead — same 4 bytes, signed, zero shader remap (SNORM unpacks straight to −1..1). 8 bits (~0.008 steps) has shown no banding on CAD lighting so far; the 10-bit layout above remains the documented upgrade path if it ever does.
+
 ### Page structure
 
 Putting the vertex and index buffer in the **same page** is the superior architectural choice for three reasons:
@@ -135,8 +139,8 @@ Resource state is combined, i.e. `D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFE
 | Feature | Decision | Benefit |
 |---|---|---|
 | Page content | Single type only | Zero PSO switching during draw |
-| Growth logic | Chained doubling (4→8→16→32→64) | No moving old data |
-| Max page size | 64 MB | Prevents fragmentation failure on low-VRAM GPUs |
+| Growth logic | Fixed-size pages; a container grows by adding pages | No moving old data; uniform pages retire / recycle cleanly |
+| Page size | 4 MB fixed today; chained doubling 4→8→…→64 MB queued (Phase 7) | Cheap RCU clones now; page count stays in the low thousands even on a 48 GB card later; jumbo objects still bypass via the big-buffer fallback |
 | Allocation | Lazy (on demand) | Keeps "Hello World" tabs lightweight |
 | Sub-allocation | Double-ended stack | Maximizes usage for varying vertex/index ratios |
 
@@ -146,26 +150,25 @@ New geometry is appended (in the middle) only if both the new vertex and index b
 
 ### Defragmentation logic
 
-The copy queue marks a page for defragmentation. All frames of that tab **freeze** (keep presenting the previous render output). Any one render thread/queue reads the mark, transitions the resource to `COMMON` and signals a fence. The copy queue picks it up and, once defragmented, returns the new resource. Freezing a few frames on screen is a recognized engineering trade-off, acceptable to CAD users.
+*(Rewritten July 2026: the original freeze-based design predated the RCU page system that was actually built. Same requirements, simpler mechanism.)*
 
-EI argument buffers are tightly coupled to the memory pages. When we defragment a page we must simultaneously rebuild its argument buffer — don't try to "patch" it, regenerate it for that page.
+Defragmentation rides the existing RCU clone path and needs **no frame freeze** and no resource-state gymnastics:
 
-**Growth logic** works similarly. To add a small 10 KB geometry to an existing 64 MB heap that's 50 MB full without blocking the render thread: all views/frames of *that* tab freeze while other tabs keep processing (no global stall). Transition the page to copy-destination, copy the new data, transition it back to render state for the render thread to pick up.
+- Every ADD / MODIFY / REMOVE batch already clones the affected pages on the copy queue, applies changes to the clones, rebuilds each clone's `ExecuteIndirect` argument buffer and publishes the new snapshot atomically. Render threads keep drawing the old pages until the swap, so nothing ever freezes.
+- When a page's `holeBytes` cross the ~25% threshold, its clone step switches from whole-page `CopyResource` to per-live-object `CopyBufferRegion`, driven by the `GeometryPlacementRecordInPage` table, packing survivors tight. Offsets are remapped in CPU metadata; the argument-buffer rebuild — mandatory on every clone anyway — picks up the new offsets for free.
+- Relocating an object never touches byte contents: indices are object-relative, resolved per draw through `BaseVertexLocation` / `StartIndexLocation`.
+- At most one page compacts per batch (bounds the extra copy volume); a clone that ends up empty is dropped instead of published (empty-page GC — already implemented).
+- EI argument buffers stay tightly coupled to pages: regenerate per clone, never patch. (Unchanged rule.)
+
+**Growth logic** needs no special path either: a container simply gets more pages — new geometry lands in the page with the largest middle gap, else in a fresh page. Pages are 4 MB today; once chained doubling lands (Phase 7), successive new pages of a fast-growing container double up to 64 MB, but the rule is unchanged: nothing grows in place, so nothing freezes. The old plan (grow a heap in place while the tab's views freeze) is gone.
 
 ### Freeze logic
 
-Use **Render To Texture (RTT)** to implement the frame freeze, since the swap chain is `FLIP_DISCARD`. Side benefits: HDR handling, UI composition, multi-monitor flexibility, eviction safety, clean defrag freezes.
+Use **Render To Texture (RTT)** to implement frame freezes, since the swap chain is `FLIP_DISCARD`. RTT is now the standard frame path (draw → RTT → copy into backbuffer → present), so a freeze is simply "keep presenting the last RTT". With RCU pages, defragmentation no longer needs freezes at all (see above); the mechanism stays valuable for eviction safety, device-loss handling, HDR tonemapping (the copy becomes a draw), UI composition and multi-monitor flexibility.
 
 ### Known issues / limitations (to be resolved in a later revision)
 
-- Transparency sorting — accept imperfect sorting for "glass" pages during rotation, and do a CPU sort + args rebuild only when the camera stops.
-- Hot page for object drag / active mutation.
-- Evict logic.
-- Compute-shader frustum culling.
-- Telemetry: per-tab VRAM usage graphs, page fragmentation heatmap, eviction frequency counters, copy-queue stall tracking.
-- Selection highlighter methodology.
-- Mesh shader on supported hardware (RTX 2000 onwards, RX 6000 onwards).
-- Instance-based LOD optimization, optionally using a compute shader.
+Everything formerly tracked here now has a roadmap slot: transparency sorting, the hot-drag / active-mutation path and instanced repeated geometry sit in Phase 5, the telemetry counters in Phase 6, and evict/residency logic, compute-shader frustum culling, mesh shaders and instance-based LOD in Phase 7. Resolved since this list was written: selection highlighter methodology — shipped as the GPU pick pass + highlight overlay + rotation cube (Selection3D module).
 
 ### Miscellaneous specification
 
@@ -182,46 +185,54 @@ On a desktop PC with two discrete GPUs and one integrated GPU, each driving one 
 
 As items complete, they move out of this pending list and into the design document proper.
 
-**Phase 1 — the visual baseline**
-- [x] Vertex format includes normals (required for lighting).
-- [x] Hemispherical lighting in shader.
-- [x] Mouse zoom / pan / rotate (basic).
-
-**Phase 2 — the "freeze" infrastructure** *(build the mechanism that hides the breakage before breaking the memory model)*
-- [x] Render To Texture (RTT) & full-screen quad — detach "drawing" from "presenting".
-
-**Phase 3 — the API pivot (the hardest part)** *(do this before custom heaps, to isolate variables)*
-- [x] Structured buffer for world matrix (`StructuredBuffer<float4x4>` + a root-constant index).
-- [x] `DrawIndexedInstanced` → `ExecuteIndirect`.
+**Phases 1–3 — complete.** The visual baseline (lit 24-byte vertices, hemispherical lighting, mouse navigation), the RTT infrastructure and the API pivot (structured-buffer world matrices, `DrawIndexedInstanced` → `ExecuteIndirect`) are all live; their designs are described in the sections above.
 
 **Phase 4 — the memory manager (the Vishwakarma core)**
-- [ ] **[MISSING]** Global upload ring buffer — the copy thread needs a staging area, else the "VRAM pages" step stalls on `CreateCommittedResource`.
-- [x] VRAM pages per tab (the stack allocator) — the double-ended stack (vertex up, index down).
-- [ ] CPU-side free-list allocator (tracks the holes).
-- [x] Tab management / view management (integrating the heaps into the UI).
-- [x] Basic ribbon UI.
 
-**Phase 5 — advanced features & polish**
-- [x] Migrated to Shader Model 6 (supported by hardware 2016 onwards).
-- [ ] VRAM defragmentation (safe now that RTT exists).
-- [x] Click / window selection (raycast against the CPU free list / data structures).
-- [ ] Instanced optimization for pipes.
+Done so far: 4 MB double-ended VRAM pages with RCU clone → mutate → atomic-snapshot publish, per-container page ownership, fence-gated retirement (snapshots, pages, outgrown matrix tables), empty-page GC, world-matrix table with slot free-list and doubling growth, tab/view management, basic ribbon UI.
+
+Remaining, in build order — every later feature funnels through the copy thread, so each item here multiplies the value of everything after it:
+
+- [ ] **Global upload ring buffer.** One persistent-mapped ring (16–32 MB, fence-tracked reclaim) serving ALL copy-thread staging: Scene3D geometry, indirect-argument rebuilds, Page2D uploads, texture uploads. Today every object upload creates its own committed staging resource (`RecordGeometryUpload`), which is exactly the stall the original roadmap predicted. Sub-tasks:
+  - [ ] Remove the dead per-tab upload heaps: `InitD3DPerTab` creates + persistently maps 64 MB (vertex) + 16 MB (index) upload buffers that nothing ever writes — ~80 MB of committed memory per tab, directly against the "Hello-World tabs stay lightweight" rule.
+  - [ ] Oversize fallback: an upload bigger than the ring gets a one-off committed staging buffer.
+  - [ ] Ring capacity becomes the natural batch throttle: a 100k-object import chunks by ring space instead of materializing all staging buffers at once (today's batch memory is unbounded — the open TODO in `GpuCopyThread`).
+- [ ] **One submit per copy batch.** The batch path today records + executes + CPU-fence-waits up to three times per tab (page clones, geometry uploads, argument rebuilds). The copy queue executes a command list strictly in order, so clone → upload → rebuild can be one recording, one `ExecuteCommandLists`, one wait just before publish. (Removing even that last CPU wait via GPU-side cross-queue waits is Phase 7 material.)
+- [ ] **Page compaction during RCU clone** — replaces the old freeze-based "VRAM defragmentation" item; see the rewritten *Defragmentation logic* section. When a page's `holeBytes` cross ~25%, its Pass-2 clone copies live ranges packed (per-object `CopyBufferRegion` from the placement records) instead of whole-page `CopyResource`. The argument-buffer rebuild — already mandatory on every clone — picks up the remapped offsets for free. At most one page compacts per batch.
+- **CPU-side segregated free-list allocator — demoted (telemetry-gated, Phase 6).** The implemented per-batch scan picks the page with the largest middle gap in O(active pages), which is fine below ~1000 pages, and compaction removes most fragmentation pressure. Build the free list only if Phase 6 telemetry shows the scan actually costing something.
+
+**Phase 5 — structural features first, then polish**
+
+Done so far: Shader Model 6; click / window selection — built as a GPU pick pass (object-ID render + fence-gated readback, Selection3D module) instead of the originally planned CPU raycast, plus selection-highlight and rotation-cube overlays.
+
+- [ ] **Page-type axes — the "16 × N" object representation.** Pages are currently keyed by container only and everything draws with one PSO (opaque triangles, 16-bit indices, back-culled). Add a page kind — {opaque | transparent | wireframe} × {16-bit | 32-bit index} — next to `containerMemoryId`, a small PSO table, and a per-kind loop in `RenderScene3D`. This unlocks wireframe display modes, transparency and large meshes; none of the items below can start without it.
+- [ ] **Big-object fallback.** Wire the dormant `BigGeometryObject` path: dedicated committed resource, 32-bit indices, own draw call. Today one object above 65,536 vertices silently wraps its 16-bit indices — must land before STL / terrain import ships.
+- [ ] **Hot-drag / active-mutation path** (promoted from the known-issues list). An interactive drag today would be a MODIFY per mouse-move — a 4 MB page clone per frame. Fast path: whole-object move/rotate rewrites only the object's world-matrix slot. Prerequisite: the per-frame matrix double-buffer (open TODO on `worldMatrixBuffer`) so in-place matrix writes cannot tear against in-flight frames. Must land before interactive 3D move/rotate tooling.
+- [ ] **Transparency sorting** (needs the page-type axes): accept imperfect order during camera motion; CPU sort + argument rebuild when the camera stops.
+- [ ] **Instanced rendering for repeated geometry** (pipes, bolts, standard sections): `InstanceCount > 1` + per-instance matrix indirection in the vertex shader. This finally answers the "repeated geometry" open question above, and is the single biggest VRAM lever for plant models.
 - [ ] SSAO.
-- [ ] Upgrade vertices to HDR + tonemapping.
-- [ ] Transparency sorting (CPU sort + args rebuild when the camera stops moving).
+- [ ] **HDR output pipeline** (reworded — the vertex side is already done, colors are FP16): `rttFormat` → `R16G16B16A16_FLOAT`, tonemap draw replacing the RTT→backbuffer `CopyResource` (the full-screen-quad path returns), HDR swap chain + the startup detection rules from the *Vertex format* section.
 
-**Phase 6 — performance & telemetry**
-- [ ] Per-tab VRAM usage graphs.
-- [ ] Page fragmentation heatmap.
-- [ ] Eviction frequency counters.
-- [ ] Copy-queue stall tracking.
+**Phase 6 — performance & telemetry** (wire into the existing ImprovementData pipeline; this phase also settles the demoted items)
+
+- [ ] Per-tab VRAM usage graphs: page count, `liveBytes`, `holeBytes`, matrix-table size, big-object list size.
+- [ ] Page fragmentation heatmap + compaction-trigger counters.
+- [ ] Copy-thread health: batch size, batch latency, stall time at the publish fence wait, upload-ring high-water mark.
+- [ ] Retire-backlog depth (promote today's `_DEBUG`-only sentinel to a real counter — it catches the frozen-monitor-fence → unbounded-retirement failure mode).
+- [ ] Eviction frequency counters (ground work for Phase 7 residency).
+- [ ] Right-size the per-page indirect buffer from measured object counts: today every 4 MB page reserves a fixed 65,536 × 24 B = 1.5 MB argument buffer, while the densest possible page holds ~45k objects.
+- [ ] Decision gate: segregated free-list allocator (from Phase 4) — build only if the page-selection scan shows up in these numbers.
 
 **Phase 7 — extreme performance (only after everything above is done and stable)**
+
+- [ ] **Chained page doubling (4→8→16→32→64 MB).** Fixed 4 MB pages are right while a model's geometry sits in the low GBs, but the arithmetic fails at the top end: filling a 48 GB professional card would need ~12,000 pages — ~24,600 committed resources (each page = geometry buffer + argument buffer, plus today's fixed 1.5 MB argument reservation each) and ~37,000 bind/`ExecuteIndirect` calls per frame, an order of magnitude past our 1000–5000 draw-call budget and against WDDM guidance to keep allocation counts in the low thousands (there is no hard API cap; creation cost, residency tracking and per-draw binding are what bite). Doubling each container's next-page size up to 64 MB puts the same card at ~800 pages. The code is half-ready: `GeometryPage::pageSize` is already per-page and only `CreateNewPage` hardcodes 4 MB — but `IsFull`, clone/compaction volume and argument-buffer sizing must all follow the variable size. Trigger from Phase 6 page-count telemetry; schedule before (or with) residency management below, which also gets cheaper with fewer, larger allocations.
+- [ ] **Residency management** (promoted from the known-issues list): `Evict` a tab's pages a few seconds after tab switch, `MakeResident` on return, budget-driven via `IDXGIAdapter3::QueryVideoMemoryInfo` + budget-change notifications. Tab 0 always resident.
+- [ ] Replace the final copy-batch CPU fence wait with GPU-side cross-queue waits (fence-tagged snapshots).
 - [ ] LOD optimization (instancing or compute shaders, based on camera distance).
 - [ ] Compute-shader frustum culling.
 - [ ] Mesh-shader implementation (supported hardware, pipes only).
-- [ ] GPU-based defragmentation.
-- [ ] Asynchronous resource creation (reduce stalls during heap growth / defragmentation).
+- [ ] GPU-based defragmentation (compute compaction — the CPU-driven clone compaction from Phase 4 should carry us a long way first).
+- [ ] Asynchronous resource creation (reduce stalls during page allocation bursts).
 - [ ] Page-level optimization: static pages → single draw, semi-dynamic → EI, highly dynamic → EI + GPU compaction.
 
 **Not to do:**

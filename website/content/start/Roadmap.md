@@ -6,20 +6,8 @@ layout: "section"
 ---
 Long Term Roadmap, capability targets are listed at our homepage. Here we list out detailed information. More like whats developers are currently prioritizing.
 
-## Recently Shipped (as of July 2026):
-* Selection of objects enabled in both 3D and 2D environments.
-* Improvement logs / telemetry server for opt-in crash and usage reporting.
-* Python based extension system (frozen CPython / PocketPy) over an IPC pipe, with security-hardened `.std` parsing.
-* Interoperability: reading of `.std` files and a DXF importer extension.
-* Printing option enabled for both 2D and 3D.
-* Software installer and automatic background updater with signed releases.
-* OpenSSL pinned as a submodule and built as part of the static build.
-* User modeling primitives: lines, polylines, polygons, circles, ellipses, arcs, 2D text and primitive 3D shapes.
-
 ## Working Right Now:
 * Ram Shanker: Graphics Engine : Various graphics milestones are listed in the source code at https://github.com/ramshankerji/Vishwakarma/blob/main/code-core/MemoryManagerGPU.h 
-* Ram Shanker: Data storage & retrieval, and interoperability improvements.
-* Ram Shanker: Website Improvements 
 * Potential New Contributors : ? If you would like to work on something, get in touch with Ram, so we can list it here.
 
 ## Next up in Developments
@@ -56,3 +44,6 @@ If you have any suggestion, feel free to start a discussion. All feedback welcom
 Even better if you would like to take up something for development yourself ! Go ahead, give it a try. There is no downside to failure.
 
 All the best!
+
+## Changelog
+Refer to [Changelog](changelog) for more details on our recent milestone.

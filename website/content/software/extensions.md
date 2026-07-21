@@ -202,3 +202,217 @@ To insulate extension developers from the binary wire layout (whether Protobuf, 
 *   Loading unsigned extensions requires an explicit **developer-mode opt-in** (per machine, off by default) and shows a persistent warning badge in the UI. Without opt-in, an auto-loading unsigned-code folder would be a drop-point for any malware able to write files as the user.
 *   **Explicit load, explicit reload:** the Dev folder is never scanned or auto-loaded — the user explicitly loads each dev extension, and must explicitly reload it after every change (no file watching, no hot reload, not remembered across sessions). This friction is deliberate: it prevents "just install it as a developer extension" from becoming a bypass of the signed store for distributing extensions to end users.
 *   Extensions are **never** auto-loaded from document/model directories — auto-loading code that travels alongside documents is exactly how the `acad.lsp` worms (e.g. ACAD/Medre.A, which mass-exfiltrated drawings) spread.
+
+---
+
+## 6. Extension Store Identity (Django Login-Server Integration)
+
+**Status: PLANNED — nothing in this section is implemented.** It concretizes the
+"server-side repository" of §5 on top of the account system designed in `login.md`, which is
+itself not yet built. The Django server in `./server` today ships only telemetry
+(`/api/logs`, `/api/stats`); implementation order is: `accounts` app first (per `login.md`
+§17), then the `store` app below. Until then, the only extensions are the two bundled
+importers, which ship inside the installer and need no store at all.
+
+### 6.1 Identity Mapping: Publisher = Account
+
+A publisher is not a new kind of identity — it is a **role claimed by an existing account**
+from `login.md`: one immutable Ed25519 account key pair, with all its properties inherited
+unchanged (no merger, disable-only credentials, append-only event chain).
+
+*   **One account, at most one publisher role.** Claiming the role writes a `Publisher` row
+    binding a **handle** to the account. The handle is the `<publisher>` half of the on-disk
+    id `<publisher>.<name>` of §5 (*Storage on Disk*): lowercase `[a-z0-9-]`, 3–32 chars,
+    chosen once, immutable forever.
+*   **Handles are never recycled.** Not after account closure, not after publisher
+    suspension. A freed handle is a supply-chain attack (register the abandoned name, ship a
+    hostile "update") — the npm/PyPI name-resurrection lesson. The uniqueness constraint
+    covers all rows regardless of status.
+*   **No transfer.** Consistent with the no-merger rule: a publisher who loses their account
+    loses the handle forever. The extensions can be re-reviewed and re-published under a new
+    handle; installed copies keep working (revocation is an explicit security act, §6.5,
+    never an automatic side effect of account loss).
+*   The public identity shown in the store UI is the handle plus the account public-key
+    prefix (`ram-shanker · Ab3…`), same convention as telemetry's `Installation.__str__`.
+
+### 6.2 Server: New `store` Django App
+
+Third app beside `api` (telemetry-only) and the planned `accounts`. Models in the concise
+style of `api/models.py` / `login.md` §6:
+
+```python
+class Publisher(models.Model):
+    account = models.OneToOneField("accounts.Account", on_delete=models.PROTECT)
+    handle = models.CharField(max_length=32, unique=True)     # Immutable, never recycled.
+    status = models.IntegerField(default=1)                   # 1 ACTIVE, 2 SUSPENDED.
+    created_utc = models.DateTimeField(auto_now_add=True)
+
+class Extension(models.Model):
+    publisher = models.ForeignKey(Publisher, on_delete=models.PROTECT,
+                                  related_name="extensions")
+    name = models.CharField(max_length=32)                    # <publisher>.<name> is the id.
+    display_name = models.CharField(max_length=64)
+    summary = models.CharField(max_length=256, blank=True, default="")
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["publisher", "name"],
+                                               name="unique_extension_per_publisher")]
+
+class ExtensionVersion(models.Model):
+    extension = models.ForeignKey(Extension, on_delete=models.PROTECT,
+                                  related_name="versions")
+    version = models.CharField(max_length=24)                 # Monotonic per extension.
+    status = models.IntegerField(default=1)   # 1 SUBMITTED, 2 REJECTED, 3 PUBLISHED,
+                                              # 4 YANKED, 5 REVOKED.
+    capabilities = models.JSONField(default=list)             # Declared capability strings.
+    package_sha256 = models.CharField(max_length=64)          # Zip as uploaded.
+    manifest = models.JSONField()                             # Exactly what gets signed.
+    manifest_signature = models.CharField(max_length=96)      # Store Ed25519 key; "" until signed.
+    submitted_utc = models.DateTimeField(auto_now_add=True)
+    published_utc = models.DateTimeField(null=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["extension", "version"],
+                                               name="unique_version_per_extension")]
+
+class RevocationEntry(models.Model):
+    """Append-only. The signed revocation list of §5 is generated from these rows."""
+    extension = models.ForeignKey(Extension, on_delete=models.PROTECT)
+    version_range = models.CharField(max_length=64)           # "*" or "min-max".
+    reason_code = models.IntegerField()                       # Enum, no free text to clients.
+    created_utc = models.DateTimeField(auto_now_add=True)
+```
+
+Package zips live as files in the writable state directory (`/var/lib/…`), keyed by
+SHA-256, not as database blobs — the Pi's SQLite stays small. Pure-Python packages are
+tiny; ingestion enforces a **hard 10 MB cap per package** and per-file/count caps mirroring
+the host-side IPC philosophy: the server, like the host, treats every upload as hostile
+input.
+
+The **store signing key** is a dedicated Ed25519 key pair, sealed at rest with the same
+environment KEK that seals account private keys (`login.md` §2), distinct from both the
+release-manifest key and every account key. Its public key is embedded in the executable
+(§5, *Signing & Load-Time Verification* — unchanged).
+
+### 6.3 URL Map and Authentication
+
+Same `/api/` prefix, routed to the `store` app. Two auth classes, both inherited from
+`login.md` rather than invented here:
+
+*   **Publisher endpoints** — require a login: a `WebSession` cookie (dashboard on the
+    static site, `login.md` §8) or, later, the desktop delegation chain
+    (`account key → installation key → session key → body`, `login.md` §7.4). The MVP
+    accepts **web sessions only**; in-app publishing is deferred (§6.7).
+*   **Consumer endpoints** — **anonymous, always.** Browsing, downloading, and revocation
+    checks never require login and never carry the installation key: what a user installs
+    is nobody's business, matching the telemetry stance of "no PII, ever". Anonymous GETs
+    are also exactly what Cloudflare can cache for free in front of the Pi.
+
+| Method | URL | Auth | Purpose |
+|--------|-----|------|---------|
+| GET  | `/api/store/index`                    | none | Catalog: ids, versions, manifest hashes (signed, Cloudflare-cached) |
+| GET  | `/api/store/download/<id>/<version>`  | none | Package zip + detached signed manifest |
+| GET  | `/api/store/revocations`              | none | Signed revocation list (§6.5) |
+| POST | `/api/store/publisher/register`       | session + Turnstile | Claim handle, append `AccountEvent` |
+| POST | `/api/store/submit`                   | session + Turnstile | Upload a version (zip + declared capabilities) |
+| GET  | `/api/store/publisher/status`         | session | Own extensions, versions, review states |
+| POST | `/api/store/yank`                     | session | Publisher withdraws a version (§6.5) |
+
+Every publisher-side mutation appends to the account's signed `AccountEvent` chain
+(`login.md` §6) with new event types — publisher registered, version submitted, version
+yanked — so a publisher's publishing history is as tamper-evident as their credential
+history. Rate limits extend the existing cache-based limiter: per-account submission caps
+(e.g. 10/day) beside the per-IP caps of `login.md` §11.
+
+### 6.4 Submission → Review → Signing Pipeline
+
+1.  **Upload.** The dashboard posts the zip and the declared capability list. The server
+    validates structure (package layout of §1, entry `main.py`, file caps), stores the zip
+    by hash, writes `ExtensionVersion(status=SUBMITTED)`.
+2.  **Static analysis** (§5) runs server-side: import scan against the frozen-stdlib
+    allowlist, obfuscation heuristics, size anomalies. As §5 already states, this is a
+    review *filter*, not a security control — the sandbox and host-side capability
+    enforcement remain the actual controls.
+3.  **Human approval.** Initially every publication is manually approved (volume will be
+    tiny); the automated scan only pre-sorts. Rejection stores a reason visible via
+    `publisher/status`.
+4.  **Signing.** On approval the server assembles the canonical manifest — extension id,
+    version, declared capabilities, entry module, SHA-256 of every file, **publisher handle
+    and publisher account public key**, signing timestamp — signs it with the store key,
+    and flips the version to PUBLISHED. The manifest format of §5 gains exactly those
+    provenance fields; client-side verification (`EVP_DigestVerify` on every load) is
+    unchanged.
+5.  **Capability escalation gate.** A version whose capability set exceeds its
+    predecessor's is flagged for mandatory human review, and the client surfaces the
+    delta at update time ("this update adds `document.query`") before the new version is
+    used — the Android-permission-escalation lesson, applied at the store *and* the host.
+
+The publisher never signs anything: their account private key is server-side only by
+design (`login.md` §2), so publisher provenance is asserted by the store signature over
+the manifest's publisher fields plus the account event chain — one signer (the store key),
+one verification path in the client.
+
+### 6.5 Yank, Revoke, and Account-Lifecycle Interactions
+
+Three distinct removal semantics, deliberately mirroring crates.io's yank-vs-revoke split:
+
+*   **Yank (publisher-initiated):** stops new installs and update offers; already-installed
+    copies keep loading. Not on the revocation list. For "this version has a bad bug".
+*   **Revoke (store-initiated, security):** appended to `RevocationEntry`, served in the
+    signed revocation list, and — per §5 — disables installed copies at next load even
+    though their signature remains valid. For malware, compromised publisher, or a
+    sandbox-relevant vulnerability.
+*   **Account closure / publisher suspension:** freezes all publishing (no new versions,
+    no new extensions) but revokes nothing automatically. Installed software keeps working
+    unless a human decides it is actually dangerous. Automatic mass-revocation on account
+    loss would let an account-takeover-then-close attack brick every user of a popular
+    extension.
+
+The revocation list is JSON, signed by the store key, and carries a **monotonic sequence
+number**; the client persists the highest sequence seen and rejects any older list, so a
+network attacker cannot replay a pre-revocation list to resurrect a revoked extension. It
+is fetched alongside software-update checks (§5, unchanged) — anonymous, cacheable, cheap.
+
+### 6.6 Trust Display in the Application
+
+The in-app store browser and the installed-extensions list show, for every extension: the
+publisher handle, the account public-key prefix, the declared capabilities in plain
+language, and the review/signing date — all read from the verified manifest, never from
+mutable server responses. Developer-mode extensions (§5) show none of this and keep their
+persistent warning badge; the signed-store path is the only way to acquire a trust line.
+
+### 6.7 Explicitly Out of Scope (This Iteration)
+
+*   **Paid extensions / licensing** — needs the licensing design first (`login.md` §15
+    names it as a future per-account feature); the store launches free-only.
+*   **Ratings, comments, download counts** — social features are out (`login.md` §15);
+    aggregate install counts, if ever wanted, would ride the existing anonymous telemetry.
+*   **In-app publishing over the delegation chain** — designed for (§6.3) but deferred;
+    the web dashboard is the only submission surface at launch.
+*   **Organization / team publishers** — one account, one human, one handle. Multi-owner
+    publishing would reintroduce exactly the shared-credential ambiguity the account
+    design forbids.
+
+### 6.8 OPEN Items
+
+*   **Publisher vetting depth** — whether claiming a handle requires ≥2 active credentials
+    on the account (recovery-hardened accounts only), or any account may publish.
+*   **Manifest transparency log** — whether signed manifests should also be appended to a
+    public hash chain (a miniature certificate-transparency analogue) so the store cannot
+    sign secretly-targeted packages. Cheap to add later because manifests are already
+    canonical signed records.
+*   **Package storage growth** — the Pi's disk is finite; policy for pruning old REJECTED
+    and superseded package blobs.
+
+### 6.9 Implementation Order
+
+1.  `store` app skeleton: models + migrations, package storage by hash → verify: unit
+    tests for handle immutability, no-recycle constraint, version-state transitions.
+2.  Signed index + download + revocation endpoints serving the two bundled importers as
+    the first store-hosted packages → verify: client installs, verifies, and loads a
+    store-downloaded package end-to-end; a revocation-list entry disables it at next load.
+3.  Publisher registration + submission + review dashboard (requires `accounts` app
+    steps 1–2 of `login.md` §17) → verify: full submit→approve→sign→install round trip by
+    a second account; `AccountEvent` rows appear for every publisher mutation.
+4.  Capability-escalation gate and update-time delta prompt → verify: an update adding a
+    capability is held for review and prompts in-app before first use.
