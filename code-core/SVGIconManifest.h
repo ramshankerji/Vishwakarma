@@ -181,6 +181,7 @@
     VISHWAKARMA_SVG_ICON(3930718075u, "icon_3930718075_line_element_beam.svg") \
     VISHWAKARMA_SVG_ICON(3932640333u, "icon_3932640333_create_vvessel_2d.svg") \
     VISHWAKARMA_SVG_ICON(3937232917u, "icon_3937232917_edit_move.svg") \
+    VISHWAKARMA_SVG_ICON(3950482947u, "icon_3950482947_VishwakaramText.svg") \
     VISHWAKARMA_SVG_ICON(3988350268u, "icon_3988350268_concrete_slab_poly.svg") \
     VISHWAKARMA_SVG_ICON(3996694081u, "icon_3996694081_create_elbow.svg") \
     VISHWAKARMA_SVG_ICON(4004139340u, "icon_4004139340_code_civil_is456_lsd.svg") \

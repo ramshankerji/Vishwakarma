@@ -50,6 +50,7 @@
 #include "ExtensionCommunications.h"
 #include "AccountManager.h"
 #include "ImprovementData.h"
+#include "ApplicationTab.h"
 
 #include <windows.h>
 #include <windowsx.h> // For some macros like GET_X_LPARAM, GET_Y_LPARAM etc.
@@ -89,6 +90,10 @@ void JoinAllEngineeringThreads();
 void PushSystemTodoToTab(DATASETTAB* tab, ACTION_TYPE actionType, int x = 0,
     int y = 0, int delta = 0, uint64_t objectId = 0, uint64_t auxValue = 0) {
     if (!tab || !tab->todoCPUQueue) return;
+    // The Application Tab has no engineering thread, so its queues are never drained: pushing
+    // here would grow memory without bound (tabs.md Decision 3). Single choke point for all
+    // ribbon / system todos, including the ones raised from the compositor.
+    if (ApplicationTab::IsApplicationTab(tab->tabID)) return;
 
     ACTION_DETAILS request{};
     request.actionType = actionType;
@@ -105,7 +110,7 @@ void PushSystemTodoToTab(DATASETTAB* tab, ACTION_TYPE actionType, int x = 0,
 namespace {
 constexpr uint32_t ACTION_ENGINEERING_CLOSE = 0xE0000001u;
 constexpr uint32_t ACTION_ENGINEERING_CREATE = 0xE0000002u;
-uint16_t nextTabSlot = 3;
+uint16_t nextTabSlot = 2; // Slot 0 is the Application Tab, slot 1 the initial engineering tab.
 bool closeQueuedTabs[MV_MAX_TABS] = {};
 
 void PublishTabList(uint16_t* nextList, uint16_t nextCount) {
@@ -128,6 +133,9 @@ DATASETTAB* GetActiveTabForUIAction() {
     // commands issued from an extracted tab window act on that window's tab.
     const int32_t sourceTab = g_uiActionSourceTabIndex.load(std::memory_order_acquire);
     if (sourceTab >= 0 && sourceTab < MV_MAX_TABS) {
+        // Engineering commands raised while the Application Tab is in front target nothing; the
+        // callers' existing null checks turn them into no-ops (tabs.md Guard inventory).
+        if (ApplicationTab::IsApplicationTab(static_cast<uint64_t>(sourceTab))) return nullptr;
         for (uint16_t i = 0; i < tabCount; ++i) {
             if (tabList[i] == sourceTab) return &allTabs[sourceTab];
         }
@@ -137,10 +145,14 @@ DATASETTAB* GetActiveTabForUIAction() {
     uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
     for (uint16_t i = 0; i < windowCount; ++i) {
         int tabID = allWindows[windowList[i]].activeTabIndex;
-        if (tabID >= 0 && tabID < MV_MAX_TABS) return &allTabs[tabID];
+        if (tabID < 0 || tabID >= MV_MAX_TABS) continue;
+        if (ApplicationTab::IsApplicationTab(static_cast<uint64_t>(tabID))) continue;
+        return &allTabs[tabID];
     }
 
-    if (tabCount > 0) return &allTabs[tabList[0]];
+    for (uint16_t i = 0; i < tabCount; ++i) {
+        if (!ApplicationTab::IsApplicationTab(tabList[i])) return &allTabs[tabList[i]];
+    }
     return nullptr;
 }
 
@@ -248,7 +260,10 @@ DATASETTAB* CreateEngineeringTab(const std::wstring& displayName = L"",
 
 void RequestCloseEngineeringTab(uint16_t tabID) {
     uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
-    if (tabCount <= 1) return;
+    // The Application Tab is never closable, and it is always in the published list hosted by
+    // window 0 - so closing the LAST engineering tab is legal now: the replacement logic below
+    // lands the main window on tab 0, Chrome-style (tabs.md Decision 8).
+    if (ApplicationTab::IsApplicationTab(tabID)) return;
     if (tabID >= MV_MAX_TABS) return;
     if (closeQueuedTabs[tabID]) return;
 
@@ -399,7 +414,10 @@ void ProcessPendingUIActions() {
                     ACTION_TYPE::OPEN_INTERNAL_SUB_TAB, 0, 0, 0, action.p2);
             }
         } else if (action.id == InternalSubTabs::kActivateUIAction) {
-            if (action.p1 < MV_MAX_TABS) {
+            if (ApplicationTab::IsApplicationTab(action.p1)) {
+                // No engineering thread to service this: activate here (tabs.md Decision 9).
+                ApplicationTab::ActivateApplicationTabView(action.p2);
+            } else if (action.p1 < MV_MAX_TABS) {
                 DATASETTAB& actionTab = allTabs[static_cast<uint16_t>(action.p1)];
                 const int subTabSlot = FindPublishedSubTabSlot(actionTab, action.p2);
                 const int16_t viewWindowSlot = subTabSlot >= 0
@@ -546,6 +564,9 @@ void ProcessPendingUIActions() {
     }
 
     CleanupReleasedTabs();
+#ifdef _DEBUG
+    ApplicationTab::DebugVerifyQueuesEmpty(); // Proves no path pushes to the thread-less tab 0.
+#endif
 }
 }
 
@@ -741,18 +762,21 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     publishedWindowIndexes.store(activeWindowIndexesA, std::memory_order_release);
     publishedWindowCount.store(0, std::memory_order_release);
 
-    const wchar_t* initialTabNames[] = {
-        L"Tech-Structure 1",
-        L"Lab Building",
-        L"Sub Station"
-    };
-
-    for (int i = 0; i < 3; ++i)
+    // Slot 0 is the un-closable Application Tab (no engineering thread); slot 1 is the single
+    // engineering tab the application starts with, which keeps CPU memory group 0 reserved
+    // for the Application Tab (tabs.md). Further tabs come from the '+' button.
+    for (int i = 0; i < 2; ++i)
     {
         DATASETTAB& tab = allTabs[i];
-        tab.tabID = i;
-        tab.tabNo = i;
-        tab.fileName = initialTabNames[i];
+        if (i == 0) {
+            ApplicationTab::InitializeApplicationTab(tab);
+        } else {
+            tab.tabID = i;
+            tab.tabNo = i;
+            tab.fileName = L"Untitled 0";
+        }
+        // Tab 0 gets GPU state too: empty but valid keeps every downstream path (matrix tables,
+        // compositor, copy-thread retirement) untouched.
         gpu.InitD3DPerTab(tab.dx);
         if (tab.cad2d) InitCad2DTabResources(*tab.cad2d);
         // We can set random colors here later to distinguish them further.
@@ -762,15 +786,16 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     // Publish tab list
     activeTabIndexesA[0] = 0;
     activeTabIndexesA[1] = 1;
-    activeTabIndexesA[2] = 2;
 
     publishedTabIndexes.store(activeTabIndexesA, std::memory_order_release);
-    publishedTabCount.store(3, std::memory_order_release);
+    publishedTabCount.store(2, std::memory_order_release);
 
     // SETUP WINDOW (The View)
     uint16_t windowSlot = 0;
     SingleUIWindow& mainWindow = allWindows[windowSlot];
-    mainWindow.activeTabIndex = 0;
+    // The application opens on the engineering tab, not the Application Tab: the user's work is
+    // what they came for, and tab 0 is one click away in the band.
+    mainWindow.activeTabIndex = 1;
     mainWindow.currentMonitorIndex = primaryMonitorIndex;
 
     mainWindow.hWnd = CreateWindowExW(
@@ -821,11 +846,12 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     //Above function depends on GpuCopyThread, hence it can't be done earlier.
     InitSkyGradientResources(gpu.device.Get()); //Scene3D background pipeline, read by every render thread.
     std::wcout << L"Hello...." << std::endl;
-    // LAUNCH 3 ENGINEERING THREADS (One per Tab). Main logic thread. The ringmaster of the application.
-	// TODO: 3 Initial threads is during development. Final application will have dynamic thread management.
-    for (int i = 0; i < 3; ++i) {
-        std::thread t(विश्वकर्मा, (uint64_t)i);// Pass the index 'i' to the thread function
-        AddEngineeringThread((uint64_t)i, std::move(t));
+    // LAUNCH THE ENGINEERING THREAD of the one initial tab. Main logic thread, the ringmaster of
+    // the application: one per engineering tab, created with the tab and joined when it closes.
+    // Slot 0 (the Application Tab) deliberately gets no thread: the UI thread owns it.
+    {
+        std::thread t(विश्वकर्मा, (uint64_t)1);// Pass the tab index to the thread function
+        AddEngineeringThread(1, std::move(t));
     }
 
     //threads.emplace_back(GpuRenderThread, 0, 60);  // Monitor 1 at 60Hz
@@ -1038,6 +1064,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     int w, h;
 
     DATASETTAB* tab = GetActiveTabFromHwnd(hWnd);
+    // Nothing may reach the Application Tab's userInputQueue - it has no consumer (tabs.md
+    // Decision 3). Dropping the pointer here covers every push site below at once; the per-window
+    // uiInput snapshot path is untouched, so all overlay UI keeps working on tab 0.
+    if (tab && ApplicationTab::IsApplicationTab(tab->tabID)) tab = nullptr;
     ACTION_DETAILS ad;
 
     uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
@@ -1357,6 +1387,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
             currentWindow->uiInput.leftButtonReleasedThisFrame = true;
         }
         for (uint16_t ti = 0; ti < tabCount; ++ti) {
+            if (ApplicationTab::IsApplicationTab(tabList[ti])) continue; // Queue has no consumer.
             DATASETTAB & tab = allTabs[tabList[ti]];
             tab.dataTreeView.scrollbarDragging.store(false, std::memory_order_release);
 

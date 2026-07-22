@@ -2,253 +2,287 @@
 title: "Tab System and the Application Tab"
 weight: 100113
 ---
-This page is the Design Document for **Tab 0 — the un-closable Application Tab** — and the
-longer-term Chrome-style tab strip it enables. To be referred by AI for coding as well as humans.
-It is a plan; sections marked as decisions are locked, defaults are changeable until first
-implementation.
+This page documents **Tab 0 — the un-closable Application Tab** — as it works today, and the
+Chrome-style tab strip it enables. To be referred by AI for coding as well as humans.
 
-The feature: today the application starts 3 engineering tabs, each with its own engineering
-thread. We add a 4th tab at **tab index 0** that has no file name — its tab button shows only the
-Devanagari application title **विश्वकर्मा**. It cannot be closed, cannot be extracted into another
-window, and has **no engineering thread**: everything inside it is owned and serviced by the main
-UI thread. It hosts 8 fixed, un-closable views (sub-tabs): Launcher, Profile, Settings, Support,
-Peer Chat, Documentation, Common Geometry, and Stats. Its memory group (group 0) is reserved as
-the future home of the immutable instancing geometry masters. Once tab 0 exists, a later phase
-removes the OS title bar so the window becomes nearly identical to the Google Chrome tab system:
-`[विश्वकर्मा][Tab][Tab][+] ................ [─][□][✕]`.
+The application starts with two tabs. **Tab 0** has no file name — its tab button shows the logo
+and the Devanagari application title **विश्वकर्मा**. It cannot be closed, cannot be extracted into
+another window, and has **no engineering thread**: everything inside it is owned and serviced by
+the main UI thread. It hosts 8 fixed, un-closable views (sub-tabs): Launcher, Profile, Settings,
+Support, Peer Chat, Documentation, Common Geometry, and Stats. Its memory group (group 0) is
+reserved as the future home of the immutable instancing geometry masters. **Tab 1** is the single
+engineering tab the application opens with; every further tab comes from the `+` button.
 
-## Current state (anchor points in code)
+Still to come: removing the OS title bar, so the window becomes nearly identical to the Google
+Chrome tab system — `[विश्वकर्मा][Tab][Tab][+] ................ [─][□][✕]`.
 
-- `Main.cpp` `wWinMain`: creates tabs 0..2 from `initialTabNames[]` (~line 744), publishes a
-  3-entry tab list, then launches 3 engineering threads `विश्वकर्मा(i)` for `i = 0..2` (~line 826).
-  `nextTabSlot` starts at 3.
-- `CreateEngineeringTab()` (`Main.cpp` ~line 199): '+' button path; takes the next slot, publishes,
-  spawns the engineering thread.
-- `RequestCloseEngineeringTab()` (`Main.cpp` ~line 249): refuses when `tabCount <= 1`; picks a
-  replacement tab, retargets windows, queues `ACTION_TYPE::CLOSE_TAB` to the tab's own thread.
-- Tab band rendering: `UserInterface.cpp` `BuildUIOverlay` (~line 1067 onward). Every tab button
-  gets an `x` close button; label text is ASCII-filtered (`if (ch <= 0x7F)`, ~line 1183), so a
-  Devanagari `fileName` would currently render blank. Drag-down extracts a tab
-  (`kExtractTabUIAction`) unless it is the window's last hosted tab.
-- Sub-tab (view) machinery: fixed 128-slot `subTabs[]` per `DATASETTAB` with a double-buffered
-  published index list (`विश्वकर्मा.h` ~line 157). Slots are engineering-thread owned, written
-  under `storageObjectsMutex`, read lock-free by render threads. Open/activate/close live in
-  `विश्वकर्मा.cpp` (`OpenInternalSubTab` ~line 394).
-- Content per window: `RenderCompositor-DirectX12.cpp` (~line 250) branches Page2D vs Scene3D on
-  the active sub-tab's container type, then draws the UI overlay on top.
-- Input: `WndProc` (`Main.cpp`) pushes scene/keyboard input into the active tab's
-  `userInputQueue`; ribbon commands resolve their target via `GetActiveTabForUIAction()`.
-- The comment at `विश्वकर्मा.h` ~line 245 ("Tab 0 id default application launch screen tab. It
-  can't be closed.") already records this intent — this document implements it.
+## Design decisions
 
-## Locked design decisions
-
-1. **Tab 0 reuses `DATASETTAB` slot `allTabs[0]`.** No parallel structure. Every existing reader
-   (tab band, sub-tab band, compositor, data tree) keeps working on the same arrays and published
-   lists. `IsApplicationTab(tabIndex)` is simply `tabIndex == kApplicationTabId` with
-   `constexpr uint16_t kApplicationTabId = 0;`.
+1. **Tab 0 reuses `DATASETTAB` slot `allTabs[0]`.** No parallel structure. Every reader (tab band,
+   sub-tab band, compositor, data tree) works on the same arrays and published lists.
+   `IsApplicationTab(tabID)` is simply `tabID == kApplicationTabId`.
 2. **No engineering thread, UI thread is the single writer.** Tab 0's `DATASETTAB` fields are
    written only by the main UI thread (startup init + `ProcessPendingUIActions`). Render threads
-   read exactly as they do for other tabs (acquire loads of published lists). The 8 view slots
-   are filled and published **once at startup, before render threads launch**, and never change
+   read exactly as they do for other tabs (acquire loads of published lists). The 8 view slots are
+   filled and published **once at startup, before render threads launch**, and never change
    afterward — the published sub-tab list of tab 0 is immutable, so there is nothing to race on.
-   Only `activeInternalSubTabMemoryId` changes at runtime (UI thread writes on view activation,
-   same 1-frame-staleness read contract as everywhere else).
+   Only `activeInternalSubTabMemoryId` changes at runtime.
 3. **Tab 0's queues are never drained — so nothing may ever push to them.** `userInputQueue` and
-   `todoCPUQueue` exist (the constructor makes them) but have no consumer. Guards (see Guard
-   Inventory) stop `WndProc` and `PushSystemTodoToTab()` from pushing; otherwise memory grows
-   unbounded. This is the single most important correctness rule of this feature.
+   `todoCPUQueue` exist (the constructor makes them) but have no consumer. The guards in the
+   inventory below stop every push site; otherwise memory grows unbounded. This is the single most
+   important correctness rule of this feature.
 4. **Views are identified by reserved synthetic container IDs.** Real container memory IDs come
-   from `GetNewTempID()` which counts up from 1, so low constants would collide. Reserve the top
-   range: `constexpr uint64_t kAppViewContainerIdBase = 0xFFFFFFFFFFFFFF00ULL;` and
+   from `GetNewTempID()` which counts up from 1, so low constants would collide. The top range is
+   reserved instead: `constexpr uint64_t kAppViewContainerIdBase = 0xFFFFFFFFFFFFFF00ULL`, and
    `AppViewKind` 1..8 maps to `kAppViewContainerIdBase + kind`. `InternalSubTab` is **not**
-   modified; `containerType` stays `ObjectType::Unknown` and helpers
-   `IsAppViewContainerId(uint64_t)` / `AppViewKindForContainerId(uint64_t)` derive the kind.
-   Storage schema is untouched — these IDs are never persisted.
-5. **Single new file pair `ApplicationTab.h` / `ApplicationTab.cpp`** hosts everything: the
-   `AppViewKind` enum, synthetic ID helpers, `InitializeApplicationTab()`,
-   `BuildApplicationTabOverlay()` (per-view stub panels), and later the per-view real content.
-   Bifurcate into per-view files only when a view outgrows a screenful of code.
-6. **Engineering tabs shift to slots 1..3; memory group 0 is reserved.** `tabNo` doubles as the
-   CPU memory group number (`new (tab->tabNo)` placement allocation), so tab 0 keeping group 0
-   reserves that group for the future immutable instancing masters. `nextTabSlot` starts at 4.
+   modified; `containerType` stays `ObjectType::Unknown` and the helpers
+   `IsAppViewContainerId(uint64_t)` / `AppViewKindForContainerId(uint64_t)` derive the kind. The
+   storage schema is untouched — these IDs are never persisted.
+5. **The file pair `ApplicationTab.h` / `ApplicationTab.cpp`** hosts everything: the `AppViewKind`
+   enum, synthetic ID helpers, `InitializeApplicationTab()`, `ActivateApplicationTabView()`,
+   `BuildApplicationTabOverlay()` and the per-view content. Bifurcate into per-view files only when
+   a view outgrows a screenful of code.
+6. **Engineering tabs start at slot 1; memory group 0 is reserved.** `tabNo` doubles as the CPU
+   memory group number (`new (tab->tabNo)` placement allocation), so tab 0 keeping group 0 reserves
+   that group for the future immutable instancing masters.
 7. **The Devanagari title renders as an SVG word-mark icon, not shaped text.** विश्वकर्मा needs
-   complex shaping (conjunct श्व, rakar र्मा) that the codepoint→glyph MSDF atlas cannot do, and
-   the tab-label path filters to ASCII anyway. Author the word once as vector paths (text→path in
-   Inkscape from `Fonts/NotoSansDevanagari`), commit as a new icon in `website/static/SVGIcons`
-   plus one `SVGIconManifest.h` line, and draw it with `PushIcon` in tab 0's button — the exact
-   mechanism the launch splash already uses for the logo (`kSplashLogoCodepoint`,
-   `UserInterface.cpp` ~line 921). Full Devanagari text shaping is explicitly out of scope here.
-8. **Un-closable and un-movable, everywhere.** No `x` on the tab button, close requests refused
-   at the `RequestCloseEngineeringTab` level (defense in depth), no drag-out extraction, no
-   drag-merge into another window. `hostWindowSlot` stays 0 forever; secondary tab-host windows
-   never show tab 0. Closing the last *engineering* tab is now allowed — the main window falls
-   back to the Application Tab, Chrome-style.
-9. **Views are un-closable and (for now) un-extractable.** The sub-tab band draws no `x` for tab
-   0's views and ignores drag-out. View activation for tab 0 is handled directly on the UI
-   thread inside `ProcessPendingUIActions` (write `activeInternalSubTabMemoryId`), since there is
-   no engineering thread to service `kActivateUIAction`.
+   complex shaping (conjunct श्व, rakar र्मा) that the codepoint→glyph MSDF atlas cannot do, and the
+   tab-label path filters to ASCII anyway. The word is committed once as vector paths — see the
+   word-mark section below. Full Devanagari text shaping is explicitly out of scope.
+8. **Un-closable and un-movable, everywhere.** No `x` on the tab button, close requests refused at
+   the `RequestCloseEngineeringTab` level (defence in depth), no drag-out extraction, no drag-merge
+   into another window. `hostWindowSlot` stays 0 forever; secondary tab-host windows never show
+   tab 0. Closing the last *engineering* tab is legal — the main window falls back to the
+   Application Tab, Chrome-style.
+9. **Views are un-closable and un-extractable.** The sub-tab band draws no `x` for tab 0's views
+   and ignores drag-out. View activation for tab 0 is handled directly on the UI thread inside
+   `ProcessPendingUIActions`, since there is no engineering thread to service `kActivateUIAction`.
+   The machinery (`subTabHostWindowSlots`) would allow extraction later — e.g. Docs on a second
+   monitor — since these views render purely from the UI overlay.
+10. **The full ribbon stays drawn on tab 0.** Uniform layout; engineering commands no-op through
+    the `GetActiveTabForUIAction` guard. A contextual ribbon for the Application Tab is a later
+    decision, not a gap.
 
 ## The 8 application views
 
-| # | `AppViewKind` | Band title | MVP content (Phase 3) | Eventual content |
-|---|---------------|------------|----------------------|------------------|
-| 1 | `Launcher` | Launcher | Stub panel | Recent local files + online servers; click opens a new engineering tab |
-| 2 | `Profile` | Profile | Stub panel | Login details, badges, achievements (AccountManager identity) |
-| 3 | `Settings` | Settings | Stub panel | Application-level settings |
-| 4 | `Support` | Support | Stub panel | Direct chat with support team (server: mv-server.ramshanker.in) |
-| 5 | `PeerChat` | Peer Chat | Stub panel | IPMessenger-style LAN chat for the local office |
-| 6 | `Documentation` | Docs | Stub panel | Local copy of the online documentation (this website) |
-| 7 | `CommonGeometry` | Geometry | Stub panel | Display of the frequently-used / instanced master geometry elements |
-| 8 | `Stats` | Stats | **Real data from day 1** | Tab count, window count, CPU memory pages, GPU memory pages, and whatever else is cheap to read |
+| # | `AppViewKind` | Band title | Panel heading | Content |
+|---|---------------|------------|---------------|---------|
+| 1 | `Launcher` | Launcher | Launcher | Stub. Eventually: recent local files + online servers; click opens a new engineering tab |
+| 2 | `Profile` | Profile | Profile | Stub. Eventually: login details, badges, achievements (AccountManager identity) |
+| 3 | `Settings` | Settings | Settings | Stub. Eventually: application-level settings |
+| 4 | `Support` | Support | Support | Stub. Eventually: direct chat with support team (server: mv-server.ramshanker.in) |
+| 5 | `PeerChat` | Peer Chat | Peer Chat | Stub. Eventually: IPMessenger-style LAN chat for the local office |
+| 6 | `Documentation` | Docs | Documentation | Stub. Eventually: local copy of the online documentation (this website) |
+| 7 | `CommonGeometry` | Geometry | Common Geometry | Stub. Eventually: catalogue of the frequently-used / instanced master geometry |
+| 8 | `Stats` | Stats | Stats | **Live numbers** — see below |
 
-Stats ships real numbers in the MVP because it is nearly free (`publishedTabCount`,
-`publishedWindowCount` are atomics; CPU/GPU page counts need only small read-only counters
-exposed from `MemoryManagerCPU` / `MemoryManagerGPU-DirectX12`) and it proves the whole
-UI-thread-owned view pattern end to end.
+One `AppViewDescriptor` table in `ApplicationTab.cpp` carries all three strings per view: the short
+band title (the buttons are narrow), the fuller panel heading, and the placeholder line. Heading
+and body are left-aligned at a one-row margin rather than centred; these panels grow into real
+content, and left alignment is where that content will start.
 
-> **Naming note:** the request said "Comment Geometry elements". This document interprets it as
-> **Common Geometry** — the display of the immutable instancing masters described below. If the
-> intent was annotation/markup elements (clouds, leaders, comments), rename the view; nothing
-> else in the design changes.
+Stats was worth building first because it is nearly free and it proves the whole UI-thread-owned
+view pattern end to end. It reads five numbers, all lock-free from the render thread:
+`publishedTabCount`, `publishedWindowCount`, the `राम::liveChunkCount` atomic (incremented in
+`getNewChunkForTab`, decremented in `notifyTabClosed`, both already under the global mutex), that
+count × 4 MB, and the sum of `geometry.activeSnapshot->pages.size()` over the published tabs — the
+same RCU snapshot the render threads already walk, so the GPU side needed no new counter at all.
 
-## Startup sequence changes (`Main.cpp` `wWinMain`)
+## Startup sequence (`Main.cpp` `wWinMain`)
 
-1. Keep the existing per-tab init loop but run it for slots 0..3: slot 0 gets
-   `InitializeApplicationTab(allTabs[0])` (from the new file), slots 1..3 get the existing
-   `initialTabNames[]` treatment (names unchanged). `gpu.InitD3DPerTab` and
-   `InitCad2DTabResources` still run for tab 0 — empty but valid GPU state keeps every
-   downstream path (matrix tables, compositor) untouched.
-2. `InitializeApplicationTab` fills: `tabID = tabNo = 0`, `fileName = L"विश्वकर्मा"` (used by
+1. The per-tab init loop runs for slots 0..1: slot 0 gets `InitializeApplicationTab(allTabs[0])`,
+   slot 1 gets `tabID = tabNo = 1` and `fileName = L"Untitled 0"`. `gpu.InitD3DPerTab` and
+   `InitCad2DTabResources` run for tab 0 as well — empty but valid GPU state keeps every downstream
+   path (matrix tables, compositor, copy-thread retirement) untouched.
+2. `InitializeApplicationTab` fills `tabID = tabNo = 0`, `fileName = L"विश्वकर्मा"` (used by
    window-title contexts; the band draws the word-mark icon instead), `dataTreeView.isVisible =
    false`, then opens the 8 view slots — slot `k-1` gets `containerType = Unknown`,
-   `containerMemoryId = kAppViewContainerIdBase + k`, ASCII `title` from the table above, state
-   `SUBTAB_OPEN` — and publishes the 8-entry list. `activeInternalSubTabMemoryId` = Launcher.
-   No lock needed: render threads do not exist yet.
-3. Publish tab list `{0, 1, 2, 3}`, count 4. `nextTabSlot = 4`.
-4. Engineering thread launch loop becomes `for (int i = 1; i <= 3; ++i)`. Tab 0 gets no thread.
-5. `mainWindow.activeTabIndex`: **default 1 during development** (engineering demo content stays
-   front on every run); switch the default to 0 (Launcher) once the Launcher has real content.
+   `containerMemoryId = kAppViewContainerIdBase + k`, the ASCII band title, state `SUBTAB_OPEN` —
+   and publishes the 8-entry list straight into `subTabIndexesA`. `activeInternalSubTabMemoryId`
+   starts at Launcher. No lock needed: render threads do not exist yet. Nothing ever re-publishes
+   tab 0's list, so the double buffer never swaps and buffer A stays published for the whole run.
+3. Publish tab list `{0, 1}`, count 2. `nextTabSlot = 2`.
+4. One engineering thread is launched, for slot 1. Tab 0 gets no thread.
+5. `mainWindow.activeTabIndex = 1`: the application opens on the engineering tab, since the user's
+   work is what they came for and tab 0 is one click away in the band.
 
 ## Guard inventory
 
-Every place that must learn about the Application Tab. Each is one small `IsApplicationTab(...)`
-check; together they make "no thread + un-closable" airtight.
+Every place that knows about the Application Tab. Each is one small `IsApplicationTab(...)` check;
+together they make "no thread + un-closable" airtight.
 
 | Where | Guard |
 |-------|-------|
-| `WndProc` (`Main.cpp`, all `tab->userInputQueue->push` sites) | Skip the push when the routed tab is tab 0 (queue has no consumer — Decision 3). The per-window `uiInput` snapshot path is untouched, so all overlay UI (buttons, text fields) keeps working. |
-| `PushSystemTodoToTab()` (`Main.cpp` ~line 89) | Early-return for tab 0 (same reason). Single choke point for all ribbon/system todos. |
-| `RequestCloseEngineeringTab()` | Replace the `tabCount <= 1` guard with `tabID == kApplicationTabId` refusal. Closing the last engineering tab is now legal; the existing replacement logic already lands the main window on tab 0 (it is always in the published list, hosted by window 0). |
-| Tab band (`UserInterface.cpp` ~line 1126) | Tab 0: draw word-mark icon instead of label; skip the `x` button and its hit test; never set `pressedTabId` (no drag-out). |
-| `ExtractTabToNewWindow` / drag-merge paths | Refuse tab 0; `hostWindowSlot` stays 0. |
-| Sub-tab band (`UserInterface.cpp` ~line 1400) | When the active tab is 0: skip the `x` button/hit-test and drag-out (`pressedSubTabSlot` stays -1). Activation click still emits `kActivateUIAction`. |
-| `ProcessPendingUIActions` (`Main.cpp` ~line 375) | `kActivateUIAction` for tab 0: set `allTabs[0].activeInternalSubTabMemoryId = p2` directly on the UI thread. `kCloseUIAction` / `kExtractUIAction` / `kCloseViewWindowUIAction` for tab 0: ignore. |
-| `GetActiveTabForUIAction()` (`Main.cpp` ~line 123) | Never return tab 0 — return `nullptr` when the action originated there. All engineering ribbon commands (save, create sphere, import…) then no-op on the Application Tab through their existing null checks. Commands that do not need a tab (e.g. `PROJECT_OPEN` → `OpenStorageFileInNewTab`) keep working. |
-| Shutdown / `CleanupReleasedTabs` | No change needed — tab 0 never sets `closeRequested`, owns no engineering thread to join, and never enters the GPU-release handshake. Verify only. |
+| `WndProc` (`Main.cpp`, all `tab->userInputQueue->push` sites) | The routed tab pointer is dropped when it is tab 0, right after `GetActiveTabFromHwnd` — one line covering every push site below it (queue has no consumer, Decision 3). The per-window `uiInput` snapshot path is untouched, so all overlay UI (buttons, text fields) keeps working. `WM_CAPTURECHANGED` fans out over the published tab list and skips tab 0 separately. |
+| `PushSystemTodoToTab()` | Early-return for tab 0 (same reason). Single choke point for all ribbon/system todos, including those raised from the compositor. |
+| `FileInputThread()` (`Input_UI_Network_File.h`) | Its startup bulk load and the two auto-import dev hooks push straight into the `todoCPUQueue` of `tabList[0]`, bypassing `PushSystemTodoToTab` — and `tabList[0]` *is* tab 0. They resolve "first tab" through a local `FirstEngineeringTab()` instead. This one was found by the debug sentinel below, not by inspection. |
+| `RequestCloseEngineeringTab()` | Refuses `tabID == kApplicationTabId`. This replaced the old `tabCount <= 1` guard: closing the last engineering tab is legal now, and the existing replacement logic lands the main window on tab 0 (always in the published list, hosted by window 0). |
+| Tab band (`UserInterface.cpp`) | Tab 0: draw the logo + word-mark instead of a label; skip the `x` button and its hit test; never set `pressedTabId` (no drag-out). |
+| `ExtractTabToNewWindow` | Refuses tab 0; `hostWindowSlot` stays 0. Drag-merge needs no guard: it only moves tabs hosted by a secondary window, and tab 0 never leaves slot 0. |
+| Sub-tab band (`UserInterface.cpp`) | When the active tab is 0: skip the `x` draw and hit-test and the drag-out candidate (`pressedSubTabSlot` stays -1); the title takes the freed width. Activation click still emits `kActivateUIAction`. |
+| `ExtractViewToNewWindow` | Refuses tab 0. Needed only once the views were published: before that the slot lookup failed on its own, afterwards it would succeed and build a real view window. |
+| `ProcessPendingUIActions` | `kActivateUIAction` for tab 0 calls `ApplicationTab::ActivateApplicationTabView(p2)` on the UI thread. `kCloseUIAction` needs no branch — it routes through the guarded `PushSystemTodoToTab`. |
+| `GetActiveTabForUIAction()` | Never returns tab 0, in any of its three resolution paths — `nullptr` when the action originated there. All engineering ribbon commands (save, create sphere, import…) then no-op on the Application Tab through their existing null checks. Commands that do not need a tab (e.g. `PROJECT_OPEN` → `OpenStorageFileInNewTab`) keep working. |
+| Shutdown / `CleanupReleasedTabs` | No change needed — tab 0 never sets `closeRequested`, owns no engineering thread to join, and never enters the GPU-release handshake. |
+
+`ApplicationTab::DebugVerifyQueuesEmpty()` is the standing regression net for Decision 3: a
+Debug-only drain of both of tab 0's queues at the end of `ProcessPendingUIActions`, printing
+`[apptab][bug]` with the action type of anything that slipped through. It caught the
+`FileInputThread` leak on its first run. Keep it. To see its output, launch with stdout and stderr
+redirected to files — `AllocateConsoleWindow` keeps the inherited handles when stdout is a pipe or
+a disk file.
 
 Not guards, but consequences worth knowing: tab 0 has no camera orbit, no random geometry
 generation, no pick servicing (no pick requests are ever queued for it), and its data tree is
-hidden. The compositor's Scene3D branch runs against empty geometry and draws only the sky
-gradient behind the view panel — harmless, zero compositor changes in the MVP.
+hidden. The compositor's Scene3D branch runs against empty geometry and draws only the sky gradient
+behind the view panel — harmless, and it is fully covered by the opaque panel anyway.
 
 ## Rendering the application views
 
-`BuildUIOverlay` (UI overlay, render thread, immediate-mode — same model as the ribbon and the
-properties pane): when `window.activeTabIndex == kApplicationTabId`, call
-`ApplicationTab::BuildApplicationTabOverlay(...)` after the bands are drawn. It:
+`BuildUIOverlay` (render thread, immediate-mode — same model as the ribbon and the properties
+pane) calls `ApplicationTab::BuildApplicationTabOverlay(...)` when the window's active tab is tab 0.
+It runs after the bands and before the right-side overlay, so the icon bar and panes still land on
+top of it. It:
 
 1. Draws one opaque full-content panel (from `topUITotalHeightPx` down) in the UI background
-   color — this is why the compositor needs no changes.
-2. Switches on `AppViewKindForContainerId(allTabs[0].activeInternalSubTabMemoryId)` and draws the
-   active view: MVP = centered view name + one line of placeholder text; Stats = live numbers.
-3. Receives the same `UIInput` snapshot as the rest of the overlay, so future views (Launcher
-   file list, Settings toggles) get clicks and text input for free, and commit their effects via
-   `PushUIAction` handled on the UI thread — never via tab queues.
+   colour — this is why the compositor needs no changes.
+2. Switches on `AppViewKindForContainerId(...)` and draws the active view: heading + placeholder
+   line, or live numbers for Stats.
+3. Can take the same `UIInput` snapshot as the rest of the overlay when a view needs it, so future
+   views (Launcher file list, Settings toggles) get clicks and text input for free, and commit
+   their effects via `PushUIAction` handled on the UI thread — never via tab queues.
+
+So the panel could live in `ApplicationTab.cpp` rather than inside `BuildUIOverlay`, the three
+existing widget primitives `PushWidgetRect` / `PushWidgetText` / `WidgetTextBaselineY` moved out of
+their anonymous namespace into `UserInterface.h`, alongside `extern UIColors uiActiveColors`. That
+is the whole drawing API a view needs; no primitive was duplicated.
+
+`ActivateApplicationTabView()` validates the incoming id against the published list rather than the
+id range, and takes `storageObjectsMutex` — the same lock `ActivateInternalSubTab` takes on the
+engineering thread — so the compositor's locked read of `activeInternalSubTabMemoryId` cannot race
+the UI thread's write.
 
 Threading recap: render thread draws and hit-tests; durable state changes travel through
-`PushUIAction` → `ProcessPendingUIActions` (UI thread), which is already the pattern for every
-band button today.
+`PushUIAction` → `ProcessPendingUIActions` (UI thread), which is already the pattern for every band
+button.
 
 ## Devanagari tab title (word-mark details)
 
-- New SVG: the word विश्वकर्मा converted to paths (no `<text>` element — the embedded rasterizer
-  handles paths only), committed under `website/static/SVGIcons` with a manifest line in
-  `SVGIconManifest.h`, ID per the existing hash-style convention.
-- The icon atlas rasterizes square cells (`RenderEmbeddedSVGIcons(int pixelSize)`), so author the
-  word inside a **square viewBox occupying a horizontal middle strip**. In the tab band, draw the
-  icon as a square quad larger than the band height, centered vertically on the band: the strip
-  lands inside the band, the overflow above/below is fully transparent pixels, and the ribbon —
-  drawn after the band — paints over the lower overflow anyway. No renderer changes.
-- Fallback that MVP may ship with: the existing logo icon (`IconForID(1u)`), swapped for the
-  word-mark by changing one constant. Do not block Phase 1 on SVG authoring.
-- If the strip trick looks bad at small DPI, the alternative is teaching the atlas one
-  non-square cell (`RenderedSVGIcon` already carries independent width/height) — deferred.
+Tab 0's button is `[logo][विश्वकर्मा]`, centred as one group. The word-mark is
+`icon_3950482947_VishwakaramText.svg`: a single `<path>` (text→path in Inkscape — no `<text>`
+element, the embedded rasterizer handles paths only), viewBox `0 0 56.72 15.43` ≈ 3.68:1,
+registered with one line in `SVGIconManifest.h`.
 
-## Phases
+That aspect ratio forced a real change to the icon pipeline, and the reasoning is worth keeping:
 
-### Phase 1 — Tab 0 exists, un-closable, engineering tabs renumbered
-Startup changes, all guards from the inventory, word-mark (or logo fallback) tab button.
-No views yet (empty published sub-tab list is fine — band renders nothing).
-**Verify:** app starts with 4 tabs; tab 0 shows the icon and no `x`; clicking tab 0 shows the
-empty sky-gradient content; engineering tabs 1..3 behave exactly as before (create, close,
-extract, multi-window); `+` creates slot 4+; closing all engineering tabs leaves the app on tab
-0 and the app stays healthy; opening/saving files from tab 0 either works (open) or no-ops
-(save); a debug counter proves tab 0's queues stay empty across a full session.
+- **The "square viewBox with a horizontal middle strip" idea does not work at the real cell size.**
+  Cells are `iconSizePx` = `UI_ICON_SIZE_MM` (4 mm) at the floored layout DPI — **20 px** on an
+  ordinary monitor. A square viewBox would give the whole word 20 px of width (~5 px tall), then
+  upscale it ~3.7× to fill the band. Unreadable.
+- **Wide icons get a horizontal run of atlas cells instead.** Two changes, both no-ops for the 201
+  square icons: `RenderEmbeddedSVGIcons` rasterizes with `renderToBitmap(-1, pixelSize)` so width
+  follows the SVG's own aspect — passing *both* dimensions makes lunasvg scale x and y
+  independently, which squashes rather than letterboxes; and `BuildIconAtlas` reserves
+  `ceil(width / cellSize)` adjacent cells via `TryReserveIconCellRun`, never splitting a run across
+  rows. The glyph's UVs span the run, so `Glyph::width / Glyph::height` is the aspect callers size
+  their quad by. The word-mark lands at 74 × 20 px — 1:1 with how it is drawn.
+- The band draws it at `0.75 × iconSizePx` tall with the width derived from that glyph aspect, in
+  `tabBackgroundText`, so it downsamples slightly rather than upscaling.
 
-### Phase 2 — The 8 un-closable views
-`InitializeApplicationTab` publishes the 8 slots; sub-tab band guards; UI-thread activation.
-**Verify:** all 8 buttons visible with no `x`; clicking each switches
-`activeInternalSubTabMemoryId`; drag-out does nothing; engineering tabs' own sub-tabs
-(Scene3D/Page2D) still open/close/extract normally.
+## Sub-tab close button
 
-### Phase 3 — Stub panels + real Stats view
-`BuildApplicationTabOverlay` with the opaque panel, per-view stubs, Stats with live counters.
-**Verify:** each view renders its name; Stats numbers change when tabs/windows open and close and
-when geometry allocates pages in engineering tabs.
+The `x` on *engineering* sub-tab buttons was invisible for a long time: the glyph is wider than the
+fixed `closeSize * 0.55` clip width that was passed to `pushTextClipped`, and that function drops a
+glyph whole rather than truncating it, so nothing was drawn even though the hit test worked. It is
+now centred on its measured width (`MeasureUIStringWidth`) and drawn in `kUIDisabledTextGray` at
+rest, white on the hover pill. Dull at rest is deliberate — a row of view buttons should not read
+as clutter. **Size such clips from `MeasureUIStringWidth`, never from a guessed fraction.**
 
-## Future phases (designed direction, not scheduled)
+## Files
+
+| File | Role |
+|------|------|
+| `code-core/ApplicationTab.h` / `.cpp` | Everything from Decision 5: `kApplicationTabId`, `IsApplicationTab()`, `AppViewKind`, synthetic ID helpers, `InitializeApplicationTab()`, `ActivateApplicationTabView()`, `BuildApplicationTabOverlay()`, `DebugVerifyQueuesEmpty()`. |
+| `code-core/Main.cpp` | Startup sequence, engineering thread launch, guards in `WndProc`, `PushSystemTodoToTab`, `RequestCloseEngineeringTab`, `GetActiveTabForUIAction`, `ProcessPendingUIActions`. |
+| `code-core/UserInterface.cpp` / `.h` | Tab-band tab-0 branch (logo + word-mark, no `x`, no drag); sub-tab-band tab-0 branch; wide-icon atlas runs; `BuildApplicationTabOverlay` call; the three exported widget primitives. |
+| `code-core/Input_UI_Network_File.h` | `FirstEngineeringTab()` for the bulk load and the auto-import dev hooks. |
+| `code-core/SVGIconRenderer.cpp` | Aspect-preserving rasterization. |
+| `code-core/SVGIconManifest.h` + `website/static/SVGIcons/` | Word-mark icon entry + SVG file. |
+| `code-core/MemoryManagerCPU.h` | `राम::liveChunkCount` for the Stats view. |
+| `code-core/RenderCompositor-DirectX12.cpp` | Tab-0 refusals in `ExtractTabToNewWindow` / `ExtractViewToNewWindow`. |
+
+## Future work
 
 ### Instancing / Common Geometry masters
 Tab 0's memory group 0 hosts the frequently-used geometry elements at all instancing levels.
 Created **once at startup on the main thread before the copy/render threads consume them**, then
 immutable — the same create-before-publish reasoning that makes the view slots race-free, applied
-to geometry pages. The CommonGeometry view becomes their visual catalog. Engineering tabs will
+to geometry pages. The CommonGeometry view becomes their visual catalogue. Engineering tabs will
 reference these masters by ID for instanced draws; the graphics-pipeline side (instance buffers,
 per-instance transforms) is its own future design document section in `graphics.md`.
 
+### Recent-files persistence for the Launcher
+TODO. File format and location — likely next to the AccountManager identity data — to be decided
+when the Launcher gets real content.
+
 ### Chrome-style frameless window
-Remove the OS title bar; final band layout `[विश्वकर्मा][tabs...][+] ... [─][□][✕]`.
-Known ingredients: `WM_NCCALCSIZE` client-area extension (a commented prototype already sits in
-`WndProc`, `Main.cpp` ~line 1060), `WM_NCHITTEST` returning `HTCAPTION` for empty band area (drag
-to move), `HTMINBUTTON`/`HTMAXBUTTON`/`HTCLOSE` for the three drawn window controls (and Win11
-snap-layout flyout via `HTMAXBUTTON`), maximized-state inset correction, and drawing the three
-controls at the band's right edge in `BuildUIOverlay`. This phase only starts after tab 0 has
-shipped, because the band then carries the application identity that the title bar used to.
 
-## File touch list (Phases 1–3)
+Remove the OS title bar; final band layout `[विश्वकर्मा][tabs...][+] ... [─][□][✕]`. Tab 0 shipping
+was the prerequisite, because the band now carries the application identity the title bar used to.
+Estimated at ~200–250 lines across three files: small, with no threading or architectural risk, but
+the most Win32-fiddly work in this feature. Survey findings, so a future session does not have to
+re-derive them:
 
-| File | Change |
-|------|--------|
-| `code-core/ApplicationTab.h` / `.cpp` | **New.** Everything from Decision 5. |
-| `code-core/Main.cpp` | Startup sequence, thread launch loop 1..3, guards in `WndProc`, `PushSystemTodoToTab`, `RequestCloseEngineeringTab`, `GetActiveTabForUIAction`, `ProcessPendingUIActions`. |
-| `code-core/UserInterface.cpp` | Tab-band tab-0 branch (icon, no `x`, no drag); sub-tab-band tab-0 branch; `BuildApplicationTabOverlay` call. |
-| `code-core/विश्वकर्मा.h` | `kApplicationTabId`, `IsApplicationTab()` (or these live in `ApplicationTab.h` and are included where needed). |
-| `code-core/SVGIconManifest.h` + `website/static/SVGIcons/` | Word-mark icon entry + SVG file. |
-| `code-core/MemoryManagerCPU.h` / `MemoryManagerGPU-DirectX12.h` | Tiny read-only page counters for the Stats view (only if not already readable). |
-| Project file (`Vishwakarma.vcxproj`) | Add the new .h/.cpp pair. |
+**Already in our favour**
 
-## Open questions and changeable defaults
+- The tab band already draws from client `y = 0`, so extending the client area over the caption
+  needs **no layout change** — the band simply moves up into the vacated strip.
+- No window-style change needed. `WS_OVERLAPPEDWINDOW` keeps `WS_THICKFRAME` / `WS_CAPTION`, which
+  is what gives snap, resize and the minimise animation; only the *visual* frame goes.
+- `SingleUIWindow::rightOverlayWidthPx` is the precedent for the plumbing this needs: the render
+  thread publishes a px geometry through an atomic, `WndProc` reads it for hit-testing.
+- `GetTopRibbonHeightPxForWindow()` already reads `topRibbonLayout` from `WndProc`, so band metrics
+  are reachable from the UI thread today.
+- Dragging by `HTCAPTION` still fires `WM_ENTERSIZEMOVE` / `WM_EXITSIZEMOVE`, so
+  `TryMergeWindowOnDrop` keeps working untouched. Tab drag-out survives too, because tab buttons
+  return `HTCLIENT`.
 
-- **Startup active tab**: default engineering tab 1 during development; flips to tab 0 when the
-  Launcher is real.
-- **Ribbon on tab 0**: MVP keeps the full ribbon drawn (uniform layout; commands no-op via the
-  `GetActiveTabForUIAction` guard). A contextual ribbon (or none) for the Application Tab is a
-  later decision.
-- **Data tree on tab 0**: hidden by default (`dataTreeView.isVisible = false`).
-- **View 7 name**: "Common Geometry" per the naming note above — confirm or rename.
-- **Extracting tab-0 views into their own windows** (e.g. Docs on a second monitor): refused in
-  the MVP; the machinery (`subTabHostWindowSlots`) would allow it later since these views render
-  purely from the UI overlay.
-- **Recent-files persistence for the Launcher**: file format and location (likely next to the
-  AccountManager identity data) — decide when the Launcher gets real content.
+**Mechanical part**
+
+`WM_NCCALCSIZE` client-area extension; three window-control icons drawn at the band's right edge
+(the ✕ and □ want real SVG icons — the UI has no diagonal-quad primitive); publishing their rects;
+`WM_NCHITTEST` returning `HTMINBUTTON` / `HTMAXBUTTON` / `HTCLOSE` / `HTCAPTION` / `HTCLIENT`.
+Returning those hit codes gets close/minimise/maximise **and** the Win11 snap-layout flyout from
+`DefWindowProc` for free.
+
+**Where the time will actually go**
+
+1. **Maximised inset.** Windows oversizes a maximised window by the frame thickness; without
+   correction the top of the band is clipped off-screen. Startup calls `ShowWindow(SW_MAXIMIZE)`,
+   so this is visible on the very first run.
+2. **Per-monitor DPI.** The inset must come from `GetSystemMetricsForDpi` at the window's current
+   DPI and be re-evaluated on `WM_DPICHANGED`. Windows get dragged between a 1080p and a 4K panel
+   on the development machine, so this is where it will bite hardest. Related pre-existing gap:
+   `WM_DPICHANGED` currently only calls `RestartRenderThreads()` and never applies the OS-suggested
+   rect from `lParam`.
+3. **Top resize border.** Once the client covers the caption, the top few pixels must be
+   synthesized as `HTTOP` by hand or the window cannot be resized from the top edge.
+4. **Drop shadow.** Needs `DwmExtendFrameIntoClientArea` with a 1 px top margin, else the window
+   reads as a flat rectangle with no separation from what is behind it.
+5. **Stale layout at `WM_NCHITTEST` time.** It can arrive before `topRibbonLayout.isValid` (startup,
+   monitor topology change). A wrong fallback makes the window **undraggable and unclosable** — the
+   one bug here that makes the app unusable rather than merely ugly. Needs a deliberate fallback,
+   in the spirit of the existing one in `GetTopRibbonHeightPxForWindow`.
+
+**Decided**
+
+- **Scope it per window, not to the main window.** Secondary tab-host windows draw the same band
+  and get the same frameless treatment; `WINDOW_KIND_VIEW` windows have no band and keep the normal
+  frame. One `windowKind` branch in `WndProc`.
+- **The published rects live in `SingleUIWindow`'s existing `tabBandRect` / `viewBandRect` /
+  `contentRect` fields**, which are declared and threaded through both copy constructors today but
+  never written or read anywhere. They become the home for this — converted to atomics, since
+  `WndProc` reads what a render thread writes.
+
+Housekeeping when starting: the `WM_NCCALCSIZE` prototype sits in `WndProc` **twice**, both copies
+commented out and containing a `,,,,` typo that would not compile. Collapse to one.

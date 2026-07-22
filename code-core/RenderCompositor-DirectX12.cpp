@@ -9,6 +9,7 @@
 #include "UserInterface-DirectX12.h"
 #include "विश्वकर्मा.h"
 
+#include "ApplicationTab.h"
 #include "colors.h"
 #include "RenderCompositor.h"
 #include "RenderCompositor-DirectX12.h"
@@ -1306,6 +1307,9 @@ static void ResetInputViewRouting(DATASETTAB& tab, uint16_t subTabSlot) {
 // Extracts a tab out of its hosting window into a new dedicated tab-host window (full ribbon).
 void ExtractTabToNewWindow(uint16_t tabID) {
     if (tabID >= MV_MAX_TABS) return;
+    // The Application Tab stays in the main window forever (tabs.md Decision 8). Drag-merge needs
+    // no guard: it only moves tabs hosted by a secondary window, and tab 0 never leaves slot 0.
+    if (ApplicationTab::IsApplicationTab(tabID)) return;
     DATASETTAB& tab = allTabs[tabID];
     const int16_t sourceSlot = tab.hostWindowSlot.load(std::memory_order_acquire);
 
@@ -1337,6 +1341,9 @@ void ExtractTabToNewWindow(uint16_t tabID) {
 // GeometryPage; focuses the existing window when the view is already extracted.
 void ExtractViewToNewWindow(uint16_t tabIndex, uint64_t containerMemoryId) {
     if (tabIndex >= MV_MAX_TABS) return;
+    // The Application Tab's views are un-extractable for now (tabs.md Decision 9). Its 8 slots ARE
+    // published, so without this the lookup below would succeed and build a real view window.
+    if (ApplicationTab::IsApplicationTab(tabIndex)) return;
     DATASETTAB& tab = allTabs[tabIndex];
     const int subTabSlot = FindPublishedSubTabSlot(tab, containerMemoryId);
     if (subTabSlot < 0) return;

@@ -12,6 +12,7 @@
 
 #include "UserInterface.h"
 #include <algorithm>
+#include "ApplicationTab.h"
 #include "FontManager.h"
 #include "..\build\NotoSansMSDF_Compiled.h"
 #include "विश्वकर्मा.h"
@@ -185,14 +186,16 @@ static void FillRect(AtlasBitmap& atlas, int x, int y, int w, int h, uint8_t cov
     }
 }
 
+// Blits the rasterised icon centred inside the reserved atlas region (one square cell for every
+// icon but the wide word-mark, which gets a horizontal run of cells).
 static void CopyRenderedSVGIconToAtlas(AtlasBitmap& atlas, const SVGIconRenderer::RenderedSVGIcon& icon,
-    int originX, int originY, int cellSize) {
+    int originX, int originY, int regionW, int regionH) {
     if (icon.rgba.empty() || icon.width <= 0 || icon.height <= 0) return;
 
-    const int copyW = std::min(icon.width, cellSize);
-    const int copyH = std::min(icon.height, cellSize);
-    const int dstX = originX + std::max(0, (cellSize - copyW) / 2);
-    const int dstY = originY + std::max(0, (cellSize - copyH) / 2);
+    const int copyW = std::min(icon.width, regionW);
+    const int copyH = std::min(icon.height, regionH);
+    const int dstX = originX + std::max(0, (regionW - copyW) / 2);
+    const int dstY = originY + std::max(0, (regionH - copyH) / 2);
 
     for (int y = 0; y < copyH; ++y) {
         for (int x = 0; x < copyW; ++x) {
@@ -206,25 +209,43 @@ static void CopyRenderedSVGIconToAtlas(AtlasBitmap& atlas, const SVGIconRenderer
     }
 }
 
-static bool TryReserveIconCell(int iconIndex, int atlasW, int atlasH, int cellSize, int& outX, int& outY) {
+// Number of cells one rasterised icon needs side by side: 1 for every square icon, more for a
+// wide one. The renderer keeps each icon's aspect ratio, so width alone decides this.
+static int IconCellsWide(int iconWidthPx, int cellSize) {
+    return std::max(1, (iconWidthPx + cellSize - 1) / cellSize);
+}
+
+// Pixel width of a run of `cellsWide` cells, gaps included: the run belongs to one icon, so the
+// gaps between its cells are usable image area.
+static int IconCellRunWidth(int cellsWide, int cellSize) {
+    return cellsWide * cellSize + (cellsWide - 1) * kIconCellGap;
+}
+
+// Reserves a horizontal run of `cellsWide` cells starting at `iconIndex`, advancing iconIndex to
+// the next row when the run would not fit in the current one (a run is never split across rows).
+static bool TryReserveIconCellRun(int& iconIndex, int atlasW, int atlasH, int cellSize, int cellsWide,
+    int& outX, int& outY) {
     const int cellsPerRow = (atlasW + kIconCellGap) / (cellSize + kIconCellGap);
-    if (cellsPerRow <= 0) return false;
+    if (cellsPerRow <= 0 || cellsWide > cellsPerRow) return false;
+
+    const int column = iconIndex % cellsPerRow;
+    if (column + cellsWide > cellsPerRow) iconIndex += cellsPerRow - column;
 
     outX = (iconIndex % cellsPerRow) * (cellSize + kIconCellGap);
     outY = kIconStartY + (iconIndex / cellsPerRow) * (cellSize + kIconCellGap);
-    return outX + cellSize <= atlasW && outY + cellSize <= atlasH;
+    return outX + IconCellRunWidth(cellsWide, cellSize) <= atlasW && outY + cellSize <= atlasH;
 }
 
 static void StoreIconCellGlyph(IconAtlasCPU& out, char32_t codepoint, int x, int y, int atlasW, int atlasH,
-    int cellSize, bool includeInFallbackPool = true) {
+    int cellW, int cellH, bool includeInFallbackPool = true) {
     Glyph glyph{};
     glyph.uvMinX = (float)x / atlasW;
     glyph.uvMinY = (float)y / atlasH;
-    glyph.uvMaxX = (float)(x + cellSize) / atlasW;
-    glyph.uvMaxY = (float)(y + cellSize) / atlasH;
-    glyph.width = cellSize;
-    glyph.height = cellSize;
-    glyph.advanceX = cellSize;
+    glyph.uvMaxX = (float)(x + cellW) / atlasW;
+    glyph.uvMaxY = (float)(y + cellH) / atlasH;
+    glyph.width = cellW;
+    glyph.height = cellH;
+    glyph.advanceX = cellW;
     out.iconGlyphLookup[codepoint] = glyph;
     if (includeInFallbackPool) {
         out.metadata.mixedIconCodepoints.push_back(codepoint);
@@ -261,7 +282,14 @@ AtlasBitmap BuildIconAtlas(int iconCellSizePx, IconAtlasCPU& out) {
 
     const std::vector<SVGIconRenderer::RenderedSVGIcon> svgIcons =
         SVGIconRenderer::RenderEmbeddedSVGIcons(cellSize);
-    const int atlasDimension = ComputeIconAtlasDimension(4u + svgIcons.size(), cellSize);
+    // 4 dummy icons + one run per SVG icon. A wide icon costs `cellsWide` cells, plus as many
+    // again for the worst case where its run does not fit the current row and skips to the next.
+    size_t cellsNeeded = 4u;
+    for (const SVGIconRenderer::RenderedSVGIcon& svgIcon : svgIcons) {
+        const int cellsWide = IconCellsWide(svgIcon.width, cellSize);
+        cellsNeeded += static_cast<size_t>(2 * cellsWide - 1);
+    }
+    const int atlasDimension = ComputeIconAtlasDimension(cellsNeeded, cellSize);
     const int atlasW = atlasDimension;
     const int atlasH = atlasDimension;
 
@@ -282,8 +310,9 @@ AtlasBitmap BuildIconAtlas(int iconCellSizePx, IconAtlasCPU& out) {
     std::array<int, 4> iconYs{};
     int nextIconIndex = 0;
     for (int i = 0; i < 4; ++i) {
-        if (!TryReserveIconCell(nextIconIndex, atlasW, atlasH, cellSize, iconXs[i], iconYs[i])) continue;
-        StoreIconCellGlyph(out, out.metadata.dummyIconCodepoints[i], iconXs[i], iconYs[i], atlasW, atlasH, cellSize);
+        if (!TryReserveIconCellRun(nextIconIndex, atlasW, atlasH, cellSize, 1, iconXs[i], iconYs[i])) continue;
+        StoreIconCellGlyph(out, out.metadata.dummyIconCodepoints[i], iconXs[i], iconYs[i], atlasW, atlasH,
+            cellSize, cellSize);
         ++nextIconIndex;
     }
 
@@ -317,13 +346,18 @@ AtlasBitmap BuildIconAtlas(int iconCellSizePx, IconAtlasCPU& out) {
     FillRect(atlas, iconXs[3] + S(13), iconYs[3] + S(13), S(7), S(7), 255);
 
     for (const SVGIconRenderer::RenderedSVGIcon& svgIcon : svgIcons) {
+        const int cellsWide = IconCellsWide(svgIcon.width, cellSize);
+        const int runWidth = IconCellRunWidth(cellsWide, cellSize);
         int cellX = 0;
         int cellY = 0;
-        if (!TryReserveIconCell(nextIconIndex, atlasW, atlasH, cellSize, cellX, cellY)) break;
+        if (!TryReserveIconCellRun(nextIconIndex, atlasW, atlasH, cellSize, cellsWide, cellX, cellY)) break;
 
-        CopyRenderedSVGIconToAtlas(atlas, svgIcon, cellX, cellY, cellSize);
-        StoreIconCellGlyph(out, SVGIconRenderer::IconForID(svgIcon.id), cellX, cellY, atlasW, atlasH, cellSize, false);
-        ++nextIconIndex;
+        CopyRenderedSVGIconToAtlas(atlas, svgIcon, cellX, cellY, runWidth, cellSize);
+        // The glyph spans the whole run, so its width:height ratio is what callers should size the
+        // quad by - PushIcon maps these UVs onto whatever rectangle it is given.
+        StoreIconCellGlyph(out, SVGIconRenderer::IconForID(svgIcon.id), cellX, cellY, atlasW, atlasH,
+            runWidth, cellSize, false);
+        nextIconIndex += cellsWide;
     }
 
     return atlas;
@@ -791,9 +825,9 @@ void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t c
     ctx.indexCount += glyphCount * 6;
 }
 
-namespace {
-// File-scope helpers for reusable widgets (BuildUIDropdown). Unlike raw PushRect, they advance
-// the vertex/index counters themselves, mirroring BuildUIOverlay's local pushRect/pushTextClipped.
+// Reusable widget primitives (declared in UserInterface.h, also used by ApplicationTab.cpp).
+// Unlike raw PushRect, they advance the vertex/index counters themselves, mirroring
+// BuildUIOverlay's local pushRect/pushTextClipped.
 void PushWidgetRect(UIDrawContext& ctx, DX12ResourcesUI& uiRes, float x, float y, float w, float h,
     uint32_t color) {
     if (ctx.vertexCount + 4 > uiRes.maxVertices || ctx.indexCount + 6 > uiRes.maxIndices) return;
@@ -804,7 +838,6 @@ void PushWidgetRect(UIDrawContext& ctx, DX12ResourcesUI& uiRes, float x, float y
     ctx.indexCount += 6;
 }
 
-// ASCII text scaled by 'textScale', clipped to maxWidth, baseline at baselineY.
 void PushWidgetText(UIDrawContext& ctx, DX12ResourcesUI& uiRes, float x, float baselineY,
     const char* text, float maxWidth, uint32_t color, float textScale) {
     if (!text || maxWidth <= 0.0f) return;
@@ -851,7 +884,6 @@ float WidgetTextBaselineY(float y, float h, float textScale) {
     const Glyph& g = glyphIt->second;
     return y + h * 0.5f + (float)g.bearingY * textScale - (float)g.height * textScale * 0.5f;
 }
-} // namespace
 
 int BuildUIDropdown(UIDrawContext& ctx, DX12ResourcesUI& uiRes, const UIInput& input,
     UIDropdownState& state, float x, float y, float width, float rowHeightPx, float textScale,
@@ -919,6 +951,11 @@ constexpr uint64_t kSplashDurationMs = 5000ULL;
 // icon_1_logo.svg, embedded via SVGIconManifest.h and rasterised into every monitor's icon atlas.
 // Drawn with a white vertex colour so the atlas keeps the logo's own tricolour (shader multiplies).
 constexpr char32_t kSplashLogoCodepoint = SVGIconRenderer::IconForID(1u);
+// Tab 0's button carries the application identity instead of a file name: the logo, then the
+// विश्वकर्मा word-mark beside it (tabs.md "Devanagari tab title"). The word-mark is a wide SVG
+// whose glyph spans a run of atlas cells, so its quad is sized from the glyph's own aspect ratio.
+constexpr char32_t kApplicationTabIconCodepoint = SVGIconRenderer::IconForID(1u);
+constexpr char32_t kApplicationTabWordMarkCodepoint = SVGIconRenderer::IconForID(3950482947u);
 
 std::atomic<uint64_t> g_splashOverlayStartTick{ 0 };
 
@@ -1126,6 +1163,9 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
     for (uint16_t i = 0; i < visibleTabs; i++) {
         uint16_t tabID = tabList[i];
         bool isActive = (window.activeTabIndex == tabID);
+        // The Application Tab shows the word-mark icon, has no close button and cannot be
+        // dragged out into its own window (tabs.md Decision 8).
+        const bool isApplicationTab = ApplicationTab::IsApplicationTab(tabID);
 
         // area for this tab (slot)
         float tabX = currentX;
@@ -1151,7 +1191,8 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
         }
 
         // Check clicks on the X button first to avoid activating the tab when user intends to close
-        bool xHovered = input.mouseX >= xBtnX && input.mouseX < xBtnX + xBtnSize &&
+        bool xHovered = !isApplicationTab &&
+            input.mouseX >= xBtnX && input.mouseX < xBtnX + xBtnSize &&
             input.mouseY >= xBtnY && input.mouseY < xBtnY + xBtnSize;
         if (xHovered && input.leftButtonPressedThisFrame) {
             // Signal close intent to engineering thread. Pass tabID in parameter p1.
@@ -1163,29 +1204,55 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
             input.mouseY >= 0 && input.mouseY < tabBarHeightPx;
         if (!xHovered && tabHovered && input.leftButtonPressedThisFrame) {
             window.activeTabIndex = tabID; // Render thread will draw this tab's geometry on the next frame.
-            window.pressedTabId = tabID;   // Candidate for drag-out extraction while the button stays down.
+            // Candidate for drag-out extraction while the button stays down.
+            if (!isApplicationTab) window.pressedTabId = tabID;
         }
 
-        // Draw the X button: only draw rounded background when hovered, otherwise render as plain text
-        char32_t xChar[2] = { U'x', U'\0' };
-        if (xHovered) {
-            PushRoundedRectangle(ctx, xBtnX, xBtnY, xBtnSize, xBtnSize, std::max(1.0f, roundedCornerRadiusPx * 0.6f),
-                0xFF444444, uiRes);
-            pushTextClipped(xBtnX + 2.0f, textBaselineY(xBtnY, xBtnSize, uiTextScale), xChar, xBtnSize - 4.0f, 0xFFFFFFFF, uiTextScale);
+        if (!isApplicationTab) {
+            // Draw the X button: only draw rounded background when hovered, otherwise render as plain text
+            char32_t xChar[2] = { U'x', U'\0' };
+            if (xHovered) {
+                PushRoundedRectangle(ctx, xBtnX, xBtnY, xBtnSize, xBtnSize, std::max(1.0f, roundedCornerRadiusPx * 0.6f),
+                    0xFF444444, uiRes);
+                pushTextClipped(xBtnX + 2.0f, textBaselineY(xBtnY, xBtnSize, uiTextScale), xChar, xBtnSize - 4.0f, 0xFFFFFFFF, uiTextScale);
+            } else {
+                // Render as plain small text matching tab text color
+                pushTextClipped(xBtnX + 2.0f, textBaselineY(xBtnY, xBtnSize, uiTextScale), xChar, xBtnSize - 4.0f, uiActiveColors.tabBackgroundText, uiTextScale);
+            }
+
+            // Draw label clipped to remaining area (avoid overlapping with X)
+            std::u32string tabLabel;
+            tabLabel.reserve(allTabs[tabID].fileName.size());
+            for (wchar_t ch : allTabs[tabID].fileName) {
+                if (ch <= 0x7F) tabLabel.push_back(static_cast<char32_t>(ch));
+            }
+
+            float labelMaxWidth = contentW - (8.0f + xBtnSize + 4.0f);
+            pushTextClipped(contentX + 8.0f, textBaselineY(0.0f, tabBarHeightPx, uiTextScale), tabLabel.c_str(), labelMaxWidth, uiActiveColors.tabBackgroundText, uiTextScale);
         } else {
-            // Render as plain small text matching tab text color
-            pushTextClipped(xBtnX + 2.0f, textBaselineY(xBtnY, xBtnSize, uiTextScale), xChar, xBtnSize - 4.0f, uiActiveColors.tabBackgroundText, uiTextScale);
+            // [logo][word-mark], centred as one group in the tab. The word-mark's width comes from
+            // its glyph aspect (it spans a run of atlas cells); 0 when the atlas has no such icon.
+            const float wordMarkHeight = std::round(iconSizePx * 0.75f);
+            float wordMarkWidth = 0.0f;
+            if (ctx.iconData) {
+                auto wordMarkIt = ctx.iconData->iconGlyphLookup.find(kApplicationTabWordMarkCodepoint);
+                if (wordMarkIt != ctx.iconData->iconGlyphLookup.end() && wordMarkIt->second.height > 0) {
+                    wordMarkWidth = std::round(wordMarkHeight *
+                        (float)wordMarkIt->second.width / (float)wordMarkIt->second.height);
+                }
+            }
+            const float markGapPx = wordMarkWidth > 0.0f ? 4.0f : 0.0f;
+            const float groupWidth = iconSizePx + markGapPx + wordMarkWidth;
+            const float logoX = contentX + std::max(0.0f, (contentW - groupWidth) * 0.5f);
+            // White vertex colour so the atlas keeps the icon's own colours (the shader multiplies).
+            PushIcon(ctx, logoX, (tabBarHeightPx - iconSizePx) * 0.5f,
+                iconSizePx, iconSizePx, kApplicationTabIconCodepoint, 0xFFFFFFFFu, uiRes);
+            if (wordMarkWidth > 0.0f) {
+                PushIcon(ctx, logoX + iconSizePx + markGapPx, (tabBarHeightPx - wordMarkHeight) * 0.5f,
+                    wordMarkWidth, wordMarkHeight, kApplicationTabWordMarkCodepoint,
+                    uiActiveColors.tabBackgroundText, uiRes);
+            }
         }
-
-        // Draw label clipped to remaining area (avoid overlapping with X)
-        std::u32string tabLabel;
-        tabLabel.reserve(allTabs[tabID].fileName.size());
-        for (wchar_t ch : allTabs[tabID].fileName) {
-            if (ch <= 0x7F) tabLabel.push_back(static_cast<char32_t>(ch));
-        }
-
-        float labelMaxWidth = contentW - (8.0f + xBtnSize + 4.0f);
-        pushTextClipped(contentX + 8.0f, textBaselineY(0.0f, tabBarHeightPx, uiTextScale), tabLabel.c_str(), labelMaxWidth, uiActiveColors.tabBackgroundText, uiTextScale);
 
         currentX += tabW;
 
@@ -1412,6 +1479,10 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
             subTabList = activeTabData->publishedSubTabIndexes.load(std::memory_order_acquire);
             subTabListCount = activeTabData->publishedSubTabCount.load(std::memory_order_acquire);
         }
+        // The Application Tab's 8 views are un-closable and (for now) un-extractable, so they get
+        // no `x` and never become a drag-out candidate (tabs.md Decision 9).
+        const bool isApplicationTabViews = activeTabIndex >= 0 &&
+            ApplicationTab::IsApplicationTab(static_cast<uint64_t>(activeTabIndex));
 
         const size_t internalTabCount = subTabList ? subTabListCount : 0;
         if (internalTabCount > 0) {
@@ -1442,7 +1513,7 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
                 const bool tabHovered =
                     input.mouseX >= tabX && input.mouseX < tabX + internalTabWidth &&
                     input.mouseY >= internalBarY && input.mouseY < internalBarY + internalBarHeight;
-                const bool closeHovered =
+                const bool closeHovered = !isApplicationTabViews &&
                     input.mouseX >= closeX && input.mouseX < closeX + closeSize &&
                     input.mouseY >= closeY && input.mouseY < closeY + closeSize;
 
@@ -1458,7 +1529,8 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
                     } else if (tabHovered) {
                         PushUIAction(InternalSubTabs::kActivateUIAction,
                             static_cast<uint32_t>(activeTabIndex), subTab.containerMemoryId);
-                        window.pressedSubTabSlot = subTabSlot; // Drag-out extraction candidate.
+                        // Drag-out extraction candidate.
+                        if (!isApplicationTabViews) window.pressedSubTabSlot = subTabSlot;
                     }
                 }
 
@@ -1467,19 +1539,29 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
                 // an extracted Page2D focuses its dedicated window instead of activating inline.
                 const uint32_t textColor = isExtracted ? dataTreeActiveColor
                     : (isActive ? uiActiveColors.tabActiveText : uiActiveColors.tabBackgroundText);
+                const float titleMaxWidth = isApplicationTabViews
+                    ? std::max(0.0f, contentWidth - 12.0f)      // No `x`: the title gets the width.
+                    : std::max(0.0f, closeX - contentX - 10.0f);
                 pushTextClipped(contentX + 6.0f,
                     textBaselineY(internalBarY, internalBarHeight, uiTextScale),
-                    title.c_str(), std::max(0.0f, closeX - contentX - 10.0f),
-                    textColor, uiTextScale, isActive);
+                    title.c_str(), titleMaxWidth, textColor, uiTextScale, isActive);
 
-                const char32_t closeText[2] = { U'x', U'\0' };
-                if (closeHovered) {
-                    PushRoundedRectangle(ctx, closeX, closeY, closeSize, closeSize,
-                        std::max(1.0f, roundedCornerRadiusPx * 0.6f), 0xFF444444, uiRes);
+                if (!isApplicationTabViews) {
+                    const char32_t closeText[2] = { U'x', U'\0' };
+                    if (closeHovered) {
+                        PushRoundedRectangle(ctx, closeX, closeY, closeSize, closeSize,
+                            std::max(1.0f, roundedCornerRadiusPx * 0.6f), 0xFF444444, uiRes);
+                    }
+                    // Centre the glyph on its measured width: the old fixed 0.55 * closeSize clip
+                    // was narrower than the glyph, so pushTextClipped dropped it entirely and no
+                    // 'x' was ever drawn. Dull grey at rest keeps a row of view buttons quiet; the
+                    // hover background plus white make it unmistakable under the pointer.
+                    const float closeTextWidth = MeasureUIStringWidth(closeText, uiTextScale);
+                    pushTextClipped(closeX + (closeSize - closeTextWidth) * 0.5f,
+                        textBaselineY(closeY, closeSize, uiTextScale), closeText,
+                        closeTextWidth + 1.0f,
+                        closeHovered ? 0xFFFFFFFF : kUIDisabledTextGray, uiTextScale);
                 }
-                pushTextClipped(closeX + closeSize * 0.28f,
-                    textBaselineY(closeY, closeSize, uiTextScale), closeText,
-                    closeSize * 0.55f, textColor, uiTextScale);
 
                 internalX += internalTabWidth;
             }
@@ -1499,6 +1581,14 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
             }
             window.pressedSubTabSlot = -1;
         }
+    }
+
+    // The Application Tab owns its whole content area: one opaque panel plus the active view.
+    // Drawn here, after the bands and before the right-side overlay, so the icon bar and panes
+    // still land on top of it (tabs.md "Rendering the application views").
+    if (activeTabIndex >= 0 && ApplicationTab::IsApplicationTab(static_cast<uint64_t>(activeTabIndex))) {
+        ApplicationTab::BuildApplicationTabOverlay(ctx, uiRes, activeInternalSubTabMemoryId,
+            topUITotalHeightPx, W, H, buttonHeightPx, uiTextScale);
     }
 
     if (activeTabIndex >= 0 && activeTabIndex < MV_MAX_TABS) {

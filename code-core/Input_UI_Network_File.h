@@ -6,6 +6,7 @@
 #include <random>
 #include "विश्वकर्मा.h"
 
+#include "ApplicationTab.h"
 #include "UserInputProcessing.h"
 #include "ExtensionCommunications.h"
 #include "RenderPage2D.h" // Cad2DFindTargetPage2DMemoryId for the DXF auto-import dev hook.
@@ -13,6 +14,18 @@
 
 extern std::atomic<bool> shutdownSignal; // Global flag to signal all threads to shut down.
 // Global queue for inputs to send commands to the Main Logic Thread.
+
+// "First tab" for the bulk load and the dev/testing hooks below means the first ENGINEERING tab:
+// the published list starts with the Application Tab, whose todoCPUQueue has no consumer and must
+// never be pushed to (tabs.md Decision 3).
+static DATASETTAB* FirstEngineeringTab() {
+    uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
+    uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+    for (uint16_t i = 0; i < tabCount; ++i) {
+        if (!ApplicationTab::IsApplicationTab(tabList[i])) return &allTabs[tabList[i]];
+    }
+    return nullptr;
+}
 
 // TODO: Implement windows socket API for listening to other clients.
 void NetworkInputThread() {
@@ -36,17 +49,12 @@ void FileInputThread() {
     // and then terminate, or it could continuously monitor for file changes.
     // For this example, it loads 10 objects and then sleeps.
     // Push 10 create commands to first active tab (if any)
-    uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
-    uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
-
-    if (tabCount > 0)
+    if (DATASETTAB* tab = FirstEngineeringTab())
     {
-        uint16_t firstTabIndex = tabList[0];
-        DATASETTAB& tab = allTabs[firstTabIndex];
         for (int i = 0; i < 10; ++i){
             ACTION_DETAILS action{};
             action.actionType = ACTION_TYPE::CREATEPYRAMID;
-            tab.todoCPUQueue->push(action);
+            tab->todoCPUQueue->push(action);
         }
 
     }
@@ -57,9 +65,8 @@ void FileInputThread() {
     wchar_t autoImportStd[MAX_PATH] = {};
     if (GetEnvironmentVariableW(L"VISHWAKARMA_AUTO_IMPORT_STD", autoImportStd, MAX_PATH) > 0) {
         for (int attempt = 0; attempt < 100 && !shutdownSignal; ++attempt) {
-            if (publishedTabCount.load(std::memory_order_acquire) > 0) {
-                uint16_t* list = publishedTabIndexes.load(std::memory_order_acquire);
-                ExtensionCommunications::QueueImportStdFile(&allTabs[list[0]], autoImportStd);
+            if (DATASETTAB* tab = FirstEngineeringTab()) {
+                ExtensionCommunications::QueueImportStdFile(tab, autoImportStd);
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -73,12 +80,11 @@ void FileInputThread() {
     wchar_t autoImportDxf[MAX_PATH] = {};
     if (GetEnvironmentVariableW(L"VISHWAKARMA_AUTO_IMPORT_DXF", autoImportDxf, MAX_PATH) > 0) {
         for (int attempt = 0; attempt < 300 && !shutdownSignal; ++attempt) {
-            if (publishedTabCount.load(std::memory_order_acquire) > 0) break;
+            if (FirstEngineeringTab()) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        if (publishedTabCount.load(std::memory_order_acquire) > 0) {
-            uint16_t* list = publishedTabIndexes.load(std::memory_order_acquire);
-            DATASETTAB& tab = allTabs[list[0]];
+        if (DATASETTAB* firstTab = FirstEngineeringTab()) {
+            DATASETTAB& tab = *firstTab;
             uint64_t pageMemoryId = 0;
             for (int attempt = 0; attempt < 300 && !shutdownSignal; ++attempt) {
                 pageMemoryId = Cad2DFindTargetPage2DMemoryId(tab);

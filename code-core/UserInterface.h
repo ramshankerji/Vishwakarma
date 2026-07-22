@@ -331,8 +331,11 @@ struct UIColors { // Standard UI Colours (ABGR format for DX12)
     uint32_t actionGroupHoverBackground = 0xFFFF9933; // Orange in Indian Flag
     uint32_t actionText = 0xFF242424; //rgba(36, 36, 36) + Corner smoothening color?
     //Action icon color is stored inside the button itself. Different icons = different colors.
-    uint32_t actionIconDisabled = 0xFF888888; //rgba(136, 136, 136)	
+    uint32_t actionIconDisabled = 0xFF888888; //rgba(136, 136, 136)
 };
+
+// The palette every overlay draws with (defined in UserInterface.cpp).
+extern UIColors uiActiveColors;
 
 
 // Thread-safe push (lock-free ring buffer style – reuse your MemoryManagerGPU ring buffer idea)
@@ -854,6 +857,15 @@ void PushRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h
 void PushTopRoundedRectangle(UIDrawContext& ctx, float x, float y, float w, float h, float radiusPx,
     uint32_t color, DX12ResourcesUI& uiRes);
 void PushText(UIDrawContext& ctx, float x, float y, const char* text, uint32_t color, DX12ResourcesUI& uiRes);
+
+// Widget primitives shared by BuildUIDropdown and the Application Tab's content panel
+// (ApplicationTab.cpp). Unlike raw PushRect they advance the vertex/index counters themselves.
+void PushWidgetRect(UIDrawContext& ctx, DX12ResourcesUI& uiRes, float x, float y, float w, float h,
+    uint32_t color);
+// ASCII text scaled by textScale, clipped to maxWidth, baseline at baselineY.
+void PushWidgetText(UIDrawContext& ctx, DX12ResourcesUI& uiRes, float x, float baselineY,
+    const char* text, float maxWidth, uint32_t color, float textScale);
+float WidgetTextBaselineY(float y, float h, float textScale);
 
 // Reusable dropdown: draws a closed field at (x, y, width, rowHeightPx) showing items[selectedIndex]
 // and, while open, the item list below it. Handles its own hit-testing against input and returns

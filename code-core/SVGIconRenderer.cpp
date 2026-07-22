@@ -63,7 +63,10 @@ std::vector<RenderedSVGIcon> RenderEmbeddedSVGIcons(int pixelSize) {
             continue;
         }
 
-        lunasvg::Bitmap bitmap = document->renderToBitmap(pixelSize, pixelSize, 0x00000000u);
+        // Height drives the raster; width follows the SVG's own aspect ratio. Passing both would
+        // make lunasvg scale x and y independently, squashing a wide icon (the विश्वकर्मा
+        // word-mark) into a square. Every square icon still comes out pixelSize x pixelSize.
+        lunasvg::Bitmap bitmap = document->renderToBitmap(-1, pixelSize, 0x00000000u);
         if (bitmap.isNull() || bitmap.width() <= 0 || bitmap.height() <= 0) {
             std::cerr << "Failed to rasterize embedded SVG icon: " << icon.fileName << "\n";
             continue;

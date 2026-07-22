@@ -157,6 +157,7 @@ python "$(ProjectDir)..\code-miscellaneous\steel_profile_embedder.py" "$(Project
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="AccountManager.cpp" />
+    <ClCompile Include="ApplicationTab.cpp" />
     <ClCompile Include="DataTreeView.cpp" />
     <ClCompile Include="PropertyPane.cpp" />
     <ClCompile Include="DataStorage.cpp" />
@@ -214,6 +215,7 @@ python "$(ProjectDir)..\code-miscellaneous\steel_profile_embedder.py" "$(Project
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AccountManager.h" />
+    <ClInclude Include="ApplicationTab.h" />
     <ClInclude Include="colors.h" />
     <ClInclude Include="GPUPlatformSelector.h" />
     <ClInclude Include="ImprovementData.h" />

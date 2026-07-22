@@ -53,6 +53,7 @@ Additional Info: We do not use void*, but rather use modern std::byte*.
 #include <optional>
 #include <algorithm> // Required for std::lower_bound
 #include <list> // For freeChunks pool
+#include <atomic>
 #include <new>  // Required for placement new
 #include <map>
 #include <thread>
@@ -298,6 +299,10 @@ public:
     राम& operator=(const राम&) = delete;
 
     const uint32_t POINTER_OVERHEAD_BYTES = 8; // We store the bytes allocated, just preceding the bytes.
+
+    // Committed 4 MB chunks currently held by tabs (read by the Application Tab's Stats view,
+    // tabs.md). Only the two chunk lifecycle points below write it, both under the global mutex.
+    std::atomic<uint32_t> liveChunkCount{ 0 };
     
     /*Called by the overloaded `new` operator in META_DATA. return A pointer to the allocated memory.*/
     std::byte* Allocate(uint64_t size, uint32_t memoryGroupNo);
@@ -448,6 +453,7 @@ inline void राम::notifyTabClosed(uint32_t memoryGroupNo) {
             VirtualMemory::decommit_memory(chunk, SMALL_ALLOCATOR_CHUNK_SIZE);
             freeChunks.push_back(chunk); // Add back to the free pool for reuse
         }
+        liveChunkCount.fetch_sub(static_cast<uint32_t>(it->second.size()), std::memory_order_relaxed);
         tabToChunksMap.erase(it);
     }
     // Drop the allocation hint unconditionally: it points into a chunk that is now decommitted.
@@ -485,6 +491,7 @@ inline CPU_RAM_4MB* राम::getNewChunkForTab(uint32_t memoryGroupNo) {
         newChunk = new (chunkMem) CPU_RAM_4MB(memoryGroupNo); // Placement new
     }
     tabToChunksMap[memoryGroupNo].push_back(newChunk);
+    liveChunkCount.fetch_add(1, std::memory_order_relaxed);
     std::cout << "Tab " << memoryGroupNo << ": Acquired new chunk at " << newChunk << std::endl;
     return newChunk;
 }
