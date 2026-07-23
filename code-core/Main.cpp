@@ -54,8 +54,11 @@
 
 #include <windows.h>
 #include <windowsx.h> // For some macros like GET_X_LPARAM, GET_Y_LPARAM etc.
+#include <uxtheme.h>  // MARGINS, used by DwmExtendFrameIntoClientArea below.
+#include <dwmapi.h>   // DwmExtendFrameIntoClientArea for the frameless window's drop shadow.
 
 #pragma comment(lib, "Comdlg32.lib")
+#pragma comment(lib, "Dwmapi.lib")
 
 /* We have moved to statically compiling the .h/.c files of dependencies. 
 Hence we don't need to compile them and generate .lib file and link them separately.
@@ -212,7 +215,11 @@ DATASETTAB* CreateEngineeringTab(const std::wstring& displayName = L"",
     if (tabCount >= MV_MAX_TABS || nextTabSlot >= MV_MAX_TABS) return nullptr;
     if (hostWindowSlot >= MV_MAX_WINDOWS || !allWindows[hostWindowSlot].hWnd ||
         allWindows[hostWindowSlot].windowKind != WINDOW_KIND_TABHOST) {
-        hostWindowSlot = 0; // Fall back to the main window when the requested host is gone.
+        // Fall back to whichever tab-host window currently hosts the Application Tab. Slot 0 is no
+        // longer guaranteed to be alive, since its window can now be closed (tab 0 migrates away).
+        hostWindowSlot = static_cast<uint16_t>(
+            allTabs[ApplicationTab::kApplicationTabId].hostWindowSlot.load(std::memory_order_acquire));
+        if (hostWindowSlot >= MV_MAX_WINDOWS || !allWindows[hostWindowSlot].hWnd) hostWindowSlot = 0;
     }
 
     uint16_t* currentList = publishedTabIndexes.load(std::memory_order_acquire);
@@ -323,6 +330,38 @@ void RequestCloseEngineeringTab(uint16_t tabID) {
     closeRequest.x = tabID;
     closeRequest.timestamp = GetTickCount64();
     allTabs[tabID].todoCPUQueue->push(closeRequest);
+}
+
+// Destroys every engineering tab hosted by the given window (used when the whole window is closed —
+// tabs.md). Removes them from the published list and signals each engineering thread to tear down;
+// the async close then joins through CleanupReleasedTabs, exactly as a single tab [x] does. The
+// Application Tab, if hosted here, is deliberately left in the list for the caller to migrate. Unlike
+// RequestCloseEngineeringTab this does no per-tab window bookkeeping: the window is being torn down,
+// and no surviving window holds these tabs active (a window's active tab is one it hosts).
+static void CloseAllHostedEngineeringTabs(uint16_t windowSlot) {
+    uint16_t* currentList = publishedTabIndexes.load(std::memory_order_acquire);
+    const uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+    uint16_t* nextList = (currentList == activeTabIndexesA) ? activeTabIndexesB : activeTabIndexesA;
+    uint16_t nextCount = 0;
+    for (uint16_t i = 0; i < tabCount; ++i) {
+        const uint16_t tabID = currentList[i];
+        const bool hostedHere =
+            allTabs[tabID].hostWindowSlot.load(std::memory_order_acquire) == static_cast<int16_t>(windowSlot);
+        if (hostedHere && !ApplicationTab::IsApplicationTab(tabID)) {
+            if (!closeQueuedTabs[tabID]) {
+                closeQueuedTabs[tabID] = true;
+                ACTION_DETAILS closeRequest{};
+                closeRequest.actionType = ACTION_TYPE::CLOSE_TAB;
+                closeRequest.source = INPUT_SOURCE::SYSTEM;
+                closeRequest.x = tabID;
+                closeRequest.timestamp = GetTickCount64();
+                allTabs[tabID].todoCPUQueue->push(closeRequest);
+            }
+            continue; // dropped from the published list
+        }
+        nextList[nextCount++] = tabID;
+    }
+    PublishTabList(nextList, nextCount);
 }
 
 void CleanupReleasedTabs() {
@@ -830,6 +869,10 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     
     std::wcout << "Starting application..." << std::endl;
 
+    // Chrome-style frameless window (tabs.md): reclaim the caption before the first show, so the tab
+    // band opens at y = 0 with the OS title bar already gone (no visible frame flash).
+    ApplyFramelessFrame(mainWindow.hWnd);
+
     // By default we always initialize application in maximized state.
     // Intentionally we don't remember last closed size and slowdown startup time retrieving that value.
     ShowWindow(mainWindow.hWnd, SW_MAXIMIZE); // hWnd: the value returned from CreateWindow
@@ -943,6 +986,19 @@ static void UpdateUIMousePosition(SingleUIWindow* window, LPARAM lParam) {
     if (!window) return;
     window->uiInput.mouseX = static_cast<float>(GET_X_LPARAM(lParam));
     window->uiInput.mouseY = static_cast<float>(GET_Y_LPARAM(lParam));
+}
+
+// Chrome-style frameless window (tabs.md). Extends the client area over the caption (the actual
+// reclaim happens in WM_NCCALCSIZE) and adds a 1px DWM top margin so the OS keeps drawing the
+// window's drop shadow / crisp border. Idempotent; re-applied after DPI changes so the inset tracks
+// the monitor. Only tab-host windows are made frameless; WINDOW_KIND_VIEW windows keep the OS frame.
+void ApplyFramelessFrame(HWND hWnd) {
+    if (!hWnd) return;
+    MARGINS margins{ 0, 0, 1, 0 }; // 1px top so the drop shadow survives the reclaimed caption.
+    DwmExtendFrameIntoClientArea(hWnd, &margins);
+    // Force one WM_NCCALCSIZE now so the reclaimed client area (and thus the band at y=0) takes effect.
+    SetWindowPos(hWnd, nullptr, 0, 0, 0, 0,
+        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
 }
 
 float GetTopRibbonHeightPxForWindow(const SingleUIWindow* window) {
@@ -1085,27 +1141,132 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     switch (message)
     {
-    /*
-    case WM_NCCALCSIZE: //Override the WM_NCCALCSIZE message to extend the client area into the title bar space.
-        if (wParam == TRUE) {
-            // Extend the client area to cover the title bar
-            NCCALCSIZE_PARAMS* pncsp = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
-            pncsp->rgrc[0].top -= GetSystemMetrics(SM_CYCAPTION);
+    // ******* FRAMELESS WINDOW (Chrome-style, tabs.md) *******
+    // Tab-host windows drop the OS caption: the client area extends over it and the tab band draws the
+    // app identity, tabs and the min/max/close buttons. WINDOW_KIND_VIEW windows keep the normal frame,
+    // so every case here no-ops for them (isFrameless == false) and falls back to DefWindowProc.
+    case WM_NCCALCSIZE:
+    {
+        const bool isFrameless = currentWindow && currentWindow->windowKind == WINDOW_KIND_TABHOST;
+        if (isFrameless && wParam == TRUE) {
+            // Reclaim the caption but keep the side/bottom resize borders (so snap, resize and the
+            // minimise animation still work). Insets come from GetSystemMetricsForDpi at the window's
+            // current DPI, re-evaluated every message, so a monitor move rescales them automatically.
+            NCCALCSIZE_PARAMS* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
+            RECT& rc = params->rgrc[0];
+            const UINT dpi = GetDpiForWindow(hWnd);
+            const int frameX = GetSystemMetricsForDpi(SM_CXFRAME, dpi);
+            const int frameY = GetSystemMetricsForDpi(SM_CYFRAME, dpi);
+            const int padding = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            rc.left += frameX + padding;
+            rc.right -= frameX + padding;
+            rc.bottom -= frameY + padding;
+            // Maximised: Windows oversizes the window by the frame thickness, so add it back or the top
+            // of the band is clipped off-screen (tabs.md "Maximised inset"). Restored: keep a 1px
+            // non-client sliver at the top so the OS draws its thin border line there — the crisp
+            // Chrome-style top edge, instead of the tab band bleeding to the very top pixel.
+            if (IsZoomed(hWnd)) rc.top += frameY + padding;
+            else rc.top += 1;
             return 0;
-        },,,,
-        break;
-    */
-    /*
-    case WM_NCCALCSIZE: //Override the WM_NCCALCSIZE message to extend the client area into the title bar space.
-        if (wParam == TRUE) {
-            // Extend the client area to cover the title bar
-            NCCALCSIZE_PARAMS* pncsp = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
-            pncsp->rgrc[0].top -= GetSystemMetrics(SM_CYCAPTION);
-            return 0;
-        },,,,
-        break;
-    */
-    
+        }
+        return DefWindowProc(hWnd, message, wParam, lParam);
+    }
+
+    case WM_NCHITTEST:
+    {
+        const bool isFrameless = currentWindow && currentWindow->windowKind == WINDOW_KIND_TABHOST;
+        if (!isFrameless) return DefWindowProc(hWnd, message, wParam, lParam);
+
+        POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        ScreenToClient(hWnd, &pt);
+        RECT client{}; GetClientRect(hWnd, &client);
+
+        int32_t bandBottom = currentWindow->frameTabBarBottomPx.load(std::memory_order_acquire);
+        const int32_t controlsLeft = currentWindow->frameControlsLeftPx.load(std::memory_order_acquire);
+        const int32_t dragLeft = currentWindow->frameCaptionDragLeftPx.load(std::memory_order_acquire);
+
+        // Fallback before the first frame publishes the band geometry: a DPI-derived tab-bar height
+        // keeps the whole top strip draggable, so the window is never left undraggable/unclosable
+        // (tabs.md — the one bug that makes the app unusable). Mirrors GetTopRibbonHeightPxForWindow.
+        if (bandBottom <= 0) {
+            float dpiForBand = (float)GetDpiForWindow(hWnd);
+            if (dpiForBand < UI_MIN_LAYOUT_DPI) dpiForBand = UI_MIN_LAYOUT_DPI;
+            bandBottom = (int32_t)std::round(UI_TAB_BAR_HEIGHT_MM * dpiForBand / 25.4f);
+        }
+
+        // Inside the tab-bar strip WE own the hit test, so the buttons stay clickable even on a restored
+        // window whose top-right corner would otherwise be an OS resize border (letting DefWindowProc
+        // decide first turned the buttons into resize handles). Controls take priority over the resize
+        // edges; everything below the strip falls through to DefWindowProc, which keeps the
+        // left/right/bottom resize borders that survive WM_NCCALCSIZE.
+        if (pt.y >= 0 && pt.y < bandBottom && pt.x >= 0 && pt.x < client.right) {
+            // Min / max / close block at the right — reported as caption-button hit codes so
+            // DefWindowProc runs the action and Windows 11 shows the snap flyout for HTMAXBUTTON.
+            if (controlsLeft > 0 && pt.x >= controlsLeft) {
+                int buttonWidth = (int)(client.right - controlsLeft) / 3;
+                if (buttonWidth < 1) buttonWidth = 1;
+                int index = (int)(pt.x - controlsLeft) / buttonWidth;
+                if (index > 2) index = 2;
+                if (index == 0) return HTMINBUTTON;
+                if (index == 1) return HTMAXBUTTON;
+                return HTCLOSE;
+            }
+            // Resize edges in the non-control part of the strip (restored only): the reclaimed caption
+            // removed the OS top border, so synthesise HTTOP / HTTOPLEFT / HTLEFT by hand.
+            if (!IsZoomed(hWnd)) {
+                const UINT dpi = GetDpiForWindow(hWnd);
+                const int border = GetSystemMetricsForDpi(SM_CYFRAME, dpi) +
+                    GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+                const bool nearTop = pt.y < border;
+                const bool nearLeft = pt.x < border;
+                if (nearTop && nearLeft) return HTTOPLEFT;
+                if (nearTop) return HTTOP;
+                if (nearLeft) return HTLEFT;
+            }
+            // Empty strip between the '+' button and the controls is the window drag handle.
+            if (pt.x >= dragLeft && (controlsLeft <= 0 || pt.x < controlsLeft)) return HTCAPTION;
+            return HTCLIENT; // Tabs and '+'.
+        }
+
+        // Below (or outside) the band: DefWindowProc owns the side/bottom resize borders and client.
+        return DefWindowProc(hWnd, message, wParam, lParam);
+    }
+
+    case WM_NCMOUSEMOVE:
+        // The control buttons are non-client, so their hover never arrives as WM_MOUSEMOVE. Feed the
+        // cursor into the per-window UI snapshot so the render thread lights the hovered button, then
+        // let DefWindowProc drive the snap flyout / button-press handling.
+        if (currentWindow && currentWindow->windowKind == WINDOW_KIND_TABHOST) {
+            POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            ScreenToClient(hWnd, &pt);
+            currentWindow->uiInput.mouseX = (float)pt.x;
+            currentWindow->uiInput.mouseY = (float)pt.y;
+            TRACKMOUSEEVENT tme{ sizeof(TRACKMOUSEEVENT), TME_LEAVE | TME_NONCLIENT, hWnd, 0 };
+            TrackMouseEvent(&tme);
+        }
+        return DefWindowProc(hWnd, message, wParam, lParam);
+
+    case WM_NCMOUSELEAVE:
+        // Cursor left the non-client area: park the UI mouse off-screen so no control stays lit.
+        if (currentWindow && currentWindow->windowKind == WINDOW_KIND_TABHOST) {
+            currentWindow->uiInput.mouseX = -1.0f;
+            currentWindow->uiInput.mouseY = -1.0f;
+        }
+        return DefWindowProc(hWnd, message, wParam, lParam);
+
+    case WM_NCLBUTTONDOWN:
+        // Perform the window-control commands ourselves rather than relying on DefWindowProc's handling
+        // of these synthetic caption-button hit codes — on a frameless window it runs close/maximise but
+        // silently drops minimise. Doing it explicitly is deterministic for all three. HTCAPTION and the
+        // resize edges fall through to DefWindowProc (window drag / resize). The snap-layout flyout is
+        // hover-driven (WM_NCHITTEST → HTMAXBUTTON), so consuming the click here does not disturb it.
+        if (currentWindow && currentWindow->windowKind == WINDOW_KIND_TABHOST) {
+            if (wParam == HTMINBUTTON) { ShowWindow(hWnd, SW_MINIMIZE); return 0; }
+            if (wParam == HTMAXBUTTON) { ShowWindow(hWnd, IsZoomed(hWnd) ? SW_RESTORE : SW_MAXIMIZE); return 0; }
+            if (wParam == HTCLOSE) { PostMessage(hWnd, WM_CLOSE, 0, 0); return 0; }
+        }
+        return DefWindowProc(hWnd, message, wParam, lParam);
+
     // ******* LIFECYCLE messages ******
     
     
@@ -1425,6 +1586,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         // leaves a zombie process holding the D3D12 device (subsequent launches then fail at
         // CreateCommandQueue). Startup runs RestartRenderThreads itself, so early messages are moot.
         if (!gpu.isGPUEngineInitialized) break;
+        // WM_DPICHANGED carries the OS-suggested window rect (in lParam) for the new DPI. Applying it
+        // keeps the frameless window correctly sized when dragged between a 1080p and a 4K panel; the
+        // WM_NCCALCSIZE inset then re-derives from the new DPI on its own (tabs.md "Per-monitor DPI").
+        if (message == WM_DPICHANGED && lParam) {
+            const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
+            SetWindowPos(hWnd, nullptr, suggested->left, suggested->top,
+                suggested->right - suggested->left, suggested->bottom - suggested->top,
+                SWP_NOZORDER | SWP_NOACTIVATE);
+        }
         std::wcout << L"WM_DISPLAYCHANGE / WM_DPICHANGED received. Restarting render threads." << std::endl;
         /* This IS a topology change. Monitor details may have changed. But Geometry belonging to tabs persists!
         Monitor addition / removal is very rare event. 1 event each couple hours average is already conservative.
@@ -1454,6 +1624,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         UINT newHeight = HIWORD(lParam);
 
         if (currentWindow) { // Simply keep storing latest value. Render thread will pick it up when it has time.
+            // Publish maximised state so the band picks the maximise vs restore glyph (tabs.md).
+            currentWindow->isMaximized.store(wParam == SIZE_MAXIMIZED, std::memory_order_release);
             currentWindow->nextRequestedWidth.store(newWidth, std::memory_order_relaxed);
             currentWindow->nextRequestedHeight.store(newHeight, std::memory_order_relaxed);
 
@@ -1510,38 +1682,63 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         break;
         }
     case WM_CLOSE: // This is called BEFORE WM_DESTROY is received. Importantly, once this is over hWnd is destroyed.
-        // Secondary windows (extracted tabs / views) close individually: hosted content returns
-        // to the main window / inline band, rendering elsewhere continues undisturbed.
-        if (currentWindow && currentWindow != &allWindows[0]) {
+    {
+        if (!currentWindow) { DestroyWindow(hWnd); return 0; }
+
+        // Extracted VIEW windows are unchanged: the sub-tab returns inline and the window dies.
+        if (currentWindow->windowKind == WINDOW_KIND_VIEW) {
             HandleSecondaryWindowClose(*currentWindow);
             return 0;
         }
-        // Main window: full application shutdown below.
-        // Initiate shutdown for render threads FIRST
-        std::wcout << "WM_CLOSE: Pausing render threads..." << std::endl;
-        pauseRenderThreads = true;
 
-        // Join render threads to ensure they stop BEFORE window destruction
-        // TODO : Warning : This will terminate ALL render threads. Revisit this code when multi window is implemented.
+        // Tab-host window (tabs.md): closing it closes ALL its tabs. Find another tab-host window that
+        // would keep the application alive; if there is none, this is the last one and we quit.
+        const uint16_t closingSlot = static_cast<uint16_t>(currentWindow - allWindows);
+        int16_t survivorSlot = -1;
+        for (uint16_t i = 0; i < windowCount; ++i) {
+            const uint16_t s = windowList[i];
+            if (s != closingSlot && allWindows[s].hWnd &&
+                allWindows[s].windowKind == WINDOW_KIND_TABHOST) { survivorSlot = static_cast<int16_t>(s); break; }
+        }
+
+        if (survivorSlot >= 0) {
+            // The application survives (render threads keep running for the other windows). Mark the
+            // closing window so render threads skip it before we start dropping its tabs, avoiding a
+            // read of a tab mid-teardown (TeardownWindowSlot sets this too — it is idempotent).
+            currentWindow->isMigrating.store(true, std::memory_order_release);
+            // If this window hosts the (un-closable) Application Tab, migrate it to the survivor before
+            // tearing everything down, then close every engineering tab here.
+            const int16_t appTabHost =
+                allTabs[ApplicationTab::kApplicationTabId].hostWindowSlot.load(std::memory_order_acquire);
+            if (appTabHost == static_cast<int16_t>(closingSlot)) {
+                allTabs[ApplicationTab::kApplicationTabId].hostWindowSlot.store(survivorSlot, std::memory_order_release);
+                if (allWindows[survivorSlot].activeTabIndex < 0)
+                    allWindows[survivorSlot].activeTabIndex = static_cast<int>(ApplicationTab::kApplicationTabId);
+            }
+            CloseAllHostedEngineeringTabs(closingSlot);
+            TeardownWindowSlot(closingSlot);
+            if (allWindows[survivorSlot].hWnd) SetForegroundWindow(allWindows[survivorSlot].hWnd);
+            return 0;
+        }
+
+        // Last tab-host window (it necessarily hosts tab 0): shut the whole application down.
+        std::wcout << "WM_CLOSE: last tab-host window; shutting the application down..." << std::endl;
+        pauseRenderThreads = true;
+        // Join render threads to ensure they stop BEFORE window destruction.
         for (auto& t : renderThreads) {
             if (t.joinable()) { t.join(); }
         }
         std::wcout << "WM_CLOSE: All render threads joined." << std::endl;
-
-        // Now safe to clean up window-specific DX resources (swap chain, RTVs, etc.)
-        // This prevents any lingering GPU work on invalid resources
-        for (uint16_t i = 0; i < windowCount; ++i) {
-            SingleUIWindow& window = allWindows[windowList[i]];
-            if (window.hWnd == hWnd) {  // Target this specific window
-                gpu.CleanupWindowResources(window.dx);
-                break; // We found it. No need to continue.
-            }
-        }
-        DestroyWindow(hWnd);// Now destroy the window (sends WM_DESTROY)
-        return 0;  // Don't call DefWindowProc (prevents default handling)
-        break;
+        // Clean up this window's DX resources; wWinMain's post-loop cleanup handles the rest.
+        gpu.CleanupWindowResources(currentWindow->dx);
+        DestroyWindow(hWnd);   // sends WM_DESTROY
+        PostQuitMessage(0);    // explicit: the last tab-host window is not necessarily slot 0
+        return 0;
+    }
     case WM_DESTROY:
-        // Only the main window quits the application; secondary windows die individually.
+        // Belt-and-suspenders quit for the common case where the closed window is still slot 0. The
+        // last-tab-host-window path in WM_CLOSE also posts quit explicitly (the last window may not be
+        // slot 0 once tab 0 has migrated); a duplicate WM_QUIT is harmless.
         if (hWnd == allWindows[0].hWnd) PostQuitMessage(0);
         break;
     default:

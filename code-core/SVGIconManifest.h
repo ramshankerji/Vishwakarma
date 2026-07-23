@@ -5,6 +5,10 @@
 // Add one VISHWAKARMA_SVG_ICON(id, "file.svg") line for each file in website/static/SVGIcons.
 #define VISHWAKARMA_SVG_ICON_MANIFEST(VISHWAKARMA_SVG_ICON) \
     VISHWAKARMA_SVG_ICON(1u, "icon_1_logo.svg") \
+    VISHWAKARMA_SVG_ICON(10u, "icon_10_window_minimize.svg") \
+    VISHWAKARMA_SVG_ICON(11u, "icon_11_window_maximize.svg") \
+    VISHWAKARMA_SVG_ICON(12u, "icon_12_window_restore.svg") \
+    VISHWAKARMA_SVG_ICON(13u, "icon_13_window_close.svg") \
     VISHWAKARMA_SVG_ICON(2162683985u, "icon_2162683985_line_element_column.svg") \
     VISHWAKARMA_SVG_ICON(2198107607u, "icon_2198107607_select_lines.svg") \
     VISHWAKARMA_SVG_ICON(2209549389u, "icon_2209549389_import_std.svg") \

@@ -8,6 +8,8 @@ inline constexpr wchar_t szWindowClass[] = L"विश्वकर्मा";
 
 // Window lifecycle (moved out of Main.cpp; still called by WndProc / ProcessPendingUIActions).
 void CloseSecondaryWindow(uint16_t windowSlot);
+// Tears down any window slot, main window included (WndProc's tab-host close path uses it for slot 0).
+void TeardownWindowSlot(uint16_t windowSlot);
 void ExtractTabToNewWindow(uint16_t tabID);
 void ExtractViewToNewWindow(uint16_t tabIndex, uint64_t containerMemoryId);
 void CloseViewWindowFor(uint16_t tabIndex, uint16_t subTabSlot);

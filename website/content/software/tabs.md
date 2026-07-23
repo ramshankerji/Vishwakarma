@@ -13,8 +13,9 @@ Support, Peer Chat, Documentation, Common Geometry, and Stats. Its memory group 
 reserved as the future home of the immutable instancing geometry masters. **Tab 1** is the single
 engineering tab the application opens with; every further tab comes from the `+` button.
 
-Still to come: removing the OS title bar, so the window becomes nearly identical to the Google
-Chrome tab system — `[विश्वकर्मा][Tab][Tab][+] ................ [─][□][✕]`.
+The OS title bar is gone: the window is frameless, nearly identical to the Google Chrome tab
+system — `[विश्वकर्मा][Tab][Tab][+] ................ [─][□][✕]`. See
+[Chrome-style frameless window](#chrome-style-frameless-window) below.
 
 ## Design decisions
 
@@ -49,11 +50,13 @@ Chrome tab system — `[विश्वकर्मा][Tab][Tab][+] ...........
    complex shaping (conjunct श्व, rakar र्मा) that the codepoint→glyph MSDF atlas cannot do, and the
    tab-label path filters to ASCII anyway. The word is committed once as vector paths — see the
    word-mark section below. Full Devanagari text shaping is explicitly out of scope.
-8. **Un-closable and un-movable, everywhere.** No `x` on the tab button, close requests refused at
-   the `RequestCloseEngineeringTab` level (defence in depth), no drag-out extraction, no drag-merge
-   into another window. `hostWindowSlot` stays 0 forever; secondary tab-host windows never show
-   tab 0. Closing the last *engineering* tab is legal — the main window falls back to the
-   Application Tab, Chrome-style.
+8. **Un-closable, and un-movable by hand.** No `x` on the tab button, close requests refused at the
+   `RequestCloseEngineeringTab` level (defence in depth), no drag-out extraction, no drag-merge into
+   another window. Closing the last *engineering* tab is legal — the hosting window falls back to the
+   Application Tab, Chrome-style. Tab 0 does move in exactly one involuntary case: when the window
+   hosting it is closed while another tab-host window survives, it **migrates** there rather than
+   dying (see "Closing a tab-host window" below), so `hostWindowSlot` is no longer pinned to 0 and a
+   secondary window can end up showing tab 0.
 9. **Views are un-closable and un-extractable.** The sub-tab band draws no `x` for tab 0's views
    and ignores drag-out. View activation for tab 0 is handled directly on the UI thread inside
    `ProcessPendingUIActions`, since there is no engineering thread to service `kActivateUIAction`.
@@ -118,7 +121,7 @@ together they make "no thread + un-closable" airtight.
 | `FileInputThread()` (`Input_UI_Network_File.h`) | Its startup bulk load and the two auto-import dev hooks push straight into the `todoCPUQueue` of `tabList[0]`, bypassing `PushSystemTodoToTab` — and `tabList[0]` *is* tab 0. They resolve "first tab" through a local `FirstEngineeringTab()` instead. This one was found by the debug sentinel below, not by inspection. |
 | `RequestCloseEngineeringTab()` | Refuses `tabID == kApplicationTabId`. This replaced the old `tabCount <= 1` guard: closing the last engineering tab is legal now, and the existing replacement logic lands the main window on tab 0 (always in the published list, hosted by window 0). |
 | Tab band (`UserInterface.cpp`) | Tab 0: draw the logo + word-mark instead of a label; skip the `x` button and its hit test; never set `pressedTabId` (no drag-out). |
-| `ExtractTabToNewWindow` | Refuses tab 0; `hostWindowSlot` stays 0. Drag-merge needs no guard: it only moves tabs hosted by a secondary window, and tab 0 never leaves slot 0. |
+| `ExtractTabToNewWindow` | Refuses tab 0 (no *hand* drag-out). Tab 0 still migrates involuntarily when its host window is closed — see "Closing a tab-host window". Drag-merge needs no guard: it only moves tabs hosted by a secondary window. |
 | Sub-tab band (`UserInterface.cpp`) | When the active tab is 0: skip the `x` draw and hit-test and the drag-out candidate (`pressedSubTabSlot` stays -1); the title takes the freed width. Activation click still emits `kActivateUIAction`. |
 | `ExtractViewToNewWindow` | Refuses tab 0. Needed only once the views were published: before that the slot lookup failed on its own, afterwards it would succeed and build a real view window. |
 | `ProcessPendingUIActions` | `kActivateUIAction` for tab 0 calls `ApplicationTab::ActivateApplicationTabView(p2)` on the UI thread. `kCloseUIAction` needs no branch — it routes through the guarded `PushSystemTodoToTab`. |
@@ -198,6 +201,105 @@ now centred on its measured width (`MeasureUIStringWidth`) and drawn in `kUIDisa
 rest, white on the hover pill. Dull at rest is deliberate — a row of view buttons should not read
 as clutter. **Size such clips from `MeasureUIStringWidth`, never from a guessed fraction.**
 
+## Chrome-style frameless window
+
+The tab-host window has no OS title bar. Its client area is extended over the caption and the tab
+band carries the whole caption strip: `[विश्वकर्मा][tabs…][+] …… [─][□][✕]`. `WINDOW_KIND_VIEW`
+windows (extracted sub-tabs) have no band and keep the normal OS frame — one `windowKind` branch
+guards every case below. No window-style change was needed: the window keeps `WS_OVERLAPPEDWINDOW`
+(so `WS_THICKFRAME` / `WS_CAPTION` still give snap, resize and the minimise animation); only the
+*visual* frame is removed.
+
+`ApplyFramelessFrame(HWND)` (`Main.cpp`) runs once per tab-host window, right after it is published
+and before it is shown: it calls `DwmExtendFrameIntoClientArea` with a 1 px top margin (so the OS
+keeps drawing the drop shadow) and forces one `WM_NCCALCSIZE` via `SetWindowPos(SWP_FRAMECHANGED)`.
+The main window gets it before `ShowWindow(SW_MAXIMIZE)`, so no framed window ever flashes.
+
+**Reclaiming the caption — `WM_NCCALCSIZE`.** For a frameless window it keeps the left/right/bottom
+resize borders (insets from `GetSystemMetricsForDpi` at the window's current DPI). When maximised,
+Windows oversizes the window by the frame thickness, so the top is pushed back down by that inset —
+otherwise the top of the band is clipped off-screen (visible on the very first run, which opens
+maximised). When restored, the top keeps a **1 px** non-client sliver (`rc.top += 1`) so the OS still
+draws its thin border line at the very top — the crisp Chrome-style top edge — with the band starting
+just below it.
+
+**Hit-testing — `WM_NCHITTEST`.** The render thread publishes three px coordinates per window —
+`frameTabBarBottomPx`, `frameControlsLeftPx`, `frameCaptionDragLeftPx`, atomics on `SingleUIWindow`,
+the same publish-through-atomic pattern as `rightOverlayWidthPx`. Inside the tab-bar strip **`WndProc`
+owns the hit test** — the min/max/close block at the right returns `HTMINBUTTON` / `HTMAXBUTTON` /
+`HTCLOSE`, the empty strip between the `+` button and the controls returns `HTCAPTION`, the reclaimed
+top edge is synthesised as `HTTOP` / `HTTOPLEFT` / `HTLEFT` (restored only, non-control area) so the
+top can still be resized, and the rest (tabs, `+`) stays `HTCLIENT`. **Controls take priority over the
+resize edges** — critical on a restored window, whose top-right corner is otherwise an OS resize
+border: deferring to `DefWindowProc` first there turned the buttons into resize handles. Below the
+strip, `WndProc` falls through to `DefWindowProc`, which keeps the side/bottom resize borders. The
+button size follows the tab-bar height (`round(frameTabBarBottomPx * 1.5)`), the same formula the
+render thread lays them out with, so the hit regions match the drawn buttons regardless of any
+transient window-width lag. Returning `HTMAXBUTTON` still earns the Windows 11 snap-layout flyout on
+hover from `DefWindowProc` for free.
+
+**Stale-layout fallback.** A `WM_NCHITTEST` can arrive before the first frame publishes the geometry
+(startup, monitor topology change); then `frameTabBarBottomPx` is 0 and the handler falls back to a
+DPI-derived tab-bar height with the whole top strip draggable. Without this the window could be
+undraggable and unclosable — the one bug here that makes the app unusable rather than merely ugly.
+
+**The window controls.** `BuildUIOverlay` draws three buttons at the right of the tab bar and
+publishes the coordinates above. They are white line-art SVGs (ids 10–13 in `SVGIconManifest.h`) so
+the shader (`atlas.rgb * vertex colour`) tints them: grey at rest, white on hover, over a red pill on
+the close button's hover. The middle button shows a maximise square when windowed and a restore glyph
+when maximised (`SingleUIWindow::isMaximized`, set in `WM_SIZE`). Because the buttons are non-client,
+their hover never arrives as `WM_MOUSEMOVE`; `WndProc` feeds the cursor position from `WM_NCMOUSEMOVE`
+into the per-window `uiInput` (and parks it off-screen on `WM_NCMOUSELEAVE`) so the render thread
+lights the hovered button. The **clicks are handled in `WM_NCLBUTTONDOWN`** — `HTMINBUTTON` →
+`SW_MINIMIZE`, `HTMAXBUTTON` → maximise/restore, `HTCLOSE` → `WM_CLOSE` — rather than left to
+`DefWindowProc`, which on a frameless window runs close and maximise but silently drops minimise.
+Doing it ourselves is deterministic for all three and does not disturb the hover-driven snap flyout.
+
+**Per-monitor DPI.** All insets come from `GetSystemMetricsForDpi` at the window's current DPI and
+are recomputed on every `WM_NCCALCSIZE`, so a window dragged between a 1080p and a 4K panel rescales
+itself. `WM_DPICHANGED` now also applies the OS-suggested window rect from `lParam` before restarting
+the render threads (it previously ignored it).
+
+Dragging by `HTCAPTION` still fires `WM_ENTERSIZEMOVE` / `WM_EXITSIZEMOVE`, so `TryMergeWindowOnDrop`
+and tab drag-out are untouched. The published rects live in the new atomics rather than the
+long-unused `tabBandRect` / `viewBandRect` / `contentRect` fields, which stay dead for now.
+
+The extra window churn this feature adds (a `SWP_FRAMECHANGED` per window, caption-reclaim resizes,
+windows dragged across monitors) surfaced a latent compositor bug: `InitD3DPerWindow` created each
+window's render-texture in `RENDER_TARGET`, but every frame's opening barrier and the resize path
+expect `PIXEL_SHADER_RESOURCE`. The main window's startup maximise-resize hid it (that recreates the
+RTT as `PIXEL_SHADER_RESOURCE` before render threads run); a freshly extracted tab, or the
+monitor-mismatch recreation partway through the frame loop, rendered straight after creation and
+tripped `RESOURCE_BARRIER_BEFORE_AFTER_MISMATCH`. The RTT is now created in `PIXEL_SHADER_RESOURCE`,
+matching the barrier and the resize path.
+
+## Closing a tab-host window
+
+Closing a tab-host window (its `[✕]`, or the OS close) **closes every tab hosted in it** — the tabs
+are destroyed, not migrated back to the main window as they were before. `WndProc`'s `WM_CLOSE`
+branch drives it:
+
+- **Extracted `WINDOW_KIND_VIEW` windows** (a sub-tab pulled into its own ribbon-less window): closing
+  the window **closes the sub-tab it hosts** — `HandleSecondaryWindowClose` pushes
+  `CLOSE_INTERNAL_SUB_TAB` for that container (Scene3D / Page2D), so it no longer reappears inline in
+  the parent tab. Dragging the view window back onto the parent's band (`TryMergeWindowOnDrop`) still
+  returns it inline — only the close button destroys the sub-tab.
+- **A tab-host window** first looks for another surviving tab-host window. If one exists the
+  application lives on: every engineering tab hosted here is closed through
+  `CloseAllHostedEngineeringTabs` (same `CLOSE_TAB` teardown a single `[x]` uses, minus the per-tab
+  window bookkeeping), and the window is torn down with `TeardownWindowSlot`. If this window hosts the
+  Application Tab, tab 0 is **migrated** to the survivor first (its `hostWindowSlot` retargeted) so it
+  is never destroyed; the survivor is brought to the foreground.
+- **If there is no other tab-host window**, this is the last one — it necessarily hosts tab 0 — so the
+  **whole application shuts down** (pause + join render threads, clean up, `PostQuitMessage`).
+
+Two lifecycle assumptions had to go, because the main window (slot 0) can now be the one closed:
+`TeardownWindowSlot` generalises the old `CloseSecondaryWindow` to any slot (nulling `hWnd` before
+`DestroyWindow`, so the `WM_DESTROY` quit-guard on `allWindows[0].hWnd` does not fire and the app
+keeps running); and the quit is posted **explicitly** from the last-window branch, since the last
+tab-host window is no longer guaranteed to be slot 0. `CreateEngineeringTab`'s host fallback now
+resolves to whichever window currently hosts tab 0 rather than hard-coding slot 0.
+
 ## Files
 
 | File | Role |
@@ -224,65 +326,3 @@ per-instance transforms) is its own future design document section in `graphics.
 ### Recent-files persistence for the Launcher
 TODO. File format and location — likely next to the AccountManager identity data — to be decided
 when the Launcher gets real content.
-
-### Chrome-style frameless window
-
-Remove the OS title bar; final band layout `[विश्वकर्मा][tabs...][+] ... [─][□][✕]`. Tab 0 shipping
-was the prerequisite, because the band now carries the application identity the title bar used to.
-Estimated at ~200–250 lines across three files: small, with no threading or architectural risk, but
-the most Win32-fiddly work in this feature. Survey findings, so a future session does not have to
-re-derive them:
-
-**Already in our favour**
-
-- The tab band already draws from client `y = 0`, so extending the client area over the caption
-  needs **no layout change** — the band simply moves up into the vacated strip.
-- No window-style change needed. `WS_OVERLAPPEDWINDOW` keeps `WS_THICKFRAME` / `WS_CAPTION`, which
-  is what gives snap, resize and the minimise animation; only the *visual* frame goes.
-- `SingleUIWindow::rightOverlayWidthPx` is the precedent for the plumbing this needs: the render
-  thread publishes a px geometry through an atomic, `WndProc` reads it for hit-testing.
-- `GetTopRibbonHeightPxForWindow()` already reads `topRibbonLayout` from `WndProc`, so band metrics
-  are reachable from the UI thread today.
-- Dragging by `HTCAPTION` still fires `WM_ENTERSIZEMOVE` / `WM_EXITSIZEMOVE`, so
-  `TryMergeWindowOnDrop` keeps working untouched. Tab drag-out survives too, because tab buttons
-  return `HTCLIENT`.
-
-**Mechanical part**
-
-`WM_NCCALCSIZE` client-area extension; three window-control icons drawn at the band's right edge
-(the ✕ and □ want real SVG icons — the UI has no diagonal-quad primitive); publishing their rects;
-`WM_NCHITTEST` returning `HTMINBUTTON` / `HTMAXBUTTON` / `HTCLOSE` / `HTCAPTION` / `HTCLIENT`.
-Returning those hit codes gets close/minimise/maximise **and** the Win11 snap-layout flyout from
-`DefWindowProc` for free.
-
-**Where the time will actually go**
-
-1. **Maximised inset.** Windows oversizes a maximised window by the frame thickness; without
-   correction the top of the band is clipped off-screen. Startup calls `ShowWindow(SW_MAXIMIZE)`,
-   so this is visible on the very first run.
-2. **Per-monitor DPI.** The inset must come from `GetSystemMetricsForDpi` at the window's current
-   DPI and be re-evaluated on `WM_DPICHANGED`. Windows get dragged between a 1080p and a 4K panel
-   on the development machine, so this is where it will bite hardest. Related pre-existing gap:
-   `WM_DPICHANGED` currently only calls `RestartRenderThreads()` and never applies the OS-suggested
-   rect from `lParam`.
-3. **Top resize border.** Once the client covers the caption, the top few pixels must be
-   synthesized as `HTTOP` by hand or the window cannot be resized from the top edge.
-4. **Drop shadow.** Needs `DwmExtendFrameIntoClientArea` with a 1 px top margin, else the window
-   reads as a flat rectangle with no separation from what is behind it.
-5. **Stale layout at `WM_NCHITTEST` time.** It can arrive before `topRibbonLayout.isValid` (startup,
-   monitor topology change). A wrong fallback makes the window **undraggable and unclosable** — the
-   one bug here that makes the app unusable rather than merely ugly. Needs a deliberate fallback,
-   in the spirit of the existing one in `GetTopRibbonHeightPxForWindow`.
-
-**Decided**
-
-- **Scope it per window, not to the main window.** Secondary tab-host windows draw the same band
-  and get the same frameless treatment; `WINDOW_KIND_VIEW` windows have no band and keep the normal
-  frame. One `windowKind` branch in `WndProc`.
-- **The published rects live in `SingleUIWindow`'s existing `tabBandRect` / `viewBandRect` /
-  `contentRect` fields**, which are declared and threaded through both copy constructors today but
-  never written or read anywhere. They become the home for this — converted to atomics, since
-  `WndProc` reads what a render thread writes.
-
-Housekeeping when starting: the `WM_NCCALCSIZE` prototype sits in `WndProc` **twice**, both copies
-commented out and containing a `,,,,` typo that would not compile. Collapse to one.

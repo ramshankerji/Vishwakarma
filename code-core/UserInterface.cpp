@@ -956,6 +956,13 @@ constexpr char32_t kSplashLogoCodepoint = SVGIconRenderer::IconForID(1u);
 // whose glyph spans a run of atlas cells, so its quad is sized from the glyph's own aspect ratio.
 constexpr char32_t kApplicationTabIconCodepoint = SVGIconRenderer::IconForID(1u);
 constexpr char32_t kApplicationTabWordMarkCodepoint = SVGIconRenderer::IconForID(3950482947u);
+// Chrome-style window controls drawn at the right of the tab band (tabs.md frameless window). Authored
+// as white line-art SVGs so the shader (atlas.rgb * vertex colour) tints them: grey at rest, white on
+// hover, over a red pill on the close button's hover.
+constexpr char32_t kWindowMinimizeCodepoint = SVGIconRenderer::IconForID(10u);
+constexpr char32_t kWindowMaximizeCodepoint = SVGIconRenderer::IconForID(11u);
+constexpr char32_t kWindowRestoreCodepoint = SVGIconRenderer::IconForID(12u);
+constexpr char32_t kWindowCloseCodepoint = SVGIconRenderer::IconForID(13u);
 
 std::atomic<uint64_t> g_splashOverlayStartTick{ 0 };
 
@@ -1138,9 +1145,16 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
     const float plusButtonWidth = buttonHeightPx; // reserve square area for '+'
     const float minTabWidth = std::max(4.0f * pixelsPerMMx, 8.0f); // 4mm minimum as requested, but at least 8px
 
+    // Chrome-style window controls (min / max-restore / close) occupy the far right of the tab bar on
+    // tab-host windows (tabs.md frameless window). Reserve their width so tabs never slide underneath.
+    const bool drawWindowControls = (window.windowKind == WINDOW_KIND_TABHOST);
+    const float windowControlHeightPx = tabBarHeightPx;
+    const float windowControlWidthPx = std::round(windowControlHeightPx * 1.5f);
+    const float windowControlsWidthPx = drawWindowControls ? windowControlWidthPx * 3.0f : 0.0f;
+
     // Determine how many slots we need to fit: tabs + one slot for '+' button
     uint16_t slotsNeeded = tabCount + 1;
-    float availableForTabs = std::max(0.0f, W - plusButtonWidth);
+    float availableForTabs = std::max(0.0f, W - plusButtonWidth - windowControlsWidthPx);
 
     float tentativeWidth = availableForTabs / (float)slotsNeeded;
     float tabWidthPx = defaultTabWidth;
@@ -1300,6 +1314,45 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
     if (plusHovered && input.leftButtonPressedThisFrame) {
         // p1 = window slot, so the new tab is hosted by the window whose '+' was clicked.
         PushUIAction(ACTION_ENGINEERING_CREATE, static_cast<uint64_t>(windowSlot), 0);
+    }
+
+    // WINDOW CONTROLS (minimise / maximise-restore / close) — Chrome-style frameless window (tabs.md).
+    // WndProc returns HTMINBUTTON / HTMAXBUTTON / HTCLOSE for the rects published below, so
+    // DefWindowProc performs the actual min/max/close and the Win11 snap flyout; here we only draw the
+    // buttons and light the one under the cursor (WndProc feeds the non-client mouse position into
+    // input on WM_NCMOUSEMOVE). The click itself is non-client, so it never reaches this immediate-mode
+    // hit test — nothing to handle here beyond hover.
+    if (drawWindowControls) {
+        const float ctlH = windowControlHeightPx;
+        const float ctlW = windowControlWidthPx;
+        const float controlsLeft = std::round(W - windowControlsWidthPx);
+        const float iconExtent = std::round(ctlH * 0.60f);
+        const bool maximized = window.isMaximized.load(std::memory_order_acquire);
+        const uint32_t closeHoverColor = 0xFF1C2BC4u; // Windows close red (#C42B1C) in ABGR.
+        const uint32_t neutralHoverColor = 0xFF505050u;
+
+        const char32_t controlGlyphs[3] = {
+            kWindowMinimizeCodepoint,
+            maximized ? kWindowRestoreCodepoint : kWindowMaximizeCodepoint,
+            kWindowCloseCodepoint,
+        };
+        for (int c = 0; c < 3; ++c) {
+            const float bx = controlsLeft + (float)c * ctlW;
+            const bool hovered = input.mouseX >= bx && input.mouseX < bx + ctlW &&
+                input.mouseY >= 0.0f && input.mouseY < ctlH;
+            if (hovered) {
+                pushRect(bx, 0.0f, ctlW, ctlH, (c == 2) ? closeHoverColor : neutralHoverColor);
+            }
+            const uint32_t iconColor = hovered ? 0xFFFFFFFFu : uiActiveColors.tabBackgroundText;
+            PushIcon(ctx, bx + (ctlW - iconExtent) * 0.5f, (ctlH - iconExtent) * 0.5f,
+                iconExtent, iconExtent, controlGlyphs[c], iconColor, uiRes);
+        }
+
+        // Publish the caption geometry WndProc hit-tests against (release; WndProc acquires).
+        window.frameTabBarBottomPx.store((int32_t)std::round(ctlH), std::memory_order_release);
+        window.frameControlsLeftPx.store((int32_t)controlsLeft, std::memory_order_release);
+        window.frameCaptionDragLeftPx.store((int32_t)std::round(plusX + plusSize + 6.0f),
+            std::memory_order_release);
     }
 
     // TOP BUTTONS (ACTION GROUP BAR)

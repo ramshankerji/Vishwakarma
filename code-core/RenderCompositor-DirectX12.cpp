@@ -579,9 +579,16 @@ void शंकर::InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D1
 
     for (UINT i = 0; i < FRAMES_PER_RENDERTARGETS; i++) {
         CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
-        ThrowIfFailed(gpu.device->CreateCommittedResource( // Create the Resource in RENDER_TARGET state by default
+        // Create the RTT in PIXEL_SHADER_RESOURCE — the state every frame's opening barrier expects
+        // (PIXEL_SHADER_RESOURCE -> RENDER_TARGET) and the same state the resize path recreates it in.
+        // Creating it in RENDER_TARGET used to work only because the main window is resized on startup
+        // (which recreates it as PIXEL_SHADER_RESOURCE) before render threads run; windows that render
+        // straight after InitD3DPerWindow with no intervening resize — a fresh extracted tab, or the
+        // monitor-mismatch recreation a few lines into the frame loop — hit the first barrier with the
+        // resource still in RENDER_TARGET, tripping RESOURCE_BARRIER_BEFORE_AFTER_MISMATCH.
+        ThrowIfFailed(gpu.device->CreateCommittedResource(
             &heapProps, D3D12_HEAP_FLAG_NONE, &texDesc,
-            D3D12_RESOURCE_STATE_RENDER_TARGET, &clearValue, IID_PPV_ARGS(&dx.renderTextures[i])));
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clearValue, IID_PPV_ARGS(&dx.renderTextures[i])));
 
         gpu.device->CreateRenderTargetView(dx.renderTextures[i].Get(), nullptr, rttRtvHandle); // Create RTV
         rttRtvHandle.Offset(1, gpu.rtvDescriptorSize);
@@ -1241,15 +1248,22 @@ static SingleUIWindow* CreateSecondaryWindow(uint8_t kind, const std::wstring& t
     nextList[windowCount] = windowSlot;
     PublishWindowList(nextList, windowCount + 1);
 
+    // Secondary tab-host windows carry the same tab band, so they get the same Chrome-style frameless
+    // treatment (tabs.md). Extracted WINDOW_KIND_VIEW windows have no band and keep the OS frame.
+    if (kind == WINDOW_KIND_TABHOST) ApplyFramelessFrame(window.hWnd);
+
     ShowWindow(window.hWnd, SW_SHOW);
     UpdateWindow(window.hWnd);
     return &window;
 }
 
-// Unpublishes a secondary window, waits out any in-flight frame, releases its DX resources and
-// destroys the OS window. The main window (slot 0) never goes through here.
-void CloseSecondaryWindow(uint16_t windowSlot) {
-    if (windowSlot == 0 || windowSlot >= MV_MAX_WINDOWS) return;
+// Unpublishes a window, waits out any in-flight frame, releases its DX resources and destroys the OS
+// window. Works for ANY slot, including the main window (slot 0) — that path is used when the window
+// hosting tab 0 is closed while another tab-host window survives (tabs.md). It nulls the slot's hWnd
+// before DestroyWindow, so the WM_DESTROY quit-guard (which compares against allWindows[0].hWnd) does
+// not fire and the application keeps running.
+void TeardownWindowSlot(uint16_t windowSlot) {
+    if (windowSlot >= MV_MAX_WINDOWS) return;
     SingleUIWindow& window = allWindows[windowSlot];
     if (!window.hWnd) return;
 
@@ -1295,6 +1309,13 @@ void CloseSecondaryWindow(uint16_t windowSlot) {
     window.activeTabIndex = -1;
     window.viewParentTabIndex = -1;
     DestroyWindow(hWndToDestroy);
+}
+
+// Secondary-window convenience wrapper. Its callers (RequestCloseEngineeringTab when the last tab in a
+// window closes, CloseViewWindowFor) must never destroy the main window, so slot 0 is refused here.
+void CloseSecondaryWindow(uint16_t windowSlot) {
+    if (windowSlot == 0) return;
+    TeardownWindowSlot(windowSlot);
 }
 
 // Scene input routed to a sub-tab slot falls back to the inline view when that slot's dedicated
@@ -1378,32 +1399,22 @@ void CloseViewWindowFor(uint16_t tabIndex, uint16_t subTabSlot) {
     }
 }
 
-// User clicked the OS close button of a secondary window: hosted content returns to where it
-// came from (views go back inline, tabs re-host into the main window), then the window dies.
+// User closed an extracted sub-tab (view) window: closing the window closes the sub-tab it hosted
+// (its Scene3D / Page2D) rather than returning it inline, then the window dies. Only VIEW windows
+// reach here — tab-host windows have their own close path in WndProc (tabs.md "Closing a tab-host
+// window").
 void HandleSecondaryWindowClose(SingleUIWindow& window) {
     const uint16_t windowSlot = static_cast<uint16_t>(&window - allWindows);
-    if (window.windowKind == WINDOW_KIND_VIEW) {
-        if (window.viewParentTabIndex >= 0 && window.viewParentTabIndex < MV_MAX_TABS &&
-            window.viewSubTabSlot < MV_MAX_SUBTABS) {
-            DATASETTAB& parentTab = allTabs[window.viewParentTabIndex];
-            parentTab.subTabHostWindowSlots[window.viewSubTabSlot]
-                .store(-1, std::memory_order_release);
-            ResetInputViewRouting(parentTab, window.viewSubTabSlot);
-            // Make the returning view the inline-active one so it stays visible.
-            PushSystemTodoToTab(&parentTab, ACTION_TYPE::ACTIVATE_INTERNAL_SUB_TAB, 0, 0, 0,
-                parentTab.subTabs[window.viewSubTabSlot].containerMemoryId);
-        }
-    }
-    else {
-        uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
-        const uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
-        for (uint16_t i = 0; i < tabCount; ++i) {
-            DATASETTAB& tab = allTabs[tabList[i]];
-            if (tab.hostWindowSlot.load(std::memory_order_acquire) == static_cast<int16_t>(windowSlot)) {
-                tab.hostWindowSlot.store(0, std::memory_order_release);
-                if (allWindows[0].activeTabIndex < 0) allWindows[0].activeTabIndex = tabList[i];
-            }
-        }
+    if (window.windowKind == WINDOW_KIND_VIEW &&
+        window.viewParentTabIndex >= 0 && window.viewParentTabIndex < MV_MAX_TABS &&
+        window.viewSubTabSlot < MV_MAX_SUBTABS) {
+        DATASETTAB& parentTab = allTabs[window.viewParentTabIndex];
+        const uint64_t memoryId = parentTab.subTabs[window.viewSubTabSlot].containerMemoryId;
+        parentTab.subTabHostWindowSlots[window.viewSubTabSlot].store(-1, std::memory_order_release);
+        ResetInputViewRouting(parentTab, window.viewSubTabSlot);
+        // Close the sub-tab itself (remove it + retire its slot on the engineering thread), so the
+        // view does not reappear inline in the parent tab's window.
+        PushSystemTodoToTab(&parentTab, ACTION_TYPE::CLOSE_INTERNAL_SUB_TAB, 0, 0, 0, memoryId);
     }
     CloseSecondaryWindow(windowSlot);
 }

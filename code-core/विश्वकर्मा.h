@@ -293,6 +293,15 @@ struct SingleUIWindow {
     std::atomic<uint64_t> uiKeyboardCaptureCount{ 0 }; // != 0 while a UI text field has focus (WndProc suppresses shortcuts).
     std::atomic<uint32_t> rightOverlayWidthPx{ 0 };    // Icon bar (+ pane) width in px; input guards read it.
 
+    // Chrome-style frameless window (website/content/software/tabs.md). The render thread publishes the
+    // tab-band caption geometry here each frame; WndProc reads it in WM_NCHITTEST to place the OS
+    // caption drag zone and the min/max/close buttons. Same publish-through-atomic pattern as
+    // rightOverlayWidthPx. All zero until the first frame publishes them (WndProc falls back safely).
+    std::atomic<int32_t> frameTabBarBottomPx{ 0 };    // Bottom of the draggable tab-bar strip, client px.
+    std::atomic<int32_t> frameControlsLeftPx{ 0 };    // Left edge of the min/max/close block; it spans to the client right.
+    std::atomic<int32_t> frameCaptionDragLeftPx{ 0 }; // Left edge of the empty drag zone (right of the '+' button).
+    std::atomic<bool> isMaximized{ false };           // Set in WM_SIZE; selects the maximize vs restore glyph.
+
     PlatformWindowGpu dx;
 
     // BOILERPLATE TO FIX C2672 ERROR
@@ -315,6 +324,10 @@ struct SingleUIWindow {
         migrationState.store(other.migrationState.load());
         isResizing.store(other.isResizing.load());
         isInSizeMove = other.isInSizeMove;
+        frameTabBarBottomPx.store(other.frameTabBarBottomPx.load());
+        frameControlsLeftPx.store(other.frameControlsLeftPx.load());
+        frameCaptionDragLeftPx.store(other.frameCaptionDragLeftPx.load());
+        isMaximized.store(other.isMaximized.load());
     }
 
     // Move Constructor (Critical for std::vector performance)
@@ -336,6 +349,10 @@ struct SingleUIWindow {
         isMigrating.store(other.isMigrating.load());
         isResizing.store(other.isResizing.load());
         isInSizeMove = other.isInSizeMove;
+        frameTabBarBottomPx.store(other.frameTabBarBottomPx.load());
+        frameControlsLeftPx.store(other.frameControlsLeftPx.load());
+        frameCaptionDragLeftPx.store(other.frameCaptionDragLeftPx.load());
+        isMaximized.store(other.isMaximized.load());
     }
 
     // Assignment Operator
@@ -357,12 +374,19 @@ struct SingleUIWindow {
             isMigrating.store(other.isMigrating.load());
             isResizing.store(other.isResizing.load());
             isInSizeMove = other.isInSizeMove;
+            frameTabBarBottomPx.store(other.frameTabBarBottomPx.load());
+            frameControlsLeftPx.store(other.frameControlsLeftPx.load());
+            frameCaptionDragLeftPx.store(other.frameCaptionDragLeftPx.load());
+            isMaximized.store(other.isMaximized.load());
         }
         return *this;
     }
 };
 
 void विश्वकर्मा(uint64_t tabID);
+// Makes a tab-host window Chrome-style frameless (client extends over the caption + a DWM top margin
+// for the drop shadow). Called once per tab-host window at creation and after DPI changes (tabs.md).
+void ApplyFramelessFrame(HWND hWnd);
 bool GetVisibleSceneViewportForTab(const DATASETTAB& tab, int& widthPx, int& heightPx, int& topPx);
 
 // Lock-free scan of the published sub-tab list. Returns the slot index, or -1 when not open.
