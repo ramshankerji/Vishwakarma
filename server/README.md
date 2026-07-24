@@ -36,6 +36,7 @@ apps installed at all.
 cd server
 python -m venv venv
 venv/bin/pip install -r requirements.txt        # Windows: venv\Scripts\pip
+python api/pci_ids_embedder.py                  # generates the untracked GPU name table
 MV_DEBUG=1 venv/bin/python manage.py migrate
 MV_DEBUG=1 venv/bin/python manage.py runserver 127.0.0.1:8000
 ```
@@ -64,6 +65,11 @@ sudo git clone <repo-url> /opt/vishwakarma
 cd /opt/vishwakarma/server
 sudo python3 -m venv venv
 sudo ./venv/bin/pip install -r requirements.txt
+
+# GPU name table: generated here rather than tracked in git, so it must be written
+# while /opt is still writable - the service itself never can (ProtectSystem=strict).
+# Re-run it after a git pull to pick up newly released GPUs.
+sudo python3 api/pci_ids_embedder.py
 
 # Root-only env file with the secret and the DB path.
 sudo install -m 600 -o root -g root deploy/mv-telemetry.env.example /etc/mv-telemetry.env

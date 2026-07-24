@@ -32,17 +32,14 @@ System Environment:
 
 Software Environment:
 
-* List of installed applications, versions, and installation dates
 * Presence of development tools, runtime environments, and system libraries
 * Windows services and drivers relevant to software functionality
-* Registry keys related to software compatibility (no personal data)
+* Graphics driver timeout (TDR) settings and any Windows compatibility shims applied to the Software's own executable
 
 System Identifiers:
 
-* Computer name and workgroup/domain membership
-* Windows user account name (username only, no passwords or credentials)
 * Machine GUID and hardware-based unique identifiers
-* Software installation ID and license key hash
+* Software installation ID
 * Public IP address (for update checks and regional statistics only)
 
 Usage and Performance Data:

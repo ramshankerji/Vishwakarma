@@ -5,3 +5,6 @@ db.sqlite3-*
 .env
 venv/
 staticfiles/
+
+# Generated on the host by api/pci_ids_embedder.py from the upstream PCI ID Repository.
+api/gpu_pci_ids.py

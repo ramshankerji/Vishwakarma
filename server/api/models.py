@@ -1,3 +1,5 @@
+# Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
 from django.db import models
 
 
@@ -33,6 +35,30 @@ class HardwareReport(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=["installation", "-received_utc"])]
+
+
+class ReportGpu(models.Model):
+    """One graphics adapter of a HardwareReport. A machine with several GPUs produces several
+    rows, each counted separately by the /api/stats aggregation."""
+    report = models.ForeignKey(HardwareReport, on_delete=models.CASCADE, related_name="gpus")
+    name = models.CharField(max_length=128, blank=True, default="")
+    # PCI ids: the driver reports the same generic name ("AMD Radeon(TM) Graphics") for many
+    # different chips, so the device id is what actually identifies the silicon.
+    vendor_id = models.IntegerField(default=0)
+    device_id = models.IntegerField(default=0)
+    vram_mb = models.BigIntegerField(default=0)
+    driver_version = models.CharField(max_length=32, blank=True, default="")
+    discrete = models.BooleanField(default=False)
+
+
+class ReportMonitor(models.Model):
+    """One attached display of a HardwareReport, as configured when the report was collected."""
+    report = models.ForeignKey(HardwareReport, on_delete=models.CASCADE, related_name="monitors")
+    width_px = models.IntegerField(default=0)   # Physical pixels, not the DPI-scaled desktop size.
+    height_px = models.IntegerField(default=0)
+    refresh_hz = models.IntegerField(default=0)
+    width_mm = models.IntegerField(default=0)   # Panel size from EDID; 0 when it exposes none.
+    height_mm = models.IntegerField(default=0)
 
 
 class UsageRecord(models.Model):

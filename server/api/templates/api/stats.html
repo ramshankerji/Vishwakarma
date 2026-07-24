@@ -106,8 +106,58 @@
     </div>
 
     <div class="panel">
+      <h2>System Memory</h2>
+      {% for item in ram_list %}
+      <div class="row">
+        <div class="name"><b>{{ item.label }}</b><span>{{ item.count }}</span></div>
+        <div class="bar"><i style="width: {{ item.percent }}%"></i></div>
+      </div>
+      {% empty %}<p class="empty">No hardware reports received yet.</p>{% endfor %}
+    </div>
+
+    <div class="panel">
       <h2>Graphics Cards</h2>
       {% for item in gpu_list %}
+      <div class="row">
+        <div class="name"><b>{{ item.label }}</b><span>{{ item.count }}</span></div>
+        <div class="bar"><i style="width: {{ item.percent }}%"></i></div>
+      </div>
+      {% empty %}<p class="empty">No hardware reports received yet.</p>{% endfor %}
+    </div>
+
+    <div class="panel">
+      <h2>Graphics Memory</h2>
+      {% for item in vram_list %}
+      <div class="row">
+        <div class="name"><b>{{ item.label }}</b><span>{{ item.count }}</span></div>
+        <div class="bar"><i style="width: {{ item.percent }}%"></i></div>
+      </div>
+      {% empty %}<p class="empty">No hardware reports received yet.</p>{% endfor %}
+    </div>
+
+    <div class="panel">
+      <h2>Display Resolution</h2>
+      {% for item in resolution_list %}
+      <div class="row">
+        <div class="name"><b>{{ item.label }}</b><span>{{ item.count }}</span></div>
+        <div class="bar"><i style="width: {{ item.percent }}%"></i></div>
+      </div>
+      {% empty %}<p class="empty">No hardware reports received yet.</p>{% endfor %}
+    </div>
+
+    <div class="panel">
+      <h2>Refresh Rate</h2>
+      {% for item in refresh_list %}
+      <div class="row">
+        <div class="name"><b>{{ item.label }}</b><span>{{ item.count }}</span></div>
+        <div class="bar"><i style="width: {{ item.percent }}%"></i></div>
+      </div>
+      {% empty %}<p class="empty">No hardware reports received yet.</p>{% endfor %}
+    </div>
+
+    <div class="panel">
+      <h2>Display Modes</h2>
+      {% for item in display_mode_list %}
       <div class="row">
         <div class="name"><b>{{ item.label }}</b><span>{{ item.count }}</span></div>
         <div class="bar"><i style="width: {{ item.percent }}%"></i></div>

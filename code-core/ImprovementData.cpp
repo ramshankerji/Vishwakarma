@@ -15,6 +15,7 @@
 #include <dxgi1_6.h>
 #include <intrin.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -335,43 +336,104 @@ static void OsVersionInfo(std::string& name, std::string& version, long long& bu
         name.replace(name.find("Windows 10"), 10, "Windows 11");
 }
 
-static void GpuInfo(std::string& name, long long& vramMB, std::string& driverVersion, bool& discrete) {
-    name = "";
-    vramMB = 0;
-    driverVersion = "";
-    discrete = false;
+struct GpuInfo {
+    std::string name;
+    std::string driverVersion;
+    unsigned vendorId = 0;  // PCI vendor: 0x8086 Intel, 0x10DE NVIDIA, 0x1002 AMD.
+    unsigned deviceId = 0;  // PCI device: identifies the silicon even when the name is generic
+    long long vramMB = 0;   // ("AMD Radeon(TM) Graphics" is the same string on many chips).
+    bool discrete = false;
+};
+
+// Every hardware adapter, highest dedicated video memory first, so element 0 is the GPU the
+// application is most likely to render on.
+static std::vector<GpuInfo> EnumerateGpus() {
+    std::vector<GpuInfo> gpus;
     IDXGIFactory1* factory = nullptr;
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return gpus;
     IDXGIAdapter1* adapter = nullptr;
-    IDXGIAdapter1* best = nullptr;
-    DXGI_ADAPTER_DESC1 bestDesc{};
     for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; i++) {
         DXGI_ADAPTER_DESC1 desc{};
         adapter->GetDesc1(&desc);
-        if (!(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) &&
-            (!best || desc.DedicatedVideoMemory > bestDesc.DedicatedVideoMemory)) {
-            if (best) best->Release();
-            best = adapter;
-            bestDesc = desc;
-        } else {
-            adapter->Release();
+        if (!(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+            GpuInfo gpu;
+            gpu.name = WideToUtf8(desc.Description);
+            gpu.vendorId = desc.VendorId;
+            gpu.deviceId = desc.DeviceId;
+            gpu.vramMB = (long long)(desc.DedicatedVideoMemory / (1024ULL * 1024));
+            gpu.discrete = desc.DedicatedVideoMemory >= 512ULL * 1024 * 1024;
+            LARGE_INTEGER umd{};
+            if (SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd))) {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
+                         HIWORD(umd.HighPart), LOWORD(umd.HighPart),
+                         HIWORD(umd.LowPart), LOWORD(umd.LowPart));
+                gpu.driverVersion = buf;
+            }
+            gpus.push_back(gpu);
         }
-    }
-    if (best) {
-        name = WideToUtf8(bestDesc.Description);
-        vramMB = (long long)(bestDesc.DedicatedVideoMemory / (1024ULL * 1024));
-        discrete = bestDesc.DedicatedVideoMemory >= 512ULL * 1024 * 1024;
-        LARGE_INTEGER umd{};
-        if (SUCCEEDED(best->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd))) {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
-                     HIWORD(umd.HighPart), LOWORD(umd.HighPart),
-                     HIWORD(umd.LowPart), LOWORD(umd.LowPart));
-            driverVersion = buf;
-        }
-        best->Release();
+        adapter->Release();
     }
     factory->Release();
+    std::sort(gpus.begin(), gpus.end(),
+              [](const GpuInfo& a, const GpuInfo& b) { return a.vramMB > b.vramMB; });
+    return gpus;
+}
+
+struct MonitorInfo {
+    int widthPx = 0, heightPx = 0;  // Physical pixels, unaffected by the desktop scaling factor.
+    int refreshHz = 0;
+    int widthMm = 0, heightMm = 0;  // Panel size from EDID; 0 when the monitor exposes none.
+};
+
+// Physical panel size out of the monitor's EDID block in the device registry key. The device
+// interface name looks like \\?\DISPLAY#DEL41A8#5&1a2b&0&UID4352#{e6f07b5f-...}; the registry
+// path is that same identity with '#' as the separator and the interface guid dropped.
+static void EdidPhysicalSizeMm(const std::wstring& interfaceName, int& widthMm, int& heightMm) {
+    widthMm = heightMm = 0;
+    if (interfaceName.size() < 5) return;
+    std::wstring id = interfaceName.substr(4); // Drop the "\\?\" prefix.
+    size_t guid = id.rfind(L'#');
+    if (guid == std::wstring::npos) return;
+    id.resize(guid);                           // Drop the "#{interface guid}" tail.
+    for (wchar_t& c : id) if (c == L'#') c = L'\\';
+
+    unsigned char edid[1024]{};                // Base block + up to 7 extension blocks.
+    DWORD size = sizeof(edid);
+    std::wstring key = L"SYSTEM\\CurrentControlSet\\Enum\\" + id + L"\\Device Parameters";
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, key.c_str(), L"EDID", RRF_RT_REG_BINARY, nullptr,
+                     edid, &size) != ERROR_SUCCESS || size < 128)
+        return;
+    // Preferred detailed timing descriptor at 0x36 carries the size in millimetres: bytes 12
+    // and 13 hold the low 8 bits, byte 14 packs both high nibbles.
+    widthMm = ((edid[0x44] & 0xF0) << 4) | edid[0x42];
+    heightMm = ((edid[0x44] & 0x0F) << 8) | edid[0x43];
+    if (widthMm == 0 || heightMm == 0) {       // Fall back to the coarser centimetre fields.
+        widthMm = edid[0x15] * 10;
+        heightMm = edid[0x16] * 10;
+    }
+}
+
+static std::vector<MonitorInfo> EnumerateMonitors() {
+    std::vector<MonitorInfo> monitors;
+    DISPLAY_DEVICEW output{ sizeof(output) };
+    for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &output, 0); i++) {
+        if (!(output.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) continue;
+        if (output.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER) continue;
+        // EnumDisplaySettings reports the real mode, unlike the DPI-scaled metrics APIs.
+        DEVMODEW mode{};
+        mode.dmSize = sizeof(mode);
+        if (!EnumDisplaySettingsW(output.DeviceName, ENUM_CURRENT_SETTINGS, &mode)) continue;
+        MonitorInfo monitor;
+        monitor.widthPx = (int)mode.dmPelsWidth;
+        monitor.heightPx = (int)mode.dmPelsHeight;
+        monitor.refreshHz = (int)mode.dmDisplayFrequency;
+        DISPLAY_DEVICEW panel{ sizeof(panel) };
+        if (EnumDisplayDevicesW(output.DeviceName, 0, &panel, EDD_GET_DEVICE_INTERFACE_NAME))
+            EdidPhysicalSizeMm(panel.DeviceID, monitor.widthMm, monitor.heightMm);
+        monitors.push_back(monitor);
+    }
+    return monitors;
 }
 
 // Collects all system metrics. Returns the payload json and a fingerprint hash computed
@@ -401,10 +463,32 @@ static void CollectHardwareStatistics(std::string& payloadJson, std::string& fin
     long long osBuild = 0, osUbr = 0;
     OsVersionInfo(osName, osVersion, osBuild, osUbr);
 
-    std::string gpuName, gpuDriver;
-    long long gpuVramMB = 0;
-    bool gpuDiscrete = false;
-    GpuInfo(gpuName, gpuVramMB, gpuDriver, gpuDiscrete);
+    std::vector<GpuInfo> gpus = EnumerateGpus();
+    std::vector<MonitorInfo> monitors = EnumerateMonitors();
+
+    std::string gpusJson = "[";
+    for (size_t i = 0; i < gpus.size(); i++) {
+        gpusJson += i ? ",{\"name\":\"" : "{\"name\":\"";
+        gpusJson += JsonEscape(gpus[i].name); // Up to 128 characters: kept out of the buffer below.
+        char buf[192];
+        snprintf(buf, sizeof(buf), "\",\"vendorId\":%u,\"deviceId\":%u,\"vramMB\":%lld,"
+                 "\"driverVersion\":\"%s\",\"discrete\":%s}",
+                 gpus[i].vendorId, gpus[i].deviceId, gpus[i].vramMB,
+                 gpus[i].driverVersion.c_str(), gpus[i].discrete ? "true" : "false");
+        gpusJson += buf;
+    }
+    gpusJson += "]";
+
+    std::string monitorsJson = "[";
+    for (size_t i = 0; i < monitors.size(); i++) {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "%s{\"widthPx\":%d,\"heightPx\":%d,\"refreshHz\":%d,"
+                 "\"widthMm\":%d,\"heightMm\":%d}",
+                 i ? "," : "", monitors[i].widthPx, monitors[i].heightPx,
+                 monitors[i].refreshHz, monitors[i].widthMm, monitors[i].heightMm);
+        monitorsJson += buf;
+    }
+    monitorsJson += "]";
 
     std::string drivesJson = "[";
     for (size_t i = 0; i < drives.size(); i++) {
@@ -430,18 +514,18 @@ static void CollectHardwareStatistics(std::string& payloadJson, std::string& fin
     snprintf(buf, sizeof(buf), "\"osName\":\"%s\",\"osVersion\":\"%s\",\"osBuild\":%lld,\"osUpdateBuildRevision\":%lld,",
              JsonEscape(osName).c_str(), JsonEscape(osVersion).c_str(), osBuild, osUbr);
     payloadJson += buf;
-    snprintf(buf, sizeof(buf), "\"gpuName\":\"%s\",\"gpuVramMB\":%lld,\"gpuDriverVersion\":\"%s\",\"gpuDiscrete\":%s",
-             JsonEscape(gpuName).c_str(), gpuVramMB, gpuDriver.c_str(), gpuDiscrete ? "true" : "false");
-    payloadJson += buf;
+    payloadJson += "\"gpus\":" + gpusJson + ",";
+    payloadJson += "\"monitors\":" + monitorsJson;
     payloadJson += "}";
 
     // Stable fields only: intentionally no free-space, so daily use never looks like new hardware.
+    // Monitors are deliberately excluded too - docking or unplugging a screen is not a hardware
+    // change worth a new row, and including them would emit one per dock state on every launch.
     std::string stable = cpuName + "|" + std::to_string(physicalCores) + "|" +
         std::to_string(logicalCores) + "|" + std::to_string(cpuBaseMHz) + "|" + isa + "|" +
         std::to_string(ramTotalMB) + "|" + ramType + "|" + std::to_string(ramSpeed) + "|" +
         drivesJson + "|" + std::to_string(diskTotalGB) + "|" + osName + "|" + osVersion + "|" +
-        std::to_string(osBuild) + "|" + std::to_string(osUbr) + "|" + gpuName + "|" +
-        std::to_string(gpuVramMB) + "|" + gpuDriver;
+        std::to_string(osBuild) + "|" + std::to_string(osUbr) + "|" + gpusJson;
     fingerprint = Sha256Hex(stable);
 }
 

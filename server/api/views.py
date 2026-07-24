@@ -1,3 +1,5 @@
+# Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
+
 import json
 import logging
 from collections import Counter
@@ -15,12 +17,15 @@ from django.views.decorators.http import require_GET, require_POST
 
 from .commands import COMMAND_NAMES
 from .crypto import verify_request
-from .models import HardwareReport, Installation, UsageRecord
+from .gpu_names import gpu_label
+from .models import HardwareReport, Installation, ReportGpu, ReportMonitor, UsageRecord
 
 logger = logging.getLogger("api")
 
 MAX_BODY_BYTES = 1 * 1024 * 1024
 MAX_USAGE_ROWS_PER_REQUEST = 4096
+MAX_GPUS_PER_REPORT = 8
+MAX_MONITORS_PER_REPORT = 16
 RATE_LIMIT_PER_HOUR = 120  # Per installation key; normal clients need ~2 requests a day.
 
 
@@ -29,6 +34,45 @@ def _parse_iso_utc(value):
         return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
     except (ValueError, TypeError):
         return None
+
+
+def _int(value, limit):
+    """Clamped integer out of untrusted json. Anything unusable becomes 0."""
+    try:
+        return max(0, min(int(value or 0), limit))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _store_gpus(report, gpus):
+    """One ReportGpu row per adapter. Element 0 is the highest-VRAM one (client sorts them)."""
+    if not isinstance(gpus, list):
+        return
+    rows = [ReportGpu(
+        report=report,
+        name=str(gpu.get("name", ""))[:128],
+        vendor_id=_int(gpu.get("vendorId"), 0xFFFF),
+        device_id=_int(gpu.get("deviceId"), 0xFFFF),
+        vram_mb=_int(gpu.get("vramMB"), 1024 * 1024),
+        driver_version=str(gpu.get("driverVersion", ""))[:32],
+        discrete=bool(gpu.get("discrete", False)),
+    ) for gpu in gpus[:MAX_GPUS_PER_REPORT] if isinstance(gpu, dict)]
+    ReportGpu.objects.bulk_create(rows)
+
+
+def _store_monitors(report, monitors):
+    """One ReportMonitor row per attached display."""
+    if not isinstance(monitors, list):
+        return
+    rows = [ReportMonitor(
+        report=report,
+        width_px=_int(monitor.get("widthPx"), 100000),
+        height_px=_int(monitor.get("heightPx"), 100000),
+        refresh_hz=_int(monitor.get("refreshHz"), 1000),
+        width_mm=_int(monitor.get("widthMm"), 10000),
+        height_mm=_int(monitor.get("heightMm"), 10000),
+    ) for monitor in monitors[:MAX_MONITORS_PER_REPORT] if isinstance(monitor, dict)]
+    ReportMonitor.objects.bulk_create(rows)
 
 
 def _rate_limited(key: str) -> bool:
@@ -87,7 +131,10 @@ def logs(request):
         if isinstance(hardware, dict):
             collected = _parse_iso_utc(payload.get("hardwareCollectedUtc")) \
                 or django_timezone.now()
-            HardwareReport.objects.create(
+            gpus = hardware.get("gpus")
+            primary_gpu = gpus[0] if isinstance(gpus, list) and gpus \
+                and isinstance(gpus[0], dict) else {}
+            report = HardwareReport.objects.create(
                 installation=installation,
                 collected_utc=collected,
                 payload=hardware,
@@ -96,8 +143,10 @@ def logs(request):
                 ram_total_mb=int(hardware.get("ramTotalMB", 0) or 0),
                 os_name=str(hardware.get("osName", ""))[:128],
                 os_build=int(hardware.get("osBuild", 0) or 0),
-                gpu_name=str(hardware.get("gpuName", ""))[:128],
+                gpu_name=str(primary_gpu.get("name", ""))[:128],
             )
+            _store_gpus(report, gpus)
+            _store_monitors(report, hardware.get("monitors"))
             hardware_acked = True
 
         ack_ids = []
@@ -142,6 +191,14 @@ def login(request):
     return JsonResponse({"status": "not_implemented"}, status=501)
 
 
+def _gb_label(megabytes):
+    """Whole gigabytes, rounded up: the OS always reports slightly less than the installed
+    amount because firmware and integrated graphics reserve a slice of it."""
+    if not megabytes:
+        return ""
+    return "%d GB" % -(-int(megabytes) // 1024)
+
+
 @require_GET
 @cache_page(600)
 def stats(request):
@@ -161,9 +218,32 @@ def stats(request):
         return [{"label": label, "count": n, "percent": round(100 * n / peak)}
                 for label, n in items]
 
+    def top_labels(pairs, limit=8):
+        """Same ranking as top_counts for values that have to be computed in python (unit
+        conversion, bucketing, joining several columns into one label). pairs yields
+        (label, installation_id); empty labels are dropped."""
+        installations_per_label = {}
+        for label, installation_id in pairs:
+            if label:
+                installations_per_label.setdefault(label, set()).add(installation_id)
+        items = sorted(((label, len(ids)) for label, ids in installations_per_label.items()),
+                       key=lambda item: (-item[1], item[0]))[:limit]
+        peak = items[0][1] if items else 1
+        return [{"label": label, "count": n, "percent": round(100 * n / peak)}
+                for label, n in items]
+
     # Latest hardware report per installation would need window functions; for dashboard
     # purposes counting distinct installations per value is a good approximation.
     hardware = HardwareReport.objects.all()
+
+    # One row per adapter / per display, so multi-GPU and multi-monitor machines contribute
+    # to every bucket they actually occupy.
+    gpu_rows = list(ReportGpu.objects.values_list(
+        "name", "vendor_id", "device_id", "vram_mb", "discrete", "report__installation_id"))
+    # The EDID panel size is stored per monitor but deliberately not aggregated: physical
+    # millimetres vary by a millimetre or two between otherwise identical panels.
+    monitor_rows = list(ReportMonitor.objects.values_list(
+        "width_px", "height_px", "refresh_hz", "report__installation_id"))
 
     command_counter = Counter()
     for actions in (UsageRecord.objects.exclude(ribbon_actions={})
@@ -188,7 +268,26 @@ def stats(request):
         "records": totals["records"] or 0,
         "os_list": top_counts(hardware, "os_name"),
         "cpu_list": top_counts(hardware, "cpu_name"),
-        "gpu_list": top_counts(hardware, "gpu_name"),
+        "gpu_list": top_labels(
+            (gpu_label(name, vendor, device), installation)
+            for name, vendor, device, _vram, _discrete, installation in gpu_rows),
+        # An integrated GPU's "dedicated" memory is an arbitrary UMA carve-out (495 MB on a
+        # Ryzen 5825U), so only discrete cards get a size bucket.
+        "vram_list": top_labels(
+            (_gb_label(vram) if discrete else "Shared / integrated", installation)
+            for _name, _vendor, _device, vram, discrete, installation in gpu_rows),
+        "ram_list": top_labels(
+            (_gb_label(mb), installation)
+            for mb, installation in hardware.values_list("ram_total_mb", "installation_id")),
+        "resolution_list": top_labels(
+            ("%d x %d" % (w, h) if w and h else "", installation)
+            for w, h, _hz, installation in monitor_rows),
+        "refresh_list": top_labels(
+            ("%d Hz" % hz if hz else "", installation)
+            for _w, _h, hz, installation in monitor_rows),
+        "display_mode_list": top_labels(
+            ("%d x %d @ %d Hz" % (w, h, hz) if w and h and hz else "", installation)
+            for w, h, hz, installation in monitor_rows),
         "commands": commands,
     }
     return render(request, "api/stats.html", context)

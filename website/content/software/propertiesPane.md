@@ -31,7 +31,9 @@ MODIFY command to the GPU copy thread.
    addressed through **typed get/set accessor function pointers, not `offsetof`** — the shape
    structs are not standard-layout (both `META_DATA` and the derived shapes declare data
    members), so `offsetof` on them is only conditionally supported by compilers. No virtual
-   functions on the data structs (`META_DATA` layout is frozen; a vtable pointer would break it).
+   functions on the data structs — not because a vtable pointer would corrupt anything (it
+   would not; see the note below), but because it costs 8 bytes on every object in a model that
+   may hold millions of them, and buys nothing a per-type function-pointer table does not.
 4. **UI/render thread owns text-edit state** (focus, buffer, caret). Keystrokes never mutate
    engineering data. The engineering thread receives the committed value on Enter. The protocol
    additionally reserves a *draft-value* message so that future engineering-side validation
@@ -122,8 +124,17 @@ extern const PropertyTypeDescriptor kPropertyTables[]; // Sphere, Cylinder, Cone
   compiler-layout coupling rather than a language guarantee — a real concern with GCC/Clang
   ports planned). Each accessor is a tiny stateless lambda that decays to a function pointer:
   `[](const META_DATA* o){ return static_cast<const SPHERE*>(o)->radius; }` — fully portable,
-  no casts at the call site, and type-checked at compile time. (Virtual `GetProperties()`
-  methods remain rejected: `META_DATA` layout is frozen and a vtable pointer would break it.)
+  no casts at the call site, and type-checked at compile time.
+- **Why not virtual `GetProperties()`:** an earlier revision of this document claimed a vtable
+  pointer "would break" `META_DATA`'s layout. That was overstated and is corrected here.
+  Nothing memcpys or reinterprets these objects, `static_cast<SPHERE*>(metaData)` works
+  unchanged with virtuals present, and the custom `operator new(size, memoryGroupNo)` is
+  unaffected. Standard-layout is lost either way, because both the base and the derived shape
+  declare data members — that is the rule that bites, and no member removal restores it. The
+  real objections to virtuals are (a) 8 bytes of vptr on every object, and (b) reach: `decode`
+  is a *factory* (the object does not exist yet when you need to dispatch), so the type switch
+  survives regardless, and the nine `Cad2D*RecordCPU` types do not derive from `META_DATA` at
+  all, so a base-class virtual cannot serve them. A per-type descriptor table solves all three.
 - Types whose geometry is a vertex list (`PYRAMID`, `CUBOID`, `PARALLELEPIPED`,
   `FRUSTUM_OF_PYRAMID`) get an **empty field table** in the MVP — the pane shows Type + ID only.
   Editing individual vertices is a future extension (repeating row groups).

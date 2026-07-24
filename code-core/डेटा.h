@@ -100,8 +100,7 @@ struct META_DATA {
     uint16_t schemaVersion = 0; // Derived class will set this value. To assist with versioning of data structure.
 
     // Every time a variable changes, we increment this to signal other threads.
-    std::atomic<uint64_t> dataVersion{ 1 }; // Incremented on each modification
-    std::atomic<uint64_t> geometryRenderedVersion{ 0 }; // The version last seen by the GPU processing logic
+    uint64_t dataVersion = 1; // Incremented on each modification. std::atomic discarded.
     bool isDeleted{ false };                // Soft-delete flag
 
 	META_DATA() { memoryID = MemoryID::next(); }; // Assign a unique memoryID at creation
