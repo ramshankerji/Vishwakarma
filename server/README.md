@@ -98,6 +98,42 @@ simulating the tunnel's forwarded-proto header:
 `ok`). The definitive check is `curl https://mv-server.ramshanker.in/api/health`
 once the tunnel is up.
 
+## Upgrading an existing deployment
+
+Pulling new code onto the Pi. Every command runs from `/opt/vishwakarma/server`.
+
+```bash
+sudo git -C /opt/vishwakarma pull
+cd /opt/vishwakarma/server
+
+# Only when requirements.txt changed.
+sudo ./venv/bin/pip install -r requirements.txt
+
+# Regenerate the untracked GPU name table (stdlib only, so system python3 is enough).
+sudo python3 api/pci_ids_embedder.py
+
+# Apply migrations. MV_DB_PATH is not optional here: without it Django falls back to
+# BASE_DIR/db.sqlite3 and would migrate a stray empty file instead of the real database.
+sudo -u mvtelemetry MV_SECRET_KEY=dummy MV_DB_PATH=/var/lib/mv-telemetry/db.sqlite3 \
+    ./venv/bin/python manage.py migrate
+
+# Workers keep serving the old code until they are recycled.
+sudo systemctl restart mv-telemetry
+journalctl -u mv-telemetry -n 30 --no-pager
+```
+
+Never set `MV_DEBUG=1` on the Pi: besides debug mode it disables `SECURE_SSL_REDIRECT`
+and HSTS. `MV_SECRET_KEY=dummy` is the right lever for a one-off management command,
+since SQLite never uses the key and the settings guard only requires it to be non-empty.
+
+Two bash details that bite when copying these lines apart from each other: `MV_DEBUG=1`
+on a line by itself sets a shell variable that is never exported, so the `python` child
+process does not see it (`export` it, or use the inline `VAR=value command` prefix as
+above); and bash allows no spaces around `=` in an assignment.
+
+`/api/stats` is wrapped in `@cache_page(600)`, so a stale copy of the dashboard can
+survive up to ten minutes after the restart before new panels appear.
+
 ## Cloudflare tunnel
 
 TLS terminates at Cloudflare; the tunnel forwards plain HTTP to gunicorn on

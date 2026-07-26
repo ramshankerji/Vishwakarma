@@ -161,6 +161,9 @@ python "$(ProjectDir)..\code-miscellaneous\steel_profile_embedder.py" "$(Project
     <ClCompile Include="DataTreeView.cpp" />
     <ClCompile Include="PropertyPane.cpp" />
     <ClCompile Include="DataStorage.cpp" />
+    <ClCompile Include="..\code-core\डेटा-सामान्य-3D.cpp" />
+    <ClCompile Include="..\code-core\डेटा-पाइप.cpp" />
+    <ClCompile Include="..\code-core\डेटा-संरचना.cpp" />
     <ClCompile Include="ExtensionCommunications.cpp" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\ExtensionIPC.pb.cc" />
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_ARC2D.pb.cc" />
@@ -223,6 +226,7 @@ python "$(ProjectDir)..\code-miscellaneous\steel_profile_embedder.py" "$(Project
     <ClInclude Include="DataTreeView.h" />
     <ClInclude Include="PropertyPane.h" />
     <ClInclude Include="DataStorage.h" />
+    <ClInclude Include="DataStorageProtoHelpers.h" />
     <ClInclude Include="..\code-core\ID.h" />
     <ClInclude Include="..\code-core\MemoryManagerCPU.h" />
     <ClInclude Include="..\code-core\Input_UI_Network_File.h" />

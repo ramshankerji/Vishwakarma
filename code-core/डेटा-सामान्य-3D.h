@@ -42,6 +42,8 @@ struct PYRAMID :public META_DATA{
 	void Randomize(); // Assign random position, size, colors etc.
     GeometryData GetGeometry(); // Simply returns the vertices with colors and indexes.
     void CalculateGeometry() {}; // Calculate the geometry, potentially taking into account cutouts.
+    bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
+    bool decode(const std::vector<uint8_t>& payload);
 };
 
 struct CUBOID :public META_DATA {
@@ -58,6 +60,8 @@ struct CUBOID :public META_DATA {
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
+    bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
+    bool decode(const std::vector<uint8_t>& payload);
 };
 
 struct CONE :public META_DATA {
@@ -76,6 +80,8 @@ struct CONE :public META_DATA {
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
+    bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
+    bool decode(const std::vector<uint8_t>& payload);
 };
 
 struct CYLINDER :public META_DATA {
@@ -93,6 +99,8 @@ struct CYLINDER :public META_DATA {
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
+    bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
+    bool decode(const std::vector<uint8_t>& payload);
 };
 
 struct PARALLELEPIPED :public META_DATA {
@@ -109,6 +117,8 @@ struct PARALLELEPIPED :public META_DATA {
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
+    bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
+    bool decode(const std::vector<uint8_t>& payload);
 };
 
 struct SPHERE :public META_DATA {
@@ -126,6 +136,8 @@ struct SPHERE :public META_DATA {
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
+    bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
+    bool decode(const std::vector<uint8_t>& payload);
 };
 
 struct TORUS :public META_DATA {
@@ -142,6 +154,8 @@ struct TORUS :public META_DATA {
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
+    bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
+    bool decode(const std::vector<uint8_t>& payload);
 };
 
 struct ELLIPSOID :public META_DATA {
@@ -159,6 +173,8 @@ struct ELLIPSOID :public META_DATA {
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
+    bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
+    bool decode(const std::vector<uint8_t>& payload);
 };
 
 struct FRUSTUM_OF_PYRAMID :public META_DATA {
@@ -175,6 +191,8 @@ struct FRUSTUM_OF_PYRAMID :public META_DATA {
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
+    bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
+    bool decode(const std::vector<uint8_t>& payload);
 };
 
 struct  FRUSTUM_OF_CONE :public META_DATA {
@@ -192,6 +210,8 @@ struct  FRUSTUM_OF_CONE :public META_DATA {
     c_string name;
     void Randomize();
     GeometryData GetGeometry();
+    bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
+    bool decode(const std::vector<uint8_t>& payload);
 };
 
 struct PIPE : public META_DATA {
@@ -214,6 +234,8 @@ struct PIPE : public META_DATA {
 
     void Randomize();
     GeometryData GetGeometry();
+    bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
+    bool decode(const std::vector<uint8_t>& payload);
 };
 
 /************************* IMPLEMENTATIONS *************************/

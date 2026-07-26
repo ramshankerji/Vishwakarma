@@ -28,6 +28,15 @@
     <ClCompile Include="DataStorage.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
+    <ClCompile Include="..\code-core\डेटा-सामान्य-3D.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-core\डेटा-पाइप.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\code-core\डेटा-संरचना.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
     <ClCompile Include="$(IntDir)GeneratedProtobuf\DataStorage_ARC2D.pb.cc">
       <Filter>code-core</Filter>
     </ClCompile>
@@ -193,6 +202,9 @@
       <Filter>code-core</Filter>
     </ClInclude>
     <ClInclude Include="PropertyPane.h">
+      <Filter>code-core</Filter>
+    </ClInclude>
+    <ClInclude Include="DataStorageProtoHelpers.h">
       <Filter>code-core</Filter>
     </ClInclude>
     <ClInclude Include="DataStorage.h">

@@ -33,6 +33,8 @@ struct LINE_MEMBER : public META_DATA {
 
     void Randomize();
     GeometryData GetGeometry();
+    bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
+    bool decode(const std::vector<uint8_t>& payload);
 };
 
 struct STRUCTURAL_CURVED_MEMBER {

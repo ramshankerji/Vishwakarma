@@ -6,12 +6,29 @@
 <title>Mission Vishwakarma - Global Usage Statistics</title>
 <style>
   :root {
+    color-scheme: light dark;
     --saffron: #FF9933;
     --green: #138808;
     --ink: #1c2321;
     --paper: #f6f8f7;
     --card: #ffffff;
     --muted: #6b7671;
+    --track: #e7ecea;
+    --shadow: 0 1px 4px rgba(28,35,33,.08);
+  }
+  /* Dark theme when the operating system asks for it; light is the default otherwise.
+     The saffron/green accents are shared - only the surface and text tones are re-toned,
+     with green lifted for legible links and bar ends against a dark background. */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --green: #35c24a;
+      --ink: #e6ebe8;
+      --paper: #141816;
+      --card: #1d2320;
+      --muted: #93a09a;
+      --track: #2a322e;
+      --shadow: 0 1px 4px rgba(0,0,0,.4);
+    }
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -31,7 +48,7 @@
   }
   .card {
     background: var(--card); border-radius: 12px; padding: 18px 16px;
-    box-shadow: 0 1px 4px rgba(28,35,33,.08); text-align: center;
+    box-shadow: var(--shadow); text-align: center;
     border-top: 3px solid var(--saffron);
   }
   .card:nth-child(even) { border-top-color: var(--green); }
@@ -40,7 +57,7 @@
   .panels { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
   .panel {
     background: var(--card); border-radius: 12px; padding: 20px;
-    box-shadow: 0 1px 4px rgba(28,35,33,.08);
+    box-shadow: var(--shadow);
   }
   .panel h2 { font-size: 1.05rem; margin-bottom: 14px; font-weight: 600; }
   .row { margin-bottom: 10px; }
@@ -50,7 +67,7 @@
   .row .name b { font-weight: 500; overflow: hidden; text-overflow: ellipsis;
     white-space: nowrap; max-width: 75%; }
   .row .name span { color: var(--muted); }
-  .bar { background: #e7ecea; border-radius: 5px; height: 10px; overflow: hidden; }
+  .bar { background: var(--track); border-radius: 5px; height: 10px; overflow: hidden; }
   .bar i {
     display: block; height: 100%; border-radius: 5px;
     background: linear-gradient(90deg, var(--saffron), var(--green));

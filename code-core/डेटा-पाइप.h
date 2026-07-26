@@ -40,6 +40,8 @@ struct ELBOW : public META_DATA {
 
     void Randomize();
     GeometryData GetGeometry();
+    bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
+    bool decode(const std::vector<uint8_t>& payload);
 };
 
 // Pipe tee/branch. Branch diameters are independent of the main run, and the branch angle
@@ -66,6 +68,8 @@ struct TEE : public META_DATA {
 
     void Randomize();
     GeometryData GetGeometry();
+    bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
+    bool decode(const std::vector<uint8_t>& payload);
 };
 
 // Plate flange: an annular disc with a bore, plus a raised face projecting from one side.
@@ -89,6 +93,8 @@ struct FLANGE : public META_DATA {
 
     void Randomize();
     GeometryData GetGeometry();
+    bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
+    bool decode(const std::vector<uint8_t>& payload);
 };
 
 struct T_Y {
