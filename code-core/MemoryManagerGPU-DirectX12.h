@@ -221,8 +221,10 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
     Selection3DResources selection3D;
     PickPassContext pickCtx; // Render-thread pick scratch (targets, readback, in-flight state).
 
-	CameraState camera; //Reference is updated per frame.
-    //Currently per tab, but latter we will have this per view. Since each tab can have multiple views.
+    // NO camera here. Cameras are per view (InternalSubTab::camera, tab.camera as fallback) and are
+    // resolved per window per frame by ResolveWindowViewTarget, then passed down as a parameter. A
+    // camera field here would be shared by every window/monitor showing this tab, so two render
+    // threads drawing two views of one tab would race on it.
 };
 
 struct DX12ResourcesPerWindow {// Presentation Logic
@@ -486,7 +488,7 @@ public:
     // monitorId: index into gpu.screens[] for DPI/physical info used by UI layout calculations
     void RenderScene3D(ID3D12GraphicsCommandList* cmdList, //Called by per monitor render thread.
         DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage,
-        int monitorId, uint64_t activeContainerMemoryId);
+        const CameraState& camera, int monitorId, uint64_t activeContainerMemoryId);
     void WaitForPreviousFrame(const DX12ResourcesPerRenderThread& dx);
     void ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UINT newHeight);
 

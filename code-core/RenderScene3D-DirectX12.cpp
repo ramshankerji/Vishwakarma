@@ -152,14 +152,13 @@ std::unique_ptr<GeometryPage> CreateNewPage(uint64_t containerMemoryId)
 
 void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
     DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage,
-    int monitorId, uint64_t activeContainerMemoryId) {
-    //int i = 0; // Latter to be iterated over number of screens.
+    const CameraState& camera, int monitorId, uint64_t activeContainerMemoryId) {
     // Update constant buffer with transformation matrices
 
     // Create view matrix (camera looking at scene from distance)
-    XMVECTOR eyePosition = XMLoadFloat3(&tabRes.camera.position);
-    XMVECTOR focusPoint = XMLoadFloat3(&tabRes.camera.target);
-    XMVECTOR upDirection = XMLoadFloat3(&tabRes.camera.up);
+    XMVECTOR eyePosition = XMLoadFloat3(&camera.position);
+    XMVECTOR focusPoint = XMLoadFloat3(&camera.target);
+    XMVECTOR upDirection = XMLoadFloat3(&camera.up);
     DirectX::XMMATRIX viewMatrix = DirectX::XMMatrixLookAtLH(eyePosition, focusPoint, upDirection);
 
     // Create projection matrix
@@ -174,7 +173,7 @@ void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
     float aspectRatio = static_cast<float>(winRes.WindowWidth) / static_cast<float>(sceneHeight);
 
     XMMATRIX projectionMatrix = XMMatrixPerspectiveFovLH(
-        tabRes.camera.fov, aspectRatio, tabRes.camera.nearZ, tabRes.camera.farZ);
+        camera.fov, aspectRatio, camera.nearZ, camera.farZ);
     XMMATRIX viewProj = viewMatrix * projectionMatrix;
 
     // Create world matrix with rotation. Now the camera rotates, not the world !

@@ -32,6 +32,7 @@ SelectionState. */
 struct DX12ResourcesPerTab;
 struct DX12ResourcesPerWindow;
 struct TabGeometryStorage;
+struct CameraState; // RenderScene3D.h
 
 enum class PickPurpose : uint32_t {
     None = 0,
@@ -127,8 +128,8 @@ void CleanupSelection3DResources(DX12ResourcesPerTab& tabRes);
 // while the scene RTV/DSV + scene viewport are still bound.
 void RecordSelectionOverlays(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage, SelectionState& selection,
-    const DirectX::XMMATRIX& viewProj, int topUIHeightPx, int sceneWidth, int sceneHeight,
-    uint64_t activeContainerMemoryId);
+    const CameraState& camera, const DirectX::XMMATRIX& viewProj, int topUIHeightPx, int sceneWidth,
+    int sceneHeight, uint64_t activeContainerMemoryId);
 
 // Service a pending pick request (records an id+depth pass + readback) and publish any completed
 // pick result back to SelectionState. Uses winRes.constantBuffer for the b0 view-proj constants.

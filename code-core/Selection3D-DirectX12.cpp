@@ -382,8 +382,8 @@ void CleanupPickPassContext(PickPassContext& ctx) {
 
 void RecordSelectionOverlays(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage, SelectionState& selection,
-    const XMMATRIX& viewProj, int /*topUIHeightPx*/, int /*sceneWidth*/, int sceneHeight,
-    uint64_t activeContainerMemoryId) {
+    const CameraState& camera, const XMMATRIX& viewProj, int /*topUIHeightPx*/,
+    int /*sceneWidth*/, int sceneHeight, uint64_t activeContainerMemoryId) {
     if (!commandList || !tabRes.selection3D.initialized || sceneHeight <= 0) return;
 
     // --- Highlight the selected objects in deep blue -------------------------------------------
@@ -434,10 +434,10 @@ void RecordSelectionOverlays(ID3D12GraphicsCommandList* commandList, DX12Resourc
     const float alpha = std::clamp(
         static_cast<float>(kNavCubeVisibleMs - elapsed) / 250.0f, 0.0f, 1.0f);
 
-    XMVECTOR eye = XMLoadFloat3(&tabRes.camera.position);
-    XMVECTOR target = XMLoadFloat3(&tabRes.camera.target);
+    XMVECTOR eye = XMLoadFloat3(&camera.position);
+    XMVECTOR target = XMLoadFloat3(&camera.target);
     const float distance = XMVectorGetX(XMVector3Length(XMVectorSubtract(eye, target)));
-    const float tanHalfFov = std::tan(tabRes.camera.fov * 0.5f);
+    const float tanHalfFov = std::tan(camera.fov * 0.5f);
     // Scale the unit cube so it keeps a roughly constant on-screen size regardless of zoom.
     const float scale = kNavCubePixels * 2.0f * tanHalfFov * (std::max)(distance, 1e-3f) /
         static_cast<float>(sceneHeight);

@@ -88,7 +88,7 @@ inline XMUBYTE4 PackNormal(XMFLOAT3 n) {
 }
 
 struct META_DATA {
-    uint64_t memoryID = 0;// This is temporary CPU ID inside currently running software. Scoped within each tab.
+    uint64_t memoryID = 0;// This is temporary CPU ID inside currently running software process.
     uint64_t memoryIDParent = 0; // This is temporary CPU ID. "0" simply means it has not been initialized.
     uint64_t persistedId = 0;      // This is the unique ID within the saved file.
     uint64_t persistedParentId = 0;// This is the unique ID within the saved file.

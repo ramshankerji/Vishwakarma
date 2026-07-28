@@ -286,3 +286,175 @@ One render thread per monitor drives the whole flow top-to-bottom:
 ```
 
 **Key boundary rule:** the two renderers (Scene3D, Page2D) never touch a swap chain, never present, and never decide *what* to draw. They receive a container `memoryId`, a view state (camera or pan/zoom) and a viewport, and record commands into a command list handed to them by the compositor. The compositor never touches geometry pages or PSOs directly. The UI overlay is always recorded **last**, by the compositor, on top of whichever renderer ran.
+
+## 10 Million Objects + 64 Random Subset Draw Plan
+
+### Goal and terminology
+
+This plan prepares one tab to hold up to 10 million simultaneously GPU-resident Scene3D objects while presenting up to 64 independently filtered SubTabs. The objective is not to redraw 10 million objects in every SubTab at 60 Hz: it is to build the ownership, memory, and command-generation architecture that makes that scale possible, then progressively reduce each SubTab to the objects that matter for its camera.
+
+The following names are deliberately distinct:
+
+| Term | Lifetime / responsibility |
+|---|---|
+| **Persistent engineering object ID** | Durable file/project identity. It is resolved again after loading a project. |
+| **`memoryID`** | 64-bit, process-local, monotonically assigned CPU identity. It is never reused during one process lifetime and remains the engineering-thread <-> GPU-copy-thread command key. |
+| **`gpuInstanceIndex`** | Dense 32-bit renderer identity. It indexes GPU arrays, is reusable only after fence-safe retirement, and is paired with a generation counter on the CPU. |
+| **SubTab** | Content selection: a Scene3D container set or a Page2D logical-container set, plus its filter and display state. This replaces the older overloaded use of “view”. |
+| **Viewport** | Camera, input ownership, render-target rectangle and presentation state. A Viewport references a SubTab. Multiple Viewports may show the same SubTab with different cameras. |
+
+This section assumes **64 simultaneously mask-addressable SubTabs per tab**. A 64-bit object membership mask directly represents that limit. The current fixed SubTab-slot capacity is larger; if 128 active masks are required later, use two mask words (`uint2` on the GPU) rather than changing the rest of this design.
+
+Every tab owns its own logical render stores and snapshots because tabs are independent. The device, copy queue, upload ring, heap arena, memory budget and fence retirement service remain global, so the application still has one coherent VRAM budget.
+
+### Target state
+
+| Area | Current implementation | Target implementation |
+|---|---|---|
+| Content selection | One sub-tab identifies one container | One SubTab contains a set of Scene3D *or* Page2D containers plus compact filter rules and optional explicit object overrides. |
+| Camera | Scene camera is copied into shared per-tab state during rendering | Camera belongs to a Viewport and is never overwritten by another window/monitor. |
+| Object identity | `memoryID`, page/slot and reusable matrix slot are intertwined | Copy-thread registry separates `memoryID`, stable `gpuInstanceIndex`, and movable geometry-page location. |
+| Geometry | 4 MB GeometryPages, COW/RCU snapshots | Retain this successful first-level design. |
+| Per-object data | One monolithic 64-byte world-matrix buffer | Per-tab, paged 64-byte InstanceRecords. |
+| Visibility | Whole page is drawn or skipped by container ID | 64-bit per-object SubTab membership plus container-set/filter rules. |
+| Draw arguments | Persistent per-GeometryPage executable indirect buffers | Persistent GPU-readable draw templates and transient, Viewport-specific visible indirect buffers. |
+| Culling | None | Start with GPU filter/compaction; add spatial culling later. |
+
+### Phase A — SubTabs, Viewports and container sets
+
+1. Rename the existing content-level “view” concept to **SubTab**. A SubTab has one content type: Scene3D or Page2D. It contains one or more logical containers of that type; a mixed Scene3D/Page2D SubTab is intentionally not supported because it would have ambiguous renderer and interaction semantics.
+2. Introduce **Viewport** as a separate object. It owns a Scene3D camera (or Page2D pan/zoom), input/pick state, render-target dimensions and update scheduling. A window may later host multiple Viewports side by side.
+3. Replace the one-container-only render selection with a SubTab container set. When the set alone defines the subset, store it as a compact rule; do not set a per-object bit for every member merely to represent a container selection.
+4. Add a snapshot-level `containerMemoryId -> GeometryPage list` directory. This immediately avoids walking every page in a tab when a SubTab selects only a few containers, even before spatial culling exists.
+
+### Phase B — renderer object identity and lifetime
+
+The copy thread becomes the sole owner of two mappings:
+
+```text
+memoryID -> GpuInstanceHandle { gpuInstanceIndex, generation }
+memoryID -> GeometryLocation  { current GeometryPage, slot }
+```
+
+`gpuInstanceIndex` is identity, never a page location. When COW moves an object from one GeometryPage/slot to another, the index remains unchanged. Engineering code keeps sending commands by `memoryID`; it need not know page coordinates or GPU indices. A transient `GpuInstanceHandle` may be cached in `META_DATA`, but is never persisted to disk.
+
+Deletion uses a zombie interval:
+
+```text
+active -> absent from newly published snapshots -> zombie -> all old frames retire -> reusable index
+```
+
+Only after every snapshot that could reference the index is past its retire fence may the index return to the free list. Increment the generation at reuse. This avoids stale commands or an old page accidentally addressing a newly assigned object.
+
+### Phase C — paged instance and visibility stores
+
+Build a reusable paging foundation, but keep the policies typed:
+
+```text
+GpuHeapArena      large device-memory allocations / placed-resource suballocation
+PagedStore<T>     logical pages, versions, page-directory snapshots and fence retirement
+FrameRing<T>      transient per-frame/per-Viewport allocations; no RCU snapshots
+```
+
+Logical pages must be suballocated from larger GPU resources or heaps. Do **not** create one committed D3D12 resource for every 64 KB page.
+
+The initial per-tab stores are:
+
+| Store | Logical page | Objects/page | Update model |
+|---|---:|---:|---|
+| GeometryStore | 4 MB | Variable | Existing COW/RCU GeometryPages. |
+| InstanceStore | 512 KB | 8,192 | Immutable/COW page directory for transform and authored object appearance. |
+| VisibilityStore | 64 KB | 8,192 | GPU-updated membership pages; independent from InstanceStore COW. |
+| DrawTemplateStore | Coupled to GeometryStore | Variable | Immutable GPU-readable source records for command generation. |
+| VisibleIndirectRing | Dynamic | Per Viewport/frame | Transient culling output and count buffers. |
+
+An InstanceRecord remains exactly 64 bytes, so one 512 KB page tracks the same 8,192 objects as one 64 KB visibility page:
+
+```cpp
+struct InstanceRecord {
+    float4 transformA;     // 48 bytes across transformA/B/C: affine object transform
+    float4 transformB;
+    float4 transformC;
+    uint   materialIndex;  // 16-byte object render payload
+    uint   packedColor;
+    uint   renderFlags;
+    uint   packedParams;   // e.g. opacity plus a future scalar parameter
+}; // 64 bytes
+```
+
+The final affine row/column is implicit. Therefore shaders must use an explicit affine-transform helper; the record is no longer safe to pass directly to a generic `float4x4` `mul` operation. The three transform vectors retain the 3x3 component currently used for normal handling. The current uniform-scale normal assumption remains; a future non-uniform-scale implementation may add an inverse-transpose representation or a separate normal-transform policy.
+
+Appearance is intentionally packed into InstanceStore for authored, infrequently changed state: material, base color, opaque/transparent classification, opacity and render flags. Keep high-frequency temporary state (hover, selection, view membership, temporary hide/show) out of this COW page so an interaction does not clone 512 KB of instance data.
+
+VisibilityStore contains one 64-bit SubTab mask per `gpuInstanceIndex`, represented as `uint2` in GPU code for broad shader compatibility. CPU-side membership changes remain keyed by `memoryID`; the copy thread resolves them to dense indices and a compute pass applies the mask deltas. Reusing a SubTab bit requires clearing its prior membership and observing the same fence/lifetime discipline as other asynchronous work.
+
+### Phase D — publish one coherent scene epoch
+
+Geometry pages, InstanceStore pages and later spatial pages cannot be published as unrelated “latest” resources. Publish one atomic `SceneEpoch` directory instead:
+
+```text
+SceneEpoch
+  GeometryPage directory
+  InstanceStore page directory
+  DrawTemplate directory
+  Container -> page directory
+  revision numbers
+```
+
+The render thread acquires one SceneEpoch and binds only resources reachable from it. A transform change COWs only its 512 KB logical InstanceStore page, updates the matching directory entry, and publishes the new epoch. Old page versions retire only after all relevant render fences pass.
+
+This also corrects the unsafe pattern of immediately returning a matrix slot to a free list while an old immutable geometry page can still reference that slot. A stable `gpuInstanceIndex` plus epoch-consistent InstanceStore page keeps old frames and new frames self-consistent.
+
+### Phase E — dynamic GPU indirect generation, before spatial culling
+
+Retire the *persistent executable* per-page indirect-buffer model, but do not remove draw information from the GPU. Replace it with two concepts:
+
+```text
+DrawTemplateBuffer
+  Persistent and GPU-readable; identifies gpuInstanceIndex, index count,
+  start index, base vertex and geometry source page.
+
+VisibleIndirectBuffer
+  Per-Viewport, transient GPU output containing compacted commands and a count buffer.
+```
+
+The first compute implementation is intentionally simple:
+
+```text
+SubTab container/filter/membership -> scan relevant draw templates
+                                  -> compact matching commands on GPU
+                                  -> VisibleIndirectBuffer + count
+                                  -> ExecuteIndirect
+```
+
+This phase establishes the correct data flow but does not promise 64 full 10-million-object scans every frame. Cache cull output by `(SceneEpoch, SubTab filter revision, visibility revision)` and regenerate only when its inputs change. Allocate output only for active, visible Viewports; never keep 64 full 10-million-command buffers resident.
+
+Transparent commands are emitted to a separate transparent output/path according to `renderFlags`. The transparent flag is only classification; ordering and sorting policy remain a later rendering concern.
+
+### Phase F — spatial data and real GPU culling (deferred)
+
+Bounds and spatial data are deliberately deferred until the previous phases are correct. Design the draw template and instance/page headers so they can later acquire world bounds, a spatial-cell/BVH reference and LOD data.
+
+The culling path then evolves without changing object identity or paging:
+
+```text
+SubTab filter -> container-page rejection -> spatial-page rejection
+              -> frustum culling -> LOD selection -> optional Hi-Z occlusion
+              -> compact visible indirect commands
+```
+
+The initial GPU filter/compaction path remains useful as a correctness baseline and fallback.
+
+### Phase G — viewport scheduling and scale limits
+
+64 independent SubTabs do not imply 64 equal-rate full-resolution renders. The compositor schedules Viewports according to user value:
+
+| Viewport class | Typical policy |
+|---|---|
+| Focused interactive | 30–60 Hz, highest LOD budget |
+| Visible secondary | Budgeted refresh rate |
+| Static background | Render only when dirty |
+| Dashboard/thumbnail | Lower resolution and low refresh rate |
+| Occluded/minimized | No rendering |
+
+This policy, together with cached cull output and the later spatial hierarchy, is what turns the 10-million-object / 64-SubTab requirement into bounded GPU work rather than 640 million draw commands every frame.

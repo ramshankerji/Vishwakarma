@@ -242,7 +242,10 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 const VishwakarmaStorage::ObjectType activeInternalSubTabType =
                     viewTarget.containerType;
                 const int renderSlot = viewTarget.renderSlot;
-                tabRes.camera = viewTarget.camera;
+                // viewTarget holds this frame's own copy of the view camera. It is never written
+                // back into tabRes, so two render threads drawing two views of this same tab
+                // cannot clobber each other's camera.
+                const CameraState& camera = viewTarget.camera;
                 const bool isInputViewWindow = viewTarget.isInputViewWindow;
                 uint64_t fenceToWaitFor = gpu.copyFenceValue.load(std::memory_order_acquire);// Cross-Queue Sync.
                 //if (fenceToWaitFor > 0) { threadRes.commandQueue->Wait(gpu.copyFence.Get(), fenceToWaitFor); }
@@ -255,7 +258,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 else {
                     ClearSceneSkyGradient(threadRes.commandList.Get(), winRes, monitorId);
                     gpu.RenderScene3D(threadRes.commandList.Get(), winRes, tabRes, tab.geometry,
-                        monitorId, activeInternalSubTabMemoryId);// Renders geometry.
+                        camera, monitorId, activeInternalSubTabMemoryId);// Renders geometry.
 
                     // Selection highlight + rotation-cube overlay (still inside the scene RTV/DSV +
                     // scene viewport bound by RenderScene3D, so this draws before the UI).
@@ -264,19 +267,19 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                     sceneVpW = winRes.WindowWidth;
                     sceneVpH = winRes.WindowHeight - sceneTopUI;
                     if (sceneVpH > 0) {
-                        DirectX::XMVECTOR eyeP = DirectX::XMLoadFloat3(&tabRes.camera.position);
-                        DirectX::XMVECTOR focusP = DirectX::XMLoadFloat3(&tabRes.camera.target);
-                        DirectX::XMVECTOR upP = DirectX::XMLoadFloat3(&tabRes.camera.up);
+                        DirectX::XMVECTOR eyeP = DirectX::XMLoadFloat3(&camera.position);
+                        DirectX::XMVECTOR focusP = DirectX::XMLoadFloat3(&camera.target);
+                        DirectX::XMVECTOR upP = DirectX::XMLoadFloat3(&camera.up);
                         DirectX::XMMATRIX viewM = DirectX::XMMatrixLookAtLH(eyeP, focusP, upP);
                         const float aspect = static_cast<float>(winRes.WindowWidth) /
                             static_cast<float>(sceneVpH);
                         DirectX::XMMATRIX projM = DirectX::XMMatrixPerspectiveFovLH(
-                            tabRes.camera.fov, aspect, tabRes.camera.nearZ, tabRes.camera.farZ);
+                            camera.fov, aspect, camera.nearZ, camera.farZ);
                         sceneViewProj = viewM * projM; // Matches RenderScene3D's view-proj.
                         if (isInputViewWindow) {
                             RecordSelectionOverlays(threadRes.commandList.Get(), winRes, tabRes,
-                                tab.geometry, tab.selection, sceneViewProj, sceneTopUI, sceneVpW,
-                                sceneVpH, activeInternalSubTabMemoryId);
+                                tab.geometry, tab.selection, camera, sceneViewProj, sceneTopUI,
+                                sceneVpW, sceneVpH, activeInternalSubTabMemoryId);
                         }
                     }
                 }
