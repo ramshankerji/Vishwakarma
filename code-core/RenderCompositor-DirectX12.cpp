@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <sstream>
 #include <shellscalingapi.h>
 
 #include "MemoryManagerGPU-DirectX12.h"
@@ -422,34 +423,33 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             frameCount = 0;// Reset counters
             lastFpsTime = currentTime;
 
-            // 2D render-state heartbeat: what each tab's Page2D snapshot holds on the GPU and
-            // where its input view is looking. Bridges "records ingested" and "pixels visible".
-            uint16_t* fpsTabList = publishedTabIndexes.load(std::memory_order_acquire);
-            const uint16_t fpsTabCount = publishedTabCount.load(std::memory_order_acquire);
-            for (uint16_t t = 0; t < fpsTabCount; ++t) {
-                DATASETTAB& fpsTab = allTabs[fpsTabList[t]];
-                if (!fpsTab.cad2d) continue;
-                Cad2DPageSnapshot* snapshot =
-                    fpsTab.cad2d->activeSnapshot.load(std::memory_order_acquire);
-                if (!snapshot || snapshot->pages.empty()) continue;
-                const int inputSlot = InputViewSlot(fpsTab);
-                const int viewSlot = (inputSlot >= 0 && inputSlot < MV_MAX_SUBTABS) ? inputSlot : 0;
-                const Cad2DViewState& view = fpsTab.cad2d->views[viewSlot];
-                std::cout << "[cad2d][dbg] tab=" << fpsTabList[t]
-                          << " inputSlot=" << inputSlot
-                          << " view center=(" << view.centerXCU.load(std::memory_order_acquire)
-                          << ", " << view.centerYCU.load(std::memory_order_acquire)
-                          << ") zoom=" << view.zoomPixelsPerCU.load(std::memory_order_acquire)
-                          << " gpuPages:";
-                for (const Cad2DPageGPU* page : snapshot->pages) {
-                    if (!page) continue;
-                    std::cout << " {container=" << page->containerMemoryId
-                              << " lines=" << page->lineCount
-                              << " curves=" << page->curveCount
-                              << " textIdx=" << page->textIndexCount << "}";
-                }
-                std::cout << std::endl;
-            }
+            // Copy-thread heartbeat: the numbers the 10M plan's workload budgets are measured
+            // against (graphics.md). "clones/chunk" is the one that matters most - inserting into
+            // a large scene must stay at 1-2, never scale with the scene. Assembled into one
+            // string before writing: every monitor's render thread prints this, and separate <<
+            // calls interleave mid-line between them.
+            const uint64_t chunks = gCopyStats.chunks.load(std::memory_order_relaxed);
+            const uint64_t clones = gCopyStats.pagesCloned.load(std::memory_order_relaxed);
+            std::ostringstream copyLine;
+            copyLine << "[gpu][copy] batches=" << gCopyStats.batches.load(std::memory_order_relaxed)
+                     << " chunks=" << chunks
+                     << " commands=" << gCopyStats.commands.load(std::memory_order_relaxed)
+                     << " clones=" << clones
+                     << " clones/chunk=" << std::fixed << std::setprecision(2)
+                     << (chunks ? static_cast<double>(clones) / chunks : 0.0)
+                     << " cloneMB=" << (gCopyStats.clonedBytes.load(std::memory_order_relaxed) >> 20)
+                     << " ringMB=" << (gCopyStats.ringBytes.load(std::memory_order_relaxed) >> 20)
+                     << " ringPeakKB=" << (gCopyStats.ringHighWater.load(std::memory_order_relaxed) >> 10)
+                     << " oversize=" << gCopyStats.oversizeStaging.load(std::memory_order_relaxed)
+                     << " queued=" << gCopyStats.queueDeferred.load(std::memory_order_relaxed)
+                     << " maxPages=" << gCopyStats.maxActivePages.load(std::memory_order_relaxed)
+                     << " slots(pending/free)=" << gCopyStats.pendingSlots.load(std::memory_order_relaxed)
+                     << "/" << gCopyStats.freeSlots.load(std::memory_order_relaxed)
+                     << " retireBacklog(live/peak)="
+                     << gCopyStats.liveRetireBacklog.load(std::memory_order_relaxed)
+                     << "/" << gCopyStats.peakRetireBacklog.load(std::memory_order_relaxed)
+                     << "\n";
+            std::cout << copyLine.str() << std::flush;
         }
 #endif
 

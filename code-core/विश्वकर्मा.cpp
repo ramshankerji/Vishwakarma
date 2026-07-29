@@ -678,8 +678,22 @@ static uint64_t EnsureActiveScene3D(DATASETTAB* targetTab) {
     return scene ? scene->memoryID : 0;
 }
 
+/* Accumulator for BULK geometry creation. Registering one object at a time takes toCopyThreadMutex
+and storageObjectsMutex once per object, and - more importantly - lets the copy thread drain between
+every push, so it sees batches of a handful of commands and clones a whole 4 MB page to add each
+handful. Collecting objects here and handing them over in one locked burst per queue turns that into
+one clone per burst. Holding toCopyThreadMutex across the whole burst is the part that actually
+groups them: the copy thread's drain loop takes the same mutex, so it cannot interleave.
+
+Only the bulk paths use this; passing nullptr keeps the original immediate behaviour. */
+struct GeneratedGeometryBatch {
+    std::vector<CommandToCopyThread> copyCommands;
+    std::vector<StoredGeometryObject3D> storedObjects;
+    std::vector<uint64_t> memoryIds;
+};
+
 static void RegisterGeneratedGeometryElement(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType,
-    META_DATA* object, GeometryData&& geometry) {
+    META_DATA* object, GeometryData&& geometry, GeneratedGeometryBatch* batch = nullptr) {
     if (!targetTab || !object) return;
 
     if (object->memoryIDParent == 0) {
@@ -688,10 +702,20 @@ static void RegisterGeneratedGeometryElement(DATASETTAB* targetTab, VishwakarmaS
     object->dataType = static_cast<uint16_t>(VishwakarmaStorage::ToNumber(objectType));
     object->schemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
 
+    if (batch) { // Deferred: the caller hands everything over via FlushGeneratedGeometryBatch.
+        batch->copyCommands.push_back({ CommandToCopyThreadType::ADD, std::move(geometry),
+            object->memoryID, targetTab->tabID, object->memoryIDParent });
+        batch->storedObjects.push_back({ objectType, object->memoryID, object });
+        batch->memoryIds.push_back(object->memoryID);
+        return;
+    }
+
     {
         std::lock_guard<std::mutex> lock(toCopyThreadMutex);
-        commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD, geometry, object->memoryID,
-            targetTab->tabID, object->memoryIDParent });
+        // Moved, not copied: geometry is an rvalue reference we own and nothing reads it after
+        // this, so copying it deep-copied both vertex and index vectors per object.
+        commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD, std::move(geometry),
+            object->memoryID, targetTab->tabID, object->memoryIDParent });
     }
 
     if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
@@ -701,6 +725,36 @@ static void RegisterGeneratedGeometryElement(DATASETTAB* targetTab, VishwakarmaS
     }
 
     targetTab->allIDsInThisTab.push_back(object->memoryID);
+    toCopyThreadCV.notify_one();
+}
+
+// Hand an accumulated batch over: one lock acquisition per queue for the whole burst, one notify.
+// Same two-mutexes-never-nested discipline as the immediate path above.
+static void FlushGeneratedGeometryBatch(DATASETTAB* targetTab, GeneratedGeometryBatch& batch) {
+    if (!targetTab || batch.copyCommands.empty()) return;
+
+    {
+        std::lock_guard<std::mutex> lock(toCopyThreadMutex);
+        for (CommandToCopyThread& command : batch.copyCommands) {
+            commandToCopyThreadQueue.push(std::move(command));
+        }
+    }
+
+    if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
+    {
+        // Held briefly and once: the render thread takes this mutex every frame in
+        // ResolveWindowViewTarget, so per-object locking here stalls rendering during an import.
+        std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+        targetTab->storageObjects3D.insert(targetTab->storageObjects3D.end(),
+            batch.storedObjects.begin(), batch.storedObjects.end());
+    }
+
+    targetTab->allIDsInThisTab.insert(targetTab->allIDsInThisTab.end(),
+        batch.memoryIds.begin(), batch.memoryIds.end());
+
+    batch.copyCommands.clear();
+    batch.storedObjects.clear();
+    batch.memoryIds.clear();
     toCopyThreadCV.notify_one();
 }
 
@@ -1503,7 +1557,8 @@ static bool HandleZoomWindowInput(DATASETTAB& tab, const ACTION_DETAILS& input) 
     return true;
 }
 
-inline void addRandomGeometryElement(DATASETTAB* targetTab) {
+// Pass a batch to defer the hand-over (bulk creation); nullptr registers immediately as before.
+inline void addRandomGeometryElement(DATASETTAB* targetTab, GeneratedGeometryBatch* batch = nullptr) {
 	if (!targetTab) return; //Safety against NULL pointer dereference.
     GeometryData geometry;// These will hold the data of the randomly created shape.
     META_DATA* object = nullptr;
@@ -1643,7 +1698,7 @@ inline void addRandomGeometryElement(DATASETTAB* targetTab) {
         break;
     }
     }
-    RegisterGeneratedGeometryElement(targetTab, objectType, object, std::move(geometry));
+    RegisterGeneratedGeometryElement(targetTab, objectType, object, std::move(geometry), batch);
 }
 
 void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering thread. The ringmaster of the application.
@@ -1951,6 +2006,31 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                     myTab->autoCameraRotation = !myTab->autoCameraRotation; 
                 }
 				if (input.x == 67 || input.x == 99) { cam.Initialize(); } // 'c' & "C". Reset camera.
+                // Temporary Debug Key: bulk-generate geometry with "g", to exercise the copy
+                // thread's import path at scale (graphics.md, 10M plan). Shift+G goes 10x bigger.
+                // Everything lands in ONE queue push burst, so it drives the drain cap, the upload
+                // ring and the per-chunk publish exactly the way a real model import does.
+                if (input.x == 71 || input.x == 103) { // 'G' & 'g'
+                    const int bulkCount = (input.x == 71) ? 100000 : 10000;
+                    // Hand the copy thread 100 objects at a time. One-at-a-time registration let
+                    // it drain ~5 commands per batch and clone a whole page for each handful:
+                    // ~10 GB of clone traffic for 10k objects. At 100 per burst that is one clone
+                    // per 100 objects instead of one per 5.
+                    constexpr size_t kStressBurst = 100;
+                    const auto bulkStart = std::chrono::steady_clock::now();
+                    GeneratedGeometryBatch bulkBatch;
+                    for (int i = 0; i < bulkCount; ++i) {
+                        addRandomGeometryElement(myTab, &bulkBatch);
+                        if (bulkBatch.copyCommands.size() >= kStressBurst) {
+                            FlushGeneratedGeometryBatch(myTab, bulkBatch);
+                        }
+                    }
+                    FlushGeneratedGeometryBatch(myTab, bulkBatch); // Partial tail burst.
+                    const auto bulkMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - bulkStart).count();
+                    std::cout << "[gpu][stress] queued " << bulkCount << " objects in "
+                              << bulkMs << " ms (bursts of " << kStressBurst << ")" << std::endl;
+                }
                 break;
 
             case ACTION_TYPE::CAPTURECHANGED:
@@ -1984,7 +2064,6 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         // Process all pending inputs from User, Network, File threads
         ACTION_DETAILS nextWorkTODO;
         while (bool todo = myTab->todoCPUQueue->try_pop(nextWorkTODO)) {
-            std::cout << "Input received. Action Type = " << static_cast<int>(nextWorkTODO.actionType) <<"\n";
             if (nextWorkTODO.actionType == ACTION_TYPE::CREATEPYRAMID) {
                 //addRandomGeometryElement();
             } else if (nextWorkTODO.actionType == ACTION_TYPE::CLOSE_TAB) {

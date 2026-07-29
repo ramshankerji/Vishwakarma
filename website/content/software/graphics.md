@@ -88,7 +88,7 @@ The copy queue prepares `newPage` (vertex buffer, index buffer, `ExecuteIndirect
 
 There are multiple views per tab. *As implemented*, the `ExecuteIndirect` argument buffer is per **page** (one, not per-view double-buffered) and is regenerated whenever a page is cloned; a delete soft-marks the placement record (`isDeleted`) and the next rebuild drops it. Per-view argument buffers proved unnecessary — a view filters at draw time by the page's container ID, issuing an argument count of 0 for inactive containers.
 
-**Free-list allocator:** maintain a CPU-side segregated free list, per tab. The allocator knows, e.g., "I have a 12 KB middle gap in Page 3 and a 40 KB middle gap in Page 8." When a 10 KB request comes in, it immediately returns "Page 3" — no iterating through page objects. If the free list says no existing page can accommodate the geometry, create a new heap / placed-resource buffer. The free list tracks only middle empty space, not internal holes from deleted objects; aggregate holes are tracked per page and defragmented occasionally.
+**Free-list allocator** *(designed, not built — demoted to a telemetry-gated decision in Phase 6; the implemented path is a per-batch largest-gap scan)***:** maintain a CPU-side segregated free list, per tab. The allocator knows, e.g., "I have a 12 KB middle gap in Page 3 and a 40 KB middle gap in Page 8." When a 10 KB request comes in, it immediately returns "Page 3" — no iterating through page objects. If the free list says no existing page can accommodate the geometry, create a new heap / placed-resource buffer. The free list tracks only middle empty space, not internal holes from deleted objects; aggregate holes are tracked per page and defragmented occasionally.
 
 When a buffer accumulates more than 25% holes, it creates a new defragmented buffer and switches over once complete (for new geometry additions). At most one buffer is defragmented at a time (between two frames). Since pages are 4 MB, this does not produce a high-latency stall while running async with the copy thread.
 
@@ -102,9 +102,11 @@ The realistic "worst case" hierarchy for a CAD frame:
 - **Transparency:** opaque vs transparent (sorting requirement) — transparent objects must be drawn last for alpha blending.
 - **Topology:** triangles (solid) vs lines (wireframe) (PSO requirement) — we cannot draw lines and triangles in the same call.
 - **Culling:** single-sided vs double-sided (PSO requirement) — sheet metal vs solids. Since sectioning is a common use case, we may make all geometry double-sided; to be ascertained later.
-- **Buffer pages (N):** how many 256 MB blocks are in use.
+- **Buffer pages (N):** how many 4 MB pages are in use.
 
 Total unique batches = 2 × 2 × 2 × 2 × N = **16 × N**. This ensures no pipeline-state reset while rendering a single page — one `ExecuteIndirect` call per page.
+
+*Superseded at the top end:* the one-call-per-page model holds through Phase 5. The 10-million-object plan replaces it with GPU-compacted, per-Viewport command buffers and a single `ExecuteIndirect` per Viewport; of these four axes only index width remains a true page property there. See *10 Million Objects + 64 SubTab Draw Plan*, Step 7.
 
 *To clarify later:* how to handle repeated geometry (e.g. bolts). They need only one set of vertex/index buffers and can be drawn with different world matrices.
 
@@ -127,6 +129,8 @@ Putting the vertex and index buffer in the **same page** is the superior archite
 2. **Cache locality** — the GPU fetches vertices and indices from physically close VRAM (same page), slightly improving cache hit rates.
 3. **Double-ended layout** — vertices start at offset 0 and grow **up**; indices start at offset max (4 MB) and grow **down**. Free space is always the gap in the middle. The page is full when the vertex head pointer meets or crosses the index tail pointer. A mandatory 64-byte gap in the middle handles alignment concerns.
 
+**Vertex offsets are a whole number of vertices, always.** Every object's `vertexByteOffset` is rounded up to a multiple of `sizeof(Vertex)` (24), never to a power-of-two boundary, because the draw path addresses vertices by `BaseVertexLocation = vertexByteOffset / sizeof(Vertex)` in units of stride — and the Selection3D highlight path recomputes the same division independently. 24 already satisfies `CopyBufferRegion`, so a separate alignment buys nothing. Index offsets stay 4-byte aligned. Note the trap: 24 is not a power of two, so the usual `(v + a - 1) & ~(a - 1)` helper cannot express this and a separate round-up-to-multiple is required. An earlier revision aligned to 16 and survived only because every generator happened to emit an even vertex count; the first odd-count object — an imported mesh of N triangles gives 3N vertices — would have silently misaligned the *next* object in that page by 8 bytes, with no error or warning.
+
 **Lazy creation:**
 
 - New tab → allocated memory = 0 MB.
@@ -134,7 +138,7 @@ Putting the vertex and index buffer in the **same page** is the superior archite
 - User draws a glass window → allocate `Transparent_Page_0` (4 MB).
 - User never draws a wireframe → `Wireframe_Page` stays null.
 
-Resource state is combined, i.e. `D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER | D3D12_RESOURCE_STATE_INDEX_BUFFER`.
+Pages are created in `COMMON` and never explicitly transitioned; implicit promotion covers every read-only use they have. (An earlier revision of this section specified a combined `VERTEX_AND_CONSTANT_BUFFER | INDEX_BUFFER` state — that contradicted the page lifecycle above and was never built.)
 
 | Feature | Decision | Benefit |
 |---|---|---|
@@ -168,12 +172,14 @@ Use **Render To Texture (RTT)** to implement frame freezes, since the swap chain
 
 ### Known issues / limitations (to be resolved in a later revision)
 
-Everything formerly tracked here now has a roadmap slot: transparency sorting, the hot-drag / active-mutation path and instanced repeated geometry sit in Phase 5, the telemetry counters in Phase 6, and evict/residency logic, compute-shader frustum culling, mesh shaders and instance-based LOD in Phase 7. Resolved since this list was written: selection highlighter methodology — shipped as the GPU pick pass + highlight overlay + rotation cube (Selection3D module).
+Everything formerly tracked here now has a roadmap slot: transparency sorting, the hot-drag / active-mutation path and instanced repeated geometry sit in Phase 5, the telemetry counters in Phase 6, and evict/residency logic, compute-shader frustum culling, mesh shaders and instance-based LOD in Phase 7.
+
+Resolved since this list was written: selection highlighter methodology — shipped as the GPU pick pass + highlight overlay + rotation cube (Selection3D module); vertex page offsets misaligned against the 24-byte stride — see the alignment rule under *Page structure*; and world-matrix slots recycled before the frames referencing them retired — see Step 1 of the 10-million-object plan.
 
 ### Miscellaneous specification
 
-- A uniform 64-bit object ID, unique across all objects in the entire process memory. Each object can have up to ~16 simultaneous variations of vertex geometry / graphics representation.
-- We expect roughly 1000–5000 draw calls per frame.
+- A uniform 64-bit object ID, unique across all objects in the entire process memory. The renderer maps exactly one `gpuInstanceIndex` to one such ID; if multiple simultaneous geometry variations per object are ever wanted, the key becomes `(memoryID, variation)` — see the 10M plan's terminology.
+- We expect roughly 1000–5000 draw calls per frame at present. That budget is what the one-`ExecuteIndirect`-per-page model is sized for; at 10M objects the same budget is met instead by one compacted `ExecuteIndirect` per Viewport (Step 7).
 - Multiple partially-overlapping windows, each independently resizable / maximize / minimize.
 - The lowest distance between an object and *all* the different view-camera positions is used by the logic threads to decide the Level of Detail.
 - A mechanism to manage memory over-pressure, signalling the logic threads to reduce level of detail within some distance.
@@ -189,15 +195,11 @@ As items complete, they move out of this pending list and into the design docume
 
 **Phase 4 — the memory manager (the Vishwakarma core)**
 
-Done so far: 4 MB double-ended VRAM pages with RCU clone → mutate → atomic-snapshot publish, per-container page ownership, fence-gated retirement (snapshots, pages, outgrown matrix tables), empty-page GC, world-matrix table with slot free-list and doubling growth, tab/view management, basic ribbon UI.
+Done so far: 4 MB double-ended VRAM pages with RCU clone → mutate → atomic-snapshot publish, per-container page ownership, fence-gated retirement (snapshots, pages, outgrown matrix tables, matrix slots), empty-page GC, world-matrix table with slot free-list and doubling growth, tab/view management, basic ribbon UI, and the global upload ring with ring-gated chunked submission.
+
+**Global upload ring buffer + ring-gated submission — done.** One persistent-mapped 64 MB ring with fence-tracked reclaim now serves Scene3D geometry staging and the argument-buffer rebuilds, replacing the per-object committed staging resources in `RecordGeometryUpload`, and the dead per-tab upload heaps (64 MB vertex + 16 MB index per tab, committed and mapped but never written) are gone. Submission is chunk-driven: one recording, one submit, one fence wait and one publish per chunk, collapsing the three record/execute/CPU-wait cycles per tab into one. The CPU-side drain is capped so a lakh-object import cannot materialise hundreds of megabytes of `GeometryData` before a byte reaches the GPU, and an oversize payload falls back to a one-off committed buffer. Specified in full as Step 0 of the 10-million-object plan below. **Still to migrate onto the ring:** Page2D record uploads (`ProcessCad2DCopyBatch`, which also creates its own allocator and command list per batch) and texture uploads.
 
 Remaining, in build order — every later feature funnels through the copy thread, so each item here multiplies the value of everything after it:
-
-- [ ] **Global upload ring buffer.** One persistent-mapped ring (16–32 MB, fence-tracked reclaim) serving ALL copy-thread staging: Scene3D geometry, indirect-argument rebuilds, Page2D uploads, texture uploads. Today every object upload creates its own committed staging resource (`RecordGeometryUpload`), which is exactly the stall the original roadmap predicted. Sub-tasks:
-  - [ ] Remove the dead per-tab upload heaps: `InitD3DPerTab` creates + persistently maps 64 MB (vertex) + 16 MB (index) upload buffers that nothing ever writes — ~80 MB of committed memory per tab, directly against the "Hello-World tabs stay lightweight" rule.
-  - [ ] Oversize fallback: an upload bigger than the ring gets a one-off committed staging buffer.
-  - [ ] Ring capacity becomes the natural batch throttle: a 100k-object import chunks by ring space instead of materializing all staging buffers at once (today's batch memory is unbounded — the open TODO in `GpuCopyThread`).
-- [ ] **One submit per copy batch.** The batch path today records + executes + CPU-fence-waits up to three times per tab (page clones, geometry uploads, argument rebuilds). The copy queue executes a command list strictly in order, so clone → upload → rebuild can be one recording, one `ExecuteCommandLists`, one wait just before publish. (Removing even that last CPU wait via GPU-side cross-queue waits is Phase 7 material.)
 - [ ] **Page compaction during RCU clone** — replaces the old freeze-based "VRAM defragmentation" item; see the rewritten *Defragmentation logic* section. When a page's `holeBytes` cross ~25%, its Pass-2 clone copies live ranges packed (per-object `CopyBufferRegion` from the placement records) instead of whole-page `CopyResource`. The argument-buffer rebuild — already mandatory on every clone — picks up the remapped offsets for free. At most one page compacts per batch.
 - **CPU-side segregated free-list allocator — demoted (telemetry-gated, Phase 6).** The implemented per-batch scan picks the page with the largest middle gap in O(active pages), which is fine below ~1000 pages, and compaction removes most fragmentation pressure. Build the free list only if Phase 6 telemetry shows the scan actually costing something.
 
@@ -207,7 +209,7 @@ Done so far: Shader Model 6; click / window selection — built as a GPU pick pa
 
 - [ ] **Page-type axes — the "16 × N" object representation.** Pages are currently keyed by container only and everything draws with one PSO (opaque triangles, 16-bit indices, back-culled). Add a page kind — {opaque | transparent | wireframe} × {16-bit | 32-bit index} — next to `containerMemoryId`, a small PSO table, and a per-kind loop in `RenderScene3D`. This unlocks wireframe display modes, transparency and large meshes; none of the items below can start without it.
 - [ ] **Big-object fallback.** Wire the dormant `BigGeometryObject` path: dedicated committed resource, 32-bit indices, own draw call. Today one object above 65,536 vertices silently wraps its 16-bit indices — must land before STL / terrain import ships.
-- [ ] **Hot-drag / active-mutation path** (promoted from the known-issues list). An interactive drag today would be a MODIFY per mouse-move — a 4 MB page clone per frame. Fast path: whole-object move/rotate rewrites only the object's world-matrix slot. Prerequisite: the per-frame matrix double-buffer (open TODO on `worldMatrixBuffer`) so in-place matrix writes cannot tear against in-flight frames. Must land before interactive 3D move/rotate tooling.
+- [ ] **Hot-drag / active-mutation path** (promoted from the known-issues list). An interactive drag today would be a MODIFY per mouse-move — a 4 MB page clone per frame. This is now solved by the 10M plan rather than by a separate mechanism: Steps 1–4 make a whole-object move write one new instance slot plus one atomic redirect, cloning nothing. The per-frame matrix double-buffer once listed here as a prerequisite is *not* the right fix — no fixed frame depth is correct when render threads run at different refresh rates, and a 64-byte record cannot be written in place without tearing. Must land before interactive 3D move/rotate tooling.
 - [ ] **Transparency sorting** (needs the page-type axes): accept imperfect order during camera motion; CPU sort + argument rebuild when the camera stops.
 - [ ] **Instanced rendering for repeated geometry** (pipes, bolts, standard sections): `InstanceCount > 1` + per-instance matrix indirection in the vertex shader. This finally answers the "repeated geometry" open question above, and is the single biggest VRAM lever for plant models.
 - [ ] SSAO.
@@ -215,12 +217,14 @@ Done so far: Shader Model 6; click / window selection — built as a GPU pick pa
 
 **Phase 6 — performance & telemetry** (wire into the existing ImprovementData pipeline; this phase also settles the demoted items)
 
+A first set of copy-thread counters already exists (`GpuCopyStats`, printed on the debug FPS heartbeat): batches, chunks, commands, pages cloned, clones-per-chunk, clone bytes, ring bytes and high-water, oversize-staging count, deferred-queue depth, max active pages, pending/free matrix slots, and retire backlog as both a live gauge and an all-time peak. They are the numbers the four workload budgets above are measured against. Note which counters are cumulative, which are live and which are high-water marks — a peak reads like a stuck value when it is only recording a stall that has since cleared. Wiring them into the ImprovementData pipeline and the Application Tab stats pane is the remaining work.
+
 - [ ] Per-tab VRAM usage graphs: page count, `liveBytes`, `holeBytes`, matrix-table size, big-object list size.
 - [ ] Page fragmentation heatmap + compaction-trigger counters.
-- [ ] Copy-thread health: batch size, batch latency, stall time at the publish fence wait, upload-ring high-water mark.
-- [ ] Retire-backlog depth (promote today's `_DEBUG`-only sentinel to a real counter — it catches the frozen-monitor-fence → unbounded-retirement failure mode).
+- [ ] Copy-thread health: batch latency and stall time at the publish fence wait (the rest is covered by `GpuCopyStats`).
+- [x] Retire-backlog depth — promoted out of `_DEBUG` to a real counter. It catches the frozen-monitor-fence → unbounded-retirement failure mode, and it is what caught the per-chunk-publish VRAM exhaustion described in Step 0.
 - [ ] Eviction frequency counters (ground work for Phase 7 residency).
-- [ ] Right-size the per-page indirect buffer from measured object counts: today every 4 MB page reserves a fixed 65,536 × 24 B = 1.5 MB argument buffer, while the densest possible page holds ~45k objects.
+- [ ] Right-size the per-page indirect buffer from measured object counts: today every 4 MB page reserves a fixed 65,536 × 24 B = 1.5 MB argument buffer, while the densest possible page holds ~45k objects. At 10M objects the fixed reservation alone would be ~2.4 GB, which is the sharpest justification for retiring persistent per-page argument buffers entirely (10M plan, Step 7) — do this only as an interim measure if Step 7 is still distant.
 - [ ] Decision gate: segregated free-list allocator (from Phase 4) — build only if the page-selection scan shows up in these numbers.
 
 **Phase 7 — extreme performance (only after everything above is done and stable)**
@@ -287,56 +291,155 @@ One render thread per monitor drives the whole flow top-to-bottom:
 
 **Key boundary rule:** the two renderers (Scene3D, Page2D) never touch a swap chain, never present, and never decide *what* to draw. They receive a container `memoryId`, a view state (camera or pan/zoom) and a viewport, and record commands into a command list handed to them by the compositor. The compositor never touches geometry pages or PSOs directly. The UI overlay is always recorded **last**, by the compositor, on top of whichever renderer ran.
 
-## 10 Million Objects + 64 Random Subset Draw Plan
+## 10 Million Objects + 64 SubTab Draw Plan
 
-### Goal and terminology
+### Goal and workload
 
-This plan prepares one tab to hold up to 10 million simultaneously GPU-resident Scene3D objects while presenting up to 64 independently filtered SubTabs. The objective is not to redraw 10 million objects in every SubTab at 60 Hz: it is to build the ownership, memory, and command-generation architecture that makes that scale possible, then progressively reduce each SubTab to the objects that matter for its camera.
+One tab holds up to 10 million simultaneously GPU-resident Scene3D objects, presented through up to 64 independently filtered SubTabs. The objective is not to redraw 10 million objects in every SubTab at 60 Hz; it is to build the identity, memory and command-generation architecture that makes that scale possible, then progressively reduce each SubTab to what its camera needs.
 
-The following names are deliberately distinct:
+Every decision below is driven by four concrete workloads. They are the acceptance criteria:
+
+| Workload | Must cost | Must **not** cost |
+|---|---|---|
+| Insert ~100 objects into a live 10M scene | Clone the 1–2 append-target geometry pages plus their argument rebuild | Anything proportional to 10M |
+| Move 10–1000 objects scattered anywhere in the 10M | One new 64-byte instance record and one 4-byte redirect write per object | **Any geometry page clone.** 1000 objects spread over 1000 pages would be ~4 GB of clone traffic |
+| Hide / show any subset; 64 SubTabs showing different subsets | One atomic mask write per object | Any clone, any argument rebuild, any upload |
+| Several monitors at different refresh rates, one render thread each | Nothing extra | Any scheme needing a fixed number of frames in flight |
+
+The insert path already meets its budget: today's RCU clone is O(pages touched), not O(scene). **Move and hide are what drive the rest of this design.**
+
+### Terminology
 
 | Term | Lifetime / responsibility |
 |---|---|
-| **Persistent engineering object ID** | Durable file/project identity. It is resolved again after loading a project. |
-| **`memoryID`** | 64-bit, process-local, monotonically assigned CPU identity. It is never reused during one process lifetime and remains the engineering-thread <-> GPU-copy-thread command key. |
-| **`gpuInstanceIndex`** | Dense 32-bit renderer identity. It indexes GPU arrays, is reusable only after fence-safe retirement, and is paired with a generation counter on the CPU. |
-| **SubTab** | Content selection: a Scene3D container set or a Page2D logical-container set, plus its filter and display state. This replaces the older overloaded use of “view”. |
-| **Viewport** | Camera, input ownership, render-target rectangle and presentation state. A Viewport references a SubTab. Multiple Viewports may show the same SubTab with different cameras. |
+| **Persistent engineering object ID** | Durable file/project identity, resolved again after loading a project. |
+| **`memoryID`** | 64-bit, process-local, monotonically assigned CPU identity (`MemoryID::next`). Never reused during one process lifetime; remains the engineering-thread ↔ copy-thread command key. |
+| **`gpuInstanceIndex`** | Dense 32-bit renderer identity. **Stable for the object's whole GPU lifetime** — unchanged when the object is modified, moves geometry page, or is relocated by defragmentation. Reusable only after fence-safe retirement, paired with a CPU-side generation counter. |
+| **`instanceSlot`** | Physical location of the object's 64-byte record in the instance arena. **Changes on every transform edit.** Known only to the copy thread and the redirect table. |
+| **SubTab** | Content selection: a set of Scene3D containers, or a set of Page2D containers, plus filter and display state. Replaces the older overloaded use of “view”. |
+| **Viewport** | Camera, input ownership, render-target rectangle, presentation state. References a SubTab; several Viewports may show one SubTab with different cameras. |
 
-This section assumes **64 simultaneously mask-addressable SubTabs per tab**. A 64-bit object membership mask directly represents that limit. The current fixed SubTab-slot capacity is larger; if 128 active masks are required later, use two mask words (`uint2` on the GPU) rather than changing the rest of this design.
+64 mask-addressable SubTabs per tab is the design limit, represented directly by a 64-bit membership word (`uint2` in shaders). The fixed slot capacity (`MV_MAX_SUBTABS = 128`) is larger; if more than 64 *simultaneously masked* SubTabs are ever needed, add a second mask word rather than changing anything else here.
 
-Every tab owns its own logical render stores and snapshots because tabs are independent. The device, copy queue, upload ring, heap arena, memory budget and fence retirement service remain global, so the application still has one coherent VRAM budget.
+Every tab owns its own stores and snapshots because tabs are independent. Device, copy queue, upload ring, heap arena, memory budget and fence retirement stay global, so the application keeps one coherent VRAM budget.
 
-### Target state
+### Invariants
 
-| Area | Current implementation | Target implementation |
-|---|---|---|
-| Content selection | One sub-tab identifies one container | One SubTab contains a set of Scene3D *or* Page2D containers plus compact filter rules and optional explicit object overrides. |
-| Camera | Scene camera is copied into shared per-tab state during rendering | Camera belongs to a Viewport and is never overwritten by another window/monitor. |
-| Object identity | `memoryID`, page/slot and reusable matrix slot are intertwined | Copy-thread registry separates `memoryID`, stable `gpuInstanceIndex`, and movable geometry-page location. |
-| Geometry | 4 MB GeometryPages, COW/RCU snapshots | Retain this successful first-level design. |
-| Per-object data | One monolithic 64-byte world-matrix buffer | Per-tab, paged 64-byte InstanceRecords. |
-| Visibility | Whole page is drawn or skipped by container ID | 64-bit per-object SubTab membership plus container-set/filter rules. |
-| Draw arguments | Persistent per-GeometryPage executable indirect buffers | Persistent GPU-readable draw templates and transient, Viewport-specific visible indirect buffers. |
-| Culling | None | Start with GPU filter/compaction; add spatial culling later. |
+These four rules are load-bearing. Every step below preserves them.
 
-### Phase A — SubTabs, Viewports and container sets
+1. **Geometry pages and instance data are never associated.** An object's geometry page is a movable location; its `gpuInstanceIndex` is stable identity. Tying them together would mean a transform edit clones geometry, and a page change breaks identity.
+2. **Nothing a published frame can read is ever mutated — with exactly one exception:** a single naturally-aligned store of ≤ 8 bytes whose old and new values are *both valid*. Reads are then old-or-new, never torn. This is a hardware guarantee, not a D3D12 API guarantee; D3D12 is silent on the question and its debug layer will not flag the race either way.
+3. **Everything shared per-tab retires on `min(all monitor render fences)`.** Render threads run at their monitors' refresh rates and never coordinate, so no fixed frame depth is correct for a shared resource.
+4. **Per-window / per-Viewport resources have exactly one owning render thread**, so classic N-deep buffering against that thread's own fence *is* correct for them.
 
-1. Rename the existing content-level “view” concept to **SubTab**. A SubTab has one content type: Scene3D or Page2D. It contains one or more logical containers of that type; a mixed Scene3D/Page2D SubTab is intentionally not supported because it would have ambiguous renderer and interaction semantics.
-2. Introduce **Viewport** as a separate object. It owns a Scene3D camera (or Page2D pan/zoom), input/pick state, render-target dimensions and update scheduling. A window may later host multiple Viewports side by side.
-3. Replace the one-container-only render selection with a SubTab container set. When the set alone defines the subset, store it as a compact rule; do not set a per-object bit for every member merely to represent a container selection.
-4. Add a snapshot-level `containerMemoryId -> GeometryPage list` directory. This immediately avoids walking every page in a tab when a SubTab selects only a few containers, even before spatial culling exists.
+Why instance data is not paged alongside geometry: a 4 MB geometry page holds anywhere between ~170 objects (a 36×18 sphere) and ~6,470 (a cuboid), so the two page systems can never line up; objects change geometry page on modify and on defragmentation, which would destroy index stability, and the GPU pick id *is* the instance identity; and a per-page instance buffer forces one `ExecuteIndirect` per page forever, forfeiting the single-call-per-Viewport goal of Step 7.
 
-### Phase B — renderer object identity and lifetime
+### Per-tab stores
 
-The copy thread becomes the sole owner of two mappings:
+| Store | Unit | Bytes at 10M | Mutability |
+|---|---|---:|---|
+| GeometryStore | 4 MB double-ended pages | ~6.5 GB for trivial solids | Immutable after publish; RCU clone on change |
+| InstanceArena | 64-byte records, slot-allocated | 640 MB live + hole overhead | **Records immutable while published**; edits write a new slot |
+| InstanceSlotOf | `uint` per `gpuInstanceIndex` | 40 MB | Mutated in place, one aligned 4-byte store |
+| VisibilityMask | `uint2` per `gpuInstanceIndex` | 80 MB | Mutated in place, aligned stores |
+| DrawTemplates | one per object | ~320 MB | Immutable; rebuilt when its geometry page is cloned |
+| VisibleIndirect | per active Viewport | capped, see Step 7 | Transient GPU output |
 
-```text
-memoryID -> GpuInstanceHandle { gpuInstanceIndex, generation }
-memoryID -> GeometryLocation  { current GeometryPage, slot }
+The arena, the redirect table and the mask are all indexed by the same dense `gpuInstanceIndex`, and none of them knows anything about geometry pages.
+
+### The write model
+
+This is the heart of the design; everything else follows from it.
+
+```hlsl
+uint slot = InstanceSlotOf[gpuInstanceIndex];  // 4 B, atomically rewritten on edit
+InstanceRecord r = Instances[slot];            // immutable while any frame can read it
+uint2 vis = VisibilityMask[gpuInstanceIndex];  // aligned, old-or-new
 ```
 
-`gpuInstanceIndex` is identity, never a page location. When COW moves an object from one GeometryPage/slot to another, the index remains unchanged. Engineering code keeps sending commands by `memoryID`; it need not know page coordinates or GPU indices. A transient `GpuInstanceHandle` may be cached in `META_DATA`, but is never persisted to disk.
+- **Transform edit:** allocate a fresh `instanceSlot`, write the record there (no frame can reference it yet), then flip `InstanceSlotOf[idx]` with one aligned 4-byte store. The old slot goes on the min-fence-gated free list. A concurrent reader sees the old or the new slot — both are valid transforms, so the worst case is one frame of staleness on one monitor. **No geometry page is touched and nothing is cloned.**
+- **Hide / show and SubTab membership:** one aligned write to the mask. Each Viewport tests one bit, which lives in one word, so even a torn 8-byte mask cannot be observed inconsistently by any single reader.
+- **Why records are never mutated in place:** the arena is write-combined memory, so a 64-byte `memcpy` can be observed half-old and half-new — a garbage matrix, not a stale one. The redirect exists precisely to turn a 64-byte update into a 4-byte atomic one.
+
+Dragging burns one slot per edit, but steady state ping-pongs between 2–3 slots per object: a fresh slot is needed only while the previous one is still referenced by an in-flight frame. Slots freed by moves accumulate as holes and are reclaimed by the defragmentation pass in Step 8. Index contiguity is deliberately **not** maintained during normal operation.
+
+### Step 0 — Upload ring and ring-gated submission *(implemented)*
+
+Two Phase 4 items are hard prerequisites for everything below, and they are really one mechanism. This step is the authoritative specification for both; the Phase 4 entries point here.
+
+**The ring.** One persistent-mapped upload buffer per process — 64 MB to start — serving *all* copy-thread staging: Scene3D geometry, indirect-argument and draw-template rebuilds, Page2D record uploads, texture uploads. Allocation is a bump pointer with wraparound; every allocation is tagged with the copy-fence value that will release it, and a region becomes reusable once `copyFence->GetCompletedValue()` has passed that value. Today every object upload creates its own committed staging resource in `RecordGeometryUpload`, which is exactly the stall the original roadmap predicted. The dead per-tab upload heaps go at the same time: `InitD3DPerTab` commits and persistently maps 64 MB (vertex) + 16 MB (index) that nothing ever writes — ~80 MB per tab, directly against the "Hello-World tabs stay lightweight" rule.
+
+**Submission is driven by ring capacity, not by pass boundaries.** This is what makes bulk import work. Model loading hands the copy thread lakhs of objects at once, and the ring must never be asked to hold more than it has:
+
+```text
+open command list
+for each command in the drained batch:
+    need = vertexBytes + indexBytes          // or record / template / texture bytes
+    if the ring cannot satisfy `need`:
+        Close + ExecuteCommandLists + Signal(copyFence)   // flush what is staged
+        wait until the oldest tagged region's fence releases enough space
+        Reset allocator + command list                    // rotate 2-3 allocators
+    write into the ring; record CopyBufferRegion
+Close + ExecuteCommandLists + Signal + wait; publish
+```
+
+The rule is therefore **one submit per ring-full**. For an ordinary interactive edit — a handful of objects — that degenerates to exactly one submit per batch, which was the original intent. The CPU fence wait at a flush is not a stall to be optimised away: it *is* the back-pressure that throttles the engineering thread's production to the GPU's ingestion rate, and it is the only thing keeping staging memory bounded during import.
+
+Within one chunk, clone → upload → argument rebuild is a **single** recording. The copy queue executes strictly in order, so a clone completes before the copies that write into it; the three record / execute / CPU-wait cycles the batch path performs today are unnecessary. One CPU wait remains, immediately before publish. (Removing even that, via GPU-side cross-queue waits, stays Phase 7.)
+
+**Publish per chunk, not per batch.** Each chunk ends with fully uploaded pages and rebuilt arguments, so publishing it is safe — and the user watches the model appear progressively instead of waiting through a multi-second freeze. A page left partially filled at a chunk boundary is simply re-cloned by the next chunk: 4 MB of extra copy per chunk, noise against 64 MB. Preferring to flush at the moment the current append page fills avoids even that.
+
+**Retirement must be swept between chunks — this is a correctness requirement, not an optimisation.** Publishing per chunk retires the append-target page on *every* chunk, but the fence-gated reclaim sweep historically ran once per copy-thread iteration, i.e. only after the whole batch returned. A batch producing many chunks therefore accumulated retired 5.5 MB pages (geometry + argument buffer) with nothing freeing them, and exhausted VRAM outright — `E_OUTOFMEMORY` partway through a bulk import, observed in testing before the fix. The sweep is now a callable function invoked both per copy-thread iteration and after each published chunk. Because reclaim is gated on `min(all monitor render fences)`, a copy thread that outruns the monitors can still accumulate; so when the backlog stays above a cap (~64 pages) the chunk loop takes a few short bounded waits before continuing, which throttles the copy thread against the renderer instead of letting retention grow without bound. The waits are bounded so a frozen monitor degrades to the old behaviour — visible in the retire-backlog counter — rather than hanging the copy thread.
+
+**Oversize fallback.** An upload larger than the entire ring — a jumbo STL mesh — gets a one-off committed staging buffer, so it can never deadlock waiting for space that will never exist.
+
+**Cap the CPU-side drain too.** The ring bounds GPU staging; it does nothing for the `std::vector<CommandToCopyThread>` that `GpuCopyThread` fills with `while (!commandToCopyThreadQueue.empty())`. Each command carries a `GeometryData` holding two heap vectors, so lakhs of objects materialise as hundreds of megabytes and millions of small allocations before a single byte reaches the GPU. Drain until an estimated-bytes cap (a small multiple of the ring) instead of until the queue is empty, and leave the remainder queued — the queue then supplies upstream back-pressure. This closes the open throttling TODO in `GpuCopyThread`.
+
+**Sizing sanity check**, taking one ring fill as the unit of work:
+
+| Object | Bytes each | Objects per 64 MB fill |
+|---|---:|---:|
+| Cuboid (24 vertices, 36 indices) | 648 B | ~100,000 |
+| Sphere (36 × 18) | ~24 KB | ~2,700 |
+
+A lakh of cuboids is roughly one ring fill; a lakh of spheres is ~24 fills and ~1.5 GB of geometry. Argument and template staging is small beside this — even a densely packed 4 MB page rebuilds in ~155 KB.
+
+### Step 1 — Fence-gated slot retirement *(implemented)*
+
+The bug this fixes: `REMOVE` and `MODIFY` returned the matrix slot to `freeMatrixSlots` immediately, so a later `ADD` in the same batch could take it and overwrite the transform while in-flight frames still drew the pre-publish snapshot — one frame of an object wearing a stranger's transform. Highly visible, unlike the benign one-frame staleness discussed elsewhere.
+
+Slots vacated during a chunk now collect in a per-chunk list, are tagged at publish time with the global render fence, and are handed back to `freeMatrixSlots` only by the `safeRetireFence` sweep — the same rule and the same sweep that governs retired pages, snapshots and outgrown matrix tables. Small, self-contained, and the discipline the redirect table in Step 4 depends on.
+
+*Done when:* a REMOVE + ADD in one batch cannot reuse a slot until every monitor's fence has passed it. The `slots(pending/free)` telemetry counter shows the holding list draining.
+
+### Step 2 — Reserved-tile instance arena
+
+Replace the per-tab world-matrix buffer with one **reserved (tiled) device-local resource** per tab: a large virtual range with 64 KB tiles committed on demand through `UpdateTileMappings` as the arena grows. 64 KB = 1024 records, so growth is fine-grained and an empty tab costs zero physical bytes.
+
+The point is not merely avoiding a reallocation. The virtual address never changes for the tab's lifetime, which deletes:
+
+- the whole-table copy in `GrowMatrixTable`, unaffordable at 640 MB;
+- the `retiredBuffers` path for matrix tables, and with it the "640 MB pinned until the slowest monitor catches up" hazard;
+- the `worldMatrixVAShared` / `worldMatrixDataShared` / `matrixCapacityShared` mirrors and their publish ordering, which exist *only* because the buffer address moves today.
+
+Requires `TiledResourcesTier >= 1` (buffers) — verify at install time alongside the existing Heap Tier 2 requirement. Growth needs no fence gating, because newly committed tiles back indices that no published snapshot can reference. Moving to device-local memory removes the CPU-mapped pointer the pick resolve reads today to compute a world-space AABB centre, so that computation moves into the pick shader or onto a CPU-side transform shadow.
+
+### Step 3 — Stable `gpuInstanceIndex` and the copy-thread registry
+
+Separate identity from location. The copy thread becomes the sole owner of:
+
+```text
+memoryID          -> gpuInstanceIndex     the only hash map
+gpuInstanceIndex  -> memoryID             flat array
+gpuInstanceIndex  -> generation           flat array
+gpuInstanceIndex  -> GeometryLocation     flat array (page, slot)
+```
+
+Only the first is a hash map; because the index is dense, everything else is a flat array. This matters concretely — three `unordered_map`s at 10M entries would cost well over a gigabyte of CPU node overhead, and today's single `objectLocation` map is already on that trajectory.
+
+`gpuInstanceIndex` is identity, never a page location: it does not change when the object is modified or when an RCU clone moves it between GeometryPages. Engineering code keeps addressing objects by `memoryID` and never learns page coordinates or GPU indices. A transient handle may be cached in `META_DATA` but is never persisted to disk.
+
+The GPU pick id becomes `gpuInstanceIndex + 1` (it is `matrixIndex + 1` today), so a pick resolves in O(1) through the reverse array instead of the current linear scan over every object of every page. `IndirectCommand` carries `gpuInstanceIndex` in place of `matrixIndex` and stays 24 bytes.
 
 Deletion uses a zombie interval:
 
@@ -344,31 +447,18 @@ Deletion uses a zombie interval:
 active -> absent from newly published snapshots -> zombie -> all old frames retire -> reusable index
 ```
 
-Only after every snapshot that could reference the index is past its retire fence may the index return to the free list. Increment the generation at reuse. This avoids stale commands or an old page accidentally addressing a newly assigned object.
+Only once every snapshot that could reference the index is past its retire fence may the index return to the free list, with its generation incremented. This prevents a stale command or an old page from addressing a newly assigned object.
 
-### Phase C — paged instance and visibility stores
+### Step 4 — Instance redirect table (the move path)
 
-Build a reusable paging foundation, but keep the policies typed:
+Add `InstanceSlotOf[gpuInstanceIndex]` plus the slot allocator, and switch the scene, pick and highlight vertex shaders to the two-load form shown in *The write model*. `MODIFY` then splits into two paths:
 
-```text
-GpuHeapArena      large device-memory allocations / placed-resource suballocation
-PagedStore<T>     logical pages, versions, page-directory snapshots and fence retirement
-FrameRing<T>      transient per-frame/per-Viewport allocations; no RCU snapshots
-```
+- **transform-only** → new slot, write record, atomic redirect flip. No geometry page clone, no argument rebuild, nothing published.
+- **geometry changed** → today's path (relocate into a cloned page, rebuild that page's arguments) plus a new slot.
 
-Logical pages must be suballocated from larger GPU resources or heaps. Do **not** create one committed D3D12 resource for every 64 KB page.
+This is the step that pays for the whole design: "move 1000 scattered objects" drops from up to 4 GB of page cloning to ~68 KB of writes. *Done when:* moving N scattered objects clones zero geometry pages.
 
-The initial per-tab stores are:
-
-| Store | Logical page | Objects/page | Update model |
-|---|---:|---:|---|
-| GeometryStore | 4 MB | Variable | Existing COW/RCU GeometryPages. |
-| InstanceStore | 512 KB | 8,192 | Immutable/COW page directory for transform and authored object appearance. |
-| VisibilityStore | 64 KB | 8,192 | GPU-updated membership pages; independent from InstanceStore COW. |
-| DrawTemplateStore | Coupled to GeometryStore | Variable | Immutable GPU-readable source records for command generation. |
-| VisibleIndirectRing | Dynamic | Per Viewport/frame | Transient culling output and count buffers. |
-
-An InstanceRecord remains exactly 64 bytes, so one 512 KB page tracks the same 8,192 objects as one 64 KB visibility page:
+An InstanceRecord is exactly 64 bytes:
 
 ```cpp
 struct InstanceRecord {
@@ -382,58 +472,81 @@ struct InstanceRecord {
 }; // 64 bytes
 ```
 
-The final affine row/column is implicit. Therefore shaders must use an explicit affine-transform helper; the record is no longer safe to pass directly to a generic `float4x4` `mul` operation. The three transform vectors retain the 3x3 component currently used for normal handling. The current uniform-scale normal assumption remains; a future non-uniform-scale implementation may add an inverse-transpose representation or a separate normal-transform policy.
+The final affine row is implicit, so shaders must use an explicit affine-transform helper — the record is no longer safe to hand to a generic `float4x4` `mul`. Define the row/column convention byte-for-byte before writing any of it: the table today stores `transpose(world)` and the shaders do `mul(float4(pos,1), world)`, so three `float4`s of a transposed matrix are not the obvious rows. Every consumer changes together: `ShaderSceneVertex`, `ShaderScenePickVertex`, the highlight path, the rotation-cube overlay and the CPU pick resolve. The three transform vectors retain the 3×3 part used for normals; the uniform-scale assumption stands, with an inverse-transpose or separate normal-transform policy left to a later revision.
 
-Appearance is intentionally packed into InstanceStore for authored, infrequently changed state: material, base color, opaque/transparent classification, opacity and render flags. Keep high-frequency temporary state (hover, selection, view membership, temporary hide/show) out of this COW page so an interaction does not clone 512 KB of instance data.
+Appearance is packed into the record for authored, infrequently changed state: material, base colour, opaque/transparent classification, opacity, render flags. High-frequency interaction state (hover, selection, SubTab membership, temporary hide) stays **out** of it — that state lives in Step 5's mask, so an interaction never allocates a slot.
 
-VisibilityStore contains one 64-bit SubTab mask per `gpuInstanceIndex`, represented as `uint2` in GPU code for broad shader compatibility. CPU-side membership changes remain keyed by `memoryID`; the copy thread resolves them to dense indices and a compute pass applies the mask deltas. Reusing a SubTab bit requires clearing its prior membership and observing the same fence/lifetime discipline as other asynchronous work.
+### Step 5 — Visibility mask
 
-### Phase D — publish one coherent scene epoch
+Add `VisibilityMask[gpuInstanceIndex]` — one 64-bit SubTab membership word, `uint2` in shaders for broad compatibility — and a per-draw SubTab bit index. CPU-side membership changes stay keyed by `memoryID`; the copy thread resolves them to dense indices and writes the mask directly under invariant 2.
 
-Geometry pages, InstanceStore pages and later spatial pages cannot be published as unrelated “latest” resources. Publish one atomic `SceneEpoch` directory instead:
+Two consumption paths, in this order:
+
+- **Interim, with today's per-page `ExecuteIndirect`:** the vertex shader tests the bit and emits a degenerate position when it is clear. Toggling is one atomic write — no rebuild, no clone, no upload. Vertex shading still runs for hidden geometry, which is the accepted interim cost.
+- **Final, in Step 7:** compute compaction drops hidden objects before they ever become draw commands.
+
+Per-object hide therefore ships well before the compute path exists. Reusing a SubTab bit requires clearing its prior membership first — one compute dispatch over the mask array.
+
+Note that whole-page container filtering — `ExecuteIndirect` argument count 0 when `page.containerMemoryId` is not the active container — is a *page* mechanism, not per-object hide. It stays as a cheap first-level reject.
+
+### Step 6 — SubTabs, Viewports and the container-set directory
+
+1. Rename the content-level “view” concept to **SubTab**. A SubTab has exactly one content type — Scene3D or Page2D, never mixed, because a mixed SubTab would have ambiguous renderer and interaction semantics — and holds a *set* of containers of that type. `VIEW_INSIDE_DATASETTAB`, `tab.views` and `activeViewIndex` are dead code referenced only from a comment; delete them rather than renaming them.
+2. Introduce **Viewport** as a separate object owning the Scene3D camera (or Page2D pan/zoom), input/pick state, render-target rectangle and update scheduling. Per-view cameras and Page2D pan/zoom already exist per sub-tab slot; this step lifts them out so several Viewports can show one SubTab with different cameras, and so a window can later host several side by side. The shared `DX12ResourcesPerTab::camera` write-through is already gone — the camera is passed down as a parameter.
+3. Replace one-container-only render selection with a SubTab container set. When the set alone defines the subset, store it as a compact rule; do not set a per-object mask bit for every member merely to express "this whole container".
+4. Add a snapshot-level `containerMemoryId -> GeometryPage list` directory, so a SubTab that selects a few containers stops walking every page in the tab. Independently of that directory, hoist the container test above the vertex/index buffer binds in `RenderScene3D`: today every page pays two IA binds before its argument count is discovered to be zero.
+
+### Step 7 — SceneEpoch and GPU indirect generation
+
+Geometry pages, draw templates and later spatial pages cannot be published as unrelated “latest” resources. Publish one atomic directory instead:
 
 ```text
 SceneEpoch
   GeometryPage directory
-  InstanceStore page directory
   DrawTemplate directory
-  Container -> page directory
+  container -> page directory
   revision numbers
 ```
 
-The render thread acquires one SceneEpoch and binds only resources reachable from it. A transform change COWs only its 512 KB logical InstanceStore page, updates the matching directory entry, and publishes the new epoch. Old page versions retire only after all relevant render fences pass.
+A render thread acquires one `SceneEpoch` and binds only what is reachable from it. The instance arena, redirect table and mask are deliberately **not** in the epoch: they are mutated under invariant 2 rather than republished, and that is exactly what keeps moves and hides free of clone traffic.
 
-This also corrects the unsafe pattern of immediately returning a matrix slot to a free list while an old immutable geometry page can still reference that slot. A stable `gpuInstanceIndex` plus epoch-consistent InstanceStore page keeps old frames and new frames self-consistent.
-
-### Phase E — dynamic GPU indirect generation, before spatial culling
-
-Retire the *persistent executable* per-page indirect-buffer model, but do not remove draw information from the GPU. Replace it with two concepts:
+Then retire the *persistent executable* per-page indirect buffers — without removing draw information from the GPU:
 
 ```text
 DrawTemplateBuffer
-  Persistent and GPU-readable; identifies gpuInstanceIndex, index count,
-  start index, base vertex and geometry source page.
+  Persistent, GPU-readable: gpuInstanceIndex, index count, start index,
+  base vertex, source page, flags.
 
 VisibleIndirectBuffer
-  Per-Viewport, transient GPU output containing compacted commands and a count buffer.
+  Per-Viewport GPU output: compacted commands plus a count buffer.
 ```
-
-The first compute implementation is intentionally simple:
 
 ```text
 SubTab container/filter/membership -> scan relevant draw templates
                                   -> compact matching commands on GPU
                                   -> VisibleIndirectBuffer + count
-                                  -> ExecuteIndirect
+                                  -> one ExecuteIndirect
 ```
 
-This phase establishes the correct data flow but does not promise 64 full 10-million-object scans every frame. Cache cull output by `(SceneEpoch, SubTab filter revision, visibility revision)` and regenerate only when its inputs change. Allocate output only for active, visible Viewports; never keep 64 full 10-million-command buffers resident.
+Four constraints must be designed in rather than discovered:
 
-Transparent commands are emitted to a separate transparent output/path according to `renderFlags`. The transparent flag is only classification; ordering and sorting policy remain a later rendering concern.
+- **`StartIndexLocation` must become absolute first.** It is `(indexByteOffset - page.indexTail) / 2` today, and `indexTail` moves down on every append — so appending one object silently invalidates every other object's start index in that page, which is why a full rebuild is currently mandatory. Bind the index buffer view at the page base and use `indexByteOffset / 2`, stable for the object's stay in the page. Without this, a persistent draw template cannot exist.
+- **Index width stays a page property.** Transparency can be a per-object `renderFlags` bit routed to a separate output buffer (classification only; ordering remains a later concern), but 16-bit versus 32-bit index format is set by `IASetIndexBuffer` per page. The page-kind axis therefore survives for index width and for the big-object fallback, which has no page at all.
+- **`MaxCommandCount` is a CPU-side constant.** Cap commands per Viewport, clamp in the compute shader, and count overflows in telemetry. A Viewport buffer is owned by exactly one render thread, so classic double buffering against that monitor's own fence is correct for it (invariant 4). It must be **persistent, not drawn from a per-frame ring**, because cull output is cached by `(SceneEpoch, SubTab filter revision, visibility revision)` and regenerated only when those inputs change — a ring would be overwritten before the cache could be reused. Allocate only for active, visible Viewports; never keep 64 full 10-million-command buffers resident.
+- **Compute needs descriptor infrastructure that does not exist yet.** The scene root signature is entirely root descriptors today, and the per-tab heap holds one descriptor. A shader-visible heap and a global descriptor allocator are prerequisites. Record the cull dispatch on the same per-monitor direct command list as the draws, with a UAV barrier between dispatch and `ExecuteIndirect`, so no cross-queue synchronisation is needed.
 
-### Phase F — spatial data and real GPU culling (deferred)
+### Step 8 — Defragmentation
 
-Bounds and spatial data are deliberately deferred until the previous phases are correct. Design the draw template and instance/page headers so they can later acquire world bounds, a spatial-cell/BVH reference and LOD data.
+Two arenas accumulate holes. Neither is compacted eagerly; both wait until a hole threshold is crossed.
+
+- **Geometry pages** — as already specified in *Defragmentation logic* above: when a page's `holeBytes` crosses ~25%, its next RCU clone copies live ranges packed (per-object `CopyBufferRegion` from the placement records) instead of a whole-page `CopyResource`, at most one page per batch. The argument/template rebuild is mandatory on every clone anyway, so it picks up the remapped offsets for free. **Cross-page** compaction is the new part, and it needs a deliberate pass rather than riding a clone.
+- **Instance arena** — every move burns a slot, so holes accumulate at edit rate. A pass relocates live records and rewrites the affected redirect entries. `gpuInstanceIndex` is untouched throughout, which is precisely what the redirect indirection buys.
+
+Index contiguity is deliberately not maintained between passes, and no allocation policy attempts to preserve it. None of this is in the first implementation.
+
+### Step 9 — Spatial data and real GPU culling (deferred)
+
+Bounds and spatial data are deliberately deferred until the previous steps are correct. Design the draw template and page headers so they can later acquire world bounds, a spatial-cell/BVH reference and LOD data.
 
 The culling path then evolves without changing object identity or paging:
 
@@ -443,9 +556,9 @@ SubTab filter -> container-page rejection -> spatial-page rejection
               -> compact visible indirect commands
 ```
 
-The initial GPU filter/compaction path remains useful as a correctness baseline and fallback.
+The Step 7 filter/compaction path remains useful as a correctness baseline and fallback.
 
-### Phase G — viewport scheduling and scale limits
+### Step 10 — Viewport scheduling and scale limits
 
 64 independent SubTabs do not imply 64 equal-rate full-resolution renders. The compositor schedules Viewports according to user value:
 

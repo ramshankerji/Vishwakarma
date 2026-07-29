@@ -15,7 +15,69 @@
 // Global Variables declared in विश्वकर्मा.cpp
 extern शंकर gpu;
 UploadQueue gUploadQueue;
+GpuCopyStats gCopyStats;
 extern std::atomic<uint64_t> atlasFence;
+
+// --- Global upload ring (graphics.md, 10M plan Step 0) ------------------------------------------
+
+void GpuUploadRing::Initialize() {
+    if (buffer) return;
+    capacity = kCapacity;
+    CD3DX12_HEAP_PROPERTIES uploadHeap(D3D12_HEAP_TYPE_UPLOAD);
+    auto desc = CD3DX12_RESOURCE_DESC::Buffer(capacity);
+    ThrowIfFailed(gpu.device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&buffer)));
+    buffer->SetName(L"Upload Ring");
+    CD3DX12_RANGE readRange(0, 0); // The CPU only ever writes to it.
+    ThrowIfFailed(buffer->Map(0, &readRange, reinterpret_cast<void**>(&mapped)));
+    head = tail = 0;
+}
+
+void GpuUploadRing::Shutdown() {
+    if (mapped) {
+        buffer->Unmap(0, nullptr);
+        mapped = nullptr;
+    }
+    buffer.Reset();
+    inFlight.clear();
+    head = tail = capacity = 0;
+}
+
+void GpuUploadRing::Reclaim() {
+    if (!gpu.copyFence) return;
+    const uint64_t completed = gpu.copyFence->GetCompletedValue();
+    if (completed == UINT64_MAX) return; // Device lost; leave the ring alone.
+    while (!inFlight.empty() && inFlight.front().fence <= completed) {
+        tail = inFlight.front().end;
+        inFlight.pop_front();
+    }
+}
+
+bool GpuUploadRing::Allocate(uint64_t bytes, uint8_t*& outCpu, uint64_t& outOffset) {
+    if (!mapped || bytes == 0 || bytes > capacity) return false; // Oversize: caller falls back.
+    Reclaim();
+
+    uint64_t start = (head + kAlignment - 1) & ~(kAlignment - 1);
+    // Keep every region physically contiguous, so one CopyBufferRegion covers it: when an
+    // allocation would straddle the wrap point, skip the leftover fragment at the end of the
+    // buffer. Those skipped bytes stay accounted for (the cursors are monotonic) and are reclaimed
+    // along with the region that follows them.
+    const uint64_t offsetInRing = start % capacity;
+    if (offsetInRing + bytes > capacity) start += capacity - offsetInRing;
+
+    if (start + bytes - tail > capacity) return false; // No space until more fences complete.
+
+    outOffset = start % capacity;
+    outCpu = mapped + outOffset;
+    head = start + bytes;
+    if (UsedBytes() > highWaterBytes) highWaterBytes = UsedBytes();
+    return true;
+}
+
+void GpuUploadRing::TagSubmission(uint64_t fenceValue) {
+    const uint64_t lastTaggedEnd = inFlight.empty() ? tail : inFlight.back().end;
+    if (head > lastTaggedEnd) inFlight.push_back({ head, fenceValue });
+}
 
 void शंकर::InitD3DDeviceOnly() {
     UINT dxgiFactoryFlags = 0;
@@ -89,6 +151,10 @@ void शंकर::InitD3DDeviceOnly() {
     copyFenceValue = 1;
     copyFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
+    // The single staging buffer for every copy-thread upload. Created after copyFence, which
+    // GpuUploadRing::Reclaim reads. Render threads have not started yet.
+    uploadRing.Initialize();
+
     rttFormat = DXGI_FORMAT_R8G8B8A8_UNORM; //Initially. Latter upgrade during HDR implementation.
     //When implementing HDR, check if hardware support this.
 }
@@ -96,25 +162,9 @@ void शंकर::InitD3DDeviceOnly() {
 // Implementation
 void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
 
-    // Map Persistent Pointers (Optimization). We map once and keep it mapped for the lifetime of the Tab.
-    auto uploadHeapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-    // Create Vertex Buffers (Jumbo)
-    auto vbResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(MaxVertexBufferSize);
+    // Geometry staging is NOT per tab: every upload goes through the global gpu.uploadRing.
 
-    // Upload Buffer (CPU Shared). Create an upload heap for the vertex buffer.
-    ThrowIfFailed(gpu.device->CreateCommittedResource(
-        &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &vbResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr, IID_PPV_ARGS(&tabRes.vertexBufferUpload)));
-        
-    // Create Index Buffers (Jumbo). Create Index Buffer Resources (Pre-allocation)
-    auto ibResourceDesc = CD3DX12_RESOURCE_DESC::Buffer(MaxIndexBufferSize);
-    ThrowIfFailed(gpu.device->CreateCommittedResource(// Create an upload heap for the index buffer.
-        &uploadHeapProps, D3D12_HEAP_FLAG_NONE, &ibResourceDesc, D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr, IID_PPV_ARGS(&tabRes.indexBufferUpload)));
-    // Persistently map the upload buffers. We won't unmap them until cleanup.
-    CD3DX12_RANGE readRange(0, 0); // CPU won't read from these
-    ThrowIfFailed(tabRes.vertexBufferUpload->Map(0, &readRange, reinterpret_cast<void**>(&tabRes.pVertexDataBegin)));
-    ThrowIfFailed(tabRes.indexBufferUpload->Map(0, &readRange, reinterpret_cast<void**>(&tabRes.pIndexDataBegin)));
+    CD3DX12_RANGE readRange(0, 0); // CPU won't read from the buffers it maps below.
 
     // World Matrix structured buffer. (UPLOAD heap, persistently mapped).
     auto matrixDesc = CD3DX12_RESOURCE_DESC::Buffer(tabRes.matrixCapacity * sizeof(DirectX::XMFLOAT4X4));
@@ -276,19 +326,7 @@ void शंकर::WaitForPreviousFrame(const DX12ResourcesPerRenderThread& dx) 
 }
 
 void शंकर::CleanupTabResources(DX12ResourcesPerTab& tabRes) {
-    // Unmap the CPU-visible Upload Heaps
-    if (tabRes.pVertexDataBegin) {
-        tabRes.vertexBufferUpload->Unmap(0, nullptr);
-        tabRes.pVertexDataBegin = nullptr;
-    }
-    if (tabRes.pIndexDataBegin) {
-        tabRes.indexBufferUpload->Unmap(0, nullptr);
-        tabRes.pIndexDataBegin = nullptr;
-    }
-
     // Release the GPU Resources
-    tabRes.vertexBufferUpload.Reset();
-    tabRes.indexBufferUpload.Reset();
     tabRes.srvHeap.Reset();
 
     if (tabRes.pWorldMatrixDataBegin) {
@@ -300,6 +338,7 @@ void शंकर::CleanupTabResources(DX12ResourcesPerTab& tabRes) {
     tabRes.worldMatrixDataShared.store(nullptr, std::memory_order_release);
     tabRes.matrixCapacityShared.store(0, std::memory_order_release);
     tabRes.freeMatrixSlots.clear();
+    tabRes.pendingFreeMatrixSlots.clear();
     tabRes.matrixCount = 0;
 
     CleanupSelection3DResources(tabRes);
@@ -338,6 +377,10 @@ void शंकर::CleanupD3DGlobal() {
             WaitForSingleObject(copyFenceEvent, INFINITE);
         }
     }
+
+    // Release the staging ring only after the copy queue is idle (flushed just above): its mapped
+    // memory is still the source of any copy the GPU has not finished.
+    uploadRing.Shutdown();
 
     if (copyFenceEvent) {
         CloseHandle(copyFenceEvent);
@@ -455,6 +498,133 @@ void ProcessTextureUpload(UploadRequest& req){
     }
 }
 
+/* Copy-thread-only. Frees everything whose retire fence every live monitor has passed, and hands
+fence-cleared matrix slots back to the free list.
+
+Called from two places: once per copy-thread iteration (the classic sweep), and once per PUBLISHED
+CHUNK inside ProcessScene3DCopyBatch. The second caller is not an optimisation - it is required.
+Per-chunk publish retires the append-target page on every chunk, so a batch that produces many
+chunks would otherwise pile up hundreds of 5.5 MB pages with no reclaim until the whole batch
+returned, and exhaust VRAM. (Observed: E_OUTOFMEMORY partway through a bulk import.)
+
+Returns the largest per-tab retire backlog still outstanding, or SIZE_MAX when no monitor fence
+could be read at all (nothing is safe to free then, and the caller must not act on the fence). */
+size_t PruneRetiredGpuResources(uint64_t* outSafeRetireFence) {
+    bool foundAny = false;
+    uint64_t minCompleted = UINT64_MAX;
+
+    for (int i = 0; i < gpu.currentMonitorCount; ++i) {
+        // Skip monitors whose render thread never started or has already exited and torn down its fence.
+        if (!gpu.screens[i].renderFence) continue; // fence not created yet
+        // renderFenceValue starts with 1 at the time of monitor creation.
+        if (gpu.screens[i].renderFenceValue < 2) continue; // thread never signalled
+        if (!gpu.screens[i].isScreenInitalized)  continue; // Skip inactive monitors
+
+        // GetCompletedValue() is safe to call from any thread at any time;
+        // it reads a value the GPU writes atomically.
+        uint64_t completed = gpu.screens[i].renderFence->GetCompletedValue();
+        // GetCompletedValue returns UINT64_MAX on device-lost.
+        if (completed == UINT64_MAX) continue; // Treat completed.
+        //Treat that monitor as if it has retired everything (it's already dead).
+        if (completed < minCompleted) minCompleted = completed;
+        foundAny = true;
+    }
+    if (!foundAny) return SIZE_MAX;
+
+    const uint64_t safeRetireFence = minCompleted;
+    if (outSafeRetireFence) *outSafeRetireFence = safeRetireFence;
+
+    size_t worstBacklog = 0;
+    uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
+    uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
+    for (uint16_t i = 0; i < tabCount; ++i) {
+        TabGeometryStorage& storage = allTabs[tabList[i]].geometry;
+        // Retire old RCU snapshots:
+        // The snapshot struct itself is heap-allocated (via `new` in PublishPages).
+        // It is safe to delete once no render thread can still be iterating its pages vector.
+        storage.retiredSnapshots.erase( std::remove_if(
+            storage.retiredSnapshots.begin(), storage.retiredSnapshots.end(),
+            [&](const auto& rs) {
+                if (rs.retireFence <= safeRetireFence) {
+                    delete rs.snapshot; // The GeometryPageSnapshot* itself
+                    return true;        // Remove from the retirement list
+                }
+                return false;
+            }), storage.retiredSnapshots.end()
+        );
+
+        // Retire old geometry pages:
+        // unique_ptr<GeometryPage> releases the GPU resource (ComPtr members) when it goes out of scope here.
+        storage.retiredPages.erase(std::remove_if(
+            storage.retiredPages.begin(), storage.retiredPages.end(),
+            [&](const auto& rp){
+                // Strict <= : the fence value tagged at publish time is the frame during
+                // which the old page was still live. Once all monitors have
+                // completed that frame, it is safe to free.
+                return rp.retireFence <= safeRetireFence;
+                // unique_ptr destructs automatically on removal
+            }), storage.retiredPages.end()
+        );
+
+        // Retire outgrown world-matrix buffers (GrowMatrixTable): same fence rule.
+        storage.retiredBuffers.erase(std::remove_if(
+            storage.retiredBuffers.begin(), storage.retiredBuffers.end(),
+            [&](const auto& rb) { return rb.retireFence <= safeRetireFence; }),
+            storage.retiredBuffers.end()
+        );
+
+        // Hand matrix slots freed by REMOVE / MODIFY back to the free list, under the same
+        // fence rule as the pages (10M plan Step 1). Until this point no ADD can reuse the
+        // slot, so no in-flight frame can draw an object with a stranger's transform.
+        DX12ResourcesPerTab& sweepTabRes = allTabs[tabList[i]].dx;
+        sweepTabRes.pendingFreeMatrixSlots.erase(std::remove_if(
+            sweepTabRes.pendingFreeMatrixSlots.begin(),
+            sweepTabRes.pendingFreeMatrixSlots.end(),
+            [&](const DX12ResourcesPerTab::PendingMatrixSlot& pending) {
+                if (pending.retireFence <= safeRetireFence) {
+                    sweepTabRes.freeMatrixSlots.push_back(pending.slot);
+                    return true;
+                }
+                return false;
+            }), sweepTabRes.pendingFreeMatrixSlots.end()
+        );
+        gCopyStats.pendingSlots.store(sweepTabRes.pendingFreeMatrixSlots.size(),
+            std::memory_order_relaxed);
+        gCopyStats.freeSlots.store(sweepTabRes.freeMatrixSlots.size(),
+            std::memory_order_relaxed);
+
+        if (allTabs[tabList[i]].cad2d) {
+            PruneCad2DRetiredResources(*allTabs[tabList[i]].cad2d, safeRetireFence);
+        }
+
+        // Retire-backlog counter: with healthy pruning this stays in single digits.
+        // Sustained growth means some monitor's fence stopped advancing again - the
+        // frozen-monitor failure mode that ends in unbounded retention and VRAM
+        // exhaustion. Promoted out of _DEBUG so release builds can see it too.
+        const size_t retireBacklog =
+            storage.retiredPages.size() + storage.retiredSnapshots.size();
+        if (retireBacklog > worstBacklog) worstBacklog = retireBacklog;
+        if (retireBacklog > gCopyStats.peakRetireBacklog.load(std::memory_order_relaxed)) {
+            gCopyStats.peakRetireBacklog.store(retireBacklog, std::memory_order_relaxed);
+        }
+        if (storage.activePages.size() >
+            gCopyStats.maxActivePages.load(std::memory_order_relaxed)) {
+            gCopyStats.maxActivePages.store(storage.activePages.size(),
+                std::memory_order_relaxed);
+        }
+#ifdef _DEBUG
+        if (retireBacklog > 128 && retireBacklog % 128 == 0) {
+            std::cout << "[gpu][warn] tab " << tabList[i] << " retire backlog="
+                      << retireBacklog << " safeRetireFence=" << safeRetireFence << std::endl;
+        }
+#endif
+    }
+    // Live gauge: what is still held back as of THIS sweep, across all published tabs. Set even
+    // when it is 0, unlike the peak - that is the whole point of having both.
+    gCopyStats.liveRetireBacklog.store(worstBacklog, std::memory_order_relaxed);
+    return worstBacklog;
+}
+
 void GpuCopyThread() {
     /* Different monitors have their own render threads, running at different refresh rates.
     The Copy thread must never ask : What frame is rendering?.
@@ -505,7 +675,12 @@ void GpuCopyThread() {
         // Intentionally +1 here to decouple current iteration of while loop from previous iteration.
 
         // Make a local copy of all commands to process in this iteration, to minimize lock holding time.
-        // TODO: Add throttling here ? Like only 100k commands are processed at once ? Or some % of GPU VRAM Capacity?
+        // The drain is CAPPED (graphics.md, 10M plan Step 0): every command carries a GeometryData
+        // holding two heap vectors, so draining an import of lakhs of objects in one go would
+        // materialise hundreds of megabytes and millions of small allocations before a single byte
+        // reached the GPU. The ring bounds GPU staging; this bounds the CPU side. Whatever does not
+        // fit stays queued, and that queue IS the back-pressure on the producing threads.
+        constexpr uint64_t kMaxDrainBytes = 4ull * GpuUploadRing::kCapacity; // 256 MB of geometry.
         std::vector<CommandToCopyThread> batch;
         {
             std::unique_lock<std::mutex> lock(toCopyThreadMutex);
@@ -520,9 +695,19 @@ void GpuCopyThread() {
                 return hasGeometry || hasTextures || hasCad2D || hasTabRelease || shutdownSignal;
                 });
 
-            while (!commandToCopyThreadQueue.empty()) {
+            uint64_t drainedBytes = 0;
+            while (!commandToCopyThreadQueue.empty() && drainedBytes < kMaxDrainBytes) {
+                drainedBytes += EstimateStagingBytes(commandToCopyThreadQueue.front());
                 batch.push_back(std::move(commandToCopyThreadQueue.front()));
                 commandToCopyThreadQueue.pop();
+            }
+            // Leftovers keep the CV predicate true, so the next iteration picks them up without
+            // blocking; no notify is needed and none is lost.
+            if (!commandToCopyThreadQueue.empty()) {
+                gCopyStats.queueDeferred.store(commandToCopyThreadQueue.size(),
+                    std::memory_order_relaxed);
+            } else {
+                gCopyStats.queueDeferred.store(0, std::memory_order_relaxed);
             }
         } // lock released here. We have a local batch of commands to process without holding the lock.
         if (shutdownSignal) break; // Exit if shutdown was signaled while waiting.
@@ -543,6 +728,7 @@ void GpuCopyThread() {
                 ProcessCad2DCopyBatch(cad2DBatch);
             }
             // 3D geometry batch: RCU page cloning/building/publish moved to RenderScene3D-DirectX12.cpp.
+            if (!batch.empty()) gCopyStats.batches.fetch_add(1, std::memory_order_relaxed);
             ProcessScene3DCopyBatch(batch, commandAllocator, commandList);
         }
         catch (const HrException& e) {
@@ -551,6 +737,7 @@ void GpuCopyThread() {
                 << cad2DBatch.size() << " 2D commands)." << std::endl;
             commandList->Close(); // May be left open by the throw; Close so the next Reset is legal.
         }
+        gCopyStats.ringHighWater.store(gpu.uploadRing.highWaterBytes, std::memory_order_relaxed);
 
         /* UpdateSubresources may introduce ResourceBarriers internally ! Which is not allowed on Copy Queues.
         with the raw copy command, which is safe because our buffers are already created
@@ -563,83 +750,9 @@ void GpuCopyThread() {
 
         // TODO: Throttle this to run at max once every 100ms or so. Or maybe every 1 second.
         // Retire stale snapshots and pages
-        // A retired object is safe to destroy only after every active render thread has completed a frame 
-        // AFTER the retire fence was tagged.
-        bool foundAny = false;
-        uint64_t minCompleted = UINT64_MAX;
-
-        for (int i = 0; i < gpu.currentMonitorCount; ++i) {
-            // Skip monitors whose render thread never started or has already exited and torn down its fence.
-            if (!gpu.screens[i].renderFence) continue; // fence not created yet
-            // renderFenceValue starts with 1 at the time of monitor creation.
-            if (gpu.screens[i].renderFenceValue < 2) continue; // thread never signalled
-            if (!gpu.screens[i].isScreenInitalized)  continue; // Skip inactive monitors
-
-            // GetCompletedValue() is safe to call from any thread at any time;
-            // it reads a value the GPU writes atomically.
-            uint64_t completed = gpu.screens[i].renderFence->GetCompletedValue();
-            // GetCompletedValue returns UINT64_MAX on device-lost.
-            if (completed == UINT64_MAX) continue; // Treat completed.
-            //Treat that monitor as if it has retired everything (it's already dead).
-            if (completed < minCompleted) minCompleted = completed;
-            foundAny = true;
-        }
+        uint64_t safeRetireFence = 0;
+        const bool foundAny = PruneRetiredGpuResources(&safeRetireFence) != SIZE_MAX;
         if (foundAny) { //TODO : Fix if all monitors have exited and no render thead is running !
-            uint64_t safeRetireFence = minCompleted;
-            uint16_t* tabList = publishedTabIndexes.load(std::memory_order_acquire);
-            uint16_t tabCount = publishedTabCount.load(std::memory_order_acquire);
-            for (uint16_t i = 0; i < tabCount; ++i) {
-                TabGeometryStorage& storage = allTabs[tabList[i]].geometry;
-                // Retire old RCU snapshots: 
-                // The snapshot struct itself is heap-allocated (via `new` in PublishPages).
-                // It is safe to delete once no render thread can still be iterating its pages vector.
-                storage.retiredSnapshots.erase( std::remove_if(
-                    storage.retiredSnapshots.begin(), storage.retiredSnapshots.end(),
-                    [&](const auto& rs) {
-                        if (rs.retireFence <= safeRetireFence) {
-                            delete rs.snapshot; // The GeometryPageSnapshot* itself
-                            return true;        // Remove from the retirement list
-                        }
-                        return false;
-                    }), storage.retiredSnapshots.end()
-                );
-
-                // Retire old geometry pages:
-                // unique_ptr<GeometryPage> releases the GPU resource (ComPtr members) when it goes out of scope here.
-                storage.retiredPages.erase(std::remove_if(
-                    storage.retiredPages.begin(), storage.retiredPages.end(),
-                    [&](const auto& rp){
-                        // Strict <= : the fence value tagged at publish time is the frame during 
-                        // which the old page was still live. Once all monitors have
-                        // completed that frame, it is safe to free.
-                        return rp.retireFence <= safeRetireFence;
-                        // unique_ptr destructs automatically on removal
-                    }), storage.retiredPages.end()
-                );
-
-                // Retire outgrown world-matrix buffers (GrowMatrixTable): same fence rule.
-                storage.retiredBuffers.erase(std::remove_if(
-                    storage.retiredBuffers.begin(), storage.retiredBuffers.end(),
-                    [&](const auto& rb) { return rb.retireFence <= safeRetireFence; }),
-                    storage.retiredBuffers.end()
-                );
-
-                if (allTabs[tabList[i]].cad2d) {
-                    PruneCad2DRetiredResources(*allTabs[tabList[i]].cad2d, safeRetireFence);
-                }
-
-#ifdef _DEBUG
-                // Retire-backlog sentinel: with healthy pruning this stays in single digits.
-                // Sustained growth means some monitor's fence stopped advancing again.
-                const size_t retireBacklog =
-                    storage.retiredPages.size() + storage.retiredSnapshots.size();
-                if (retireBacklog > 128 && retireBacklog % 128 == 0) {
-                    std::cout << "[gpu][warn] tab " << tabList[i] << " retire backlog="
-                              << retireBacklog << " safeRetireFence=" << safeRetireFence << std::endl;
-                }
-#endif
-            }
-
             // Fence-gated teardown of closed tabs (requested by CleanupReleasedTabs on the UI
             // thread). Runs here because this thread owns all per-tab GPU state; safeRetireFence
             // guarantees no monitor still executes a frame referencing the tab's resources.

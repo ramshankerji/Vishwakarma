@@ -372,6 +372,15 @@ static uint32_t AllocateMatrixSlot(DX12ResourcesPerTab& tabRes, TabGeometryStora
 // to the per-tab GeometryPages (RCU clone -> mutate -> publish), then atomically publishes the
 // new page snapshot. Mirrors ProcessCad2DCopyBatch (RenderPage2D-DirectX12.cpp). The COPY-type
 // commandAllocator/commandList stay owned by GpuCopyThread and are passed in for recording.
+//
+// The batch is split into CHUNKS whose staging fits the global upload ring, and each chunk is a
+// SINGLE command-list recording - clone, geometry uploads and argument rebuilds together -
+// followed by one execute, one fence wait and its own publish (graphics.md, 10M plan Step 0).
+// The copy queue executes strictly in order, so a page clone completes before the
+// CopyBufferRegions that write into it; the three record/execute/CPU-wait cycles this function
+// used to perform per tab were unnecessary. Publishing per chunk also lets a bulk import appear
+// progressively instead of freezing until the whole batch lands, and the CPU wait at the end of
+// each chunk is not a stall to optimise away - it is the back-pressure that keeps staging bounded.
 void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
     ComPtr<ID3D12CommandAllocator>& commandAllocator,
     ComPtr<ID3D12GraphicsCommandList>& commandList) {
@@ -463,21 +472,48 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 if (batch[i].tabID == tabID) { latestCommandIndex[batch[i].id] = i; }
             }
 
-            std::vector<CommandToCopyThread> deduplicatedBatch;
+            // Pointers, not copies: every command carries a GeometryData with two heap vectors, so
+            // copying the batch here would deep-copy every object's geometry a second time.
+            std::vector<const CommandToCopyThread*> deduplicatedBatch;
             deduplicatedBatch.reserve(batch.size());
             for (size_t i = 0; i < batch.size(); ++i) {
                 if (batch[i].tabID != tabID) continue;
                 // Only keep the command if it is the absolute latest operation for this ID
-                if (latestCommandIndex[batch[i].id] == i) { deduplicatedBatch.push_back(batch[i]); }
+                if (latestCommandIndex[batch[i].id] == i) { deduplicatedBatch.push_back(&batch[i]); }
             }
 
             // Update the tabTouched flag based on our deduplicated list
             if (deduplicatedBatch.empty()) continue; // No command for this tab. Skip this tab.
             tabTouched = true;
 
+            // A chunk's staging must fit the ring. Reserve headroom for the per-page argument
+            // rebuilds recorded after the geometry: a densely packed 4 MB page rebuilds in
+            // ~155 KB, and a 64 MB chunk of the smallest objects spans only ~16 pages.
+            constexpr uint64_t kArgumentStagingReserve = 8ull * 1024 * 1024;
+            const uint64_t chunkBudget = GpuUploadRing::kCapacity - kArgumentStagingReserve;
+
+        // Chunk loop. Deliberately left at the tab loop's indent so this change reads as a logic
+        // diff rather than a 400-line re-indent; its body is everything down to "End of chunk loop".
+        for (size_t chunkStart = 0; chunkStart < deduplicatedBatch.size(); ) {
+            size_t chunkEnd = chunkStart;
+            for (uint64_t chunkBytes = 0; chunkEnd < deduplicatedBatch.size(); ++chunkEnd) {
+                const uint64_t cost = EstimateStagingBytes(*deduplicatedBatch[chunkEnd]);
+                // Always take at least one command however large it is: the oversize staging
+                // fallback covers a payload bigger than the whole ring, so it cannot stall here.
+                if (chunkEnd > chunkStart && chunkBytes + cost > chunkBudget) break;
+                chunkBytes += cost;
+            }
+
+            // Per-chunk page bookkeeping. A chunk publishes on its own, so nothing carries over
+            // except objectLocation (which now points at the pages this chunk published).
+            affectedPages.clear();
+            clonedPages.clear();
+            newPages.clear();
+
             // Pass 1: Identify affected pages. We will clone these pages,
             //apply modifications to the clones, and then publish atomically.
-            for (auto& cmd : deduplicatedBatch) {
+            for (size_t ci = chunkStart; ci < chunkEnd; ++ci) {
+                const CommandToCopyThread& cmd = *deduplicatedBatch[ci];
                 if (cmd.type == CommandToCopyThreadType::ADD) continue; // handled later
                 auto it = objectLocation.find(cmd.id);
                 if (it != objectLocation.end()) affectedPages.insert(it->second.page);
@@ -486,7 +522,8 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             // Find the page with the largest contiguous middle gap for each container receiving geometry.
             // Pages never mix containers, so inactive pages can be hidden with ExecuteIndirect count 0.
             std::unordered_set<uint64_t> containersNeedingAppend;
-            for (const auto& cmd : deduplicatedBatch) {
+            for (size_t ci = chunkStart; ci < chunkEnd; ++ci) {
+                const CommandToCopyThread& cmd = *deduplicatedBatch[ci];
                 if (!cmd.geometry.has_value()) continue;
                 uint64_t containerMemoryId = cmd.containerMemoryId;
                 auto existingIt = objectLocation.find(cmd.id);
@@ -534,8 +571,11 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 clonedPage->version = oldPage->version + 1;
                 clonedPage->holeBytes = oldPage->holeBytes;
 
+                gCopyStats.clonedBytes.fetch_add(
+                    oldPage->pageSize + 65536ull * sizeof(IndirectCommand), std::memory_order_relaxed);
                 clonedPages[oldPage] = std::move(clonedPage);
             }
+            gCopyStats.pagesCloned.fetch_add(affectedPages.size(), std::memory_order_relaxed);
 
             for (auto& [oldRaw, clone] : clonedPages) {
                 for (uint32_t i = 0; i < clone->objects.size(); ++i) {
@@ -550,40 +590,47 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 }
             }
 
+            // Route each container's appends at its cloned page. Purely CPU bookkeeping: the clone
+            // copies recorded above stay in the same command list as the uploads that follow, and
+            // the copy queue runs them in order, so there is nothing to wait for here.
             std::unordered_map<uint64_t, GeometryPage*> addTargetPages;
-            if (!affectedPages.empty()) { // If no pages cloned, we don't need these GPU operations.
-                ThrowIfFailed(commandList->Close());
-                ID3D12CommandList* lists[] = { commandList.Get() };
-                gpu.copyCommandQueue->ExecuteCommandLists(1, lists);
-                fenceValue = gpu.copyFenceValue.fetch_add(1);
-                gpu.copyCommandQueue->Signal(gpu.copyFence.Get(), fenceValue);
-
-                if (gpu.copyFence->GetCompletedValue() < fenceValue) {
-                    // TODO: Can we delay this wait until just before we need to access the cloned pages ? 
-                    // This would allow some CPU-GPU parallelism.
-                    gpu.copyFence->SetEventOnCompletion(fenceValue, gpu.copyFenceEvent);
-                    WaitForSingleObject(gpu.copyFenceEvent, INFINITE);
-                }
-
-                for (const auto& [containerMemoryId, candidate] : bestAppendCandidates) {
-                    auto cloneIt = clonedPages.find(candidate);
-                    addTargetPages[containerMemoryId] = cloneIt != clonedPages.end()
-                        ? cloneIt->second.get()
-                        : candidate;
-                }
-
-                // Re-open the command list for Pass-3 GPU work (geometry uploads for ADD/MODIFY-grow cases).
-                commandAllocator->Reset();
-                commandList->Reset(commandAllocator.Get(), nullptr);
+            for (const auto& [containerMemoryId, candidate] : bestAppendCandidates) {
+                auto cloneIt = clonedPages.find(candidate);
+                addTargetPages[containerMemoryId] = cloneIt != clonedPages.end()
+                    ? cloneIt->second.get()
+                    : candidate;
             }
 
             //std::wcout << "activePages: " << storage.activePages.size() << 
             //    ", clonedPages:" << clonedPages.size() << std::endl;
 
-            // Pass 3 — Apply every command in the batch to the (already-cloned) pages.
-            
-            // Staging uploads produced during this pass. Kept alive until after ExecuteCommandLists + fence-wait.
-            std::vector<ComPtr<ID3D12Resource>> pass3Uploads;
+            // Pass 3 — Apply every command in the chunk to the (already-cloned) pages.
+
+            // One-off committed staging for payloads the ring can never hold (a jumbo mesh larger
+            // than the whole ring). Kept alive until after ExecuteCommandLists + fence-wait.
+            std::vector<ComPtr<ID3D12Resource>> oversizeStaging;
+
+            // All staging for this chunk: the global upload ring, with the oversize fallback so a
+            // huge object can never wait for space that will never exist (10M plan Step 0).
+            auto AcquireStaging = [&](uint64_t bytes, uint8_t*& outCpu,
+                ID3D12Resource*& outResource, uint64_t& outOffset) {
+                if (gpu.uploadRing.Allocate(bytes, outCpu, outOffset)) {
+                    outResource = gpu.uploadRing.buffer.Get();
+                    gCopyStats.ringBytes.fetch_add(bytes, std::memory_order_relaxed);
+                    return;
+                }
+                ComPtr<ID3D12Resource> fallback;
+                CD3DX12_HEAP_PROPERTIES uploadHeap(D3D12_HEAP_TYPE_UPLOAD);
+                auto uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(bytes);
+                ThrowIfFailed(gpu.device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE,
+                    &uploadDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&fallback)));
+                CD3DX12_RANGE readRange(0, 0);
+                ThrowIfFailed(fallback->Map(0, &readRange, reinterpret_cast<void**>(&outCpu)));
+                outResource = fallback.Get();
+                outOffset = 0;
+                oversizeStaging.push_back(std::move(fallback));
+                gCopyStats.oversizeStaging.fetch_add(1, std::memory_order_relaxed);
+            };
 
             // Common lambda: write vertex+index data into a page Used by both ADD (to last/new page) and MODIFY-grow paths.
             // Records CopyBufferRegion into the open commandList.Returns the filled-in placement record; caller appends it.
@@ -592,28 +639,26 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 const uint32_t vertexBytes = static_cast<uint32_t>(geo.vertices.size() * sizeof(Vertex));
                 const uint32_t indexBytes = static_cast<uint32_t>(geo.indices.size() * sizeof(uint16_t));
 
-                const uint32_t vOffset = GeometryPage::AlignUp(dstPage->vertexHead, 16);
+                // Vertex offsets must be a whole number of vertices, NOT merely 16-byte aligned:
+                // RebuildIndirectBuffer below divides this by sizeof(Vertex) to get
+                // BaseVertexLocation (graphics.md, live defect 1).
+                const uint32_t vOffset = GeometryPage::VertexAlign(dstPage->vertexHead);
                 const uint32_t iOffset = GeometryPage::AlignDown(dstPage->indexTail - indexBytes, 4);
 
-                // CPU-side staging upload buffer (vertex + index packed)
-                ComPtr<ID3D12Resource> upload;
-                CD3DX12_HEAP_PROPERTIES uploadHeap(D3D12_HEAP_TYPE_UPLOAD);
-                auto uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(vertexBytes + indexBytes);
-
-                ThrowIfFailed(gpu.device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &uploadDesc,
-                    D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)));
-
+                // Staging: vertex + index packed into one contiguous ring region.
                 uint8_t* mapped = nullptr;
-                CD3DX12_RANGE readRange(0, 0);
-                upload->Map(0, &readRange, reinterpret_cast<void**>(&mapped));
+                ID3D12Resource* stagingResource = nullptr;
+                uint64_t stagingOffset = 0;
+                AcquireStaging(static_cast<uint64_t>(vertexBytes) + indexBytes, mapped,
+                    stagingResource, stagingOffset);
                 memcpy(mapped, geo.vertices.data(), vertexBytes);
                 memcpy(mapped + vertexBytes, geo.indices.data(), indexBytes);
-                upload->Unmap(0, nullptr);
 
-                // Record GPU copies (no Execute yet — batched at end of Pass 3)
-                commandList->CopyBufferRegion(dstPage->buffer.Get(), vOffset, upload.Get(), 0, vertexBytes);
-                commandList->CopyBufferRegion(dstPage->buffer.Get(), iOffset, upload.Get(), vertexBytes, indexBytes);
-                pass3Uploads.push_back(std::move(upload)); // Keep upload buffer alive until the fence fires
+                // Record GPU copies (no Execute yet — one submit at the end of the chunk).
+                commandList->CopyBufferRegion(dstPage->buffer.Get(), vOffset,
+                    stagingResource, stagingOffset, vertexBytes);
+                commandList->CopyBufferRegion(dstPage->buffer.Get(), iOffset,
+                    stagingResource, stagingOffset + vertexBytes, indexBytes);
 
                 // Build and return the placement record (caller updates page state)
                 GeometryPlacementRecordInPage rec{};
@@ -643,6 +688,10 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             uint32_t matrixIndex; // Allocate a matrix slot (new object)
             XMMATRIX worldMat;
             std::unordered_map<uint64_t, GeometryPage*> newestPagesByContainer;
+            // Matrix slots vacated by REMOVE / MODIFY in this chunk. They do NOT go back on the
+            // free list here: an ADD later in this very chunk would pop one and overwrite the
+            // transform while render threads still draw the pre-publish snapshot (10M plan Step 1).
+            std::vector<uint32_t> releasedMatrixSlots;
 
             auto AcquireAppendPage = [&](uint64_t containerMemoryId,
                 uint32_t incomingVertexBytes, uint32_t incomingIndexBytes) -> GeometryPage* {
@@ -660,7 +709,8 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 return targetPage;
             };
 
-            for (auto& cmd : deduplicatedBatch) { // Iterate over batch
+            for (size_t ci = chunkStart; ci < chunkEnd; ++ci) { // Iterate over this chunk
+                const CommandToCopyThread& cmd = *deduplicatedBatch[ci];
                 if (cmd.tabID != tabID) continue;
                 // Find the targe tab. Our static array of tabs is thread-safe for reading.
 
@@ -767,9 +817,9 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
 
                     // Allocate a fresh matrix slot for the relocated geometry
                     matrixIndex = AllocateMatrixSlot(tabRes, storage); // Doubles the table when full.
-                    // Free the old matrix slot
+                    // Release the old slot - fence-gated, not straight onto the free list.
                     worldMat = XMLoadFloat4x4(&geo->worldMatrix);
-                    tabRes.freeMatrixSlots.push_back(oldRec->matrixIndex);
+                    releasedMatrixSlots.push_back(oldRec->matrixIndex);
                     XMStoreFloat4x4(reinterpret_cast<XMFLOAT4X4*>(tabRes.pWorldMatrixDataBegin +
                         matrixIndex * sizeof(XMFLOAT4X4)), XMMatrixTranspose(worldMat));
 
@@ -804,7 +854,10 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     oldRec->isDeleted = true;
                     workPage->holeBytes += oldRec->vertexSize + oldRec->indexSize;
                     workPage->objectCount--;
-                    tabRes.freeMatrixSlots.push_back(oldRec->matrixIndex); // Free the matrix slot for reuse
+                    // Fence-gated release: the pre-publish snapshot still carries this object's
+                    // indirect command, so the slot must stay untouchable until every monitor
+                    // has finished with it.
+                    releasedMatrixSlots.push_back(oldRec->matrixIndex);
                     objectLocation.erase(locIt);// Remove from local bookkeeping
                     break;
                 
@@ -813,31 +866,11 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 } // End of switch (cmd.type)// Process Command
             } // end for (batch)
 
-            // Single GPU Execute for all Pass-3 geometry uploads
-            if (!pass3Uploads.empty()) {
-                ThrowIfFailed(commandList->Close());
-                {
-                    ID3D12CommandList* lists[] = { commandList.Get() };
-                    gpu.copyCommandQueue->ExecuteCommandLists(1, lists);
-                }
-                fenceValue = gpu.copyFenceValue.fetch_add(1);
-                gpu.copyCommandQueue->Signal(gpu.copyFence.Get(), fenceValue);
-                if (gpu.copyFence->GetCompletedValue() < fenceValue) {
-                    gpu.copyFence->SetEventOnCompletion(fenceValue, gpu.copyFenceEvent);
-                    WaitForSingleObject(gpu.copyFenceEvent, INFINITE);
-                }
-                pass3Uploads.clear();// Upload staging buffers are now safe to release
+            // No execute here: the geometry uploads stay in the same recording as the clones above
+            // and the argument rebuilds below, and go to the GPU as one submit at the end.
 
-                commandAllocator->Reset(); // Prepare for next stage.
-                commandList->Reset(commandAllocator.Get(), nullptr);
-            }
-
-            // Rebuild Indirect Buffers (outside the per-command loop) Runs once per modified or new page, 
+            // Rebuild Indirect Buffers (outside the per-command loop) Runs once per modified or new page,
             // after all commands are applied. Only live objects (isDeleted == false) are emitted.
-            // We rebuild into CPU staging, then do one more command record
-            // + execute (or we can reuse the same allocator/list with a Reset).
-            
-            std::vector<ComPtr<ID3D12Resource>> indirectUploads;
 
             // Helper that rebuilds a single page's indirect buffer
             auto RebuildIndirectBuffer = [&](GeometryPage* page) {
@@ -861,23 +894,15 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 page->indirectCount = static_cast<uint32_t>(commands.size());
                 if (commands.empty()) return; // nothing to upload
 
-                ComPtr<ID3D12Resource> indirectUpload;
-                CD3DX12_HEAP_PROPERTIES uploadHeap(D3D12_HEAP_TYPE_UPLOAD);
-                auto iuDesc = CD3DX12_RESOURCE_DESC::Buffer(commands.size() * sizeof(IndirectCommand));
-
-                ThrowIfFailed(gpu.device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &iuDesc,
-                    D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&indirectUpload)));
-
+                const uint64_t commandBytes = commands.size() * sizeof(IndirectCommand);
                 uint8_t* mapped = nullptr;
-                CD3DX12_RANGE readRange(0, 0);
-                indirectUpload->Map(0, &readRange, reinterpret_cast<void**>(&mapped));
-                memcpy(mapped, commands.data(), commands.size() * sizeof(IndirectCommand));
-                indirectUpload->Unmap(0, nullptr);
+                ID3D12Resource* stagingResource = nullptr;
+                uint64_t stagingOffset = 0;
+                AcquireStaging(commandBytes, mapped, stagingResource, stagingOffset);
+                memcpy(mapped, commands.data(), commandBytes);
 
-                commandList->CopyBufferRegion(page->indirectBuffer.Get(), 0, indirectUpload.Get(), 0,
-                    commands.size() * sizeof(IndirectCommand));
-
-                indirectUploads.push_back(std::move(indirectUpload));
+                commandList->CopyBufferRegion(page->indirectBuffer.Get(), 0,
+                    stagingResource, stagingOffset, commandBytes);
                 };
 
             // Rebuild for every cloned (modified) page
@@ -885,20 +910,28 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             // Rebuild for every brand-new page
             for (auto& page : newPages) RebuildIndirectBuffer(page.get());
 
-            if (clonedPages.empty() && newPages.empty()) continue; //Skip everything if no commands?
-
-            // Sync Copy queue.
+            // ONE submit for the whole chunk: clones, geometry uploads and argument rebuilds.
+            // Always closed and executed, even when the chunk turned out to touch no page, so the
+            // allocator is never Reset with the command list still recording.
             ThrowIfFailed(commandList->Close());
             ID3D12CommandList* lists[] = { commandList.Get() };
             gpu.copyCommandQueue->ExecuteCommandLists(1, lists);
             fenceValue = gpu.copyFenceValue.fetch_add(1);
             gpu.copyCommandQueue->Signal(gpu.copyFence.Get(), fenceValue);
+            gpu.uploadRing.TagSubmission(fenceValue); // Ring space returns when this fence passes.
             if (gpu.copyFence->GetCompletedValue() < fenceValue) {
                 gpu.copyFence->SetEventOnCompletion(fenceValue, gpu.copyFenceEvent);
                 WaitForSingleObject(gpu.copyFenceEvent, INFINITE);
             }
 
-            indirectUploads.clear(); // staging buffers safe to free
+            oversizeStaging.clear(); // Fallback staging buffers safe to free
+            gCopyStats.chunks.fetch_add(1, std::memory_order_relaxed);
+            gCopyStats.commands.fetch_add(chunkEnd - chunkStart, std::memory_order_relaxed);
+
+            if (clonedPages.empty() && newPages.empty()) { // Nothing to publish for this chunk.
+                chunkStart = chunkEnd;
+                continue;
+            }
 
             // Final RCU Publish (Single Atomic Operation). Gather per-tab publish work. Since commands can span multiple
             // tabs, group replacements and appends by their TabGeometryStorage.
@@ -914,6 +947,34 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             }
 
             PublishPages(storage, oldPages, std::move(replacements), std::move(newPages));
-            // End of Pass 3 + Publish 
-        }
+
+            // Matrix slots vacated by this chunk become reusable only once every monitor's fence
+            // has passed the publish point: until then the pre-publish snapshot is still being
+            // drawn and its indirect buffer still names them. Reading the global render fence
+            // AFTER the publish yields a value at or beyond the one PublishPages tagged the
+            // retired pages with, so this is never the more permissive of the two (Step 1).
+            if (!releasedMatrixSlots.empty()) {
+                const uint64_t slotRetireFence = gpu.renderFenceValue.load(std::memory_order_acquire);
+                for (uint32_t slot : releasedMatrixSlots) {
+                    tabRes.pendingFreeMatrixSlots.push_back({ slot, slotRetireFence });
+                }
+            }
+            // Reclaim between chunks. Each chunk retires the page it appended to, so without this
+            // a many-chunk batch accumulates 5.5 MB per chunk with nothing freeing it until the
+            // whole batch returns - which exhausts VRAM outright on a bulk import. When monitors
+            // cannot keep up, give them a few short breathers rather than racing ahead: this
+            // throttles the copy thread instead of letting retained pages grow without bound.
+            constexpr size_t kRetireBacklogCap = 64;      // ~350 MB of pages held back.
+            constexpr int kMaxBacklogWaits = 8;           // Bounded: a frozen monitor must not hang us.
+            for (int attempt = 0; attempt <= kMaxBacklogWaits; ++attempt) {
+                const size_t backlog = PruneRetiredGpuResources();
+                if (backlog == SIZE_MAX || backlog <= kRetireBacklogCap) break;
+                if (attempt == kMaxBacklogWaits) break; // Proceed anyway; the counter records it.
+                std::this_thread::sleep_for(std::chrono::milliseconds(4));
+            }
+
+            // End of Pass 3 + Publish
+            chunkStart = chunkEnd;
+        } // End of chunk loop
+        } // End of per-tab loop
 }

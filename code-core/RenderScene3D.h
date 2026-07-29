@@ -116,6 +116,15 @@ struct CommandToCopyThread
     uint64_t containerMemoryId = 0; // Parent high-level container; pages never mix container IDs.
 };
 
+// Approximate GPU staging cost of one command. Used in two places (graphics.md, 10M plan Step 0):
+// to cap the copy thread's CPU-side drain, and to size the chunks that must fit in the upload ring.
+// REMOVE carries no payload and therefore no staging cost.
+inline uint64_t EstimateStagingBytes(const CommandToCopyThread& command) {
+    if (!command.geometry.has_value()) return 0;
+    const GeometryData& geometry = *command.geometry;
+    return geometry.vertices.size() * sizeof(Vertex) + geometry.indices.size() * sizeof(uint16_t);
+}
+
 class ThreadSafeQueueGPU {
 public:
     void push(CommandToCopyThread value) {

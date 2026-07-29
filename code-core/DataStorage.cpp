@@ -965,8 +965,10 @@ void AppendObjectToTab(DATASETTAB& tab, ObjectType objectType, META_DATA* object
     GeometryData geometry;
     if (GeometryForObject(objectType, object, geometry)) {
         std::lock_guard<std::mutex> lock(toCopyThreadMutex);
-        commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD, geometry, object->memoryID,
-            tab.tabID, object->memoryIDParent });
+        // Moved, not copied: nothing reads geometry after this, and on the file-load / import path
+        // the copy meant deep-copying every object's vertex and index vectors twice over.
+        commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD, std::move(geometry),
+            object->memoryID, tab.tabID, object->memoryIDParent });
     }
 
     {

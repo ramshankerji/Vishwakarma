@@ -692,6 +692,11 @@ void AllocateConsoleWindow() {
     freopen_s(&pCerr, "CONOUT$", "w", stderr);
     // Make cout, wcout, cin, wcin, wcerr, cerr, wclog and clog point to console as well
     std::ios::sync_with_stdio(true);
+    // std::cout was missing here: a GUI app starts with no valid stdout, so the CRT leaves cout's
+    // failbit set, and clearing only the wide streams left every narrow write silently swallowed.
+    // That hid all the std::cout diagnostics ([gpu][copy], [gpu][stress], [cad2d][dbg], [gpu][warn])
+    // while std::wcout ones came through, which reads as "some logging is broken".
+    std::cout.clear();
     std::wcout.clear();
     std::wcerr.clear();
     std::cerr.clear();

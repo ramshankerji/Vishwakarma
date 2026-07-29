@@ -27,6 +27,7 @@
 #include <chrono>
 #include <map>
 #include <list>
+#include <deque>
 
 #include "RenderScene3D.h"
 
@@ -51,10 +52,6 @@ exceeds frame refresh interval, than strutting distortion will appear. However
 we low input latency outweighs the slight frame smoothness of triple buffering.
 Double buffering (2x) is also 50% more memory efficient Triple Buffering (3x). */
 const UINT FRAMES_PER_RENDERTARGETS = 2; //Initially we are going with double buffering.
-
-// Constants
-constexpr UINT64 MaxVertexBufferSize = 1024 * 1024 * 64; // 64 MB
-constexpr UINT64 MaxIndexBufferSize = 1024 * 1024 * 16; // 16 MB
 
 // Represents complete geometry and index data associated with 1 engineering object..
 // This structure holds information about a resource allocated in GPU memory (VRAM)
@@ -108,12 +105,25 @@ struct GeometryPage {
     bool IsFull(uint32_t incomingVertexBytes, uint32_t incomingIndexBytes) const  {
         //If: incomingIndexBytes > indexTail then : indexTail - incomingIndexBytes wraps to huge value.
         if (incomingIndexBytes > indexTail) return true;
-        uint32_t alignedVertexHead = AlignUp(vertexHead, 16);
+        uint32_t alignedVertexHead = VertexAlign(vertexHead);
         uint32_t alignedIndexTail  = AlignDown(indexTail - incomingIndexBytes, 4);
 		return (alignedVertexHead + incomingVertexBytes + SAFETY_GAP > alignedIndexTail);
     }
 
-    static uint32_t AlignUp(uint32_t value, uint32_t alignment) {
+    // Vertex offsets MUST be a whole number of vertices: RebuildIndirectBuffer derives
+    // BaseVertexLocation as vertexByteOffset / sizeof(Vertex), and the Selection3D highlight path
+    // repeats that division. sizeof(Vertex) is 24 - not a power of two - so AlignUp's mask trick
+    // cannot express this; a 16-byte alignment landed on a whole vertex only while the page's
+    // running vertex total happened to stay even (graphics.md, live defect 1).
+    static uint32_t RoundUpToMultiple(uint32_t value, uint32_t multiple) {
+        return ((value + multiple - 1) / multiple) * multiple;
+    }
+
+    static uint32_t VertexAlign(uint32_t value) {
+        return RoundUpToMultiple(value, static_cast<uint32_t>(sizeof(Vertex)));
+    }
+
+    static uint32_t AlignUp(uint32_t value, uint32_t alignment) { // Power-of-two alignments only.
         return (value + alignment - 1) & ~(alignment - 1);
     }
 
@@ -121,6 +131,68 @@ struct GeometryPage {
         return value & ~(alignment - 1);
     }
 };
+
+/* Global upload ring (graphics.md, 10M plan Step 0). ONE persistent-mapped UPLOAD buffer serves all
+copy-thread staging, replacing the per-object committed staging resource that RecordGeometryUpload
+used to create for every single object.
+
+Allocation is a bump pointer over MONOTONIC byte cursors; the physical offset is cursor % capacity.
+That makes free space simply capacity - (head - tail) with no wrap special-casing in the arithmetic,
+and it never overflows in any realistic session. Each submitted chunk tags the region it consumed
+with the copy-fence value that releases it; Reclaim advances the tail as those fences complete.
+
+Copy-thread-owned: exactly one thread ever touches it, so nothing here is locked or atomic. */
+struct GpuUploadRing {
+    static constexpr uint64_t kCapacity  = 64ull * 1024 * 1024; // 64 MB.
+    static constexpr uint64_t kAlignment = 256;                 // Also satisfies texture placement.
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
+    uint8_t* mapped = nullptr;
+    uint64_t capacity = 0;
+    uint64_t head = 0; // Next free byte.
+    uint64_t tail = 0; // Oldest byte still referenced by a copy the GPU has not finished.
+
+    // Everything below `end` is released once the copy fence reaches `fence`.
+    struct InFlightRegion { uint64_t end; uint64_t fence; };
+    std::deque<InFlightRegion> inFlight;
+
+    uint64_t highWaterBytes = 0; // Peak simultaneous occupancy (telemetry).
+
+    void Initialize();
+    void Shutdown();
+    void Reclaim(); // Advance the tail past every region whose copy fence has completed.
+    // Bump-allocate `bytes` as one physically contiguous region. Returns false when the ring cannot
+    // satisfy it right now (or ever, for a payload larger than the ring) - the caller then falls
+    // back to a one-off committed staging buffer, so an oversize upload can never deadlock.
+    bool Allocate(uint64_t bytes, uint8_t*& outCpu, uint64_t& outOffset);
+    // Tag everything allocated since the previous tag with the fence value that will release it.
+    void TagSubmission(uint64_t fenceValue);
+    uint64_t UsedBytes() const { return head - tail; }
+};
+
+/* Copy-thread telemetry (graphics.md Phase 6 groundwork; the counters the 10M plan's four workload
+budgets are actually measured against). Written by the copy thread, read by the debug heartbeat on
+the render threads - hence atomic, all relaxed: these are diagnostics, never control flow. */
+struct GpuCopyStats {
+    std::atomic<uint64_t> batches{ 0 };         // Drained batches processed.
+    std::atomic<uint64_t> chunks{ 0 };          // Chunks published == copy submits == fence waits.
+    std::atomic<uint64_t> commands{ 0 };        // ADD / MODIFY / REMOVE commands applied.
+    std::atomic<uint64_t> pagesCloned{ 0 };     // RCU clones performed.
+    std::atomic<uint64_t> clonedBytes{ 0 };     // Bytes moved by those clones.
+    std::atomic<uint64_t> ringBytes{ 0 };       // Bytes staged through the ring.
+    std::atomic<uint64_t> oversizeStaging{ 0 }; // Allocations that had to bypass the ring.
+    std::atomic<uint64_t> ringHighWater{ 0 };   // Peak ring occupancy.
+    std::atomic<uint64_t> queueDeferred{ 0 };   // Commands left queued by the drain cap.
+    // Largest per-tab retiredPages + retiredSnapshots seen at the last sweep, and the all-time
+    // high. The live value is what tells you retirement is keeping up right now; the peak is what
+    // catches a transient stall that has since cleared.
+    std::atomic<uint64_t> liveRetireBacklog{ 0 };
+    std::atomic<uint64_t> peakRetireBacklog{ 0 };
+    std::atomic<uint64_t> maxActivePages{ 0 };  // Largest active page count seen in one tab.
+    std::atomic<uint64_t> pendingSlots{ 0 };    // Matrix slots waiting on a fence (Step 1).
+    std::atomic<uint64_t> freeSlots{ 0 };       // Matrix slots available for reuse.
+};
+extern GpuCopyStats gCopyStats;
 
 struct BigGeometryObject {
     Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
@@ -173,14 +245,10 @@ struct TabGeometryStorage {
 
 struct DX12ResourcesPerTab { // (The Data) Geometry Data
 
-    // Upload Heaps (CPU -> GPU Transfer)
-    // Moved here because the Copy Thread writes to these when adding objects to the TAB.
-    ComPtr<ID3D12Resource> vertexBufferUpload;
-    ComPtr<ID3D12Resource> indexBufferUpload;
-
-    // Persistent Mapped Pointers (CPU Address)
-    UINT8* pVertexDataBegin = nullptr;// Pointer for mapped vertex upload buffer
-    UINT8* pIndexDataBegin = nullptr;  // Pointer for mapped index upload buffer
+    // No per-tab upload heaps: ALL copy-thread staging goes through the one global GpuUploadRing
+    // (gpu.uploadRing). The 64 MB + 16 MB per-tab heaps that used to live here were committed and
+    // persistently mapped by InitD3DPerTab and never written by anything - 80 MB of VRAM per tab,
+    // straight against the "Hello-World tabs stay lightweight" rule (graphics.md, 10M plan Step 0).
 
 	// TODO: We will generalize this to hold materials, shaders, textures etc. unique to this project/tab
     ComPtr<ID3D12DescriptorHeap> srvHeap;
@@ -198,6 +266,15 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
     uint32_t               matrixCount = 0;
 	std::vector<uint32_t>  freeMatrixSlots;   // free-list for matrix indices.
     //To enable re-use of slots when objects are removed.
+
+    // Slots released by REMOVE / MODIFY, held until every monitor's render fence has passed the
+    // value tagged at publish time (graphics.md, 10M plan Step 1 / live defect 2). Returning them
+    // to freeMatrixSlots immediately let a later ADD in the SAME batch pop the slot and overwrite
+    // the transform while render threads were still drawing the pre-publish snapshot, whose
+    // indirect buffer still carried the removed object's command - one frame of an object wearing
+    // another object's transform. The safeRetireFence sweep in GpuCopyThread does the handover.
+    struct PendingMatrixSlot { uint32_t slot; uint64_t retireFence; };
+    std::vector<PendingMatrixSlot> pendingFreeMatrixSlots;
 
     // Lock-free mirrors for RENDER-thread reads (scene/highlight/pick bind the VA each frame; the
     // pick resolve reads the mapped pointer + capacity). GrowMatrixTable republishes them only
@@ -450,6 +527,9 @@ public:
     std::atomic<uint64_t> renderFenceValue = 0; // Global. This is in addition to per monitor render fence value.
 
 	ComPtr<ID3D12CommandQueue> copyCommandQueue; // There is only 1 across the application.
+    // The one staging buffer every copy-thread upload passes through. Created by InitD3DDeviceOnly
+    // (before any thread starts) and touched only by the copy thread thereafter.
+    GpuUploadRing uploadRing;
     ComPtr<ID3D12Fence> copyFence;// Synchronization for Copy Queue
 	std::atomic<uint64_t> copyFenceValue = 1; // thread safe.
     //Start from 1 to avoid confusion with default fence value of 0.
@@ -571,6 +651,13 @@ inline void WaitForFenceValue(DX12ResourcesPerWindow dx, UINT64 fenceValue)
 
 // Thread Functions
 // toCopyThreadMutex / toCopyThreadCV / commandToCopyThreadQueue moved to RenderScene3D.h (portable).
+
+// Copy-thread-only. Frees every retired snapshot / page / matrix buffer (and Cad2D resource) whose
+// retire fence all live monitors have passed, and returns fence-cleared matrix slots to the free
+// list. Returns the largest remaining per-tab retire backlog, or SIZE_MAX when no monitor fence
+// could be read (nothing is safe to free; *outSafeRetireFence is then left untouched).
+// Called once per copy-thread iteration AND once per published chunk - see the definition.
+size_t PruneRetiredGpuResources(uint64_t* outSafeRetireFence = nullptr);
 
 // Thread Functions - Just Declaration!
 void GpuCopyThread();
