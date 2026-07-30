@@ -190,9 +190,8 @@ void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
     // Set root descriptor table. No longer used.
     // Bind directly using GPU Virtual Addresses!
     commandList->SetGraphicsRootConstantBufferView(0, winRes.constantBuffer->GetGPUVirtualAddress());
-    // Matrix-table VA (t0) is bound below, AFTER the snapshot acquire-load: the copy thread can
-    // regrow the table, and the snapshot publish order guarantees a snapshot referencing the new
-    // capacity is only visible together with the new buffer address (see DX12ResourcesPerTab).
+    // Instance arena (t0) is bound below. Its VA is fixed for the tab's lifetime since Step 2 -
+    // growth commits tiles behind the same address - so there is no ordering constraint left here.
 
     // Create named variables (l‑values)
     // Viewport starts at y = topUITotalHeightPx and has reduced height
@@ -225,9 +224,9 @@ void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
 
     // PAGE-BASED RENDERING (Solid Opaque Only)
     GeometryPageSnapshot* snapshot = storage.activeSnapshot.load(std::memory_order_acquire);
-    if (snapshot) {
-        commandList->SetGraphicsRootShaderResourceView(1,
-            tabRes.worldMatrixVAShared.load(std::memory_order_acquire));
+    if (snapshot && tabRes.instanceArena.va != 0) {
+        commandList->SetGraphicsRootShaderResourceView(1, tabRes.instanceArena.va);
+        commandList->SetGraphicsRootShaderResourceView(3, tabRes.instanceSlotOf.va);
         for (GeometryPage* pagePtr : snapshot->pages) {
             GeometryPage& page = *pagePtr;
             if (!page.published.load(std::memory_order_acquire)) continue;
@@ -267,30 +266,20 @@ void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
     //std::lock_guard<std::mutex> lock(tabRes.objectsOnGPUMutex);
 }
 
-// Copy-thread-private bookkeeping: maps each objectID to the VRAM page (raw ptr) that currently
-// owns it. Persists across batches: exactly one copy thread exists for the process lifetime.
-// File scope (not function-static) so ReleaseTabGpuGeometry can purge a closed tab's entries.
-struct ObjectLocation {
-    GeometryPage* page;   // page where object currently resides
-    uint32_t slot;        // index in page->objects
-};
-static std::unordered_map<uint64_t, ObjectLocation> objectLocation;
-
 // Copy-thread-only: full teardown of one closed tab's Scene3D geometry. GpuCopyThread calls this
 // once every monitor's render fence has passed the tab's release fence (no submitted frame can
 // still reference these pages), and again from its shutdown path after render threads joined.
 void ReleaseTabGpuGeometry(DATASETTAB& tab) {
     TabGeometryStorage& storage = tab.geometry;
 
-    // Purge this tab's entries from the location map: the pages they point to are destroyed
-    // below, and tab slots are never reused within a session, so the ids never come back.
-    std::unordered_set<const GeometryPage*> ownedPages;
-    for (const auto& page : storage.activePages) ownedPages.insert(page.get());
-    for (const auto& retired : storage.retiredPages) ownedPages.insert(retired.page.get());
-    for (auto it = objectLocation.begin(); it != objectLocation.end();) {
-        if (ownedPages.count(it->second.page)) it = objectLocation.erase(it);
-        else ++it;
-    }
+    // The identity registry is per tab now (10M plan Step 3), so purging it is a clear() instead
+    // of the scan over one global map that the shared objectLocation table used to need. It must
+    // happen here, not in CleanupTabResources: every page pointer it holds dies below, and the
+    // shutdown path calls this function without calling CleanupTabResources at all.
+    tab.dx.registry.Clear();
+    tab.dx.instanceCount = 0;
+    tab.dx.freeInstanceIndexes.clear();
+    tab.dx.pendingFreeInstanceIndexes.clear();
 
     GeometryPageSnapshot* snapshot =
         storage.activeSnapshot.exchange(nullptr, std::memory_order_acq_rel);
@@ -298,74 +287,58 @@ void ReleaseTabGpuGeometry(DATASETTAB& tab) {
     for (auto& retired : storage.retiredSnapshots) delete retired.snapshot;
     storage.retiredSnapshots.clear();
     storage.retiredPages.clear(); // unique_ptr<GeometryPage> releases the VRAM buffers.
-    storage.retiredBuffers.clear(); // Outgrown matrix buffers.
     storage.activePages.clear();
 }
 
-// Copy-thread-only: double the per-tab world-matrix table when it is full. The old buffer goes
-// onto storage.retiredBuffers (still mapped: in-flight frames may bind its VA and the pick
-// resolve may read its pointer) and is freed by the safeRetireFence sweep. The render-thread
-// mirrors are republished LAST, so readers holding stale values still hit a live buffer, and any
-// snapshot referencing the new capacity is published after the new values (see the mirror
-// comments in DX12ResourcesPerTab). Throws HrException on allocation failure; GpuCopyThread's
-// batch try/catch drops the batch and the old table stays valid.
-static void GrowMatrixTable(DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage) {
-    const uint32_t oldCapacity = tabRes.matrixCapacity;
-    const uint32_t newCapacity = oldCapacity * 2;
-
-    ComPtr<ID3D12Resource> newBuffer;
-    auto matrixDesc = CD3DX12_RESOURCE_DESC::Buffer(
-        static_cast<uint64_t>(newCapacity) * sizeof(DirectX::XMFLOAT4X4));
-    CD3DX12_HEAP_PROPERTIES uploadProps(D3D12_HEAP_TYPE_UPLOAD);
-    ThrowIfFailed(gpu.device->CreateCommittedResource(&uploadProps, D3D12_HEAP_FLAG_NONE,
-        &matrixDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&newBuffer)));
-
-    UINT8* newData = nullptr;
-    CD3DX12_RANGE readRange(0, 0);
-    ThrowIfFailed(newBuffer->Map(0, &readRange, reinterpret_cast<void**>(&newData)));
-    // Both buffers are persistently mapped upload heaps: a plain CPU memcpy carries every
-    // existing matrix over. No GPU copy, no fence needed for the data itself.
-    memcpy(newData, tabRes.pWorldMatrixDataBegin, oldCapacity * sizeof(DirectX::XMFLOAT4X4));
-
-    // Old buffer: keep alive (and mapped) until every monitor's fence passes this value.
-    storage.retiredBuffers.push_back({ tabRes.worldMatrixBuffer,
-        gpu.renderFenceValue.load(std::memory_order_acquire) });
-
-    // Copy-thread-private fields.
-    tabRes.worldMatrixBuffer = newBuffer;
-    tabRes.pWorldMatrixDataBegin = newData;
-    tabRes.matrixCapacity = newCapacity;
-
-    // Keep the per-tab srvHeap descriptor (created by InitD3DPerTab, not used by the current
-    // root-SRV draw paths) pointing at the live buffer instead of dangling on the retired one.
+// Refresh the per-tab srvHeap descriptor so it covers exactly the arena's committed range: on
+// Tier 1 a read of an unmapped tile is undefined, so the view must never advertise more than is
+// backed. Unused by today's root-SRV draw paths; it is what the Step 7 cull dispatch will bind.
+static void RefreshInstanceArenaSrv(DX12ResourcesPerTab& tabRes) {
     D3D12_SHADER_RESOURCE_VIEW_DESC srvView = {};
     srvView.Format = DXGI_FORMAT_UNKNOWN;
     srvView.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
     srvView.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvView.Buffer.FirstElement = 0;
-    srvView.Buffer.NumElements = newCapacity;
-    srvView.Buffer.StructureByteStride = sizeof(DirectX::XMFLOAT4X4);
-    gpu.device->CreateShaderResourceView(tabRes.worldMatrixBuffer.Get(), &srvView,
+    srvView.Buffer.NumElements = tabRes.instanceArena.capacity;
+    srvView.Buffer.StructureByteStride = kInstanceRecordBytes;
+    gpu.device->CreateShaderResourceView(tabRes.instanceArena.resource.Get(), &srvView,
         tabRes.srvHeap->GetCPUDescriptorHandleForHeapStart());
-
-    // Publish to render threads last: pointer, then VA, then capacity (capacity gates indices).
-    tabRes.worldMatrixDataShared.store(newData, std::memory_order_release);
-    tabRes.worldMatrixVAShared.store(newBuffer->GetGPUVirtualAddress(), std::memory_order_release);
-    tabRes.matrixCapacityShared.store(newCapacity, std::memory_order_release);
-
-    std::wcout << L"World-matrix table grown: " << oldCapacity << L" -> " << newCapacity
-        << L" slots (" << (newCapacity * sizeof(DirectX::XMFLOAT4X4) / 1024) << L" KB)." << std::endl;
 }
 
-// Copy-thread-only: next free matrix slot, doubling the table when it is full.
-static uint32_t AllocateMatrixSlot(DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage) {
-    if (!tabRes.freeMatrixSlots.empty()) {
-        const uint32_t slot = tabRes.freeMatrixSlots.back();
-        tabRes.freeMatrixSlots.pop_back();
-        return slot;
+void GrowInstanceArena(DX12ResourcesPerTab& tabRes, uint32_t minimumCapacity) {
+    if (tabRes.instanceArena.Grow(minimumCapacity)) RefreshInstanceArenaSrv(tabRes);
+}
+
+/* Copy-thread-only: the next free gpuInstanceIndex - the object's stable renderer IDENTITY.
+Reuse comes only from freeInstanceIndexes, which the safeRetireFence sweep fills; an index inside
+its zombie interval is never handed out (10M plan Step 3). */
+static uint32_t AllocateInstanceIndex(DX12ResourcesPerTab& tabRes) {
+    if (!tabRes.freeInstanceIndexes.empty()) {
+        const uint32_t reused = tabRes.freeInstanceIndexes.back();
+        tabRes.freeInstanceIndexes.pop_back();
+        return reused;
     }
-    if (tabRes.matrixCount >= tabRes.matrixCapacity) GrowMatrixTable(tabRes, storage);
-    return tabRes.matrixCount++;
+    if (tabRes.instanceCount >= tabRes.instanceSlotOf.capacity) {
+        tabRes.instanceSlotOf.Grow(tabRes.instanceCount + 1);
+    }
+    const uint32_t index = tabRes.instanceCount++;
+    tabRes.registry.Commit(tabRes.instanceCount);
+    return index;
+}
+
+/* Copy-thread-only: the next free instanceSlot - a physical LOCATION in the arena, not an identity.
+Every transform edit burns one, so this churns far faster than the index allocator; slots come back
+through the same fence-gated sweep (10M plan Step 4). */
+static uint32_t AllocateInstanceSlot(DX12ResourcesPerTab& tabRes) {
+    if (!tabRes.freeInstanceSlots.empty()) {
+        const uint32_t reused = tabRes.freeInstanceSlots.back();
+        tabRes.freeInstanceSlots.pop_back();
+        return reused;
+    }
+    if (tabRes.instanceSlotCount >= tabRes.instanceArena.capacity) {
+        GrowInstanceArena(tabRes, tabRes.instanceSlotCount + 1);
+    }
+    return tabRes.instanceSlotCount++;
 }
 
 // 3D-geometry half of the copy thread: applies one drained batch of ADD/MODIFY/REMOVE commands
@@ -452,8 +425,6 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
         std::vector<uint16_t> sortedTabs(tabList, tabList + tabCount);
         std::sort(sortedTabs.begin(), sortedTabs.end()); //Sort such that tab 0 is always processed 1st. Don't remove.
 
-        std::unordered_map<uint64_t, ObjectLocation> batchLocationOverride;
-
         for (uint16_t tabID : sortedTabs) { //Process 1 tab at a time.
             bool tabTouched = false;
 
@@ -505,7 +476,7 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             }
 
             // Per-chunk page bookkeeping. A chunk publishes on its own, so nothing carries over
-            // except objectLocation (which now points at the pages this chunk published).
+            // except the registry (which now points at the pages this chunk published).
             affectedPages.clear();
             clonedPages.clear();
             newPages.clear();
@@ -515,8 +486,10 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             for (size_t ci = chunkStart; ci < chunkEnd; ++ci) {
                 const CommandToCopyThread& cmd = *deduplicatedBatch[ci];
                 if (cmd.type == CommandToCopyThreadType::ADD) continue; // handled later
-                auto it = objectLocation.find(cmd.id);
-                if (it != objectLocation.end()) affectedPages.insert(it->second.page);
+                const uint32_t existing = tabRes.registry.Find(cmd.id);
+                if (existing != kInvalidInstanceIndex) {
+                    affectedPages.insert(tabRes.registry[existing].page);
+                }
             }
 
             // Find the page with the largest contiguous middle gap for each container receiving geometry.
@@ -526,9 +499,9 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 const CommandToCopyThread& cmd = *deduplicatedBatch[ci];
                 if (!cmd.geometry.has_value()) continue;
                 uint64_t containerMemoryId = cmd.containerMemoryId;
-                auto existingIt = objectLocation.find(cmd.id);
-                if (containerMemoryId == 0 && existingIt != objectLocation.end()) {
-                    containerMemoryId = existingIt->second.page->containerMemoryId;
+                const uint32_t existing = tabRes.registry.Find(cmd.id);
+                if (containerMemoryId == 0 && existing != kInvalidInstanceIndex) {
+                    containerMemoryId = tabRes.registry[existing].page->containerMemoryId;
                 }
                 containersNeedingAppend.insert(containerMemoryId);
             }
@@ -577,15 +550,18 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             }
             gCopyStats.pagesCloned.fetch_add(affectedPages.size(), std::memory_order_relaxed);
 
+            // Re-point the registry at the clones. Every live record already carries its stable
+            // gpuInstanceIndex, so this is a direct array write per object - the identity lookup
+            // the old objectLocation map needed here is gone.
             for (auto& [oldRaw, clone] : clonedPages) {
                 for (uint32_t i = 0; i < clone->objects.size(); ++i) {
                     auto& obj = clone->objects[i];
                     if (obj.isDeleted) continue;
 
-                    auto it = objectLocation.find(obj.objectID);
-                    if (it != objectLocation.end() && it->second.page == oldRaw) {
-                        it->second.page = clone.get();
-                        it->second.slot = i;
+                    InstanceRegistryEntry& entry = tabRes.registry[obj.gpuInstanceIndex];
+                    if (entry.page == oldRaw) {
+                        entry.page = clone.get();
+                        entry.pageSlot = i;
                     }
                 }
             }
@@ -634,8 +610,8 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
 
             // Common lambda: write vertex+index data into a page Used by both ADD (to last/new page) and MODIFY-grow paths.
             // Records CopyBufferRegion into the open commandList.Returns the filled-in placement record; caller appends it.
-            auto RecordGeometryUpload = [&](GeometryPage* dstPage, const GeometryData& geo, uint32_t matrixIndex)
-                -> GeometryPlacementRecordInPage {
+            auto RecordGeometryUpload = [&](GeometryPage* dstPage, const GeometryData& geo,
+                uint32_t gpuInstanceIndex) -> GeometryPlacementRecordInPage {
                 const uint32_t vertexBytes = static_cast<uint32_t>(geo.vertices.size() * sizeof(Vertex));
                 const uint32_t indexBytes = static_cast<uint32_t>(geo.indices.size() * sizeof(uint16_t));
 
@@ -668,7 +644,7 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 rec.indexByteOffset = iOffset;
                 rec.indexSize = indexBytes;
                 rec.indexCount = static_cast<uint32_t>(geo.indices.size());
-                rec.matrixIndex = matrixIndex;
+                rec.gpuInstanceIndex = gpuInstanceIndex;
 
                 // Local-space AABB. Consumed by GPU picking / selection re-centering (Selection3D).
                 if (!geo.vertices.empty()) {
@@ -685,13 +661,75 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 return rec;
                 };
 
-            uint32_t matrixIndex; // Allocate a matrix slot (new object)
-            XMMATRIX worldMat;
+            /* THE WRITE MODEL (graphics.md, 10M plan Step 4). Allocate a FRESH arena slot, write
+            the 64-byte record where no published frame can reach it, then flip the object's
+            4-byte redirect entry to point at it. A concurrent reader sees the old slot or the new
+            one - both hold valid transforms - so the worst case is one frame of staleness on one
+            monitor. Overwriting the record in place instead (what Step 3 shipped) could be
+            observed half-written: a garbage matrix, not a stale one.
+
+            Both copies go in ONE ring allocation and ONE command list. The copy queue executes
+            strictly in order, so the record lands before the redirect that publishes it - the same
+            ordering guarantee the page clone relies on.
+
+            Returns the new slot; the caller records it for fence-gated release of the old one.
+
+            The world-centre shadow is refreshed here too. It is what the pick resolve reads now
+            that the arena is device-local, and it must follow every transform edit, not just the
+            ones that touch geometry.
+
+            CONVENTION: transformA/B/C are the first three rows of transpose(world) - see
+            InstanceRecord in RenderScene3D.h. The 4th row of the transpose is always (0,0,0,1),
+            which is what makes 48 bytes enough. The CPU-side centre uses the ORIGINAL matrix,
+            mirroring the shader's row-vector `pos * world`, not the transposed copy. */
+            auto WriteInstanceRecord = [&](uint32_t gpuInstanceIndex, const XMFLOAT4X4& worldMatrix,
+                const GeometryPlacementRecordInPage& placement) -> uint32_t {
+                const uint32_t newSlot = AllocateInstanceSlot(tabRes);
+
+                uint8_t* mapped = nullptr;
+                ID3D12Resource* stagingResource = nullptr;
+                uint64_t stagingOffset = 0;
+                AcquireStaging(kInstanceRecordBytes + kInstanceSlotBytes, mapped,
+                    stagingResource, stagingOffset);
+
+                const XMMATRIX world = XMLoadFloat4x4(&worldMatrix);
+                XMFLOAT4X4 transposed;
+                XMStoreFloat4x4(&transposed, XMMatrixTranspose(world));
+                InstanceRecord record{};
+                // The record's 48-byte affine block IS the leading 3 rows of the transpose.
+                memcpy(record.transformA, &transposed, 3 * 4 * sizeof(float));
+                memcpy(mapped, &record, kInstanceRecordBytes);
+                memcpy(mapped + kInstanceRecordBytes, &newSlot, kInstanceSlotBytes);
+
+                commandList->CopyBufferRegion(tabRes.instanceArena.resource.Get(),
+                    static_cast<uint64_t>(newSlot) * kInstanceRecordBytes,
+                    stagingResource, stagingOffset, kInstanceRecordBytes);
+                // The flip. One naturally-aligned 4-byte write whose old and new values are both
+                // valid slots, so a reader is never torn - only old-or-new.
+                commandList->CopyBufferRegion(tabRes.instanceSlotOf.resource.Get(),
+                    static_cast<uint64_t>(gpuInstanceIndex) * kInstanceSlotBytes,
+                    stagingResource, stagingOffset + kInstanceRecordBytes, kInstanceSlotBytes);
+
+                const XMVECTOR localCenter = XMVectorSet(
+                    (placement.minX + placement.maxX) * 0.5f,
+                    (placement.minY + placement.maxY) * 0.5f,
+                    (placement.minZ + placement.maxZ) * 0.5f, 1.0f);
+                const XMVECTOR worldCenter = XMVector3Transform(localCenter, world);
+                InstanceRegistryEntry& entry = tabRes.registry[gpuInstanceIndex];
+                entry.worldCenterX = XMVectorGetX(worldCenter);
+                entry.worldCenterY = XMVectorGetY(worldCenter);
+                entry.worldCenterZ = XMVectorGetZ(worldCenter);
+                return newSlot;
+                };
+
+            uint32_t gpuInstanceIndex; // Stable renderer identity of the object being processed.
             std::unordered_map<uint64_t, GeometryPage*> newestPagesByContainer;
-            // Matrix slots vacated by REMOVE / MODIFY in this chunk. They do NOT go back on the
-            // free list here: an ADD later in this very chunk would pop one and overwrite the
-            // transform while render threads still draw the pre-publish snapshot (10M plan Step 1).
-            std::vector<uint32_t> releasedMatrixSlots;
+            /* Indices vacated by REMOVE and slots vacated by REMOVE / MODIFY in this chunk. They do
+            NOT go back on their free lists here: a later edit in this very chunk would take one and
+            overwrite live data while render threads still draw the pre-publish snapshot, or still
+            hold the pre-flip redirect value (10M plan Steps 1, 3 and 4). */
+            std::vector<uint32_t> releasedInstanceIndexes;
+            std::vector<uint32_t> releasedInstanceSlots;
 
             auto AcquireAppendPage = [&](uint64_t containerMemoryId,
                 uint32_t incomingVertexBytes, uint32_t incomingIndexBytes) -> GeometryPage* {
@@ -716,7 +754,6 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
 
                 uint32_t vertexBytes = 0, indexBytes = 0, newVertexBytes = 0, newIndexBytes = 0;
 
-                decltype(objectLocation)::iterator locIt;
                 decltype(clonedPages)::iterator cloneIt;
 
                 GeometryPage* workPage = nullptr;
@@ -727,7 +764,7 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 GeometryPlacementRecordInPage rec;
                 uint32_t slotIndex = 0;
                 uint64_t targetContainerMemoryId = cmd.containerMemoryId;
-                matrixIndex = 0;
+                gpuInstanceIndex = kInvalidInstanceIndex;
 
                 // We mandatorily check if ID still exist even if the command is ADD as a safety measure.
                 // This is also necessary when REMOVE + ADD command is received in same batch and deduped.
@@ -739,7 +776,7 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 {
                     //std::wcout << "Adding New object ID: " << cmd.id << std::endl;
                     if (!cmd.geometry.has_value()) break;
-                    if (objectLocation.find(cmd.id) != objectLocation.end()) {goto handle_modify;}
+                    if (tabRes.registry.Find(cmd.id) != kInvalidInstanceIndex) {goto handle_modify;}
 
                     geo = &(cmd.geometry.value());
                     vertexBytes = static_cast<uint32_t>(geo->vertices.size() * sizeof(Vertex));
@@ -749,19 +786,14 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                         break; // Exit this case, process next command
                     }
 
-                    matrixIndex = AllocateMatrixSlot(tabRes, storage); // Doubles the table when full.
-
-                    // Copy transposed world matrix to upload buffer
-                    worldMat = XMLoadFloat4x4(&geo->worldMatrix);
-                    XMStoreFloat4x4(reinterpret_cast<XMFLOAT4X4*>(
-                        tabRes.pWorldMatrixDataBegin + matrixIndex * sizeof(XMFLOAT4X4)),
-                        XMMatrixTranspose(worldMat));
+                    // The object's renderer identity for its whole GPU lifetime (10M plan Step 3).
+                    gpuInstanceIndex = AllocateInstanceIndex(tabRes); // Commits arena tiles if full.
 
                     GeometryPage* addTargetPage =
                         AcquireAppendPage(targetContainerMemoryId, vertexBytes, indexBytes);
 
                     // Record the geometry upload into commandList
-                    rec = RecordGeometryUpload(addTargetPage, *geo, matrixIndex);
+                    rec = RecordGeometryUpload(addTargetPage, *geo, gpuInstanceIndex);
 
                     // Update page CPU state
                     addTargetPage->objects.push_back(rec);
@@ -769,9 +801,16 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     addTargetPage->indexTail = rec.indexByteOffset;
                     addTargetPage->objectCount++;
 
-                    // Update the copy-thread's private location map
+                    // Publish identity -> location in the copy thread's private registry.
                     slotIndex = static_cast<uint32_t>(addTargetPage->objects.size() - 1);
-                    objectLocation[cmd.id] = { addTargetPage, slotIndex };
+                    tabRes.registry.indexOfMemoryId[cmd.id] = gpuInstanceIndex;
+                    tabRes.registry[gpuInstanceIndex].memoryID = cmd.id;
+                    tabRes.registry[gpuInstanceIndex].page = addTargetPage;
+                    tabRes.registry[gpuInstanceIndex].pageSlot = slotIndex;
+                    // Record + redirect flip last: the registry entry it updates must already
+                    // carry the placement this new object's world centre is derived from.
+                    tabRes.registry[gpuInstanceIndex].instanceSlot =
+                        WriteInstanceRecord(gpuInstanceIndex, geo->worldMatrix, rec);
 
                     //std::wcout << "Added New object ID: " << cmd.id << std::endl;
                     break;
@@ -782,10 +821,28 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     // TODO: Latter we will improve to use existing pages if it fits in place.
                     if (!cmd.geometry.has_value()) break;
 
-                    locIt = objectLocation.find(cmd.id);
-                    if (locIt == objectLocation.end()) { goto handle_add; }// treat as ADD
+                    gpuInstanceIndex = tabRes.registry.Find(cmd.id);
+                    if (gpuInstanceIndex == kInvalidInstanceIndex) { goto handle_add; }// treat as ADD
 
                     geo = &(cmd.geometry.value());
+
+                    /* TRANSFORM-ONLY EDIT - the path this whole design exists for (10M plan
+                    Step 4). A new instance record plus a 4-byte redirect flip, and that is the
+                    entire cost: no page is cloned, no argument buffer is rebuilt, no snapshot is
+                    published. Moving 1000 objects scattered over 1000 pages costs ~68 KB of writes
+                    instead of ~4 GB of page cloning.
+
+                    Detected by the payload carrying a world matrix but no vertices or indices;
+                    see IsTransformOnlyEdit in RenderScene3D.h. */
+                    if (IsTransformOnlyEdit(cmd)) {
+                        InstanceRegistryEntry& moved = tabRes.registry[gpuInstanceIndex];
+                        if (!moved.page) break; // Not on the GPU yet; nothing to redirect.
+                        releasedInstanceSlots.push_back(moved.instanceSlot);
+                        moved.instanceSlot = WriteInstanceRecord(gpuInstanceIndex,
+                            geo->worldMatrix, moved.page->objects[moved.pageSlot]);
+                        gCopyStats.transformOnlyEdits.fetch_add(1, std::memory_order_relaxed);
+                        break;
+                    }
 
                     newVertexBytes = static_cast<uint32_t>(geo->vertices.size() * sizeof(Vertex));
                     newIndexBytes = static_cast<uint32_t>(geo->indices.size() * sizeof(uint16_t));
@@ -793,14 +850,14 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     if (newVertexBytes == 0 || newIndexBytes == 0) break;
 
                     // Object exists — work on its owning cloned page
-                    oldPage = locIt->second.page;
-                    slotIndex = locIt->second.slot;
+                    oldPage = tabRes.registry[gpuInstanceIndex].page;
+                    slotIndex = tabRes.registry[gpuInstanceIndex].pageSlot;
                     if (targetContainerMemoryId == 0) {
                         targetContainerMemoryId = oldPage->containerMemoryId;
                     }
 
-                    // Resolve which mutable page we are working with: It will be in clonedPages (was in affectedPages 
-                    // from Pass 1), because Pass 1 already included pages from existing objectLocation.
+                    // Resolve which mutable page we are working with: It will be in clonedPages (was in affectedPages
+                    // from Pass 1), because Pass 1 already included pages from the existing registry.
 
                     cloneIt = clonedPages.find(oldPage);
                     if (cloneIt != clonedPages.end()) workPage = cloneIt->second.get();
@@ -815,31 +872,32 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     modifyTargetPage =
                         AcquireAppendPage(targetContainerMemoryId, newVertexBytes, newIndexBytes);
 
-                    // Allocate a fresh matrix slot for the relocated geometry
-                    matrixIndex = AllocateMatrixSlot(tabRes, storage); // Doubles the table when full.
-                    // Release the old slot - fence-gated, not straight onto the free list.
-                    worldMat = XMLoadFloat4x4(&geo->worldMatrix);
-                    releasedMatrixSlots.push_back(oldRec->matrixIndex);
-                    XMStoreFloat4x4(reinterpret_cast<XMFLOAT4X4*>(tabRes.pWorldMatrixDataBegin +
-                        matrixIndex * sizeof(XMFLOAT4X4)), XMMatrixTranspose(worldMat));
-
-                    rec = RecordGeometryUpload(modifyTargetPage, *geo, matrixIndex);
+                    /* GEOMETRY CHANGED - relocate into the cloned page as before, PLUS a new
+                    instance slot. gpuInstanceIndex is unchanged: identity survives a modify, and
+                    only the two locations (page and arena slot) move. Writing a fresh slot rather
+                    than overwriting the old record in place is what keeps an in-flight frame from
+                    reading a half-written matrix. */
+                    rec = RecordGeometryUpload(modifyTargetPage, *geo, gpuInstanceIndex);
                     modifyTargetPage->objects.push_back(rec);
                     modifyTargetPage->vertexHead = rec.vertexByteOffset + rec.vertexSize;
                     modifyTargetPage->indexTail = rec.indexByteOffset;
                     modifyTargetPage->objectCount++;
 
-                    objectLocation[cmd.id] = {
-                        modifyTargetPage, static_cast<uint32_t>(modifyTargetPage->objects.size() - 1) };
+                    tabRes.registry[gpuInstanceIndex].page = modifyTargetPage;
+                    tabRes.registry[gpuInstanceIndex].pageSlot =
+                        static_cast<uint32_t>(modifyTargetPage->objects.size() - 1);
+                    releasedInstanceSlots.push_back(tabRes.registry[gpuInstanceIndex].instanceSlot);
+                    tabRes.registry[gpuInstanceIndex].instanceSlot =
+                        WriteInstanceRecord(gpuInstanceIndex, geo->worldMatrix, rec);
                     break;
 
                 case CommandToCopyThreadType::REMOVE:
-                
-                    locIt = objectLocation.find(cmd.id);
-                    if (locIt == objectLocation.end()) break; // not on GPU, nothing to do
 
-                    oldPage = locIt->second.page;
-                    slotIndex = locIt->second.slot;
+                    gpuInstanceIndex = tabRes.registry.Find(cmd.id);
+                    if (gpuInstanceIndex == kInvalidInstanceIndex) break; // not on GPU, nothing to do
+
+                    oldPage = tabRes.registry[gpuInstanceIndex].page;
+                    slotIndex = tabRes.registry[gpuInstanceIndex].pageSlot;
 
                     // Resolve mutable clone
                     cloneIt = clonedPages.find(oldPage);
@@ -854,13 +912,16 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     oldRec->isDeleted = true;
                     workPage->holeBytes += oldRec->vertexSize + oldRec->indexSize;
                     workPage->objectCount--;
-                    // Fence-gated release: the pre-publish snapshot still carries this object's
-                    // indirect command, so the slot must stay untouchable until every monitor
-                    // has finished with it.
-                    releasedMatrixSlots.push_back(oldRec->matrixIndex);
-                    objectLocation.erase(locIt);// Remove from local bookkeeping
+                    // Start the zombie interval for BOTH: the pre-publish snapshot still carries
+                    // this object's indirect command, so neither its identity nor the arena slot
+                    // that command reaches through may be reissued until every monitor is done.
+                    releasedInstanceIndexes.push_back(gpuInstanceIndex);
+                    releasedInstanceSlots.push_back(tabRes.registry[gpuInstanceIndex].instanceSlot);
+                    tabRes.registry.indexOfMemoryId.erase(cmd.id);
+                    tabRes.registry[gpuInstanceIndex] = InstanceRegistryEntry{}; // memoryID = 0.
                     break;
-                
+
+
 
                 default: break;
                 } // End of switch (cmd.type)// Process Command
@@ -881,7 +942,7 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     if (obj.isDeleted) continue; // skip soft-deleted slots
 
                     IndirectCommand ic{};
-                    ic.matrixIndex = obj.matrixIndex;
+                    ic.gpuInstanceIndex = obj.gpuInstanceIndex;
                     ic.drawArguments.IndexCountPerInstance = obj.indexCount;
                     ic.drawArguments.InstanceCount = 1;
                     ic.drawArguments.StartIndexLocation = (obj.indexByteOffset - page->indexTail) / sizeof(uint16_t);
@@ -928,7 +989,35 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             gCopyStats.chunks.fetch_add(1, std::memory_order_relaxed);
             gCopyStats.commands.fetch_add(chunkEnd - chunkStart, std::memory_order_relaxed);
 
+            /* Start the zombie interval for everything this chunk vacated. Must be called at the
+            chunk's publish point - AFTER PublishPages when there is one - because the fence read
+            here has to be at or beyond the value PublishPages tags the retired pages with. Read it
+            any earlier and a frame submitted in between still draws the pre-publish snapshot,
+            which names a released INDEX, while that index is already back on the free list.
+
+            Slots have the same shape one level down: an in-flight frame may still hold the
+            pre-flip value of a redirect entry pointing at a released SLOT.
+
+            Called from BOTH exits below, because a chunk of pure transform-only edits clones no
+            page and publishes nothing, yet still vacates one slot per edit (10M plan Step 4). */
+            auto RetireReleasedIdentities = [&]() {
+                if (releasedInstanceIndexes.empty() && releasedInstanceSlots.empty()) return;
+                const uint64_t retireFence = gpu.renderFenceValue.load(std::memory_order_acquire);
+                for (uint32_t released : releasedInstanceIndexes) {
+                    tabRes.pendingFreeInstanceIndexes.push_back({ released, retireFence });
+                }
+                for (uint32_t released : releasedInstanceSlots) {
+                    if (released == kInvalidInstanceSlot) continue; // Never had a record.
+                    tabRes.pendingFreeInstanceSlots.push_back({ released, retireFence });
+                }
+                releasedInstanceIndexes.clear();
+                releasedInstanceSlots.clear();
+                };
+
             if (clonedPages.empty() && newPages.empty()) { // Nothing to publish for this chunk.
+                // The redirect flip WAS this chunk's publish; it completed with the copy fence above.
+                RetireReleasedIdentities();
+                PruneRetiredGpuResources(); // Sweep anyway: the releases above need draining.
                 chunkStart = chunkEnd;
                 continue;
             }
@@ -947,18 +1036,8 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             }
 
             PublishPages(storage, oldPages, std::move(replacements), std::move(newPages));
+            RetireReleasedIdentities(); // Fence read after the publish - see the lambda.
 
-            // Matrix slots vacated by this chunk become reusable only once every monitor's fence
-            // has passed the publish point: until then the pre-publish snapshot is still being
-            // drawn and its indirect buffer still names them. Reading the global render fence
-            // AFTER the publish yields a value at or beyond the one PublishPages tagged the
-            // retired pages with, so this is never the more permissive of the two (Step 1).
-            if (!releasedMatrixSlots.empty()) {
-                const uint64_t slotRetireFence = gpu.renderFenceValue.load(std::memory_order_acquire);
-                for (uint32_t slot : releasedMatrixSlots) {
-                    tabRes.pendingFreeMatrixSlots.push_back({ slot, slotRetireFence });
-                }
-            }
             // Reclaim between chunks. Each chunk retires the page it appended to, so without this
             // a many-chunk batch accumulates 5.5 MB per chunk with nothing freeing it until the
             // whole batch returns - which exhausts VRAM outright on a bulk import. When monitors

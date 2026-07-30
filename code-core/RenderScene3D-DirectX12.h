@@ -10,6 +10,7 @@
 
 // Full definitions live in MemoryManagerGPU-DirectX12.h (forward-declared to avoid a cycle).
 struct DX12ResourcesPerWindow;
+struct DX12ResourcesPerTab;
 struct GeometryPage;
 struct CommandToCopyThread;
 struct DATASETTAB; // विश्वकर्मा.h
@@ -26,6 +27,12 @@ void ClearSceneSkyGradient(ID3D12GraphicsCommandList* commandList, DX12Resources
 // A fresh 4 MB double-ended geometry page (COMMON state) for the given container. Foundation's
 // GpuCopyThread and the Scene3D copy path both allocate through here.
 std::unique_ptr<GeometryPage> CreateNewPage(uint64_t containerMemoryId);
+
+// Commit more 64 KB tiles behind a tab's instance arena until it holds at least minimumCapacity
+// records, and refresh the per-tab SRV to match (graphics.md, 10M plan Step 2). The arena's virtual
+// address is unaffected, so there is nothing to copy, retire or republish. Copy thread only, plus
+// InitD3DPerTab for the very first step, which runs before any thread can see the tab.
+void GrowInstanceArena(DX12ResourcesPerTab& tabRes, uint32_t minimumCapacity);
 
 // 3D-geometry half of the copy thread: applies one drained ADD/MODIFY/REMOVE batch to the
 // per-tab GeometryPages (RCU clone -> mutate -> publish). Mirrors ProcessCad2DCopyBatch.

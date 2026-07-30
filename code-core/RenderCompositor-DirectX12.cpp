@@ -443,8 +443,11 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                      << " oversize=" << gCopyStats.oversizeStaging.load(std::memory_order_relaxed)
                      << " queued=" << gCopyStats.queueDeferred.load(std::memory_order_relaxed)
                      << " maxPages=" << gCopyStats.maxActivePages.load(std::memory_order_relaxed)
+                     << " idx(pending/free)=" << gCopyStats.pendingIndexes.load(std::memory_order_relaxed)
+                     << "/" << gCopyStats.freeIndexes.load(std::memory_order_relaxed)
                      << " slots(pending/free)=" << gCopyStats.pendingSlots.load(std::memory_order_relaxed)
                      << "/" << gCopyStats.freeSlots.load(std::memory_order_relaxed)
+                     << " moves=" << gCopyStats.transformOnlyEdits.load(std::memory_order_relaxed)
                      << " retireBacklog(live/peak)="
                      << gCopyStats.liveRetireBacklog.load(std::memory_order_relaxed)
                      << "/" << gCopyStats.peakRetireBacklog.load(std::memory_order_relaxed)

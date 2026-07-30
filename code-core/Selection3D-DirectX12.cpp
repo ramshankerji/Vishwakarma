@@ -263,8 +263,8 @@ bool PageIsRenderable(const GeometryPage& page, uint64_t activeContainerMemoryId
 }
 
 // Resolve a completed pick result and publish it to SelectionState.
-void ResolveAndPublish(PickPassContext& ctx, DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage,
-    SelectionState& selection, uint64_t activeContainerMemoryId) {
+void ResolveAndPublish(PickPassContext& ctx, const DX12ResourcesPerTab& tabRes,
+    SelectionState& selection) {
     // Scan the sampled box for the nearest (smallest depth) non-background pixel.
     uint32_t bestId = 0; float bestDepth = 2.0f; int bestCol = 0, bestRow = 0;
     {
@@ -290,7 +290,7 @@ void ResolveAndPublish(PickPassContext& ctx, DX12ResourcesPerTab& tabRes, TabGeo
     XMVECTOR worldSurface = XMVectorZero();
 
     if (hit) {
-        const uint32_t matrixIndex = bestId - 1;
+        const uint32_t gpuInstanceIndex = bestId - 1; // Pick ids are 1-based; 0 is background.
 
         // Reconstruct the world-space surface point from the hit pixel + its depth.
         const float px = static_cast<float>(ctx.boxX + bestCol) + 0.5f;
@@ -303,38 +303,16 @@ void ResolveAndPublish(PickPassContext& ctx, DX12ResourcesPerTab& tabRes, TabGeo
         if (std::abs(w) > 1e-8f) worldSurface = XMVectorScale(world, 1.0f / w);
         worldCG = worldSurface; // Fallback if the object can't be resolved this frame.
 
-        // Resolve object id + local AABB from the current snapshot; compute world AABB center.
-        GeometryPageSnapshot* snapshot = storage.activeSnapshot.load(std::memory_order_acquire);
-        if (snapshot) {
-            for (GeometryPage* pagePtr : snapshot->pages) {
-                if (!pagePtr) continue;
-                GeometryPage& page = *pagePtr;
-                if (!page.published.load(std::memory_order_acquire)) continue;
-                if (activeContainerMemoryId != 0 && page.containerMemoryId != activeContainerMemoryId) continue;
-                for (const GeometryPlacementRecordInPage& obj : page.objects) {
-                    if (obj.isDeleted || obj.matrixIndex != matrixIndex) continue;
-                    objectId = obj.objectID;
-                    XMVECTOR localCenter = XMVectorSet(
-                        (obj.minX + obj.maxX) * 0.5f, (obj.minY + obj.maxY) * 0.5f,
-                        (obj.minZ + obj.maxZ) * 0.5f, 1.0f);
-                    // The stored per-object matrix is transpose(world); XMVector3Transform mirrors
-                    // the vertex shader's mul(pos, world), so this yields the world-space center.
-                    // Mirrors, capacity first: the copy thread regrows the table, and the snapshot
-                    // acquire-load above orders these reads (see DX12ResourcesPerTab).
-                    const uint32_t matrixCapacity =
-                        tabRes.matrixCapacityShared.load(std::memory_order_acquire);
-                    UINT8* matrixData = tabRes.worldMatrixDataShared.load(std::memory_order_acquire);
-                    if (matrixIndex < matrixCapacity && matrixData) {
-                        XMMATRIX worldMat = XMLoadFloat4x4(reinterpret_cast<const XMFLOAT4X4*>(
-                            matrixData + matrixIndex * sizeof(XMFLOAT4X4)));
-                        worldCG = XMVector3Transform(localCenter, worldMat);
-                    } else {
-                        worldCG = localCenter;
-                    }
-                    break;
-                }
-                if (objectId != 0) break; // Found the picked object; stop scanning pages.
-            }
+        /* O(1) through the copy thread's registry (graphics.md, 10M plan Step 3). This used to
+        scan every object of every page in the snapshot looking for a matching matrixIndex, and
+        then transform the object's local AABB centre by the mapped world matrix - neither of
+        which survives: the pick id IS the dense instance index now, and the arena is device-local
+        so there is no mapped matrix to read. The copy thread keeps the world-space centre in the
+        registry entry for exactly this reader. */
+        InstanceRegistryEntry entry{};
+        if (tabRes.registry.TryRead(gpuInstanceIndex, entry) && entry.memoryID != 0) {
+            objectId = entry.memoryID;
+            worldCG = XMVectorSet(entry.worldCenterX, entry.worldCenterY, entry.worldCenterZ, 1.0f);
         }
     }
 
@@ -399,10 +377,9 @@ void RecordSelectionOverlays(ID3D12GraphicsCommandList* commandList, DX12Resourc
             commandList->SetGraphicsRootSignature(tabRes.rootSignature.Get());
             commandList->SetPipelineState(tabRes.selection3D.highlightPSO.Get());
             commandList->SetGraphicsRootConstantBufferView(0, winRes.constantBuffer->GetGPUVirtualAddress());
-            // Mirror, not the ComPtr: the copy thread regrows the table; the snapshot loaded
-            // above orders this read (see DX12ResourcesPerTab mirror comments).
-            commandList->SetGraphicsRootShaderResourceView(1,
-                tabRes.worldMatrixVAShared.load(std::memory_order_acquire));
+            // Both VAs are fixed for the tab's lifetime (10M plan Steps 2 and 4).
+            commandList->SetGraphicsRootShaderResourceView(1, tabRes.instanceArena.va);
+            commandList->SetGraphicsRootShaderResourceView(3, tabRes.instanceSlotOf.va);
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
             for (GeometryPage* pagePtr : snapshot->pages) {
@@ -418,7 +395,7 @@ void RecordSelectionOverlays(ID3D12GraphicsCommandList* commandList, DX12Resourc
                         (obj.indexByteOffset - page.indexTail) / static_cast<UINT>(sizeof(uint16_t));
                     const INT baseVertex =
                         static_cast<INT>(obj.vertexByteOffset / sizeof(Vertex));
-                    commandList->SetGraphicsRoot32BitConstant(2, obj.matrixIndex, 0);
+                    commandList->SetGraphicsRoot32BitConstant(2, obj.gpuInstanceIndex, 0);
                     commandList->DrawIndexedInstanced(obj.indexCount, 1, startIndex, baseVertex, 0);
                 }
             }
@@ -473,7 +450,7 @@ void ServicePick(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow&
             gpu.screens[monitorId].renderFence
             ? gpu.screens[monitorId].renderFence->GetCompletedValue() : ctx.pendingFence;
         if (completed >= ctx.pendingFence) {
-            ResolveAndPublish(ctx, tabRes, storage, selection, activeContainerMemoryId);
+            ResolveAndPublish(ctx, tabRes, selection);
             ctx.state = PickPassContext::State::Idle;
         }
     }
@@ -539,10 +516,8 @@ void ServicePick(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow&
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     GeometryPageSnapshot* snapshot = storage.activeSnapshot.load(std::memory_order_acquire);
-    // Matrix-table VA bound AFTER the snapshot acquire-load: the copy thread regrows the table,
-    // and the snapshot publish order guarantees address/capacity consistency (mirror comments).
-    commandList->SetGraphicsRootShaderResourceView(1,
-        tabRes.worldMatrixVAShared.load(std::memory_order_acquire));
+    commandList->SetGraphicsRootShaderResourceView(1, tabRes.instanceArena.va);  // Fixed VAs
+    commandList->SetGraphicsRootShaderResourceView(3, tabRes.instanceSlotOf.va); // (Steps 2 and 4).
     if (snapshot) {
         for (GeometryPage* pagePtr : snapshot->pages) {
             if (!pagePtr) continue;

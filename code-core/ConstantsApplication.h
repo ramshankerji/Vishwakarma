@@ -1,5 +1,6 @@
 // Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
 #pragma once
+#include <cstdint>
 
 /*Instead of keeping the software generic, to be able to handle "any" limits, we are setting following hard limits.
 These are more than the number, a reasonable human can operate simultaneously.
@@ -18,3 +19,9 @@ static const int MV_MAX_TABS = 1024;//Maximum number of tabs.
 DATASETTAB avoids std::vector reallocation issues and enables delayed slot release after the
 respective GPU assets are drained.*/
 static const int MV_MAX_SUBTABS = 128;
+/*Maximum simultaneously GPU-resident Scene3D objects in ONE tab. This is the size of the per-tab
+instance arena's reserved (tiled) virtual address range: 10485760 records x 64 bytes = 640 MB of GPU
+virtual address reserved per tab, with physical 64 KB tiles committed only as the arena grows, so an
+empty tab still costs zero physical bytes. Raising it costs nothing but address space; lowering it
+caps how many objects a tab can hold. See website/content/software/graphics.md, 10M plan Step 2.*/
+static const uint32_t MV_MAX_INSTANCES_PER_TAB = 10 * 1024 * 1024;

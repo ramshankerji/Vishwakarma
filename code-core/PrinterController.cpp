@@ -224,11 +224,9 @@ void Record3DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab,
     uint8_t* pConstantData, uint32_t widthPx, uint32_t heightPx) {
     DX12ResourcesPerTab& tabRes = tab.dx;
     if (!tabRes.rootSignature || !tabRes.pipelineState || !tabRes.commandSignature) return;
-    // Mirror, not the ComPtr: the copy thread can regrow the matrix table concurrently; a stale
-    // VA still points at a retired-but-alive buffer (see DX12ResourcesPerTab mirror comments).
-    const D3D12_GPU_VIRTUAL_ADDRESS worldMatrixVA =
-        tabRes.worldMatrixVAShared.load(std::memory_order_acquire);
-    if (worldMatrixVA == 0) return;
+    // The instance arena / redirect VAs are fixed for the tab's lifetime: growth commits tiles
+    // behind the same address, so there is no mirror to load here any more (10M plan Step 2).
+    if (tabRes.instanceArena.va == 0) return;
 
     // Print with the per-view camera of the inline-active Scene3D sub-tab (matches what the
     // user sees); fall back to the tab-level camera when no Scene3D sub-tab is active.
@@ -251,7 +249,8 @@ void Record3DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab,
     cmd->SetGraphicsRootSignature(tabRes.rootSignature.Get());
     cmd->SetPipelineState(tabRes.pipelineState.Get());
     cmd->SetGraphicsRootConstantBufferView(0, constantBuffer->GetGPUVirtualAddress());
-    cmd->SetGraphicsRootShaderResourceView(1, worldMatrixVA);
+    cmd->SetGraphicsRootShaderResourceView(1, tabRes.instanceArena.va);
+    cmd->SetGraphicsRootShaderResourceView(3, tabRes.instanceSlotOf.va);
     cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     for (const Print3DPage& page : pages) {

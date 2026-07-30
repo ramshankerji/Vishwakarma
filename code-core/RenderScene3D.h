@@ -56,8 +56,53 @@ inline void UpdateCameraOrbit(CameraState& cam)
     cam.position = { x, y, z };
 }
 
+/* One record in a tab's instance arena, addressed by instanceSlot (NOT by gpuInstanceIndex - the
+redirect table sits in between; see graphics.md, 10M plan Step 4). 64 bytes divides the 64 KB D3D12
+buffer tile exactly, which is what makes the arena's commit-on-demand growth land on whole records.
+
+TRANSFORM CONVENTION - get this wrong and everything silently draws in the wrong place. The engine
+is row-vector throughout: the vertex shader computes `pos * W`, and DirectXMath's XMFLOAT4X4/XMMATRIX
+put the translation in row 3. The three float4s here are the first three ROWS OF transpose(W), i.e.
+the first three COLUMNS of W:
+
+    transformA = (W00, W10, W20, tx)
+    transformB = (W01, W11, W21, ty)
+    transformC = (W02, W12, W22, tz)
+
+The dropped fourth row of transpose(W) is always (0,0,0,1), which is exactly why 48 bytes suffice -
+and exactly why a shader may NOT hand this to a generic float4x4 `mul` any more. Point transform is
+three dots against float4(pos,1); normal transform is three dots against the .xyz parts (uniform
+scale assumed, inverse-transpose left to a later revision).
+
+Byte-for-byte this is the leading 48 bytes of the XMFLOAT4X4 the arena stored before Step 4, so the
+CPU writer is still one XMMatrixTranspose - it just stops copying the last row. */
+struct InstanceRecord {
+    float transformA[4];
+    float transformB[4];
+    float transformC[4];
+    // 16-byte render payload. Authored, infrequently changed state only. High-frequency
+    // interaction state (hover, selection, SubTab membership, temporary hide) deliberately stays
+    // OUT of here and lives in Step 5's visibility mask, so an interaction never allocates a slot.
+    // Nothing produces or consumes these four yet; the bytes exist because the record is 64 bytes.
+    uint32_t materialIndex;
+    uint32_t packedColor;
+    uint32_t renderFlags;
+    uint32_t packedParams;
+};
+constexpr uint32_t kInstanceRecordBytes = 64;
+static_assert(sizeof(InstanceRecord) == kInstanceRecordBytes,
+    "InstanceRecord must be exactly 64 bytes - the arena's tile math depends on it.");
+
+// One entry of InstanceSlotOf[gpuInstanceIndex]: the arena slot currently holding the object's
+// record. This is the 4-byte value a transform edit atomically flips (10M plan Step 4).
+constexpr uint32_t kInstanceSlotBytes = 4;
+
 struct IndirectCommand { // OPTIMIZED Indirect Command
-    uint32_t matrixIndex; // 4 Bytes (Root Constant b1)
+    // Dense renderer identity of the object this command draws (Root Constant b1). STABLE for the
+    // object's whole GPU lifetime: unchanged by MODIFY and by an RCU clone relocating the object to
+    // another GeometryPage. It indexes the tab's instance arena AND is the GPU pick id (+1), so a
+    // pick resolves in O(1) through the copy thread's registry (graphics.md, 10M plan Step 3).
+    uint32_t gpuInstanceIndex; // 4 Bytes
 	// Since Jumbo buffer ( or pages in future ) remains same, we bind it once.
     // REMOVED: D3D12_VERTEX_BUFFER_VIEW vbv (Saved 16 Bytes)
     // REMOVED: D3D12_INDEX_BUFFER_VIEW  ibv (Saved 16 Bytes)
@@ -91,7 +136,7 @@ struct GeometryPlacementRecordInPage {
     uint32_t indexSize;          // In bytes
 
     uint32_t indexCount;         // Number of indices (not bytes) For ExecuteIndirect
-    uint32_t matrixIndex;        // Index into the per-tab WorldMatrix structured buffer
+    uint32_t gpuInstanceIndex;   // Stable renderer identity; indexes the per-tab instance arena
 
     // Axis-Aligned Bounding Box (AABB) – stored as float32 only (24 bytes total)
     // Always present for future use (frustum culling, selection, etc.).
@@ -116,13 +161,28 @@ struct CommandToCopyThread
     uint64_t containerMemoryId = 0; // Parent high-level container; pages never mix container IDs.
 };
 
+/* A MODIFY carrying a world matrix but NO vertices or indices is a TRANSFORM-ONLY edit: the copy
+thread writes a fresh instance record and flips one redirect entry, cloning no geometry page and
+publishing no snapshot (10M plan Step 4). This is the encoding rather than a new command type
+because GeometryData already carries the matrix, and an empty payload is otherwise a no-op.
+
+ADD is never transform-only - a new object needs geometry. */
+inline bool IsTransformOnlyEdit(const CommandToCopyThread& command) {
+    return command.type == CommandToCopyThreadType::MODIFY && command.geometry.has_value() &&
+        command.geometry->vertices.empty() && command.geometry->indices.empty();
+}
+
 // Approximate GPU staging cost of one command. Used in two places (graphics.md, 10M plan Step 0):
 // to cap the copy thread's CPU-side drain, and to size the chunks that must fit in the upload ring.
-// REMOVE carries no payload and therefore no staging cost.
+// REMOVE carries no payload and therefore no staging cost. ADD / MODIFY also stage the 64-byte
+// instance record plus its 4-byte redirect entry, because both live in device-local memory since
+// Step 2 and can no longer be written by a plain CPU store into a mapped upload heap. A
+// transform-only MODIFY carries no vertices or indices, so those two terms fall to zero.
 inline uint64_t EstimateStagingBytes(const CommandToCopyThread& command) {
     if (!command.geometry.has_value()) return 0;
     const GeometryData& geometry = *command.geometry;
-    return geometry.vertices.size() * sizeof(Vertex) + geometry.indices.size() * sizeof(uint16_t);
+    return geometry.vertices.size() * sizeof(Vertex) + geometry.indices.size() * sizeof(uint16_t)
+        + kInstanceRecordBytes + kInstanceSlotBytes;
 }
 
 class ThreadSafeQueueGPU {

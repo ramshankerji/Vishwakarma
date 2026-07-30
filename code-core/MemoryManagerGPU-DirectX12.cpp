@@ -79,6 +79,135 @@ void GpuUploadRing::TagSubmission(uint64_t fenceValue) {
     if (head > lastTaggedEnd) inFlight.push_back({ head, fenceValue });
 }
 
+// --- Reserved-tile instance buffers (graphics.md, 10M plan Steps 2 and 4) -----------------------
+
+void TiledInstanceBuffer::Initialize(uint32_t elementBytesIn, uint32_t maxCapacityIn,
+    const wchar_t* debugName) {
+    if (resource) return;
+    elementBytes = elementBytesIn;
+    maxCapacity = maxCapacityIn;
+    // Tiles are a fixed 64 KB, and growth is expressed in whole tiles, so an element size that does
+    // not divide a tile would leave a record straddling the boundary between a committed and an
+    // uncommitted tile.
+    if (kInstanceArenaTileBytes % elementBytes != 0) ThrowIfFailed(E_INVALIDARG);
+
+    auto desc = CD3DX12_RESOURCE_DESC::Buffer(
+        static_cast<uint64_t>(maxCapacity) * elementBytes);
+    ThrowIfFailed(gpu.device->CreateReservedResource(&desc, D3D12_RESOURCE_STATE_COMMON,
+        nullptr, IID_PPV_ARGS(&resource)));
+    resource->SetName(debugName);
+    va = resource->GetGPUVirtualAddress();
+    capacity = 0;
+}
+
+void TiledInstanceBuffer::Shutdown() {
+    // Releasing the reserved resource drops its tile mappings, after which the backing heaps are
+    // free to go. Nothing was ever mapped, so there is nothing to unmap.
+    va = 0;
+    resource.Reset();
+    heaps.clear();
+    capacity = 0;
+}
+
+bool TiledInstanceBuffer::Grow(uint32_t minimumCapacity) {
+    if (minimumCapacity <= capacity) return false;
+    if (minimumCapacity > maxCapacity) {
+        std::cerr << "Instance buffer exhausted: needs " << minimumCapacity
+            << " elements, the reserved range holds " << maxCapacity << "." << std::endl;
+        ThrowIfFailed(E_OUTOFMEMORY);
+    }
+    const uint32_t elementsPerTile = ElementsPerTile();
+    const uint32_t oldCapacity = capacity;
+    // Double, then round up to a whole tile. A 4-byte element needs 16384 per tile, so the first
+    // step for the redirect table is one tile rather than the nominal 4096.
+    uint32_t newCapacity = oldCapacity == 0 ? kInstanceInitialCapacity : oldCapacity * 2;
+    while (newCapacity < minimumCapacity) newCapacity *= 2;
+    newCapacity = ((newCapacity + elementsPerTile - 1) / elementsPerTile) * elementsPerTile;
+    if (newCapacity > maxCapacity) newCapacity = maxCapacity;
+
+    const uint32_t firstTile = oldCapacity / elementsPerTile;
+    const uint32_t tileCount = newCapacity / elementsPerTile - firstTile;
+
+    D3D12_HEAP_DESC heapDesc = {};
+    heapDesc.SizeInBytes = static_cast<uint64_t>(tileCount) * kInstanceArenaTileBytes;
+    heapDesc.Properties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+    heapDesc.Alignment = 0; // 64 KB default, which is the tile size.
+    heapDesc.Flags = D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS;
+    ComPtr<ID3D12Heap> tileHeap;
+    ThrowIfFailed(gpu.device->CreateHeap(&heapDesc, IID_PPV_ARGS(&tileHeap)));
+
+    /* Tile mapping is a QUEUE operation, not a command-list one. The copy queue is the right queue:
+    the copy thread owns growth, and UpdateTileMappings enqueued here is ordered ahead of the
+    ExecuteCommandLists that will write into the new tiles. No fence gating is needed either - the
+    tiles being committed back elements past the current high-water mark, which nothing published
+    can reference yet. */
+    D3D12_TILED_RESOURCE_COORDINATE startCoordinate = {};
+    startCoordinate.X = firstTile;
+    D3D12_TILE_REGION_SIZE regionSize = {};
+    regionSize.NumTiles = tileCount;
+    regionSize.UseBox = FALSE;
+    const D3D12_TILE_RANGE_FLAGS rangeFlags = D3D12_TILE_RANGE_FLAG_NONE;
+    const UINT heapRangeStartOffset = 0;
+    const UINT rangeTileCount = tileCount;
+    gpu.copyCommandQueue->UpdateTileMappings(resource.Get(), 1, &startCoordinate, &regionSize,
+        tileHeap.Get(), 1, &rangeFlags, &heapRangeStartOffset, &rangeTileCount,
+        D3D12_TILE_MAPPING_FLAG_NONE);
+
+    heaps.push_back(std::move(tileHeap));
+    capacity = newCapacity;
+
+    std::wcout << L"Instance buffer grown: " << oldCapacity << L" -> " << newCapacity
+        << L" x " << elementBytes << L" B ("
+        << (static_cast<uint64_t>(newCapacity) * elementBytes / 1024) << L" KB committed)."
+        << std::endl;
+    return true;
+}
+
+// --- Per-tab identity registry (graphics.md, 10M plan Step 3) -----------------------------------
+
+void InstanceRegistry::Initialize(uint32_t maxInstances) {
+    if (entries) return;
+    reservedBytes = static_cast<uint64_t>(maxInstances) * sizeof(InstanceRegistryEntry);
+    entries = static_cast<InstanceRegistryEntry*>(
+        VirtualMemory::reserve_address_space(reservedBytes));
+    if (!entries) {
+        reservedBytes = 0;
+        ThrowIfFailed(E_OUTOFMEMORY);
+    }
+    committedBytes = 0;
+    committedCount.store(0, std::memory_order_release);
+}
+
+void InstanceRegistry::Shutdown() {
+    if (entries) VirtualMemory::release_address_space(entries, reservedBytes);
+    entries = nullptr;
+    reservedBytes = committedBytes = 0;
+    committedCount.store(0, std::memory_order_release);
+    indexOfMemoryId.clear();
+}
+
+void InstanceRegistry::Commit(uint32_t count) {
+    if (!entries) return;
+    const uint64_t needed = static_cast<uint64_t>(count) * sizeof(InstanceRegistryEntry);
+    if (needed <= committedBytes) return;
+    uint64_t target = ((needed + kCommitBlockBytes - 1) / kCommitBlockBytes) * kCommitBlockBytes;
+    if (target > reservedBytes) target = reservedBytes;
+    if (!VirtualMemory::commit_memory(reinterpret_cast<uint8_t*>(entries) + committedBytes,
+        target - committedBytes)) {
+        ThrowIfFailed(E_OUTOFMEMORY);
+    }
+    committedBytes = target;
+    // Publish last: a render thread that sees the new count is guaranteed to see committed pages.
+    committedCount.store(static_cast<uint32_t>(committedBytes / sizeof(InstanceRegistryEntry)),
+        std::memory_order_release);
+}
+
+void InstanceRegistry::Clear() {
+    indexOfMemoryId.clear();
+    // Zero the live range so no render-thread read can follow a page pointer into a destroyed page.
+    if (entries && committedBytes) memset(entries, 0, static_cast<size_t>(committedBytes));
+}
+
 void शंकर::InitD3DDeviceOnly() {
     UINT dxgiFactoryFlags = 0;
 #if defined(_DEBUG)
@@ -142,6 +271,19 @@ void शंकर::InitD3DDeviceOnly() {
     gpu.rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
     gpu.cbvSrvUavDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
+    // Tiled-resource tier. The per-tab instance arena is a reserved buffer, so Tier 1 is a hard
+    // requirement; the installer is where the check belongs, this is the startup backstop.
+    D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
+    if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)))) {
+        tiledResourcesTier = options.TiledResourcesTier;
+    }
+    std::wcout << L"Tiled Resources Tier: " << static_cast<int>(tiledResourcesTier) << std::endl;
+    if (tiledResourcesTier < D3D12_TILED_RESOURCES_TIER_1) {
+        std::wcerr << L"FATAL: this GPU reports no tiled-resource support. Vishwakarma requires "
+                      L"Tiled Resources Tier 1 (reserved buffers) for the per-tab instance arena."
+                   << std::endl;
+    }
+
     //Copy thread is global. Hence it's variables are initialized here.
     D3D12_COMMAND_QUEUE_DESC queueDesc = {};
     queueDesc.Type = D3D12_COMMAND_LIST_TYPE_COPY; // Distinct Copy Queue!
@@ -164,43 +306,34 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
 
     // Geometry staging is NOT per tab: every upload goes through the global gpu.uploadRing.
 
-    CD3DX12_RANGE readRange(0, 0); // CPU won't read from the buffers it maps below.
+    /* Instance arena + redirect table: two RESERVED (tiled) buffers covering
+    MV_MAX_INSTANCES_PER_TAB elements each. No physical memory is committed here - tiles are mapped
+    behind them as objects arrive, so a freshly opened tab costs nothing but virtual address space.
+    Both are device-local, so unlike the old world-matrix table they are not CPU-mappable: records
+    and redirect flips reach them through the upload ring like every other copy-thread write.
+    (10M plan Steps 2 and 4.) */
+    tabRes.instanceArena.Initialize(kInstanceRecordBytes, MV_MAX_INSTANCES_PER_TAB,
+        L"Instance Arena");
+    tabRes.instanceSlotOf.Initialize(kInstanceSlotBytes, MV_MAX_INSTANCES_PER_TAB,
+        L"Instance Redirect");
 
-    // World Matrix structured buffer. (UPLOAD heap, persistently mapped).
-    auto matrixDesc = CD3DX12_RESOURCE_DESC::Buffer(tabRes.matrixCapacity * sizeof(DirectX::XMFLOAT4X4));
-    auto uploadProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-    ThrowIfFailed(gpu.device->CreateCommittedResource( &uploadProps, D3D12_HEAP_FLAG_NONE, &matrixDesc,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&tabRes.worldMatrixBuffer)));
-
-    ThrowIfFailed(tabRes.worldMatrixBuffer->Map(0, &readRange,
-        reinterpret_cast<void**>(&tabRes.pWorldMatrixDataBegin)));
-
-    // Publish the render-thread mirrors (see DX12ResourcesPerTab). GrowMatrixTable republishes
-    // them whenever the copy thread doubles the table.
-    tabRes.worldMatrixDataShared.store(tabRes.pWorldMatrixDataBegin, std::memory_order_release);
-    tabRes.worldMatrixVAShared.store(tabRes.worldMatrixBuffer->GetGPUVirtualAddress(),
-        std::memory_order_release);
-    tabRes.matrixCapacityShared.store(tabRes.matrixCapacity, std::memory_order_release);
-
-    // SRV on per-tab shader-visible heap (already declared in struct)
+    // SRV on per-tab shader-visible heap (already declared in struct). Unused by today's root-SRV
+    // draw paths; it is the descriptor the Step 7 cull dispatch will need.
     D3D12_DESCRIPTOR_HEAP_DESC srvDesc = {};
     srvDesc.NumDescriptors = 1;
     srvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     srvDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     ThrowIfFailed(gpu.device->CreateDescriptorHeap(&srvDesc, IID_PPV_ARGS(&tabRes.srvHeap)));
 
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvView = {};
-    srvView.Format = DXGI_FORMAT_UNKNOWN;
-    srvView.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-    srvView.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvView.Buffer.FirstElement = 0;
-    srvView.Buffer.NumElements = tabRes.matrixCapacity;
-    srvView.Buffer.StructureByteStride = sizeof(DirectX::XMFLOAT4X4);
-    gpu.device->CreateShaderResourceView(tabRes.worldMatrixBuffer.Get(), &srvView,
-        tabRes.srvHeap->GetCPUDescriptorHandleForHeapStart());
-
-    tabRes.matrixCount = 0;
-    tabRes.freeMatrixSlots.clear();
+    tabRes.instanceCount = 0;
+    tabRes.instanceSlotCount = 0;
+    tabRes.freeInstanceIndexes.clear();
+    tabRes.freeInstanceSlots.clear();
+    tabRes.pendingFreeInstanceIndexes.clear();
+    tabRes.pendingFreeInstanceSlots.clear();
+    tabRes.registry.Initialize(MV_MAX_INSTANCES_PER_TAB);
+    GrowInstanceArena(tabRes, kInstanceInitialCapacity); // First tiles + the matching SRV.
+    tabRes.instanceSlotOf.Grow(kInstanceInitialCapacity);
 
     // Create root signature with constant buffer
     D3D12_FEATURE_DATA_ROOT_SIGNATURE featureData = {};
@@ -219,15 +352,19 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
         D3D12_DESCRIPTOR_RANGE_FLAG_NONE); //Now it does change every frame, so no static flag.
     ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_NONE);
 
-    CD3DX12_ROOT_PARAMETER1 rootParameters[3] = {}; //3: Number of descriptor ranges in this table
+    CD3DX12_ROOT_PARAMETER1 rootParameters[4] = {}; // 7 DWORDs total, well under the 64 limit.
 
     // No descriptor ranges needed!
     // b0 : ViewProj Constant Buffer (Root Descriptor)
     rootParameters[0].InitAsConstantBufferView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_VERTEX);
-    // t0 : WorldMatrices Structured Buffer (Root Descriptor)
+    // t0 : Instance arena Structured Buffer (Root Descriptor)
     rootParameters[1].InitAsShaderResourceView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_VERTEX);
-    // b1 : matrixIndex (Root Constant - 1 uint) (32-bit constant)
+    // b1 : gpuInstanceIndex (Root Constant - 1 uint) (32-bit constant)
     rootParameters[2].InitAsConstants(1, 1, 0, D3D12_SHADER_VISIBILITY_VERTEX);
+    // t1 : InstanceSlotOf redirect table (Root Descriptor). The vertex shader loads
+    // InstanceSlotOf[gpuInstanceIndex] first, then the record at that slot - the two-load form
+    // that makes a transform edit a 4-byte flip instead of a 64-byte overwrite (10M plan Step 4).
+    rootParameters[3].InitAsShaderResourceView(1, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_VERTEX);
 
     CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
     rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters,
@@ -287,7 +424,7 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
     // Command Signature
     D3D12_INDIRECT_ARGUMENT_DESC args[2] = {};
     args[0].Type = D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT;
-    args[0].Constant.RootParameterIndex = 2;   // b1 matrixIndex
+    args[0].Constant.RootParameterIndex = 2;   // b1 gpuInstanceIndex
     args[0].Constant.Num32BitValuesToSet = 1;
     args[0].Constant.DestOffsetIn32BitValues = 0;
     args[1].Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
@@ -329,17 +466,15 @@ void शंकर::CleanupTabResources(DX12ResourcesPerTab& tabRes) {
     // Release the GPU Resources
     tabRes.srvHeap.Reset();
 
-    if (tabRes.pWorldMatrixDataBegin) {
-        tabRes.worldMatrixBuffer->Unmap(0, nullptr);
-        tabRes.pWorldMatrixDataBegin = nullptr;
-    }
-    tabRes.worldMatrixBuffer.Reset();
-    tabRes.worldMatrixVAShared.store(0, std::memory_order_release);
-    tabRes.worldMatrixDataShared.store(nullptr, std::memory_order_release);
-    tabRes.matrixCapacityShared.store(0, std::memory_order_release);
-    tabRes.freeMatrixSlots.clear();
-    tabRes.pendingFreeMatrixSlots.clear();
-    tabRes.matrixCount = 0;
+    tabRes.instanceArena.Shutdown();
+    tabRes.instanceSlotOf.Shutdown();
+    tabRes.instanceCount = 0;
+    tabRes.instanceSlotCount = 0;
+    tabRes.freeInstanceIndexes.clear();
+    tabRes.freeInstanceSlots.clear();
+    tabRes.pendingFreeInstanceIndexes.clear();
+    tabRes.pendingFreeInstanceSlots.clear();
+    tabRes.registry.Shutdown();
 
     CleanupSelection3DResources(tabRes);
     CleanupPickPassContext(tabRes.pickCtx);
@@ -566,31 +701,32 @@ size_t PruneRetiredGpuResources(uint64_t* outSafeRetireFence) {
             }), storage.retiredPages.end()
         );
 
-        // Retire outgrown world-matrix buffers (GrowMatrixTable): same fence rule.
-        storage.retiredBuffers.erase(std::remove_if(
-            storage.retiredBuffers.begin(), storage.retiredBuffers.end(),
-            [&](const auto& rb) { return rb.retireFence <= safeRetireFence; }),
-            storage.retiredBuffers.end()
-        );
-
-        // Hand matrix slots freed by REMOVE / MODIFY back to the free list, under the same
-        // fence rule as the pages (10M plan Step 1). Until this point no ADD can reuse the
-        // slot, so no in-flight frame can draw an object with a stranger's transform.
+        /* End the zombie interval of instance indices freed by REMOVE and of arena slots freed by
+        REMOVE / MODIFY, under the same fence rule as the pages (10M plan Steps 1, 3 and 4). Until
+        this point no later edit can reuse either: an index is still named by the pre-publish
+        snapshot's indirect buffer, and a slot is still reachable through the pre-flip value of a
+        redirect entry an in-flight frame may already have read. */
         DX12ResourcesPerTab& sweepTabRes = allTabs[tabList[i]].dx;
-        sweepTabRes.pendingFreeMatrixSlots.erase(std::remove_if(
-            sweepTabRes.pendingFreeMatrixSlots.begin(),
-            sweepTabRes.pendingFreeMatrixSlots.end(),
-            [&](const DX12ResourcesPerTab::PendingMatrixSlot& pending) {
-                if (pending.retireFence <= safeRetireFence) {
-                    sweepTabRes.freeMatrixSlots.push_back(pending.slot);
-                    return true;
-                }
-                return false;
-            }), sweepTabRes.pendingFreeMatrixSlots.end()
-        );
-        gCopyStats.pendingSlots.store(sweepTabRes.pendingFreeMatrixSlots.size(),
+        auto reclaim = [&](std::vector<DX12ResourcesPerTab::PendingInstanceIndex>& pending,
+            std::vector<uint32_t>& freeList) {
+                pending.erase(std::remove_if(pending.begin(), pending.end(),
+                    [&](const DX12ResourcesPerTab::PendingInstanceIndex& entry) {
+                        if (entry.retireFence <= safeRetireFence) {
+                            freeList.push_back(entry.index);
+                            return true;
+                        }
+                        return false;
+                    }), pending.end());
+            };
+        reclaim(sweepTabRes.pendingFreeInstanceIndexes, sweepTabRes.freeInstanceIndexes);
+        reclaim(sweepTabRes.pendingFreeInstanceSlots, sweepTabRes.freeInstanceSlots);
+        gCopyStats.pendingIndexes.store(sweepTabRes.pendingFreeInstanceIndexes.size(),
             std::memory_order_relaxed);
-        gCopyStats.freeSlots.store(sweepTabRes.freeMatrixSlots.size(),
+        gCopyStats.freeIndexes.store(sweepTabRes.freeInstanceIndexes.size(),
+            std::memory_order_relaxed);
+        gCopyStats.pendingSlots.store(sweepTabRes.pendingFreeInstanceSlots.size(),
+            std::memory_order_relaxed);
+        gCopyStats.freeSlots.store(sweepTabRes.freeInstanceSlots.size(),
             std::memory_order_relaxed);
 
         if (allTabs[tabList[i]].cad2d) {

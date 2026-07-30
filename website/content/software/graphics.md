@@ -174,7 +174,7 @@ Use **Render To Texture (RTT)** to implement frame freezes, since the swap chain
 
 Everything formerly tracked here now has a roadmap slot: transparency sorting, the hot-drag / active-mutation path and instanced repeated geometry sit in Phase 5, the telemetry counters in Phase 6, and evict/residency logic, compute-shader frustum culling, mesh shaders and instance-based LOD in Phase 7.
 
-Resolved since this list was written: selection highlighter methodology — shipped as the GPU pick pass + highlight overlay + rotation cube (Selection3D module); vertex page offsets misaligned against the 24-byte stride — see the alignment rule under *Page structure*; and world-matrix slots recycled before the frames referencing them retired — see Step 1 of the 10-million-object plan.
+Resolved since this list was written: selection highlighter methodology — shipped as the GPU pick pass + highlight overlay + rotation cube (Selection3D module); vertex page offsets misaligned against the 24-byte stride — see the alignment rule under *Page structure*; world-matrix slots recycled before the frames referencing them retired — see Step 1 of the 10-million-object plan; and the pick resolve's world-space AABB centre, which was transforming a local centre by the *transposed* matrix (harmless only because every generator bakes positions into vertices and leaves `worldMatrix` identity) — Step 2's registry shadow computes it with the same row-vector convention the vertex shader uses.
 
 ### Miscellaneous specification
 
@@ -195,7 +195,7 @@ As items complete, they move out of this pending list and into the design docume
 
 **Phase 4 — the memory manager (the Vishwakarma core)**
 
-Done so far: 4 MB double-ended VRAM pages with RCU clone → mutate → atomic-snapshot publish, per-container page ownership, fence-gated retirement (snapshots, pages, outgrown matrix tables, matrix slots), empty-page GC, world-matrix table with slot free-list and doubling growth, tab/view management, basic ribbon UI, and the global upload ring with ring-gated chunked submission.
+Done so far: 4 MB double-ended VRAM pages with RCU clone → mutate → atomic-snapshot publish, per-container page ownership, fence-gated retirement (snapshots, pages, instance indices, instance slots), empty-page GC, the reserved-tile instance arena + redirect table with their copy-thread identity registry (10M plan Steps 2–4, which retired the doubling world-matrix table and its retired-buffer queue outright), tab/view management, basic ribbon UI, and the global upload ring with ring-gated chunked submission.
 
 **Global upload ring buffer + ring-gated submission — done.** One persistent-mapped 64 MB ring with fence-tracked reclaim now serves Scene3D geometry staging and the argument-buffer rebuilds, replacing the per-object committed staging resources in `RecordGeometryUpload`, and the dead per-tab upload heaps (64 MB vertex + 16 MB index per tab, committed and mapped but never written) are gone. Submission is chunk-driven: one recording, one submit, one fence wait and one publish per chunk, collapsing the three record/execute/CPU-wait cycles per tab into one. The CPU-side drain is capped so a lakh-object import cannot materialise hundreds of megabytes of `GeometryData` before a byte reaches the GPU, and an oversize payload falls back to a one-off committed buffer. Specified in full as Step 0 of the 10-million-object plan below. **Still to migrate onto the ring:** Page2D record uploads (`ProcessCad2DCopyBatch`, which also creates its own allocator and command list per batch) and texture uploads.
 
@@ -209,7 +209,7 @@ Done so far: Shader Model 6; click / window selection — built as a GPU pick pa
 
 - [ ] **Page-type axes — the "16 × N" object representation.** Pages are currently keyed by container only and everything draws with one PSO (opaque triangles, 16-bit indices, back-culled). Add a page kind — {opaque | transparent | wireframe} × {16-bit | 32-bit index} — next to `containerMemoryId`, a small PSO table, and a per-kind loop in `RenderScene3D`. This unlocks wireframe display modes, transparency and large meshes; none of the items below can start without it.
 - [ ] **Big-object fallback.** Wire the dormant `BigGeometryObject` path: dedicated committed resource, 32-bit indices, own draw call. Today one object above 65,536 vertices silently wraps its 16-bit indices — must land before STL / terrain import ships.
-- [ ] **Hot-drag / active-mutation path** (promoted from the known-issues list). An interactive drag today would be a MODIFY per mouse-move — a 4 MB page clone per frame. This is now solved by the 10M plan rather than by a separate mechanism: Steps 1–4 make a whole-object move write one new instance slot plus one atomic redirect, cloning nothing. The per-frame matrix double-buffer once listed here as a prerequisite is *not* the right fix — no fixed frame depth is correct when render threads run at different refresh rates, and a 64-byte record cannot be written in place without tearing. Must land before interactive 3D move/rotate tooling.
+- [ ] **Hot-drag / active-mutation path** (promoted from the known-issues list). An interactive drag would once have been a MODIFY per mouse-move — a 4 MB page clone per frame. The GPU side of this is **done**: Steps 1–4 make a whole-object move write one new instance slot plus one atomic redirect, cloning nothing. What remains is entirely on the producer side — every geometry generator currently bakes world positions into its vertices and leaves `GeometryData::worldMatrix` identity, so nothing can emit the transform-only command the copy thread already understands. Give the generators a real world matrix and the fast path lights up. (The per-frame matrix double-buffer once listed here as a prerequisite was *not* the right fix — no fixed frame depth is correct when render threads run at different refresh rates, and a 64-byte record cannot be written in place without tearing.) Must land before interactive 3D move/rotate tooling.
 - [ ] **Transparency sorting** (needs the page-type axes): accept imperfect order during camera motion; CPU sort + argument rebuild when the camera stops.
 - [ ] **Instanced rendering for repeated geometry** (pipes, bolts, standard sections): `InstanceCount > 1` + per-instance matrix indirection in the vertex shader. This finally answers the "repeated geometry" open question above, and is the single biggest VRAM lever for plant models.
 - [ ] SSAO.
@@ -217,7 +217,7 @@ Done so far: Shader Model 6; click / window selection — built as a GPU pick pa
 
 **Phase 6 — performance & telemetry** (wire into the existing ImprovementData pipeline; this phase also settles the demoted items)
 
-A first set of copy-thread counters already exists (`GpuCopyStats`, printed on the debug FPS heartbeat): batches, chunks, commands, pages cloned, clones-per-chunk, clone bytes, ring bytes and high-water, oversize-staging count, deferred-queue depth, max active pages, pending/free matrix slots, and retire backlog as both a live gauge and an all-time peak. They are the numbers the four workload budgets above are measured against. Note which counters are cumulative, which are live and which are high-water marks — a peak reads like a stuck value when it is only recording a stall that has since cleared. Wiring them into the ImprovementData pipeline and the Application Tab stats pane is the remaining work.
+A first set of copy-thread counters already exists (`GpuCopyStats`, printed on the debug FPS heartbeat): batches, chunks, commands, pages cloned, clones-per-chunk, clone bytes, ring bytes and high-water, oversize-staging count, deferred-queue depth, max active pages, pending/free instance indices (`idx`, which moves only on REMOVE — a MODIFY keeps its index), pending/free arena slots (`slots`, which every MODIFY churns), the transform-only edit count (`moves`), and retire backlog as both a live gauge and an all-time peak. They are the numbers the four workload budgets above are measured against. Note which counters are cumulative, which are live and which are high-water marks — a peak reads like a stuck value when it is only recording a stall that has since cleared. Wiring them into the ImprovementData pipeline and the Application Tab stats pane is the remaining work.
 
 - [ ] Per-tab VRAM usage graphs: page count, `liveBytes`, `holeBytes`, matrix-table size, big-object list size.
 - [ ] Page fragmentation heatmap + compaction-trigger counters.
@@ -340,12 +340,13 @@ Why instance data is not paged alongside geometry: a 4 MB geometry page holds an
 |---|---|---:|---|
 | GeometryStore | 4 MB double-ended pages | ~6.5 GB for trivial solids | Immutable after publish; RCU clone on change |
 | InstanceArena | 64-byte records, slot-allocated | 640 MB live + hole overhead | **Records immutable while published**; edits write a new slot |
+| InstanceRegistry (CPU) | 40-byte entry per `gpuInstanceIndex` | 400 MB host RAM | Copy-thread owned, read lock-free by the pick resolve |
 | InstanceSlotOf | `uint` per `gpuInstanceIndex` | 40 MB | Mutated in place, one aligned 4-byte store |
 | VisibilityMask | `uint2` per `gpuInstanceIndex` | 80 MB | Mutated in place, aligned stores |
 | DrawTemplates | one per object | ~320 MB | Immutable; rebuilt when its geometry page is cloned |
 | VisibleIndirect | per active Viewport | capped, see Step 7 | Transient GPU output |
 
-The arena, the redirect table and the mask are all indexed by the same dense `gpuInstanceIndex`, and none of them knows anything about geometry pages.
+The arena, the redirect table and the mask are all indexed by the same dense `gpuInstanceIndex`, and none of them knows anything about geometry pages. The registry is the CPU-side half of that same index space — it is the *only* store here that maps back to `memoryID` and to a geometry page, and it never reaches the GPU. Both the arena and the registry are reserve-then-commit allocations (GPU tiles, host pages), so those byte figures are the fully-populated ceiling, not what an open tab costs.
 
 ### The write model
 
@@ -408,38 +409,48 @@ A lakh of cuboids is roughly one ring fill; a lakh of spheres is ~24 fills and ~
 
 The bug this fixes: `REMOVE` and `MODIFY` returned the matrix slot to `freeMatrixSlots` immediately, so a later `ADD` in the same batch could take it and overwrite the transform while in-flight frames still drew the pre-publish snapshot — one frame of an object wearing a stranger's transform. Highly visible, unlike the benign one-frame staleness discussed elsewhere.
 
-Slots vacated during a chunk now collect in a per-chunk list, are tagged at publish time with the global render fence, and are handed back to `freeMatrixSlots` only by the `safeRetireFence` sweep — the same rule and the same sweep that governs retired pages, snapshots and outgrown matrix tables. Small, self-contained, and the discipline the redirect table in Step 4 depends on.
+Slots vacated during a chunk now collect in a per-chunk list, are tagged at publish time with the global render fence, and are handed back to the free list only by the `safeRetireFence` sweep — the same rule and the same sweep that governs retired pages and snapshots. Small, self-contained, and the discipline the redirect table in Step 4 depends on. (Step 3 renamed this machinery from matrix slots to instance indices and made it REMOVE-only; outgrown matrix tables, the third thing the sweep used to free, no longer exist at all.)
 
 *Done when:* a REMOVE + ADD in one batch cannot reuse a slot until every monitor's fence has passed it. The `slots(pending/free)` telemetry counter shows the holding list draining.
 
-### Step 2 — Reserved-tile instance arena
+### Step 2 — Reserved-tile instance arena *(implemented)*
 
-Replace the per-tab world-matrix buffer with one **reserved (tiled) device-local resource** per tab: a large virtual range with 64 KB tiles committed on demand through `UpdateTileMappings` as the arena grows. 64 KB = 1024 records, so growth is fine-grained and an empty tab costs zero physical bytes.
+The per-tab world-matrix buffer is now one **reserved (tiled) device-local resource** per tab: `MV_MAX_INSTANCES_PER_TAB` (10,485,760) records × 64 B = 640 MB of GPU virtual address reserved at tab creation, with physical 64 KB tiles committed on demand through `UpdateTileMappings` as the arena grows. 64 KB = 1024 records, so growth is fine-grained and an empty tab costs zero physical bytes.
 
-The point is not merely avoiding a reallocation. The virtual address never changes for the tab's lifetime, which deletes:
+The point is not merely avoiding a reallocation. The virtual address never changes for the tab's lifetime, which deleted:
 
 - the whole-table copy in `GrowMatrixTable`, unaffordable at 640 MB;
-- the `retiredBuffers` path for matrix tables, and with it the "640 MB pinned until the slowest monitor catches up" hazard;
-- the `worldMatrixVAShared` / `worldMatrixDataShared` / `matrixCapacityShared` mirrors and their publish ordering, which exist *only* because the buffer address moves today.
+- the `retiredBuffers` path for matrix tables, and with it the "640 MB pinned until the slowest monitor catches up" hazard — `TabGeometryStorage` no longer has a retired-buffer queue at all;
+- the `worldMatrixVAShared` / `worldMatrixDataShared` / `matrixCapacityShared` mirrors and their publish ordering, which existed *only* because the buffer address moved. All four readers (scene, pick, highlight, `PrinterController`) now bind a plain `instanceArenaVA` written once at creation.
 
-Requires `TiledResourcesTier >= 1` (buffers) — verify at install time alongside the existing Heap Tier 2 requirement. Growth needs no fence gating, because newly committed tiles back indices that no published snapshot can reference. Moving to device-local memory removes the CPU-mapped pointer the pick resolve reads today to compute a world-space AABB centre, so that computation moves into the pick shader or onto a CPU-side transform shadow.
+*As implemented:*
 
-### Step 3 — Stable `gpuInstanceIndex` and the copy-thread registry
+- **One heap per growth step, not one per tile.** The step doubles from 4096 records (4 tiles, 256 KB), so ~12 heaps back the whole 640 MB range. One 64 KB heap per tile would be 10,240 allocations, against the same WDDM low-thousands guidance that motivates chained page doubling in Phase 7.
+- **`UpdateTileMappings` is issued on the copy queue.** It is a queue operation, not a command-list one; the copy thread owns arena growth, and the mapping is enqueued ahead of the `ExecuteCommandLists` that writes records into the new tiles. Growth needs no fence gating either, because newly committed tiles back indices beyond `instanceCount` that no published snapshot can reference. Verified against `TiledResourcesTier 3` hardware.
+- **Records now ride the upload ring.** A device-local arena is not CPU-mappable, so the plain `XMStoreFloat4x4` into a persistently mapped upload heap became a 64-byte ring staging plus one `CopyBufferRegion` per record, in the same chunk recording as the geometry. `EstimateStagingBytes` accounts for it.
+- **The pick resolve's world-space AABB centre moved onto a CPU-side transform shadow** — three floats per instance inside the Step 3 registry entry, written by the copy thread at upload time. Putting it in the pick shader was the alternative; the shader has no access to an object's AABB, so the shadow is both cheaper and the only one of the two that actually works without a second per-object GPU buffer.
 
-Separate identity from location. The copy thread becomes the sole owner of:
+`TiledResourcesTier >= 1` (buffers) is a baseline requirement, to be verified at install time alongside the existing Heap Tier 2 requirement; `InitD3DDeviceOnly` queries and logs the tier as a startup backstop.
+
+### Step 3 — Stable `gpuInstanceIndex` and the copy-thread registry *(implemented)*
+
+Identity is separated from location. The copy thread is the sole owner of a **per-tab** registry:
 
 ```text
 memoryID          -> gpuInstanceIndex     the only hash map
-gpuInstanceIndex  -> memoryID             flat array
-gpuInstanceIndex  -> generation           flat array
-gpuInstanceIndex  -> GeometryLocation     flat array (page, slot)
+gpuInstanceIndex  -> { memoryID, GeometryLocation(page, pageSlot),
+                       instanceSlot, worldCentre }                 flat array
 ```
 
-Only the first is a hash map; because the index is dense, everything else is a flat array. This matters concretely — three `unordered_map`s at 10M entries would cost well over a gigabyte of CPU node overhead, and today's single `objectLocation` map is already on that trajectory.
+Only the first is a hash map; because the index is dense, everything else is a flat array. This matters concretely — three `unordered_map`s at 10M entries would cost well over a gigabyte of CPU node overhead, and the single global `objectLocation` map this replaced was already on that trajectory.
 
-`gpuInstanceIndex` is identity, never a page location: it does not change when the object is modified or when an RCU clone moves it between GeometryPages. Engineering code keeps addressing objects by `memoryID` and never learns page coordinates or GPU indices. A transient handle may be cached in `META_DATA` but is never persisted to disk.
+*As implemented*, the reverse direction is **one array of 40-byte entries** rather than the three separate arrays sketched above (32 bytes until Step 4 added the object's current `instanceSlot` to it): the same bytes, one commit path, and one cache line per lookup — which is exactly what a pick does. The array is a `VirtualMemory` reservation with 64 KB blocks committed as the index space grows, mirroring the GPU arena. That is not only about sparseness: the *render* threads read entries, so the base address must never move under them, which a `std::vector` cannot promise. The `worldCentre` field is Step 2's transform shadow.
 
-The GPU pick id becomes `gpuInstanceIndex + 1` (it is `matrixIndex + 1` today), so a pick resolves in O(1) through the reverse array instead of the current linear scan over every object of every page. `IndirectCommand` carries `gpuInstanceIndex` in place of `matrixIndex` and stays 24 bytes.
+The `gpuInstanceIndex -> generation` array is **deliberately not built yet.** Nothing caches a GPU handle to validate against it, and the zombie interval below is already enforced by the fence-gated free list. Add the counter with the first handle cache.
+
+`gpuInstanceIndex` is identity, never a page location: it does not change when the object is modified or when an RCU clone moves it between GeometryPages. The clone step therefore re-points the registry with a direct array write per live record — the identity lookup this used to need is gone. Engineering code keeps addressing objects by `memoryID` and never learns page coordinates or GPU indices. A transient handle may be cached in `META_DATA` but is never persisted to disk.
+
+The GPU pick id is now `gpuInstanceIndex + 1` (it was `matrixIndex + 1`), so a pick resolves in O(1) through the registry instead of a linear scan over every object of every page. `IndirectCommand` carries `gpuInstanceIndex` in place of `matrixIndex` and stays 24 bytes.
 
 Deletion uses a zombie interval:
 
@@ -447,16 +458,25 @@ Deletion uses a zombie interval:
 active -> absent from newly published snapshots -> zombie -> all old frames retire -> reusable index
 ```
 
-Only once every snapshot that could reference the index is past its retire fence may the index return to the free list, with its generation incremented. This prevents a stale command or an old page from addressing a newly assigned object.
+Only once every snapshot that could reference the index is past its retire fence may the index return to the free list. This prevents a stale command or an old page from addressing a newly assigned object. Mechanically it is the same holding list and the same `safeRetireFence` sweep that Step 1 built for matrix slots; what changed is that **MODIFY no longer vacates anything**, because identity survives a modify. Only REMOVE starts a zombie interval.
 
-### Step 4 — Instance redirect table (the move path)
+**A regression this step opened, and Step 4 closed.** With the index stable but no redirect table yet, the arena was addressed directly by `gpuInstanceIndex`, so a MODIFY rewrote the record *in place*. A frame still drawing the pre-publish snapshot read that index while the copy queue overwrote it — one frame of a stale, or if the 64-byte copy were observed mid-write garbled, transform. That is invariant 2's hazard, and it was accepted for exactly one step because interactive 3D drag does not exist yet, so MODIFY fires at property-edit rates. Step 4's redirect removed it: a fresh `instanceSlot` plus one aligned 4-byte flip.
 
-Add `InstanceSlotOf[gpuInstanceIndex]` plus the slot allocator, and switch the scene, pick and highlight vertex shaders to the two-load form shown in *The write model*. `MODIFY` then splits into two paths:
+### Step 4 — Instance redirect table (the move path) *(implemented)*
+
+`InstanceSlotOf[gpuInstanceIndex]` is a second reserved-tile buffer alongside the arena (4 bytes per index, 40 MB of reserved VA, one 64 KB tile = 16384 entries), and the scene and pick vertex shaders now use the two-load form shown in *The write model*. Besides being the move path, this closed the in-place-record-write window Step 3 knowingly opened. `MODIFY` splits into two paths:
 
 - **transform-only** → new slot, write record, atomic redirect flip. No geometry page clone, no argument rebuild, nothing published.
-- **geometry changed** → today's path (relocate into a cloned page, rebuild that page's arguments) plus a new slot.
+- **geometry changed** → the existing path (relocate into a cloned page, rebuild that page's arguments) plus a new slot.
 
 This is the step that pays for the whole design: "move 1000 scattered objects" drops from up to 4 GB of page cloning to ~68 KB of writes. *Done when:* moving N scattered objects clones zero geometry pages.
+
+*As implemented:*
+
+- **The flip is a 4-byte `CopyBufferRegion` on the copy queue, not a CPU store.** Both buffers are device-local, so the record write and the flip share one ring allocation and one command list; the copy queue's strict in-order execution is what guarantees the record lands before the redirect that publishes it — the same guarantee the page clone already relies on. The 4-byte write is naturally aligned and both its old and new values are valid slots, which is invariant 2 exactly.
+- **A transform-only chunk publishes nothing, and that turned out to be a trap.** The per-chunk handover of vacated identities sat *after* the "nothing to publish → continue" early exit, so a chunk of pure moves would have leaked one slot per edit. The handover is now a lambda called from both exits. It still has to run *after* `PublishPages` on the publishing path: the fence it reads must be at or beyond the one the retired pages were tagged with, or a frame submitted in between still draws the pre-publish snapshot naming a just-freed index.
+- **Two free lists, two different churn rates.** An index is vacated only by REMOVE; a slot is vacated by every MODIFY. Both ride the same `safeRetireFence` sweep, and the heartbeat now reports them separately (`idx(pending/free)`, `slots(pending/free)`, `moves`).
+- **The transform-only path has no producer yet.** It is keyed off a MODIFY whose payload carries a world matrix but empty vertex/index vectors (`IsTransformOnlyEdit`). Nothing emits that today, because every geometry generator bakes world positions into its vertices and leaves `GeometryData::worldMatrix` identity — so a "move" currently regenerates geometry and takes the geometry-changed branch. Giving the generators a real world matrix is the remaining prerequisite for the Phase 5 hot-drag item, and it is now the *only* one.
 
 An InstanceRecord is exactly 64 bytes:
 
@@ -472,7 +492,17 @@ struct InstanceRecord {
 }; // 64 bytes
 ```
 
-The final affine row is implicit, so shaders must use an explicit affine-transform helper — the record is no longer safe to hand to a generic `float4x4` `mul`. Define the row/column convention byte-for-byte before writing any of it: the table today stores `transpose(world)` and the shaders do `mul(float4(pos,1), world)`, so three `float4`s of a transposed matrix are not the obvious rows. Every consumer changes together: `ShaderSceneVertex`, `ShaderScenePickVertex`, the highlight path, the rotation-cube overlay and the CPU pick resolve. The three transform vectors retain the 3×3 part used for normals; the uniform-scale assumption stands, with an inverse-transpose or separate normal-transform policy left to a later revision.
+The final affine row is implicit, so shaders must use an explicit affine-transform helper — the record is no longer safe to hand to a generic `float4x4` `mul`. The convention, settled byte-for-byte: **`transformA/B/C` are the first three rows of `transpose(world)`, i.e. the three columns of the row-vector world matrix.**
+
+```text
+transformA = (W00, W10, W20, tx)      point  : dot(float4(p,1), transformA/B/C)
+transformB = (W01, W11, W21, ty)      normal : dot(n, transformA/B/C .xyz)
+transformC = (W02, W12, W22, tz)      dropped row is always (0,0,0,1)
+```
+
+That is byte-identical to the leading 48 bytes of the `XMFLOAT4X4` the arena stored before this step, so the CPU writer is still one `XMMatrixTranspose` — it just stops copying the last row. Consumers that changed together: `ShaderSceneVertex`, `ShaderScenePickVertex` (which duplicates the struct — there is no `.hlsli` include mechanism in the build, so the two definitions carry cross-reference comments) and the highlight path, which reuses the scene vertex shader. The rotation-cube overlay did **not** change: it has its own root signature and never reads instance data. The CPU pick resolve did not change either — since Step 2 it reads the registry's world-centre shadow rather than a matrix.
+
+The three transform vectors retain the 3×3 part used for normals; the uniform-scale assumption stands, with an inverse-transpose or separate normal-transform policy left to a later revision.
 
 Appearance is packed into the record for authored, infrequently changed state: material, base colour, opaque/transparent classification, opacity, render flags. High-frequency interaction state (hover, selection, SubTab membership, temporary hide) stays **out** of it — that state lives in Step 5's mask, so an interaction never allocates a slot.
 
@@ -540,7 +570,7 @@ Four constraints must be designed in rather than discovered:
 Two arenas accumulate holes. Neither is compacted eagerly; both wait until a hole threshold is crossed.
 
 - **Geometry pages** — as already specified in *Defragmentation logic* above: when a page's `holeBytes` crosses ~25%, its next RCU clone copies live ranges packed (per-object `CopyBufferRegion` from the placement records) instead of a whole-page `CopyResource`, at most one page per batch. The argument/template rebuild is mandatory on every clone anyway, so it picks up the remapped offsets for free. **Cross-page** compaction is the new part, and it needs a deliberate pass rather than riding a clone.
-- **Instance arena** — every move burns a slot, so holes accumulate at edit rate. A pass relocates live records and rewrites the affected redirect entries. `gpuInstanceIndex` is untouched throughout, which is precisely what the redirect indirection buys.
+- **Instance arena** — every move burns a slot, so holes accumulate at edit rate. Note that the fence-gated free list already recycles them, so the arena does not *grow* without bound; what a pass buys is index contiguity, by relocating live records and rewriting the affected redirect entries. `gpuInstanceIndex` is untouched throughout, which is precisely what the redirect indirection buys.
 
 Index contiguity is deliberately not maintained between passes, and no allocation policy attempts to preserve it. None of this is in the first implementation.
 

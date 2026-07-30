@@ -34,6 +34,7 @@
 #include "ConstantsApplication.h"
 #include "MemoryManagerGPU.h"
 #include "UserInterface-DirectX12.h"
+#include "VirtualMemory.h"
 #include "डेटा.h"
 #include "Selection3D-DirectX12.h"
 #include "RenderScene3D-DirectX12.h"
@@ -189,8 +190,11 @@ struct GpuCopyStats {
     std::atomic<uint64_t> liveRetireBacklog{ 0 };
     std::atomic<uint64_t> peakRetireBacklog{ 0 };
     std::atomic<uint64_t> maxActivePages{ 0 };  // Largest active page count seen in one tab.
-    std::atomic<uint64_t> pendingSlots{ 0 };    // Matrix slots waiting on a fence (Step 1).
-    std::atomic<uint64_t> freeSlots{ 0 };       // Matrix slots available for reuse.
+    std::atomic<uint64_t> pendingIndexes{ 0 };  // gpuInstanceIndexes in their zombie interval (Step 3).
+    std::atomic<uint64_t> freeIndexes{ 0 };     // gpuInstanceIndexes available for reuse.
+    std::atomic<uint64_t> pendingSlots{ 0 };    // Arena slots waiting on a fence (Step 4).
+    std::atomic<uint64_t> freeSlots{ 0 };       // Arena slots available for reuse.
+    std::atomic<uint64_t> transformOnlyEdits{ 0 }; // Moves that cloned zero geometry pages (Step 4).
 };
 extern GpuCopyStats gCopyStats;
 
@@ -218,13 +222,11 @@ struct TabGeometryStorage {
     // Cleanup queues for the Copy thread
     struct RetiredSnapshot { GeometryPageSnapshot* snapshot; uint64_t retireFence; };
     struct RetiredPage { std::unique_ptr<GeometryPage> page; uint64_t retireFence; };
-    // Outgrown world-matrix buffers (GrowMatrixTable). Kept alive - still mapped - until every
-    // monitor's fence passes retireFence: in-flight frames may bind the old VA and the pick
-    // resolve may still read the old mapped pointer. Final Release unmaps implicitly.
-    struct RetiredBuffer { Microsoft::WRL::ComPtr<ID3D12Resource> buffer; uint64_t retireFence; };
+    // There is no retired-buffer queue: the only resource that ever outgrew itself was the
+    // world-matrix table, and the Step 2 instance arena grows by committing tiles behind a fixed
+    // virtual address instead of allocating a bigger buffer and copying into it.
     std::vector<RetiredSnapshot> retiredSnapshots;
     std::vector<RetiredPage> retiredPages;
-    std::vector<RetiredBuffer> retiredBuffers;
 
     /* TODO: RCU version of all of the following vectors need to be developed. Only 1st done so far.
     std::vector<std::unique_ptr<GeometryPage>> opaquePages; // Opaque geometry pages
@@ -236,8 +238,108 @@ struct TabGeometryStorage {
     */
 };
 
+/* Instance arena geometry (graphics.md, 10M plan Step 2). D3D12 buffer tiles are always 64 KB, so a
+tile holds a whole number of records (1024 at 64 B) or redirect entries (16384 at 4 B), and every
+growth step lands on an element boundary. */
+constexpr uint32_t kInstanceArenaTileBytes   = 65536;
+constexpr uint32_t kInstanceInitialCapacity  = 4096; // 4 record tiles. First step the old table used.
+constexpr uint32_t kInvalidInstanceIndex     = 0xFFFFFFFFu;
+constexpr uint32_t kInvalidInstanceSlot      = 0xFFFFFFFFu;
+
+/* A reserved (tiled) DEVICE-LOCAL buffer whose virtual address never moves: the address range is
+reserved in full at tab creation and physical 64 KB tiles are committed on demand as it grows. Two
+per tab (10M plan Steps 2 and 4):
+
+  instanceArena  - 64-byte InstanceRecords, addressed by instanceSlot
+  instanceSlotOf - 4-byte slot ids,         addressed by gpuInstanceIndex
+
+A fixed VA is the whole point. It deletes the grow-copy, the retired-buffer queue and the atomic
+address mirrors that a doubling committed buffer forces on every reader.
+
+Copy-thread-owned. `va` is written once before any thread can see the tab and read lock-free by the
+render threads thereafter; `capacity` is copy-thread-only. */
+struct TiledInstanceBuffer {
+    Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+    D3D12_GPU_VIRTUAL_ADDRESS va = 0;
+    // One heap per growth step, and the step doubles, so a dozen heaps back the whole range. One
+    // heap per 64 KB tile would be thousands of allocations, against WDDM guidance.
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Heap>> heaps;
+    uint32_t elementBytes = 0;
+    uint32_t capacity = 0;    // Elements backed by committed tiles.
+    uint32_t maxCapacity = 0; // Elements covered by the reservation.
+
+    void Initialize(uint32_t elementBytes, uint32_t maxCapacity, const wchar_t* debugName);
+    void Shutdown();
+    // Commit tiles until at least minimumCapacity elements are backed. Returns true when tiles were
+    // actually committed (the caller may then need to refresh a descriptor). Throws HrException on
+    // allocation failure or when the reservation is exhausted.
+    bool Grow(uint32_t minimumCapacity);
+    uint32_t ElementsPerTile() const { return kInstanceArenaTileBytes / elementBytes; }
+};
+
+/* One entry of a tab's identity registry, addressed by the same dense gpuInstanceIndex as the
+instance arena (graphics.md, 10M plan Step 3). The design lists the reverse direction as three
+separate flat arrays; one array of 32-byte entries is the same bytes with one commit path and one
+cache line per lookup, which is what a pick actually does, so that is what is built here. */
+struct InstanceRegistryEntry {
+    uint64_t memoryID = 0;        // 0 = the index is free, or inside its post-REMOVE zombie interval.
+    GeometryPage* page = nullptr; // Geometry page currently holding the object - a movable LOCATION,
+    uint32_t pageSlot = 0;        // and its record index inside that page. Never an identity.
+    // Arena slot currently holding this object's 64-byte InstanceRecord, i.e. the CPU's copy of
+    // what InstanceSlotOf[gpuInstanceIndex] says on the GPU. Kept here so a transform edit knows
+    // which slot to hand back once its fence clears (10M plan Step 4).
+    uint32_t instanceSlot = kInvalidInstanceSlot;
+    // World-space AABB centre, written by the copy thread on every transform edit. This is the
+    // "CPU-side transform shadow" Step 2 asks for: the arena is device-local now, so the pick
+    // resolve can no longer read a mapped matrix pointer and transform a local AABB centre itself.
+    float worldCenterX = 0.0f, worldCenterY = 0.0f, worldCenterZ = 0.0f;
+};
+static_assert(sizeof(InstanceRegistryEntry) == 40,
+    "InstanceRegistryEntry must stay 40 bytes - one cache line covers any single lookup.");
+
+/* Copy-thread-owned identity registry for one tab. memoryID -> gpuInstanceIndex is the ONLY hash
+map; everything keyed BY the dense index is the flat array above, because three unordered_maps at
+10M entries would cost well over a gigabyte in node overhead alone.
+
+The array is a VirtualMemory reservation with 64 KB blocks committed as the index space grows. That
+is not only about sparseness: the RENDER threads read entries (the pick resolve), so the base
+address must never move under them - a std::vector would relocate. Entries are written by the copy
+thread and read by render threads without a lock, the same benign staleness contract the mapped
+matrix table used to have. */
+struct InstanceRegistry {
+    static constexpr uint64_t kCommitBlockBytes = 64 * 1024; // 2048 entries per commit.
+
+    InstanceRegistryEntry* entries = nullptr; // Fixed for the tab's lifetime. Render threads read it.
+    uint64_t reservedBytes = 0;
+    uint64_t committedBytes = 0;
+    std::atomic<uint32_t> committedCount{ 0 }; // Entries addressable right now. Only ever grows.
+    std::unordered_map<uint64_t, uint32_t> indexOfMemoryId; // The one hash map. Copy thread only.
+
+    void Initialize(uint32_t maxInstances);
+    void Shutdown();
+    void Commit(uint32_t count); // Make [0, count) addressable. Copy thread only.
+    // Drop every mapping and every page pointer. The committed pages stay - the tab is being torn
+    // down and its VA reservation is released by Shutdown.
+    void Clear();
+
+    // Copy-thread accessors. The caller has already ensured the index was allocated.
+    InstanceRegistryEntry& operator[](uint32_t index) { return entries[index]; }
+    uint32_t Find(uint64_t memoryID) const {
+        auto it = indexOfMemoryId.find(memoryID);
+        return it == indexOfMemoryId.end() ? kInvalidInstanceIndex : it->second;
+    }
+
+    // Render-thread accessor: bounds-checked against the committed range, and copies the entry out
+    // so the caller never holds a reference into memory the copy thread is writing.
+    bool TryRead(uint32_t index, InstanceRegistryEntry& out) const {
+        if (!entries || index >= committedCount.load(std::memory_order_acquire)) return false;
+        out = entries[index];
+        return true;
+    }
+};
+
 /* DirectX 12 resources are organized at 3 levels:
-1. The Data   : Per Tab (Jumbo Buffers for geometry data, materials, textures, 
+1. The Data   : Per Tab (Jumbo Buffers for geometry data, materials, textures,
     Pipeline State Object, Root Signature, Command Signature etc.)
 2. The Target : Per Window (Swap Chain, Render Targets, Depth Stencil Buffer etc.)
 3. The Worker : Per Render Thread. 1 For each monitor. (Command Queue, Command List etc.
@@ -257,36 +359,48 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
     // Copy thread will update the following map whenever it adds/removes/modifies an object on GPU.
     std::map<uint64_t, GpuResourceVertexIndexInfo> objectsOnGPU;
 
-    //Copy thread owns/writes following variables exclusively. Render threads must NOT touch them:
-    //the copy thread regrows (doubles) the table when full, so the ComPtr/pointer/capacity here can
-    //change mid-session. Render threads read the *Shared atomic mirrors below instead.
-    ComPtr<ID3D12Resource> worldMatrixBuffer; // TODO: Doublebuffer it per frame.
-    UINT8 * pWorldMatrixDataBegin = nullptr;
-    uint32_t               matrixCapacity = 4096;
-    uint32_t               matrixCount = 0;
-	std::vector<uint32_t>  freeMatrixSlots;   // free-list for matrix indices.
-    //To enable re-use of slots when objects are removed.
+    /* THE INSTANCE ARENA AND ITS REDIRECT TABLE (graphics.md, 10M plan Steps 2 and 4).
 
-    // Slots released by REMOVE / MODIFY, held until every monitor's render fence has passed the
-    // value tagged at publish time (graphics.md, 10M plan Step 1 / live defect 2). Returning them
-    // to freeMatrixSlots immediately let a later ADD in the SAME batch pop the slot and overwrite
-    // the transform while render threads were still drawing the pre-publish snapshot, whose
-    // indirect buffer still carried the removed object's command - one frame of an object wearing
-    // another object's transform. The safeRetireFence sweep in GpuCopyThread does the handover.
-    struct PendingMatrixSlot { uint32_t slot; uint64_t retireFence; };
-    std::vector<PendingMatrixSlot> pendingFreeMatrixSlots;
+        instanceSlotOf[gpuInstanceIndex] -> instanceSlot        4 bytes, mutated in place
+        instanceArena[instanceSlot]      -> InstanceRecord     64 bytes, immutable while published
 
-    // Lock-free mirrors for RENDER-thread reads (scene/highlight/pick bind the VA each frame; the
-    // pick resolve reads the mapped pointer + capacity). GrowMatrixTable republishes them only
-    // AFTER pushing the old buffer onto storage.retiredBuffers, so a reader holding stale values
-    // still dereferences a live (retired-but-alive) buffer. Readers must load the snapshot first:
-    // a snapshot referencing matrixIndex >= old capacity is published after these stores, so the
-    // snapshot acquire-load guarantees visibility of the matching (or newer) mirror values.
-    std::atomic<D3D12_GPU_VIRTUAL_ADDRESS> worldMatrixVAShared{ 0 };
-    std::atomic<UINT8*>   worldMatrixDataShared{ nullptr };
-    std::atomic<uint32_t> matrixCapacityShared{ 0 };
+    The indirection is what makes a move cost nothing. A transform edit allocates a FRESH slot,
+    writes the record where no published frame can reach it, then flips one naturally-aligned
+    4-byte redirect entry. A concurrent reader sees the old slot or the new slot - both hold valid
+    transforms - so the worst case is one frame of staleness on one monitor. No geometry page is
+    cloned, no argument buffer is rebuilt, no snapshot is published. Rewriting the 64-byte record
+    in place instead (which is what Step 3 shipped, knowingly) can be observed half-written: a
+    garbage matrix, not a stale one.
 
-	// Initially rootSignature & pipelineState were in PerWindow, but now moved here, 
+    Both buffers have a virtual address fixed for the tab's lifetime - see TiledInstanceBuffer for
+    what that deleted. Copy thread owns every field below; render threads read only the two VAs and
+    the registry's committed range. */
+    TiledInstanceBuffer instanceArena;  // 64-byte records, indexed by instanceSlot.
+    TiledInstanceBuffer instanceSlotOf; // 4-byte slot ids, indexed by gpuInstanceIndex.
+
+    uint32_t instanceCount = 0;    // Highest gpuInstanceIndex ever handed out (dense high-water).
+    uint32_t instanceSlotCount = 0;// Highest instanceSlot ever handed out.
+    std::vector<uint32_t> freeInstanceIndexes; // Past their zombie interval, reusable.
+    std::vector<uint32_t> freeInstanceSlots;   // Ditto for arena slots.
+
+    /* Indices vacated by REMOVE and slots vacated by REMOVE / MODIFY, held until every monitor's
+    render fence has passed the value tagged after the chunk's copies completed - the zombie
+    interval of Step 3, and the same mechanism Step 1 shipped for matrix slots. Handing either back
+    immediately would let a later edit in the SAME batch take it and overwrite live data while
+    render threads are still drawing frames that reference it: for an index, the pre-publish
+    snapshot's indirect buffer still names it; for a slot, an in-flight frame may still be reading
+    the pre-flip redirect value. The safeRetireFence sweep does both handovers.
+
+    Note the asymmetry: MODIFY burns a SLOT but never an INDEX, because gpuInstanceIndex is the
+    object's stable identity and survives every edit. */
+    struct PendingInstanceIndex { uint32_t index; uint64_t retireFence; };
+    std::vector<PendingInstanceIndex> pendingFreeInstanceIndexes;
+    std::vector<PendingInstanceIndex> pendingFreeInstanceSlots;
+
+    // memoryID <-> gpuInstanceIndex and the object's current geometry location (Step 3).
+    InstanceRegistry registry;
+
+	// Initially rootSignature & pipelineState were in PerWindow, but now moved here,
     // when adding commandSignature and indirect drawing infrastructure.
     // Since Root Signature and Pipeline State are closely tied to the command signature, 
     ComPtr<ID3D12RootSignature> rootSignature;
@@ -500,6 +614,11 @@ public:
 	ComPtr<ID3D12Device> device; //Very Important: We support EXACTLY 1 GPU device only in this version.
     bool isGPUEngineInitialized = false; //TODO: To be implemented.
     DXGI_FORMAT rttFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    /* Tier 1 (buffers) is what the per-tab instance arena needs - a reserved buffer whose 64 KB
+    tiles are committed on demand. It is a baseline requirement alongside Heap Tier 2 and belongs in
+    the installer's hardware check; the query here is what tells us at startup if that check was
+    skipped. Every GPU shipped since ~2015 reports Tier 1 or better. */
+    D3D12_TILED_RESOURCES_TIER tiledResourcesTier = D3D12_TILED_RESOURCES_TIER_NOT_SUPPORTED;
 
     DX12ResourcesUI uiResources;
 
