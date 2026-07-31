@@ -19,6 +19,11 @@ static const int MV_MAX_TABS = 1024;//Maximum number of tabs.
 DATASETTAB avoids std::vector reallocation issues and enables delayed slot release after the
 respective GPU assets are drained.*/
 static const int MV_MAX_SUBTABS = 128;
+/*Containers a single sub-tab may draw at once (graphics.md, 10M plan Step 6). A sub-tab holds a SET
+of containers of one type, not a single one. Fixed and small on purpose: render threads read the set
+lock-free every frame, so it must be inline storage rather than a heap buffer the engineering thread
+could reallocate underneath them.*/
+static const int MV_MAX_CONTAINERS_PER_SUBTAB = 8;
 /*Maximum simultaneously GPU-resident Scene3D objects in ONE tab. This is the size of the per-tab
 instance arena's reserved (tiled) virtual address range: 10485760 records x 64 bytes = 640 MB of GPU
 virtual address reserved per tab, with physical 64 KB tiles committed only as the arena grows, so an

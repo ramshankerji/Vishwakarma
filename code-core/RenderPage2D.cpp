@@ -76,7 +76,7 @@ void ClearLineCreationState(TabCad2DStorage& storage) {
 static Cad2DViewState& Cad2DInputView(DATASETTAB& tab) {
     int slot = InputViewSlot(tab);
     if (slot < 0 || slot >= MV_MAX_SUBTABS) slot = 0;
-    return tab.cad2d->views[slot];
+    return tab.viewports[slot].page2DView; // Pan/zoom lives in the Viewport (10M plan Step 6).
 }
 
 bool Page2DCoordinateFromInput(DATASETTAB& tab, const ACTION_DETAILS& input,

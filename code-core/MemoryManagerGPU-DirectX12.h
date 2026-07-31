@@ -179,6 +179,7 @@ struct GpuCopyStats {
     std::atomic<uint64_t> chunks{ 0 };          // Chunks published == copy submits == fence waits.
     std::atomic<uint64_t> commands{ 0 };        // ADD / MODIFY / REMOVE commands applied.
     std::atomic<uint64_t> pagesCloned{ 0 };     // RCU clones performed.
+    std::atomic<uint64_t> pagesCompacted{ 0 };  // Clones that packed live ranges instead of copying whole.
     std::atomic<uint64_t> clonedBytes{ 0 };     // Bytes moved by those clones.
     std::atomic<uint64_t> ringBytes{ 0 };       // Bytes staged through the ring.
     std::atomic<uint64_t> oversizeStaging{ 0 }; // Allocations that had to bypass the ring.
@@ -195,6 +196,8 @@ struct GpuCopyStats {
     std::atomic<uint64_t> pendingSlots{ 0 };    // Arena slots waiting on a fence (Step 4).
     std::atomic<uint64_t> freeSlots{ 0 };       // Arena slots available for reuse.
     std::atomic<uint64_t> transformOnlyEdits{ 0 }; // Moves that cloned zero geometry pages (Step 4).
+    std::atomic<uint64_t> maskWrites{ 0 };      // VisibilityMask entries written (Step 5).
+    std::atomic<uint64_t> hiddenInstances{ 0 }; // Objects hidden in at least one SubTab right now.
 };
 extern GpuCopyStats gCopyStats;
 
@@ -211,6 +214,16 @@ struct GeometryPageSnapshot {// A lightweight, immutable snapshot of the current
     // We use raw pointers here because the Render thread only needs to observe them.
     // Iterating over a contiguous array of pointers is extremely cache-friendly.
     std::vector<GeometryPage*> pages;
+
+    /* containerMemoryId -> that container's pages (graphics.md, 10M plan Step 6, item 4). Built
+    once by the copy thread when the snapshot is published, then strictly read-only - the same
+    immutability the pages vector already has.
+
+    Without it every view walked every page in the tab and paid two IA binds per page just to
+    discover its ExecuteIndirect count was 0. With it a SubTab visits only the pages it can
+    actually draw, so the container test happens ABOVE the binds rather than after them, and a
+    tab holding thousands of pages across many containers stops costing every view the whole set. */
+    std::unordered_map<uint64_t, std::vector<GeometryPage*>> pagesByContainer;
 };
 
 struct TabGeometryStorage {
@@ -247,11 +260,12 @@ constexpr uint32_t kInvalidInstanceIndex     = 0xFFFFFFFFu;
 constexpr uint32_t kInvalidInstanceSlot      = 0xFFFFFFFFu;
 
 /* A reserved (tiled) DEVICE-LOCAL buffer whose virtual address never moves: the address range is
-reserved in full at tab creation and physical 64 KB tiles are committed on demand as it grows. Two
-per tab (10M plan Steps 2 and 4):
+reserved in full at tab creation and physical 64 KB tiles are committed on demand as it grows. Three
+per tab (10M plan Steps 2, 4 and 5):
 
   instanceArena  - 64-byte InstanceRecords, addressed by instanceSlot
   instanceSlotOf - 4-byte slot ids,         addressed by gpuInstanceIndex
+  visibilityMask - 8-byte SubTab membership words, addressed by gpuInstanceIndex
 
 A fixed VA is the whole point. It deletes the grow-copy, the retired-buffer queue and the atomic
 address mirrors that a doubling committed buffer forces on every reader.
@@ -377,6 +391,27 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
     the registry's committed range. */
     TiledInstanceBuffer instanceArena;  // 64-byte records, indexed by instanceSlot.
     TiledInstanceBuffer instanceSlotOf; // 4-byte slot ids, indexed by gpuInstanceIndex.
+
+    /* THE VISIBILITY MASK (10M plan Step 5). 8 bytes per gpuInstanceIndex - a 64-bit SubTab
+    membership word, bit N = visible in the sub-tab occupying slot N. Hiding or showing an object is
+    ONE aligned write here: no geometry clone, no argument rebuild, no snapshot publish, no arena
+    slot burned. It is grown in lockstep with instanceSlotOf because both are addressed by the same
+    dense index, and both are bound as ROOT descriptors, which carry no bounds check - a read past
+    the committed tiles is undefined, not clamped. */
+    TiledInstanceBuffer visibilityMask; // 8-byte membership words, indexed by gpuInstanceIndex.
+
+    /* CPU shadow of every index whose mask is NOT kVisibleInAllSubTabs, i.e. exactly the objects
+    hidden somewhere. Two jobs, both of which would otherwise need a compute dispatch over all 10M
+    entries (and the shader-visible descriptor heap that does not exist until Step 7):
+
+      - a SET_VISIBILITY names one sub-tab bit, so the copy thread needs the object's CURRENT word
+        to compute the new one;
+      - retiring a sub-tab slot must clear that bit everywhere before the slot is reused, and this
+        bounds that sweep by the number of hidden objects instead of by the index space.
+
+    Copy-thread-owned, like the registry. Entries are erased on REMOVE and when a mask returns to
+    the all-visible default, so an unhidden scene costs nothing. */
+    std::unordered_map<uint32_t, uint64_t> hiddenInstanceMasks;
 
     uint32_t instanceCount = 0;    // Highest gpuInstanceIndex ever handed out (dense high-water).
     uint32_t instanceSlotCount = 0;// Highest instanceSlot ever handed out.
@@ -685,9 +720,13 @@ public:
     void InitD3DPerTab(DX12ResourcesPerTab& tabRes); // Call this when a new Tab is created
     void InitD3DPerWindow(DX12ResourcesPerWindow& dx, HWND hwnd, ID3D12CommandQueue* commandQueue);
     // monitorId: index into gpu.screens[] for DPI/physical info used by UI layout calculations
+    // containers: the SubTab's container set - only their pages are visited (Step 6).
+    // subTabBit: which of the 64 VisibilityMask bits this view tests, i.e. the sub-tab slot being
+    // drawn, or kNoSubTabBit when the view has no mask-addressable bit (slot >= 64, or no sub-tab).
     void RenderScene3D(ID3D12GraphicsCommandList* cmdList, //Called by per monitor render thread.
         DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage,
-        const CameraState& camera, int monitorId, uint64_t activeContainerMemoryId);
+        const CameraState& camera, int monitorId, const SubTabContainerSet& containers,
+        uint32_t subTabBit);
     void WaitForPreviousFrame(const DX12ResourcesPerRenderThread& dx);
     void ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UINT newHeight);
 

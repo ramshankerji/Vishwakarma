@@ -32,7 +32,8 @@ SelectionState. */
 struct DX12ResourcesPerTab;
 struct DX12ResourcesPerWindow;
 struct TabGeometryStorage;
-struct CameraState; // RenderScene3D.h
+struct CameraState;         // RenderScene3D.h
+struct SubTabContainerSet;  // RenderScene3D.h - the containers a SubTab draws (10M plan Step 6).
 
 enum class PickPurpose : uint32_t {
     None = 0,
@@ -126,17 +127,21 @@ void CleanupSelection3DResources(DX12ResourcesPerTab& tabRes);
 // Draw selection highlight + rotation-center cube into the currently bound scene render target.
 // Must be called after RenderScene3D (so b0 view-proj constants are already populated) and
 // while the scene RTV/DSV + scene viewport are still bound.
+// subTabBit: the VisibilityMask bit this view tests - see शंकर::RenderScene3D. The highlight reuses
+// the scene vertex shader, so a hidden object stops being highlighted for free.
 void RecordSelectionOverlays(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage, SelectionState& selection,
     const CameraState& camera, const DirectX::XMMATRIX& viewProj, int topUIHeightPx, int sceneWidth,
-    int sceneHeight, uint64_t activeContainerMemoryId);
+    int sceneHeight, const SubTabContainerSet& containers, uint32_t subTabBit);
 
 // Service a pending pick request (records an id+depth pass + readback) and publish any completed
 // pick result back to SelectionState. Uses winRes.constantBuffer for the b0 view-proj constants.
+// subTabBit must match the visible scene's: an object the user cannot see must not be clickable.
 void ServicePick(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage, SelectionState& selection,
     PickPassContext& ctx, int monitorId, const DirectX::XMMATRIX& viewProj,
-    int topUIHeightPx, int sceneWidth, int sceneHeight, uint64_t activeContainerMemoryId);
+    int topUIHeightPx, int sceneWidth, int sceneHeight, const SubTabContainerSet& containers,
+    uint32_t subTabBit);
 
 // Called after the frame's fence is signaled: promotes a just-recorded pick to in-flight.
 void FinalizePickFence(PickPassContext& ctx, uint64_t signaledFenceValue);

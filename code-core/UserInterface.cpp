@@ -2191,7 +2191,7 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
             int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
             if (GetVisibleSceneViewportForTab(tab, viewportWidth, viewportHeight, viewportTop) &&
                 viewportWidth > 0 && viewportHeight > 0) {
-                const Cad2DViewState& view = tab.cad2d->views[page2DViewSlot];
+                const Cad2DViewState& view = tab.viewports[page2DViewSlot].page2DView;
                 const float zoom = std::max(
                     view.zoomPixelsPerCU.load(std::memory_order_acquire),
                     kCad2DZoomMinPixelsPerCU);

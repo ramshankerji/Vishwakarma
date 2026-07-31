@@ -55,6 +55,11 @@ void InitializeApplicationTab(DATASETTAB& tab) {
         const uint16_t slot = static_cast<uint16_t>(kind - 1);
         InternalSubTab& view = tab.subTabs[slot];
         view.containerMemoryId = ContainerIdForAppView(static_cast<AppViewKind>(kind));
+        // Application-tab views hold no geometry, but the set must still be seeded: the compositor
+        // resolves what to draw from it, and an empty set would mean "render nothing" rather than
+        // "render this container" (10M plan Step 6).
+        view.containers.Clear();
+        view.containers.Add(view.containerMemoryId);
         view.title = kAppViews[kind - 1].bandTitle;
         tab.subTabStates[slot].store(SUBTAB_OPEN, std::memory_order_release);
         tab.subTabIndexesA[slot] = slot;

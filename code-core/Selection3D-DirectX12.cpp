@@ -256,10 +256,26 @@ void BindPageBuffers(ID3D12GraphicsCommandList* cmd, GeometryPage& page) {
     cmd->IASetIndexBuffer(&ibv);
 }
 
-bool PageIsRenderable(const GeometryPage& page, uint64_t activeContainerMemoryId) {
+// Container membership is no longer checked here: callers reach pages through the snapshot's
+// container directory, so a page they see already belongs to the SubTab (10M plan Step 6).
+bool PageIsRenderable(const GeometryPage& page) {
     return page.published.load(std::memory_order_acquire) && page.indirectCount != 0 &&
-        page.vertexHead != 0 && page.indexTail != page.pageSize &&
-        activeContainerMemoryId != 0 && page.containerMemoryId == activeContainerMemoryId;
+        page.vertexHead != 0 && page.indexTail != page.pageSize;
+}
+
+// Visit every page of every container in the SubTab's set. Mirrors the loop in RenderScene3D so
+// the pick and highlight passes see exactly the pages the visible scene drew.
+template <typename Fn>
+void ForEachSubTabPage(const GeometryPageSnapshot& snapshot, const SubTabContainerSet& containers,
+    Fn&& visit) {
+    for (uint8_t c = 0; c < containers.count; ++c) {
+        auto containerPages = snapshot.pagesByContainer.find(containers.ids[c]);
+        if (containerPages == snapshot.pagesByContainer.end()) continue;
+        for (GeometryPage* pagePtr : containerPages->second) {
+            if (!pagePtr || !PageIsRenderable(*pagePtr)) continue;
+            visit(*pagePtr);
+        }
+    }
 }
 
 // Resolve a completed pick result and publish it to SelectionState.
@@ -361,7 +377,7 @@ void CleanupPickPassContext(PickPassContext& ctx) {
 void RecordSelectionOverlays(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage, SelectionState& selection,
     const CameraState& camera, const XMMATRIX& viewProj, int /*topUIHeightPx*/,
-    int /*sceneWidth*/, int sceneHeight, uint64_t activeContainerMemoryId) {
+    int /*sceneWidth*/, int sceneHeight, const SubTabContainerSet& containers, uint32_t subTabBit) {
     if (!commandList || !tabRes.selection3D.initialized || sceneHeight <= 0) return;
 
     // --- Highlight the selected objects in deep blue -------------------------------------------
@@ -370,23 +386,21 @@ void RecordSelectionOverlays(ID3D12GraphicsCommandList* commandList, DX12Resourc
         std::lock_guard<std::mutex> lock(selection.selectedMutex);
         selectedCopy = selection.selectedObjectIds;
     }
-    if (!selectedCopy.empty() && activeContainerMemoryId != 0) {
+    if (!selectedCopy.empty() && !containers.Empty()) {
         std::unordered_set<uint64_t> selectedSet(selectedCopy.begin(), selectedCopy.end());
         GeometryPageSnapshot* snapshot = storage.activeSnapshot.load(std::memory_order_acquire);
         if (snapshot) {
             commandList->SetGraphicsRootSignature(tabRes.rootSignature.Get());
             commandList->SetPipelineState(tabRes.selection3D.highlightPSO.Get());
             commandList->SetGraphicsRootConstantBufferView(0, winRes.constantBuffer->GetGPUVirtualAddress());
-            // Both VAs are fixed for the tab's lifetime (10M plan Steps 2 and 4).
+            // All three VAs are fixed for the tab's lifetime (10M plan Steps 2, 4 and 5).
             commandList->SetGraphicsRootShaderResourceView(1, tabRes.instanceArena.va);
             commandList->SetGraphicsRootShaderResourceView(3, tabRes.instanceSlotOf.va);
+            commandList->SetGraphicsRootShaderResourceView(4, tabRes.visibilityMask.va);
+            commandList->SetGraphicsRoot32BitConstant(5, subTabBit, 0);
             commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-            for (GeometryPage* pagePtr : snapshot->pages) {
-                if (!pagePtr) continue;
-                GeometryPage& page = *pagePtr;
-                if (!PageIsRenderable(page, activeContainerMemoryId)) continue;
-
+            ForEachSubTabPage(*snapshot, containers, [&](GeometryPage& page) {
                 bool boundBuffers = false;
                 for (const GeometryPlacementRecordInPage& obj : page.objects) {
                     if (obj.isDeleted || selectedSet.find(obj.objectID) == selectedSet.end()) continue;
@@ -398,7 +412,7 @@ void RecordSelectionOverlays(ID3D12GraphicsCommandList* commandList, DX12Resourc
                     commandList->SetGraphicsRoot32BitConstant(2, obj.gpuInstanceIndex, 0);
                     commandList->DrawIndexedInstanced(obj.indexCount, 1, startIndex, baseVertex, 0);
                 }
-            }
+            });
         }
     }
 
@@ -441,7 +455,8 @@ void RecordSelectionOverlays(ID3D12GraphicsCommandList* commandList, DX12Resourc
 void ServicePick(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage, SelectionState& selection,
     PickPassContext& ctx, int monitorId, const XMMATRIX& viewProj,
-    int topUIHeightPx, int sceneWidth, int sceneHeight, uint64_t activeContainerMemoryId) {
+    int topUIHeightPx, int sceneWidth, int sceneHeight, const SubTabContainerSet& containers,
+    uint32_t subTabBit) {
     if (!commandList || !tabRes.selection3D.initialized) return;
 
     // 1) Publish a completed pick once its frame's fence has passed on the GPU.
@@ -464,7 +479,7 @@ void ServicePick(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow&
     const uint32_t purpose = selection.pickPurpose.load(std::memory_order_relaxed);
     selection.pickRequested.store(false, std::memory_order_release);
 
-    if (sceneWidth <= 0 || sceneHeight <= 0 || activeContainerMemoryId == 0) return;
+    if (sceneWidth <= 0 || sceneHeight <= 0 || containers.Empty()) return;
     const int localX = px;
     const int localY = py - topUIHeightPx;
     if (localX < 0 || localX >= sceneWidth || localY < 0 || localY >= sceneHeight) return;
@@ -517,16 +532,16 @@ void ServicePick(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow&
 
     GeometryPageSnapshot* snapshot = storage.activeSnapshot.load(std::memory_order_acquire);
     commandList->SetGraphicsRootShaderResourceView(1, tabRes.instanceArena.va);  // Fixed VAs
-    commandList->SetGraphicsRootShaderResourceView(3, tabRes.instanceSlotOf.va); // (Steps 2 and 4).
+    commandList->SetGraphicsRootShaderResourceView(3, tabRes.instanceSlotOf.va); // (Steps 2, 4
+    commandList->SetGraphicsRootShaderResourceView(4, tabRes.visibilityMask.va); //  and 5).
+    // Same bit as the visible scene: a hidden object must not be clickable either.
+    commandList->SetGraphicsRoot32BitConstant(5, subTabBit, 0);
     if (snapshot) {
-        for (GeometryPage* pagePtr : snapshot->pages) {
-            if (!pagePtr) continue;
-            GeometryPage& page = *pagePtr;
-            if (!PageIsRenderable(page, activeContainerMemoryId)) continue;
+        ForEachSubTabPage(*snapshot, containers, [&](GeometryPage& page) {
             BindPageBuffers(commandList, page);
             commandList->ExecuteIndirect(tabRes.commandSignature.Get(), page.indirectCount,
                 page.indirectBuffer.Get(), 0, nullptr, 0);
-        }
+        });
     }
 
     // Transition color targets to copy source, copy the box to the readback buffers.

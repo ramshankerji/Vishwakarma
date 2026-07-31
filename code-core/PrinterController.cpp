@@ -97,23 +97,29 @@ std::vector<Print2DPage> Collect2DPages(TabCad2DStorage& storage, uint64_t conta
     return result;
 }
 
-std::vector<Print3DPage> Collect3DPages(TabGeometryStorage& storage, uint64_t containerMemoryId) {
+// Collects every page of every container in the SubTab's set, through the snapshot's container
+// directory rather than a scan over all pages (10M plan Step 6).
+std::vector<Print3DPage> Collect3DPages(TabGeometryStorage& storage,
+    const SubTabContainerSet& containers) {
     std::vector<Print3DPage> result;
     GeometryPageSnapshot* snapshot = storage.activeSnapshot.load(std::memory_order_acquire);
     if (!snapshot) return result;
 
-    for (GeometryPage* page : snapshot->pages) {
-        if (!page || !page->published.load(std::memory_order_acquire)) continue;
-        if (page->containerMemoryId != containerMemoryId) continue;
-        if (page->indirectCount == 0 || page->vertexHead == 0 || page->indexTail == page->pageSize) continue;
-        Print3DPage copy;
-        copy.buffer = page->buffer;
-        copy.indirectBuffer = page->indirectBuffer;
-        copy.indirectCount = page->indirectCount;
-        copy.vertexHead = page->vertexHead;
-        copy.indexTail = page->indexTail;
-        copy.pageSize = page->pageSize;
-        result.push_back(std::move(copy));
+    for (uint8_t c = 0; c < containers.count; ++c) {
+        auto containerPages = snapshot->pagesByContainer.find(containers.ids[c]);
+        if (containerPages == snapshot->pagesByContainer.end()) continue;
+        for (GeometryPage* page : containerPages->second) {
+            if (!page || !page->published.load(std::memory_order_acquire)) continue;
+            if (page->indirectCount == 0 || page->vertexHead == 0 || page->indexTail == page->pageSize) continue;
+            Print3DPage copy;
+            copy.buffer = page->buffer;
+            copy.indirectBuffer = page->indirectBuffer;
+            copy.indirectCount = page->indirectCount;
+            copy.vertexHead = page->vertexHead;
+            copy.indexTail = page->indexTail;
+            copy.pageSize = page->pageSize;
+            result.push_back(std::move(copy));
+        }
     }
     return result;
 }
@@ -125,9 +131,9 @@ void Record2DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab, uint64_t con
     uint8_t* pViewConstantData, uint32_t widthPx, uint32_t heightPx) {
     TabCad2DStorage& storage = *tab.cad2d;
 
-    // Print with the per-view pan/zoom of the Page2D being printed (its own sub-tab slot).
+    // Print with the pan/zoom of the Viewport showing this Page2D (10M plan Step 6).
     const int slot = FindPublishedSubTabSlot(tab, containerMemoryId);
-    const Cad2DViewState& view = (slot >= 0) ? storage.views[slot] : storage.views[0];
+    const Cad2DViewState& view = tab.viewports[slot >= 0 ? slot : 0].page2DView;
 
     Cad2DViewConstants constants{};
     constants.viewCenterCU = {
@@ -228,12 +234,12 @@ void Record3DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab,
     // behind the same address, so there is no mirror to load here any more (10M plan Step 2).
     if (tabRes.instanceArena.va == 0) return;
 
-    // Print with the per-view camera of the inline-active Scene3D sub-tab (matches what the
-    // user sees); fall back to the tab-level camera when no Scene3D sub-tab is active.
+    // Print with the camera of the Viewport showing the inline-active Scene3D sub-tab (matches what
+    // the user sees); fall back to the tab-level camera when no Scene3D sub-tab is active.
     const int activeSlot = FindPublishedSubTabSlot(tab, tab.activeInternalSubTabMemoryId);
     const CameraState camera = activeSlot >= 0 &&
         tab.subTabs[activeSlot].containerType == VishwakarmaStorage::ObjectType::Scene3D
-        ? tab.subTabs[activeSlot].camera : tab.camera;
+        ? tab.viewports[activeSlot].camera : tab.camera;
     XMVECTOR eyePosition = XMLoadFloat3(&camera.position);
     XMVECTOR focusPoint = XMLoadFloat3(&camera.target);
     XMVECTOR upDirection = XMLoadFloat3(&camera.up);
@@ -251,6 +257,11 @@ void Record3DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab,
     cmd->SetGraphicsRootConstantBufferView(0, constantBuffer->GetGPUVirtualAddress());
     cmd->SetGraphicsRootShaderResourceView(1, tabRes.instanceArena.va);
     cmd->SetGraphicsRootShaderResourceView(3, tabRes.instanceSlotOf.va);
+    // Print what the user sees, hides included: same sub-tab, so the same VisibilityMask bit as
+    // the on-screen view (10M plan Step 5). Binding t2 is not optional even when nothing is hidden
+    // - the shader reads it through a ROOT descriptor, which has no bounds or null check.
+    cmd->SetGraphicsRootShaderResourceView(4, tabRes.visibilityMask.va);
+    cmd->SetGraphicsRoot32BitConstant(5, SubTabVisibilityBit(activeSlot), 0);
     cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     for (const Print3DPage& page : pages) {
@@ -368,7 +379,15 @@ std::vector<uint8_t> RenderForPrint(DATASETTAB& tab, bool isPage2D, uint64_t con
         Record2DDraws(cmd.Get(), tab, containerMemoryId, pages, constantBuffer.Get(), pConstantData,
             widthPx, heightPx);
     } else {
-        std::vector<Print3DPage> pages = Collect3DPages(tab.geometry, containerMemoryId);
+        // Print the whole SubTab, every container in its set - matching what is on screen.
+        const int printSlot = FindPublishedSubTabSlot(tab, containerMemoryId);
+        SubTabContainerSet printContainers;
+        if (printSlot >= 0 && !tab.subTabs[printSlot].containers.Empty()) {
+            printContainers = tab.subTabs[printSlot].containers;
+        } else {
+            printContainers.Add(containerMemoryId);
+        }
+        std::vector<Print3DPage> pages = Collect3DPages(tab.geometry, printContainers);
         Record3DDraws(cmd.Get(), tab, pages, constantBuffer.Get(), pConstantData, widthPx, heightPx);
     }
 

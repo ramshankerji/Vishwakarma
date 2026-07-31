@@ -26,7 +26,18 @@ struct InstanceRecord {
 };
 StructuredBuffer<InstanceRecord> Instances : register(t0);
 StructuredBuffer<uint> InstanceSlotOf : register(t1);
+StructuredBuffer<uint2> VisibilityMask : register(t2);
 cbuffer PerDraw : register(b1) { uint gpuInstanceIndex; };
+cbuffer PerView : register(b2) { uint subTabBit; };
+
+// Mirrors IsVisibleInSubTab in ShaderSceneVertex.hlsl - see there for the bit convention. The pick
+// pass MUST apply the identical test: an object the user cannot see must not be clickable either.
+bool IsVisibleInSubTab(uint instanceIndex, uint bit) {
+    if (bit >= 64u) return true;
+    uint2 mask = VisibilityMask[instanceIndex];
+    uint word = bit < 32u ? mask.x : mask.y;
+    return (word & (1u << (bit & 31u))) != 0u;
+}
 
 struct PSInput {
     float4 position : SV_POSITION;
@@ -35,6 +46,12 @@ struct PSInput {
 
 PSInput main(float3 position : POSITION, float4 normal : NORMAL, float4 color : COLOR) {
     PSInput result;
+    if (!IsVisibleInSubTab(gpuInstanceIndex, subTabBit)) {
+        result.position = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        result.id = 0u; // Background id, so a stray fragment could never resolve to this object.
+        return result;
+    }
+
     uint slot = InstanceSlotOf[gpuInstanceIndex];
     InstanceRecord instance = Instances[slot];
     float4 h = float4(position, 1.0f);

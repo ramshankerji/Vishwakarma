@@ -628,10 +628,9 @@ static void EnsureWindowCad2DViewBuffer(DX12ResourcesPerWindow& winRes) {
 
 void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     TabCad2DStorage& storage, DX12ResourcesUI& uiResources, int monitorId,
-    uint64_t activeContainerMemoryId, int viewSlot) {
+    uint64_t activeContainerMemoryId, const Cad2DViewState& view) {
     if (!commandList || activeContainerMemoryId == 0 || winRes.WindowHeight <= 0) return;
     if (!storage.dx.lineRootSignature) return;
-    if (viewSlot < 0 || viewSlot >= MV_MAX_SUBTABS) return;
 
     EnsureWindowCad2DViewBuffer(winRes);
     if (!winRes.pCad2DViewConstantDataBegin) return;
@@ -651,8 +650,7 @@ void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow
     const float cadBackground[] = { kCad2DBackgroundR, kCad2DBackgroundG, kCad2DBackgroundB, 1.0f };
     commandList->ClearRenderTargetView(rttHandle, cadBackground, 0, nullptr);
 
-    const Cad2DViewState& view = storage.views[viewSlot]; // Per-view pan/zoom of the shown Page2D.
-    Cad2DViewConstants constants{};
+    Cad2DViewConstants constants{}; // `view` is the Viewport's pan/zoom, handed in by the compositor.
     constants.viewCenterCU = {
         static_cast<float>(view.centerXCU.load(std::memory_order_acquire)),
         static_cast<float>(view.centerYCU.load(std::memory_order_acquire))

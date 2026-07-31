@@ -14,7 +14,38 @@
 #include <queue>
 #include <DirectXMath.h>
 
+#include "ConstantsApplication.h" // MV_MAX_CONTAINERS_PER_SUBTAB
 #include "डेटा.h" // GeometryData: the vertex/index payload carried by CommandToCopyThread.
+
+/* The set of containers one SubTab draws (graphics.md, 10M plan Step 6, item 3). A SubTab holds a
+SET of containers of a single type - never a mix, because a mixed SubTab would have ambiguous
+renderer and interaction semantics.
+
+Inline storage, not a vector: render threads read this every frame without a lock, so a heap buffer
+the engineering thread could reallocate underneath them is precisely the hazard to avoid. Same
+benign-staleness contract as the per-view camera next to it.
+
+The set is a COMPACT RULE, deliberately: "this SubTab shows container X" is expressed by one entry
+here, never by setting a per-object VisibilityMask bit for every member. The mask is for per-object
+hide; conflating the two would make opening a SubTab an O(objects) write. */
+struct SubTabContainerSet {
+    uint64_t ids[MV_MAX_CONTAINERS_PER_SUBTAB] = {};
+    uint8_t count = 0;
+
+    bool Empty() const { return count == 0; }
+    bool Contains(uint64_t containerMemoryId) const {
+        for (uint8_t i = 0; i < count; ++i) {
+            if (ids[i] == containerMemoryId) return true;
+        }
+        return false;
+    }
+    // Silently ignores 0, duplicates, and overflow past the fixed capacity.
+    void Add(uint64_t containerMemoryId) {
+        if (containerMemoryId == 0 || Contains(containerMemoryId)) return;
+        if (count < MV_MAX_CONTAINERS_PER_SUBTAB) ids[count++] = containerMemoryId;
+    }
+    void Clear() { count = 0; }
+};
 
 struct CameraState { // Each view gets its own camera state. 
     //This is part of the "View" data structure, not the "Tab" data structure. Each tab can have multiple views.
@@ -97,6 +128,34 @@ static_assert(sizeof(InstanceRecord) == kInstanceRecordBytes,
 // record. This is the 4-byte value a transform edit atomically flips (10M plan Step 4).
 constexpr uint32_t kInstanceSlotBytes = 4;
 
+/* One entry of VisibilityMask[gpuInstanceIndex]: a 64-bit SubTab MEMBERSHIP word, read as uint2 in
+shaders for broad compatibility (10M plan Step 5). Bit N set = this object is visible in the SubTab
+occupying slot N. Toggling is one aligned write under invariant 2 - no clone, no argument rebuild,
+no upload, no arena slot. That is the whole reason high-frequency interaction state (hover,
+selection, temporary hide) lives here instead of inside the 64-byte InstanceRecord. */
+constexpr uint32_t kVisibilityMaskBytes = 8;
+
+/* Default for every newly added object: visible in every SubTab. This MUST be written explicitly on
+each ADD - a freshly committed D3D12 tile has UNDEFINED contents, so a mask can never be inherited
+from the tile the way a zero-initialised allocation could be. Note also that per-object membership
+is deliberately NOT how "this whole container belongs to that SubTab" is expressed: the container
+test on the geometry page stays the cheap first-level reject (10M plan Step 6, item 3). */
+constexpr uint64_t kVisibleInAllSubTabs = ~0ull;
+
+/* Per-draw SubTab bit for a Viewport that has no mask-addressable bit - a sub-tab in slot >= 64
+(MV_MAX_SUBTABS is 128, the mask is 64 bits), or a draw with no sub-tab at all such as the print
+path. The vertex shader skips the membership test entirely for this value, so those views show
+everything rather than nothing. */
+constexpr uint32_t kNoSubTabBit = 0xFFFFFFFFu;
+
+/* Sub-tab slot -> VisibilityMask bit. MV_MAX_SUBTABS is 128 while the mask holds 64 SubTabs, which
+is the design limit rather than an oversight: if more than 64 SIMULTANEOUSLY MASKED SubTabs are ever
+needed the remedy is a second mask word, not a change here. Slots past 63 therefore show everything
+instead of failing closed. */
+inline uint32_t SubTabVisibilityBit(int subTabSlot) {
+    return subTabSlot >= 0 && subTabSlot < 64 ? static_cast<uint32_t>(subTabSlot) : kNoSubTabBit;
+}
+
 struct IndirectCommand { // OPTIMIZED Indirect Command
     // Dense renderer identity of the object this command draws (Root Constant b1). STABLE for the
     // object's whole GPU lifetime: unchanged by MODIFY and by an RCU clone relocating the object to
@@ -150,8 +209,15 @@ struct GeometryPlacementRecordInPage {
 static_assert(sizeof(GeometryPlacementRecordInPage) == 64,
     "GeometryPlacementRecordInPage must be exactly 64 bytes for optimal cache/line usage.");
 
-// Commands sent from Generator thread(s) to the Copy thread
-enum class CommandToCopyThreadType { NONE = 0, ADD, MODIFY, REMOVE };
+/* Commands sent from Generator thread(s) to the Copy thread.
+
+SET_VISIBILITY / CLEAR_SUBTAB_HIDES carry no geometry and touch no geometry page: they are pure
+VisibilityMask writes (10M plan Step 5), which is exactly why hide/show costs nothing proportional
+to the scene. Note that they must be kept OUT of the per-object deduplication pass in
+ProcessScene3DCopyBatch - that pass keys on `id` alone, so an ADD and a hide of the same object in
+one batch would collapse to whichever came last and the geometry would silently never be uploaded. */
+enum class CommandToCopyThreadType { NONE = 0, ADD, MODIFY, REMOVE, SET_VISIBILITY,
+    CLEAR_SUBTAB_HIDES };
 struct CommandToCopyThread
 {
     CommandToCopyThreadType type;
@@ -159,6 +225,15 @@ struct CommandToCopyThread
     uint64_t id = 0; // Always present
     uint64_t tabID = 0; // NEW: We must know which tab this object belongs to!
     uint64_t containerMemoryId = 0; // Parent high-level container; pages never mix container IDs.
+    /* Which SubTab bit a mask command addresses, as a pre-shifted word (1ull << subTabSlot).
+       SET_VISIBILITY    : change this bit on the object named by `id`.
+       CLEAR_SUBTAB_HIDES: force this bit back ON for every object the tab currently hides (`id` is
+       unused), so a retired sub-tab slot does not hand its hides to whatever reuses the slot.
+       The producer sends a BIT, not a whole word, because only the copy thread knows an object's
+       current membership - keeping that state in one place is what stops the two threads from
+       having to agree on a shared shadow. */
+    uint64_t visibilityBits = 0;
+    bool visibilityVisible = true; // SET_VISIBILITY only: set the bit (show) or clear it (hide).
 };
 
 /* A MODIFY carrying a world matrix but NO vertices or indices is a TRANSFORM-ONLY edit: the copy
@@ -172,6 +247,13 @@ inline bool IsTransformOnlyEdit(const CommandToCopyThread& command) {
         command.geometry->vertices.empty() && command.geometry->indices.empty();
 }
 
+// A pure VisibilityMask write: touches no geometry page and must be kept out of the per-object
+// deduplication pass (see CommandToCopyThreadType above).
+inline bool IsVisibilityCommand(const CommandToCopyThread& command) {
+    return command.type == CommandToCopyThreadType::SET_VISIBILITY ||
+        command.type == CommandToCopyThreadType::CLEAR_SUBTAB_HIDES;
+}
+
 // Approximate GPU staging cost of one command. Used in two places (graphics.md, 10M plan Step 0):
 // to cap the copy thread's CPU-side drain, and to size the chunks that must fit in the upload ring.
 // REMOVE carries no payload and therefore no staging cost. ADD / MODIFY also stage the 64-byte
@@ -179,10 +261,18 @@ inline bool IsTransformOnlyEdit(const CommandToCopyThread& command) {
 // Step 2 and can no longer be written by a plain CPU store into a mapped upload heap. A
 // transform-only MODIFY carries no vertices or indices, so those two terms fall to zero.
 inline uint64_t EstimateStagingBytes(const CommandToCopyThread& command) {
+    // A mask write is one 8-byte staging region and nothing else - no record, no redirect, no
+    // geometry (10M plan Step 5). CLEAR_SUBTAB_HIDES fans out over the tab's hidden objects, whose
+    // count only the copy thread knows; it is charged one entry here and re-checked against the
+    // ring as it writes, the same way an oversize geometry payload is.
+    if (command.type == CommandToCopyThreadType::SET_VISIBILITY ||
+        command.type == CommandToCopyThreadType::CLEAR_SUBTAB_HIDES) {
+        return kVisibilityMaskBytes;
+    }
     if (!command.geometry.has_value()) return 0;
     const GeometryData& geometry = *command.geometry;
     return geometry.vertices.size() * sizeof(Vertex) + geometry.indices.size() * sizeof(uint16_t)
-        + kInstanceRecordBytes + kInstanceSlotBytes;
+        + kInstanceRecordBytes + kInstanceSlotBytes + kVisibilityMaskBytes;
 }
 
 class ThreadSafeQueueGPU {

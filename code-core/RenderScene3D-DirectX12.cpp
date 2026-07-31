@@ -152,7 +152,8 @@ std::unique_ptr<GeometryPage> CreateNewPage(uint64_t containerMemoryId)
 
 void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
     DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage,
-    const CameraState& camera, int monitorId, uint64_t activeContainerMemoryId) {
+    const CameraState& camera, int monitorId, const SubTabContainerSet& containers,
+    uint32_t subTabBit) {
     // Update constant buffer with transformation matrices
 
     // Create view matrix (camera looking at scene from distance)
@@ -227,32 +228,40 @@ void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
     if (snapshot && tabRes.instanceArena.va != 0) {
         commandList->SetGraphicsRootShaderResourceView(1, tabRes.instanceArena.va);
         commandList->SetGraphicsRootShaderResourceView(3, tabRes.instanceSlotOf.va);
-        for (GeometryPage* pagePtr : snapshot->pages) {
-            GeometryPage& page = *pagePtr;
-            if (!page.published.load(std::memory_order_acquire)) continue;
-            if (page.indirectCount == 0) continue; //Some safety checks.
-            if (page.vertexHead == 0) continue;
-            if (page.indexTail == page.pageSize) continue;
+        // Per-object hide/show (10M plan Step 5). The bit identifies which SubTab is being drawn;
+        // it is set once for the whole view, unlike b1 which ExecuteIndirect rewrites per command.
+        commandList->SetGraphicsRootShaderResourceView(4, tabRes.visibilityMask.va);
+        commandList->SetGraphicsRoot32BitConstant(5, subTabBit, 0);
+        /* Walk only the containers this SubTab shows, via the snapshot's directory (10M plan
+        Step 6, items 3-4). This replaces "visit every page, bind its buffers, then discover the
+        argument count is 0": the container test now happens ABOVE the two IA binds instead of
+        after them, and pages belonging to other containers are never touched at all. */
+        for (uint8_t c = 0; c < containers.count; ++c) {
+            auto containerPages = snapshot->pagesByContainer.find(containers.ids[c]);
+            if (containerPages == snapshot->pagesByContainer.end()) continue;
+            for (GeometryPage* pagePtr : containerPages->second) {
+                GeometryPage& page = *pagePtr;
+                if (!page.published.load(std::memory_order_acquire)) continue;
+                if (page.indirectCount == 0) continue; //Some safety checks.
+                if (page.vertexHead == 0) continue;
+                if (page.indexTail == page.pageSize) continue;
 
-            D3D12_VERTEX_BUFFER_VIEW vbv{};
-            vbv.BufferLocation = page.buffer->GetGPUVirtualAddress();
-            vbv.SizeInBytes = page.vertexHead;
-            vbv.StrideInBytes = sizeof(Vertex);
+                D3D12_VERTEX_BUFFER_VIEW vbv{};
+                vbv.BufferLocation = page.buffer->GetGPUVirtualAddress();
+                vbv.SizeInBytes = page.vertexHead;
+                vbv.StrideInBytes = sizeof(Vertex);
 
-            D3D12_INDEX_BUFFER_VIEW ibv{};
-            ibv.BufferLocation = page.buffer->GetGPUVirtualAddress() + page.indexTail;
-            ibv.SizeInBytes = page.pageSize - page.indexTail;
-            ibv.Format = DXGI_FORMAT_R16_UINT;
+                D3D12_INDEX_BUFFER_VIEW ibv{};
+                ibv.BufferLocation = page.buffer->GetGPUVirtualAddress() + page.indexTail;
+                ibv.SizeInBytes = page.pageSize - page.indexTail;
+                ibv.Format = DXGI_FORMAT_R16_UINT;
 
-            commandList->IASetVertexBuffers(0, 1, &vbv);
-            commandList->IASetIndexBuffer(&ibv);
+                commandList->IASetVertexBuffers(0, 1, &vbv);
+                commandList->IASetIndexBuffer(&ibv);
 
-            const uint32_t argumentCount =
-                activeContainerMemoryId != 0 && page.containerMemoryId == activeContainerMemoryId
-                ? page.indirectCount
-                : 0;
-            commandList->ExecuteIndirect(tabRes.commandSignature.Get(),
-                argumentCount, page.indirectBuffer.Get(), 0, nullptr, 0);
+                commandList->ExecuteIndirect(tabRes.commandSignature.Get(),
+                    page.indirectCount, page.indirectBuffer.Get(), 0, nullptr, 0);
+            }
         }
     } // End of if (snapshot)
     // TODO: Add support for transparent pages with proper sorting and blending states.
@@ -280,6 +289,7 @@ void ReleaseTabGpuGeometry(DATASETTAB& tab) {
     tab.dx.instanceCount = 0;
     tab.dx.freeInstanceIndexes.clear();
     tab.dx.pendingFreeInstanceIndexes.clear();
+    tab.dx.hiddenInstanceMasks.clear();
 
     GeometryPageSnapshot* snapshot =
         storage.activeSnapshot.exchange(nullptr, std::memory_order_acq_rel);
@@ -318,8 +328,14 @@ static uint32_t AllocateInstanceIndex(DX12ResourcesPerTab& tabRes) {
         tabRes.freeInstanceIndexes.pop_back();
         return reused;
     }
+    // Both index-addressed buffers grow together. They are bound as ROOT descriptors, which carry
+    // no bounds check whatsoever, so a shader read past the committed tiles is undefined rather
+    // than clamped - the mask must never lag the redirect table (10M plan Step 5).
     if (tabRes.instanceCount >= tabRes.instanceSlotOf.capacity) {
         tabRes.instanceSlotOf.Grow(tabRes.instanceCount + 1);
+    }
+    if (tabRes.instanceCount >= tabRes.visibilityMask.capacity) {
+        tabRes.visibilityMask.Grow(tabRes.instanceCount + 1);
     }
     const uint32_t index = tabRes.instanceCount++;
     tabRes.registry.Commit(tabRes.instanceCount);
@@ -404,6 +420,10 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             newSnapshot->pages.reserve(storage.activePages.size());
             for (const auto& pagePtr : storage.activePages) {
                 newSnapshot->pages.push_back(pagePtr.get()); // Read-only pointers for the Render thread
+                // Container -> page directory, built once here so no render thread ever has to
+                // scan for it (10M plan Step 6, item 4). Pages never mix containers, so each page
+                // lands in exactly one bucket.
+                newSnapshot->pagesByContainer[pagePtr->containerMemoryId].push_back(pagePtr.get());
             }
             // Atomically Publish the new snapshot.  exchange() swaps the pointer and returns the old one.
             GeometryPageSnapshot* oldSnapshot = storage.activeSnapshot.exchange(newSnapshot, std::memory_order_acq_rel);
@@ -440,6 +460,12 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             // or added then modified, etc., we need only FINAL state in this batch to persist.
             std::unordered_map<uint64_t, size_t> latestCommandIndex;
             for (size_t i = 0; i < batch.size(); ++i) {
+                // Visibility commands are excluded deliberately. This map keys on `id` alone, so an
+                // ADD and a hide of the same object in one batch would collapse into whichever came
+                // last - and if that were the hide, the geometry would silently never be uploaded
+                // (10M plan Step 5). CLEAR_SUBTAB_HIDES carries id 0 and would collide with every
+                // other id-0 command besides.
+                if (IsVisibilityCommand(batch[i])) continue;
                 if (batch[i].tabID == tabID) { latestCommandIndex[batch[i].id] = i; }
             }
 
@@ -449,6 +475,9 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             deduplicatedBatch.reserve(batch.size());
             for (size_t i = 0; i < batch.size(); ++i) {
                 if (batch[i].tabID != tabID) continue;
+                // Every mask command survives, in order: each names ONE SubTab bit rather than a
+                // whole membership word, so collapsing two of them would drop a bit change.
+                if (IsVisibilityCommand(batch[i])) { deduplicatedBatch.push_back(&batch[i]); continue; }
                 // Only keep the command if it is the absolute latest operation for this ID
                 if (latestCommandIndex[batch[i].id] == i) { deduplicatedBatch.push_back(&batch[i]); }
             }
@@ -486,6 +515,17 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             for (size_t ci = chunkStart; ci < chunkEnd; ++ci) {
                 const CommandToCopyThread& cmd = *deduplicatedBatch[ci];
                 if (cmd.type == CommandToCopyThreadType::ADD) continue; // handled later
+                // A mask write never reads or relocates geometry, so pulling its object's page in
+                // here would clone 4 MB to change 8 bytes - the exact cost this step exists to
+                // avoid (10M plan Step 5).
+                if (IsVisibilityCommand(cmd)) continue;
+                /* Same reasoning for a MOVE (10M plan Step 4): it writes one fresh instance record
+                and flips one redirect entry, and touches nothing inside the geometry page - not the
+                bytes, not the placement records, not the indirect arguments. Cloning the page would
+                copy ~5.5 MB only to publish a byte-identical replacement and retire the original.
+                This line is what makes Step 4's stated criterion - "moving N scattered objects
+                clones zero geometry pages" - actually true. */
+                if (IsTransformOnlyEdit(cmd)) continue;
                 const uint32_t existing = tabRes.registry.Find(cmd.id);
                 if (existing != kInvalidInstanceIndex) {
                     affectedPages.insert(tabRes.registry[existing].page);
@@ -498,6 +538,12 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             for (size_t ci = chunkStart; ci < chunkEnd; ++ci) {
                 const CommandToCopyThread& cmd = *deduplicatedBatch[ci];
                 if (!cmd.geometry.has_value()) continue;
+                /* The second half of the move fix, and the easier one to miss: a transform-only
+                edit DOES carry a GeometryData - that is how it smuggles the world matrix - so
+                has_value() above is true for it. It appends no bytes, though, so letting it name a
+                container here force-clones that container's append-target page a few lines down,
+                and a chunk of pure moves would still clone one page per container. */
+                if (IsTransformOnlyEdit(cmd)) continue;
                 uint64_t containerMemoryId = cmd.containerMemoryId;
                 const uint32_t existing = tabRes.registry.Find(cmd.id);
                 if (containerMemoryId == 0 && existing != kInvalidInstanceIndex) {
@@ -528,24 +574,75 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             commandAllocator->Reset(); // Prepare command allocator for more work !
             commandList->Reset(commandAllocator.Get(), nullptr); // Opens command list for closing.
 
-            //Pass 2: Clone Affected Pages (RCU copy)
+            /* Pass 2: Clone Affected Pages (RCU copy).
+
+            The clone's ExecuteIndirect argument buffer is deliberately NOT copied. Every cloned and
+            every new page goes through RebuildIndirectBuffer unconditionally below, so copying the
+            old one first moved 1.5 MB that was immediately overwritten - and it contradicted the
+            standing rule that argument buffers are regenerated per clone, never patched. Only the
+            first indirectCount commands are ever read, so the rest of the fresh buffer staying
+            uninitialised is fine. */
+            bool compactedThisChunk = false; // At most one page compacts per chunk - see below.
             for (GeometryPage* oldPage : affectedPages) {
                 auto clonedPage = CreateNewPage(oldPage->containerMemoryId);
 
-                // Following 2 commands are for copying the GPU VRAM data.
-                commandList->CopyResource(clonedPage->buffer.Get(), oldPage->buffer.Get());
-                // TODO: Copy with defragmentation using metadata.
-                commandList->CopyResource(clonedPage->indirectBuffer.Get(), oldPage->indirectBuffer.Get());
+                /* PAGE COMPACTION (graphics.md, "Defragmentation logic"). A page whose holes have
+                crossed the threshold is not copied wholesale: its clone is filled by copying each
+                LIVE object's vertex and index ranges into tightly packed offsets, and the deleted
+                records are dropped. Byte contents never change - indices are object-relative and
+                resolved per draw through BaseVertexLocation / StartIndexLocation - so only the CPU
+                offsets need remapping, and the argument rebuild every clone performs anyway picks
+                those up for free. No freeze, no resource-state gymnastics: it rides the RCU clone
+                that was already going to happen.
 
-                clonedPage->objects = oldPage->objects; //These commands are CPU side metadata copy.
-                clonedPage->vertexHead = oldPage->vertexHead;
-                clonedPage->indexTail = oldPage->indexTail;
+                One page per chunk bounds the extra copy volume, and compaction is strictly cheaper
+                than the CopyResource it replaces (live bytes <= page size), so this never makes a
+                chunk slower - it just trades one big copy for a burst of small ones. */
+                const bool compact = !compactedThisChunk &&
+                    oldPage->holeBytes > oldPage->pageSize / 4; // ~25% threshold.
+
+                if (compact) {
+                    uint32_t vertexHead = 0;
+                    uint32_t indexTail = clonedPage->pageSize;
+                    clonedPage->objects.reserve(oldPage->objects.size());
+                    for (const GeometryPlacementRecordInPage& record : oldPage->objects) {
+                        if (record.isDeleted) continue; // Dropping these IS the compaction.
+                        GeometryPlacementRecordInPage packed = record;
+                        // Same placement rules as a fresh append: whole vertices, 4-byte indices.
+                        // Survivors keep their relative order, so a packed offset can never exceed
+                        // the original one and the page cannot overflow.
+                        packed.vertexByteOffset = GeometryPage::VertexAlign(vertexHead);
+                        packed.indexByteOffset =
+                            GeometryPage::AlignDown(indexTail - record.indexSize, 4);
+                        commandList->CopyBufferRegion(clonedPage->buffer.Get(),
+                            packed.vertexByteOffset, oldPage->buffer.Get(),
+                            record.vertexByteOffset, record.vertexSize);
+                        commandList->CopyBufferRegion(clonedPage->buffer.Get(),
+                            packed.indexByteOffset, oldPage->buffer.Get(),
+                            record.indexByteOffset, record.indexSize);
+                        vertexHead = packed.vertexByteOffset + packed.vertexSize;
+                        indexTail = packed.indexByteOffset;
+                        clonedPage->objects.push_back(packed);
+                    }
+                    clonedPage->vertexHead = vertexHead;
+                    clonedPage->indexTail = indexTail;
+                    clonedPage->holeBytes = 0; // Every hole is gone by construction.
+                    compactedThisChunk = true;
+                    gCopyStats.pagesCompacted.fetch_add(1, std::memory_order_relaxed);
+                    gCopyStats.clonedBytes.fetch_add(
+                        static_cast<uint64_t>(vertexHead) + (clonedPage->pageSize - indexTail),
+                        std::memory_order_relaxed);
+                } else {
+                    commandList->CopyResource(clonedPage->buffer.Get(), oldPage->buffer.Get());
+                    clonedPage->objects = oldPage->objects; //CPU side metadata copy.
+                    clonedPage->vertexHead = oldPage->vertexHead;
+                    clonedPage->indexTail = oldPage->indexTail;
+                    clonedPage->holeBytes = oldPage->holeBytes;
+                    gCopyStats.clonedBytes.fetch_add(oldPage->pageSize, std::memory_order_relaxed);
+                }
+
                 clonedPage->objectCount = oldPage->objectCount;
                 clonedPage->version = oldPage->version + 1;
-                clonedPage->holeBytes = oldPage->holeBytes;
-
-                gCopyStats.clonedBytes.fetch_add(
-                    oldPage->pageSize + 65536ull * sizeof(IndirectCommand), std::memory_order_relaxed);
                 clonedPages[oldPage] = std::move(clonedPage);
             }
             gCopyStats.pagesCloned.fetch_add(affectedPages.size(), std::memory_order_relaxed);
@@ -722,6 +819,39 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 return newSlot;
                 };
 
+            /* THE MASK WRITE (10M plan Step 5). Eight staged bytes and one CopyBufferRegion, and
+            that is the entire cost of a hide or a show: no page cloned, no argument buffer rebuilt,
+            no snapshot published, no arena slot burned. The destination is naturally aligned and a
+            reader only ever tests one bit inside one 32-bit half, so a mask observed part-way
+            through the write still reads old-or-new for that bit - invariant 2.
+
+            The CPU shadow is kept in lockstep so the next edit knows the current word without
+            reading back from device-local memory, and so retiring a sub-tab slot can restore its
+            bit on exactly the hidden objects instead of sweeping the whole index space. An entry
+            that returns to the all-visible default is ERASED, which is what keeps the shadow
+            proportional to what is actually hidden rather than to the scene. */
+            auto WriteVisibilityMask = [&](uint32_t index, uint64_t mask) {
+                uint8_t* mapped = nullptr;
+                ID3D12Resource* stagingResource = nullptr;
+                uint64_t stagingOffset = 0;
+                AcquireStaging(kVisibilityMaskBytes, mapped, stagingResource, stagingOffset);
+                memcpy(mapped, &mask, kVisibilityMaskBytes);
+                commandList->CopyBufferRegion(tabRes.visibilityMask.resource.Get(),
+                    static_cast<uint64_t>(index) * kVisibilityMaskBytes,
+                    stagingResource, stagingOffset, kVisibilityMaskBytes);
+
+                if (mask == kVisibleInAllSubTabs) tabRes.hiddenInstanceMasks.erase(index);
+                else tabRes.hiddenInstanceMasks[index] = mask;
+                gCopyStats.maskWrites.fetch_add(1, std::memory_order_relaxed);
+                };
+
+            // Current membership word: the shadow when the object is hidden somewhere, else the
+            // all-visible default. Absent from the shadow IS the default - see WriteVisibilityMask.
+            auto CurrentVisibilityMask = [&](uint32_t index) -> uint64_t {
+                auto it = tabRes.hiddenInstanceMasks.find(index);
+                return it == tabRes.hiddenInstanceMasks.end() ? kVisibleInAllSubTabs : it->second;
+                };
+
             uint32_t gpuInstanceIndex; // Stable renderer identity of the object being processed.
             std::unordered_map<uint64_t, GeometryPage*> newestPagesByContainer;
             /* Indices vacated by REMOVE and slots vacated by REMOVE / MODIFY in this chunk. They do
@@ -811,6 +941,11 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     // carry the placement this new object's world centre is derived from.
                     tabRes.registry[gpuInstanceIndex].instanceSlot =
                         WriteInstanceRecord(gpuInstanceIndex, geo->worldMatrix, rec);
+                    /* A new object is visible in every SubTab. This write is MANDATORY, not an
+                    optimisation to skip: a freshly committed D3D12 tile has undefined contents, so
+                    an unwritten mask is not "all zeroes" but garbage - and a recycled index would
+                    otherwise inherit the hides of the object that used to own it. */
+                    WriteVisibilityMask(gpuInstanceIndex, kVisibleInAllSubTabs);
 
                     //std::wcout << "Added New object ID: " << cmd.id << std::endl;
                     break;
@@ -919,9 +1054,61 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     releasedInstanceSlots.push_back(tabRes.registry[gpuInstanceIndex].instanceSlot);
                     tabRes.registry.indexOfMemoryId.erase(cmd.id);
                     tabRes.registry[gpuInstanceIndex] = InstanceRegistryEntry{}; // memoryID = 0.
+                    // Drop any hide state with the identity. No GPU write is needed - the index is
+                    // in its zombie interval and the next ADD to claim it writes the default mask.
+                    tabRes.hiddenInstanceMasks.erase(gpuInstanceIndex);
                     break;
 
+                case CommandToCopyThreadType::SET_VISIBILITY:
+                    /* Per-object hide / show. One aligned mask write, nothing else - this is the
+                    "hide any subset costs one atomic mask write per object" budget from the 10M
+                    plan's workload table, and it holds whether the scene has 10 objects or 10M. */
+                    gpuInstanceIndex = tabRes.registry.Find(cmd.id);
+                    if (gpuInstanceIndex == kInvalidInstanceIndex) break; // Not on the GPU yet.
+                    {
+                        const uint64_t current = CurrentVisibilityMask(gpuInstanceIndex);
+                        const uint64_t updated = cmd.visibilityVisible
+                            ? (current | cmd.visibilityBits)
+                            : (current & ~cmd.visibilityBits);
+                        if (updated != current) WriteVisibilityMask(gpuInstanceIndex, updated);
+                    }
+                    break;
 
+                case CommandToCopyThreadType::CLEAR_SUBTAB_HIDES:
+                    /* A sub-tab slot has been retired and its bit is about to be reused. Force that
+                    bit back ON everywhere, so hides authored for the old view do not silently
+                    apply to whatever opens in the slot next. The doc's answer is a compute dispatch
+                    over the whole mask array; the shadow lets us touch only the hidden objects
+                    instead, which needs no shader-visible descriptor heap (a Step 7 prerequisite).
+                    Collected first because WriteVisibilityMask mutates the map being read. */
+                    {
+                        std::vector<uint32_t> toRestore;
+                        for (const auto& [index, mask] : tabRes.hiddenInstanceMasks) {
+                            if ((mask & cmd.visibilityBits) != cmd.visibilityBits) {
+                                toRestore.push_back(index);
+                            }
+                        }
+                        /* Bounded per chunk: each entry stages 8 bytes and this single command is
+                        charged only 8 in EstimateStagingBytes, so an unbounded fan-out could
+                        overrun the ring and fall back to a committed buffer PER ENTRY. Whatever
+                        does not fit is re-queued, and the loop terminates because every pass
+                        strictly reduces the number of objects still hiding this bit. */
+                        constexpr size_t kMaxRestoresPerChunk = 65536; // 512 KB of staging.
+                        const size_t restoreCount = (std::min)(toRestore.size(), kMaxRestoresPerChunk);
+                        for (size_t r = 0; r < restoreCount; ++r) {
+                            WriteVisibilityMask(toRestore[r],
+                                CurrentVisibilityMask(toRestore[r]) | cmd.visibilityBits);
+                        }
+                        if (restoreCount < toRestore.size()) {
+                            CommandToCopyThread remainder;
+                            remainder.type = CommandToCopyThreadType::CLEAR_SUBTAB_HIDES;
+                            remainder.tabID = cmd.tabID;
+                            remainder.visibilityBits = cmd.visibilityBits;
+                            std::lock_guard<std::mutex> lock(toCopyThreadMutex);
+                            commandToCopyThreadQueue.push(std::move(remainder));
+                        }
+                    }
+                    break;
 
                 default: break;
                 } // End of switch (cmd.type)// Process Command

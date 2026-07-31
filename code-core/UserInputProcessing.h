@@ -129,7 +129,13 @@ enum class ACTION_TYPE : uint16_t { // Specifying uint16_t ensures that it is of
     INTERNAL_SUB_TAB_EXTRACTED = 30027, // objectId = extracted container; hand the inline band over.
     CREATE_ASSET2D_FROM_SELECTION = 30028, // Convert the 2D selection into a Asset2DDefinition + first insert.
     BEGIN_ASSET_INSERT2D = 30029, // Arm asset-insert mode; each Page2D click places the selected asset.
-    TOGGLE_AUTO_RANDOM_GEOMETRY = 30030 // Flip the tab's autoGenerateRandomGeometry flag ON/OFF.
+    TOGGLE_AUTO_RANDOM_GEOMETRY = 30030, // Flip the tab's autoGenerateRandomGeometry flag ON/OFF.
+    // Per-object hide/show in the input view's Scene3D (graphics.md, 10M plan Step 5). Each resolves
+    // to one VisibilityMask bit write per affected object on the copy thread - no geometry is
+    // cloned, no argument buffer rebuilt, nothing published.
+    HIDE_SELECTED_OBJECTS = 30031,   // Hide the current selection in this view.
+    HIDE_UNSELECTED_OBJECTS = 30032, // Hide everything in this view EXCEPT the current selection.
+    HIDE_RESET_OBJECTS = 30033       // Show everything again in this view.
 };
 
 struct ACTION_DETAILS_OLD {

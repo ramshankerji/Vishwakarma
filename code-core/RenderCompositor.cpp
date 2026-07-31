@@ -48,11 +48,22 @@ WindowViewTarget ResolveWindowViewTarget(const SingleUIWindow& window, DATASETTA
     target.containerMemoryId = activeInternalSubTabMemoryId;
     target.containerType = activeInternalSubTabType;
     target.renderSlot = renderSlot;
-    // Per-view camera: each Scene3D sub-tab carries its own camera; content shown
-    // without a sub-tab falls back to the tab-level camera.
+    /* The SubTab's container set is what the renderers actually iterate (10M plan Step 6). Copied
+    by value: it is inline storage, so this is a cheap snapshot the render thread owns for the
+    frame, immune to the engineering thread editing the set mid-frame. Falling back to the primary
+    id keeps a sub-tab whose set was never populated (or a container shown without one) rendering
+    exactly as before. */
+    if (renderSlot >= 0 && !tab.subTabs[renderSlot].containers.Empty() &&
+        activeInternalSubTabMemoryId != 0) {
+        target.containers = tab.subTabs[renderSlot].containers;
+    } else {
+        target.containers.Add(activeInternalSubTabMemoryId);
+    }
+    // View state comes from the VIEWPORT driving this SubTab, not from the SubTab itself
+    // (10M plan Step 6, item 2). Content shown without a sub-tab falls back to the tab camera.
     target.camera = renderSlot >= 0 &&
         tab.subTabs[renderSlot].containerType == VishwakarmaStorage::ObjectType::Scene3D
-        ? tab.subTabs[renderSlot].camera : tab.camera;
+        ? tab.viewports[renderSlot].camera : tab.camera;
     // Selection overlays and pick requests belong to the view the user interacts
     // with; only the window displaying that view records them, so two windows of the
     // same tab do not clobber the shared per-tab overlay / pick resources.

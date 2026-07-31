@@ -326,12 +326,13 @@ uint64_t InputViewContainerId(const DATASETTAB& tab) {
     return slot >= 0 ? tab.subTabs[slot].containerMemoryId : 0;
 }
 
-// Camera the engineering thread's scene input math applies to: the input view's per-view camera
-// when it is a Scene3D, else the tab-level fallback camera (content shown without any sub-tab).
+// Camera the engineering thread's scene input math applies to: the camera of the Viewport driving
+// the input SubTab when that SubTab is a Scene3D, else the tab-level fallback camera (content shown
+// without any sub-tab). The camera lives in the Viewport now, not the SubTab (10M plan Step 6).
 static CameraState& ActiveSceneCamera(DATASETTAB& tab) {
     const int slot = InputViewSlot(tab);
     if (slot >= 0 && tab.subTabs[slot].containerType == VishwakarmaStorage::ObjectType::Scene3D) {
-        return tab.subTabs[slot].camera;
+        return tab.viewports[slot].camera;
     }
     return tab.camera;
 }
@@ -380,15 +381,46 @@ static bool AllMonitorRenderFencesPassed(uint64_t fenceValue) {
 
 static void CleanupReleasedSubTabs(DATASETTAB* targetTab) {
     if (!targetTab || !targetTab->storageObjectsMutex) return;
+    std::vector<uint16_t> freedSlots;
     for (uint16_t slot = 0; slot < MV_MAX_SUBTABS; ++slot) {
         if (targetTab->subTabStates[slot].load(std::memory_order_acquire) != SUBTAB_PENDING_GPU_RELEASE) continue;
         if (!AllMonitorRenderFencesPassed(targetTab->subTabReleaseFenceValues[slot])) continue;
 
-        std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
-        targetTab->subTabs[slot] = InternalSubTab{}; // Release title string memory.
-        targetTab->subTabHostWindowSlots[slot].store(-1, std::memory_order_release);
-        targetTab->subTabStates[slot].store(SUBTAB_FREE, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+            targetTab->subTabs[slot] = InternalSubTab{}; // Release title string memory.
+            targetTab->subTabHostWindowSlots[slot].store(-1, std::memory_order_release);
+            targetTab->subTabStates[slot].store(SUBTAB_FREE, std::memory_order_release);
+        }
+        freedSlots.push_back(slot);
     }
+
+    /* Hand each freed slot's VisibilityMask bit back clean (graphics.md, 10M plan Step 5). Slots
+    are recycled, so without this the next sub-tab to land in one would silently inherit hides
+    authored for a view that no longer exists, and the user would have no way to see why objects
+    are missing. The copy thread touches only the objects actually hiding that bit.
+
+    Deliberately HERE and not in RetireSubTabSlot, for two reasons. Correctness: this is the
+    fence-gated FREE transition, so frames still drawing the closing view keep their hides until
+    they retire, instead of having objects pop back mid-flight. And locking: RetireSubTabSlot runs
+    under storageObjectsMutex (CloseAllInternalSubTabsLocked), so enqueueing there would nest that
+    mutex inside toCopyThreadMutex - against the never-nested discipline the geometry producers
+    follow, and a way to stall every render thread (they take storageObjectsMutex each frame in
+    ResolveWindowViewTarget) behind a copy-thread drain. Both locks above are released by now. */
+    if (freedSlots.empty()) return;
+    {
+        std::lock_guard<std::mutex> lock(toCopyThreadMutex);
+        for (uint16_t slot : freedSlots) {
+            const uint32_t bit = SubTabVisibilityBit(slot);
+            if (bit == kNoSubTabBit) continue; // Slot past the 64 mask-addressable SubTabs.
+            CommandToCopyThread command;
+            command.type = CommandToCopyThreadType::CLEAR_SUBTAB_HIDES;
+            command.tabID = targetTab->tabID;
+            command.visibilityBits = 1ull << bit;
+            commandToCopyThreadQueue.push(std::move(command));
+        }
+    }
+    toCopyThreadCV.notify_one();
 }
 
 static void OpenInternalSubTab(DATASETTAB* targetTab, uint64_t memoryId) {
@@ -418,13 +450,21 @@ static void OpenInternalSubTab(DATASETTAB* targetTab, uint64_t memoryId) {
             InternalSubTab& subTab = targetTab->subTabs[freeSlot];
             subTab.containerType = entry.objectType;
             subTab.containerMemoryId = memoryId;
+            // The container SET the renderers iterate (10M plan Step 6). Opening a container seeds
+            // it with exactly that container; the set exists so more can be added later without
+            // the renderers - or the VisibilityMask - having to learn anything new.
+            subTab.containers.Clear();
+            subTab.containers.Add(memoryId);
             subTab.title = objectName && objectName[0] != '\0'
                 ? objectName
                 : VishwakarmaStorage::ObjectTypeDisplayName(entry.objectType);
-            subTab.camera.Initialize(); // Fresh per-view 3D camera for this slot.
-            if (targetTab->cad2d) {
-                targetTab->cad2d->views[freeSlot].Reset(); // Fresh per-view Page2D pan/zoom.
-            }
+            // Bind a Viewport to this SubTab and give it fresh view state (10M plan Step 6). The
+            // mapping is 1:1 today; subTabSlot is what makes that a stored fact rather than an
+            // assumption baked into every reader.
+            Viewport& viewport = targetTab->viewports[freeSlot];
+            viewport.subTabSlot = static_cast<int16_t>(freeSlot);
+            viewport.camera.Initialize(); // Fresh 3D camera.
+            viewport.page2DView.Reset();  // Fresh Page2D pan/zoom.
             targetTab->subTabHostWindowSlots[freeSlot].store(-1, std::memory_order_release);
             targetTab->subTabStates[freeSlot].store(SUBTAB_OPEN, std::memory_order_release);
 
@@ -1000,6 +1040,71 @@ static void ZoomSceneToExtents(DATASETTAB* myTab, bool selectedOnly) {
     DirectX::XMStoreFloat3(&cam.position,
         DirectX::XMVectorSubtract(target, DirectX::XMVectorScale(forward, newDistance)));
     myTab->selection.lastNavInteractionMs.store(GetTickCount64(), std::memory_order_release);
+}
+
+/* Per-object hide / show inside the input view's Scene3D (graphics.md, 10M plan Step 5).
+
+The engineering thread decides WHICH objects change; the copy thread owns the membership word and
+does the bit arithmetic. All that crosses between them is one SET_VISIBILITY per affected object,
+and each of those costs one aligned 8-byte write - no geometry page cloned, no argument buffer
+rebuilt, no snapshot published. That is the entire point: hiding half of a ten-million-object scene
+must not touch geometry at all.
+
+The bit is the sub-tab SLOT, so a hide applies to the view the user is looking at rather than to
+every view of the same Scene3D. Objects are filtered to that view's container because a sub-tab
+shows exactly one container today (Step 6 turns that into a set).
+
+Each action touches only the objects it names - "Hide Selected" does not silently un-hide everything
+else - so the three compose the way a user expects. */
+enum class SceneVisibilityAction { HideSelected, HideUnselected, ShowAll };
+
+static void ApplySceneVisibilityAction(DATASETTAB* myTab, SceneVisibilityAction action) {
+    if (!myTab) return;
+    const int viewSlot = InputViewSlot(*myTab);
+    if (viewSlot < 0) return;
+    if (myTab->subTabs[viewSlot].containerType != VishwakarmaStorage::ObjectType::Scene3D) return;
+    const uint32_t bit = SubTabVisibilityBit(viewSlot);
+    if (bit == kNoSubTabBit) return; // Slot past the 64 mask-addressable SubTabs; nothing to toggle.
+    const uint64_t containerMemoryId = myTab->subTabs[viewSlot].containerMemoryId;
+    if (containerMemoryId == 0) return;
+
+    std::vector<uint64_t> selected;
+    if (action != SceneVisibilityAction::ShowAll) {
+        std::lock_guard<std::mutex> lock(myTab->selection.selectedMutex);
+        selected = myTab->selection.selectedObjectIds;
+    }
+    // Hiding nothing is not the same as hiding everything: with an empty selection both hide
+    // actions are no-ops rather than blanking the view or hiding the whole model.
+    if (action != SceneVisibilityAction::ShowAll && selected.empty()) return;
+
+    // The engineering thread is the sole writer of storageObjects3D, so iteration needs no lock.
+    std::vector<CommandToCopyThread> commands;
+    for (const StoredGeometryObject3D& stored : myTab->storageObjects3D) {
+        if (!stored.object || stored.object->memoryIDParent != containerMemoryId) continue;
+        const bool isSelected =
+            std::find(selected.begin(), selected.end(), stored.memoryId) != selected.end();
+        if (action == SceneVisibilityAction::HideSelected && !isSelected) continue;
+        if (action == SceneVisibilityAction::HideUnselected && isSelected) continue;
+
+        CommandToCopyThread command;
+        command.type = CommandToCopyThreadType::SET_VISIBILITY;
+        command.id = stored.memoryId;
+        command.tabID = myTab->tabID;
+        command.containerMemoryId = containerMemoryId;
+        command.visibilityBits = 1ull << bit;
+        command.visibilityVisible = action == SceneVisibilityAction::ShowAll;
+        commands.push_back(std::move(command));
+    }
+    if (commands.empty()) return;
+
+    {   // One lock for the whole burst, like FlushGeneratedGeometryBatch: the copy thread's drain
+        // takes this same mutex, so holding it across the push is what keeps them in one batch.
+        std::lock_guard<std::mutex> lock(toCopyThreadMutex);
+        for (CommandToCopyThread& command : commands) {
+            commandToCopyThreadQueue.push(std::move(command));
+        }
+    }
+    toCopyThreadCV.notify_one();
 }
 
 // Zoom Window for the 3D scene: the two clicked pixels define a rectangle on the screen. The view
@@ -1730,13 +1835,13 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
 		// Automatic camera rotation for troubleshooting. Toggle using "r". To be removed later or made optional in UI.
         if (myTab->autoCameraRotation) {
             UpdateCameraOrbit(myTab->camera); // Fallback camera (content without any sub-tab).
-            // Every open Scene3D view orbits its own camera independently.
+            // Every Viewport onto a Scene3D orbits its own camera independently.
             uint16_t* orbitList = myTab->publishedSubTabIndexes.load(std::memory_order_acquire);
             const uint16_t orbitCount = myTab->publishedSubTabCount.load(std::memory_order_acquire);
             for (uint16_t i = 0; orbitList && i < orbitCount; ++i) {
-                InternalSubTab& subTab = myTab->subTabs[orbitList[i]];
-                if (subTab.containerType == VishwakarmaStorage::ObjectType::Scene3D) {
-                    UpdateCameraOrbit(subTab.camera);
+                const uint16_t slot = orbitList[i];
+                if (myTab->subTabs[slot].containerType == VishwakarmaStorage::ObjectType::Scene3D) {
+                    UpdateCameraOrbit(myTab->viewports[slot].camera);
                 }
             }
         }
@@ -1887,7 +1992,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
 
                 myTab->lastMouseX = input.x;
                 myTab->lastMouseY = input.y;
-                // Check if in render area (vs UI): Compare input.x/y to myTab->views[activeViewIndex].rect or contentRect.
+                // Check if in render area (vs UI): compare input.x/y against the Viewport's rect.
                 break;
             case ACTION_TYPE::MOUSEWHEEL:
             {
@@ -2031,6 +2136,89 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                     std::cout << "[gpu][stress] queued " << bulkCount << " objects in "
                               << bulkMs << " ms (bursts of " << kStressBurst << ")" << std::endl;
                 }
+                /* Temporary Debug Key: "m" moves every object in the active Scene3D, as a
+                TRANSFORM-ONLY edit - a world matrix with EMPTY vertex/index vectors, which is
+                exactly what IsTransformOnlyEdit detects (graphics.md, 10M plan Step 4). Sibling of
+                the "g" stress key above, and kept for the same reason: no shipping producer emits
+                these yet (every generator bakes world positions into its vertices), so this is the
+                only way to exercise the move fast path. Watch the heartbeat - `moves` must climb
+                while `clones` and `cloneMB` stay perfectly flat. It is what caught Pass 1 and the
+                append-candidate scan still dragging a page into the clone set. */
+                if (input.x == 77 || input.x == 109) { // 'M' & 'm'
+                    const uint64_t container = InputViewContainerId(*myTab);
+                    std::vector<CommandToCopyThread> moves;
+                    // Each press must send a DIFFERENT matrix, else passes 2+ rewrite the same
+                    // transform and nothing visibly changes - which would make "clones stayed flat"
+                    // indistinguishable from "the move path silently does nothing".
+                    static int movePass = 0;
+                    ++movePass;
+                    if (container != 0) {
+                        for (const StoredGeometryObject3D& stored : myTab->storageObjects3D) {
+                            if (!stored.object || stored.object->memoryIDParent != container) continue;
+                            GeometryData transformOnly; // No vertices, no indices: THE encoding.
+                            transformOnly.id = stored.memoryId;
+                            DirectX::XMStoreFloat4x4(&transformOnly.worldMatrix,
+                                DirectX::XMMatrixTranslation(0.0f, 0.0f, movePass * 4.0f));
+                            CommandToCopyThread command;
+                            command.type = CommandToCopyThreadType::MODIFY;
+                            command.geometry = std::move(transformOnly);
+                            command.id = stored.memoryId;
+                            command.tabID = myTab->tabID;
+                            command.containerMemoryId = container;
+                            moves.push_back(std::move(command));
+                        }
+                        std::lock_guard<std::mutex> lock(toCopyThreadMutex);
+                        for (CommandToCopyThread& command : moves) {
+                            commandToCopyThreadQueue.push(std::move(command));
+                        }
+                    }
+                    toCopyThreadCV.notify_one();
+                    std::cout << "[gpu][stress] queued " << moves.size()
+                              << " transform-only moves" << std::endl;
+                }
+                /* Temporary Debug Key: "n" re-meshes every object in the active Scene3D - a
+                GEOMETRY-CHANGED MODIFY, which soft-deletes the object's placement record and
+                appends a fresh one. That is the only thing in the app that manufactures holeBytes,
+                so it is how the page-compaction threshold gets exercised (graphics.md,
+                "Defragmentation logic"): press once to punch the holes, again to watch `compacted`
+                tick while cloneMB grows by far less than a whole page. */
+                if (input.x == 78 || input.x == 110) { // 'N' & 'n'
+                    const uint64_t container = InputViewContainerId(*myTab);
+                    std::vector<CommandToCopyThread> remesh;
+                    /* Re-mesh HALF the objects, alternating which half each press. Re-meshing all
+                    of them proves nothing: every object leaves its page, the page drains to
+                    objectCount 0 and the empty-page GC drops it, so holes never coexist with
+                    survivors. Alternating halves leaves each page ~50% holes AND still populated,
+                    and the next press touches the survivors - which is what re-clones that page
+                    and lets the threshold fire. (Holes are added to the CLONE in Pass 3, while the
+                    compaction decision reads the OLD page in Pass 2, so the punch and the compact
+                    can never be the same press.) */
+                    static int remeshPass = 0;
+                    const int phase = remeshPass++ % 2;
+                    int objectIndex = 0;
+                    if (container != 0) {
+                        for (const StoredGeometryObject3D& stored : myTab->storageObjects3D) {
+                            if (!stored.object || stored.object->memoryIDParent != container) continue;
+                            if ((objectIndex++ % 2) != phase) continue;
+                            GeometryData geo;
+                            if (!GeometryForObject(stored.objectType, stored.object, geo)) continue;
+                            CommandToCopyThread command;
+                            command.type = CommandToCopyThreadType::MODIFY;
+                            command.geometry = std::move(geo);
+                            command.id = stored.memoryId;
+                            command.tabID = myTab->tabID;
+                            command.containerMemoryId = container;
+                            remesh.push_back(std::move(command));
+                        }
+                        std::lock_guard<std::mutex> lock(toCopyThreadMutex);
+                        for (CommandToCopyThread& command : remesh) {
+                            commandToCopyThreadQueue.push(std::move(command));
+                        }
+                    }
+                    toCopyThreadCV.notify_one();
+                    std::cout << "[gpu][stress] queued " << remesh.size()
+                              << " geometry re-meshes" << std::endl;
+                }
                 break;
 
             case ACTION_TYPE::CAPTURECHANGED:
@@ -2142,6 +2330,12 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 BeginZoomWindowMode(myTab);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::TOGGLE_AUTO_RANDOM_GEOMETRY) {
                 myTab->autoGenerateRandomGeometry = !myTab->autoGenerateRandomGeometry;
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::HIDE_SELECTED_OBJECTS) {
+                ApplySceneVisibilityAction(myTab, SceneVisibilityAction::HideSelected);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::HIDE_UNSELECTED_OBJECTS) {
+                ApplySceneVisibilityAction(myTab, SceneVisibilityAction::HideUnselected);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::HIDE_RESET_OBJECTS) {
+                ApplySceneVisibilityAction(myTab, SceneVisibilityAction::ShowAll);
             }
         }
 

@@ -584,6 +584,14 @@ constexpr UIControlDefinition AllUIControls[] = {
 
     // Subgroup : Helper
     { Commands::CREATE_GRID3D,          UITextID::CREATE_GRID3D, U'x', 1, 2, 0, 0, true, false, 3 , 18 },
+    /* Per-object hide/show in the active Scene3D (graphics.md, 10M plan Step 5). They live under
+    Helpers rather than Views because the Views run sits past the right window edge at 1080p, where
+    the buttons render but cannot be reached. Plain buttons, not dropdown triggers: each is a single
+    action, and zIndex 1 would flash the dropdown placeholder rect for a frame. verticalSlotNo 0
+    starts a fresh column beside Create Grid3D. */
+    { Commands::HIDE_SELECTED,          UITextID::HIDE_SELECTED, U'x', 1, 3, 0, 0, true, true, 3 , 18 },
+    { Commands::HIDE_UNSELECTED,        UITextID::HIDE_UNSELECTED, U'x', 1, 3, 1, 0, true, true, 3 , 18 },
+    { Commands::HIDE_RESET,             UITextID::HIDE_RESET, U'x', 1, 3, 2, 0, true, true, 3 , 18 },
 
     // Subgroup : Views
     { Commands::CREATE_VIEW_3D,         UITextID::CREATE_VIEW_3D, U'x', 1, 0, 0, 0, true, false, 3 , 1 }, //A plane with a inclusion offset distance.
@@ -591,9 +599,6 @@ constexpr UIControlDefinition AllUIControls[] = {
     { Commands::CREATE_TEMP_CLIP,       UITextID::CREATE_TEMP_CLIP, U'x', 2, 3, 0, 1, true, false, 3 , 1 }, // Toggle Orthographic/Isometric/Perspective
     { Commands::DELETE_TEMP_CLIP,       UITextID::DELETE_TEMP_CLIP, U'x', 1, 3, 1, 0, true, false, 3 , 1 },
     { Commands::VIEW3D_TYPE,            UITextID::VIEW3D_TYPE, U'x', 1, 3, 2, 0, true, false, 3 , 1 }, //Dropdown: Solid/Transparent/Nodal Connectivity
-    { Commands::HIDE_SELECTED,          UITextID::HIDE_SELECTED, U'x', 2, 3, 0, 1, true, false, 3 , 1 },
-    { Commands::HIDE_UNSELECTED,        UITextID::HIDE_UNSELECTED, U'x', 2, 3, 1, 1, true, false, 3 , 1 },
-    { Commands::HIDE_RESET,             UITextID::HIDE_RESET, U'x', 2, 3, 2, 1, true, false, 3 , 1 },
     // Following 3 buttons change the behaviour of Left mouse button + drag on empty space in the view.
     { Commands::VIEW_ROTATE,            UITextID::VIEW_ROTATE, U'x', 1, 3, 0, 0, true, false, 3 , 1 }, //Dropdown: X/Y/Z Axis Rotate.
     { Commands::VIEW_PAN,               UITextID::VIEW_PAN, U'x', 1, 3, 1, 0, true, false, 3 , 1 }, //Dropdown: Pan / Tilt / Orbit

@@ -248,18 +248,24 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 // cannot clobber each other's camera.
                 const CameraState& camera = viewTarget.camera;
                 const bool isInputViewWindow = viewTarget.isInputViewWindow;
+                // Which of the 64 VisibilityMask bits this view tests (10M plan Step 5). The scene,
+                // highlight and pick passes must all be given the same one.
+                const uint32_t subTabBit = SubTabVisibilityBit(renderSlot);
                 uint64_t fenceToWaitFor = gpu.copyFenceValue.load(std::memory_order_acquire);// Cross-Queue Sync.
                 //if (fenceToWaitFor > 0) { threadRes.commandQueue->Wait(gpu.copyFence.Get(), fenceToWaitFor); }
                 //Above is commented out because render thread now no longer need to wait for copyFence,
                 //because, now render thread operate over READ ONLY page list.
-                if (activeInternalSubTabType == VishwakarmaStorage::ObjectType::Page2D && tab.cad2d) {
+                if (activeInternalSubTabType == VishwakarmaStorage::ObjectType::Page2D && tab.cad2d &&
+                    renderSlot >= 0 && renderSlot < MV_MAX_SUBTABS) {
+                    // Hand the Viewport's pan/zoom down, exactly as the camera is handed to Scene3D.
                     RenderPage2D(threadRes.commandList.Get(), winRes, *tab.cad2d,
-                        gpu.uiResources, monitorId, activeInternalSubTabMemoryId, renderSlot);
+                        gpu.uiResources, monitorId, activeInternalSubTabMemoryId,
+                        tab.viewports[renderSlot].page2DView);
                 }
                 else {
                     ClearSceneSkyGradient(threadRes.commandList.Get(), winRes, monitorId);
                     gpu.RenderScene3D(threadRes.commandList.Get(), winRes, tabRes, tab.geometry,
-                        camera, monitorId, activeInternalSubTabMemoryId);// Renders geometry.
+                        camera, monitorId, viewTarget.containers, subTabBit);// Renders geometry.
 
                     // Selection highlight + rotation-cube overlay (still inside the scene RTV/DSV +
                     // scene viewport bound by RenderScene3D, so this draws before the UI).
@@ -280,7 +286,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                         if (isInputViewWindow) {
                             RecordSelectionOverlays(threadRes.commandList.Get(), winRes, tabRes,
                                 tab.geometry, tab.selection, camera, sceneViewProj, sceneTopUI,
-                                sceneVpW, sceneVpH, activeInternalSubTabMemoryId);
+                                sceneVpW, sceneVpH, viewTarget.containers, subTabBit);
                         }
                     }
                 }
@@ -308,7 +314,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 if (scene3DActive && sceneVpH > 0 && isInputViewWindow) {
                     ServicePick(threadRes.commandList.Get(), winRes, tabRes, tab.geometry,
                         tab.selection, tabRes.pickCtx, monitorId, sceneViewProj, sceneTopUI,
-                        sceneVpW, sceneVpH, activeInternalSubTabMemoryId);
+                        sceneVpW, sceneVpH, viewTarget.containers, subTabBit);
                     if (tabRes.pickCtx.state == PickPassContext::State::Recorded) {
                         pendingPickCtxs.push_back(&tabRes.pickCtx);
                     }
@@ -435,6 +441,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                      << " chunks=" << chunks
                      << " commands=" << gCopyStats.commands.load(std::memory_order_relaxed)
                      << " clones=" << clones
+                     << " compacted=" << gCopyStats.pagesCompacted.load(std::memory_order_relaxed)
                      << " clones/chunk=" << std::fixed << std::setprecision(2)
                      << (chunks ? static_cast<double>(clones) / chunks : 0.0)
                      << " cloneMB=" << (gCopyStats.clonedBytes.load(std::memory_order_relaxed) >> 20)
@@ -448,6 +455,8 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                      << " slots(pending/free)=" << gCopyStats.pendingSlots.load(std::memory_order_relaxed)
                      << "/" << gCopyStats.freeSlots.load(std::memory_order_relaxed)
                      << " moves=" << gCopyStats.transformOnlyEdits.load(std::memory_order_relaxed)
+                     << " mask(writes/hidden)=" << gCopyStats.maskWrites.load(std::memory_order_relaxed)
+                     << "/" << gCopyStats.hiddenInstances.load(std::memory_order_relaxed)
                      << " retireBacklog(live/peak)="
                      << gCopyStats.liveRetireBacklog.load(std::memory_order_relaxed)
                      << "/" << gCopyStats.peakRetireBacklog.load(std::memory_order_relaxed)

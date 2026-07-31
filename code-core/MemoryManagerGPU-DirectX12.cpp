@@ -306,16 +306,18 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
 
     // Geometry staging is NOT per tab: every upload goes through the global gpu.uploadRing.
 
-    /* Instance arena + redirect table: two RESERVED (tiled) buffers covering
+    /* Instance arena + redirect table + visibility mask: three RESERVED (tiled) buffers covering
     MV_MAX_INSTANCES_PER_TAB elements each. No physical memory is committed here - tiles are mapped
     behind them as objects arrive, so a freshly opened tab costs nothing but virtual address space.
-    Both are device-local, so unlike the old world-matrix table they are not CPU-mappable: records
-    and redirect flips reach them through the upload ring like every other copy-thread write.
-    (10M plan Steps 2 and 4.) */
+    All three are device-local, so unlike the old world-matrix table they are not CPU-mappable:
+    records, redirect flips and mask writes reach them through the upload ring like every other
+    copy-thread write. (10M plan Steps 2, 4 and 5.) */
     tabRes.instanceArena.Initialize(kInstanceRecordBytes, MV_MAX_INSTANCES_PER_TAB,
         L"Instance Arena");
     tabRes.instanceSlotOf.Initialize(kInstanceSlotBytes, MV_MAX_INSTANCES_PER_TAB,
         L"Instance Redirect");
+    tabRes.visibilityMask.Initialize(kVisibilityMaskBytes, MV_MAX_INSTANCES_PER_TAB,
+        L"Visibility Mask");
 
     // SRV on per-tab shader-visible heap (already declared in struct). Unused by today's root-SRV
     // draw paths; it is the descriptor the Step 7 cull dispatch will need.
@@ -331,9 +333,11 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
     tabRes.freeInstanceSlots.clear();
     tabRes.pendingFreeInstanceIndexes.clear();
     tabRes.pendingFreeInstanceSlots.clear();
+    tabRes.hiddenInstanceMasks.clear();
     tabRes.registry.Initialize(MV_MAX_INSTANCES_PER_TAB);
     GrowInstanceArena(tabRes, kInstanceInitialCapacity); // First tiles + the matching SRV.
     tabRes.instanceSlotOf.Grow(kInstanceInitialCapacity);
+    tabRes.visibilityMask.Grow(kInstanceInitialCapacity);
 
     // Create root signature with constant buffer
     D3D12_FEATURE_DATA_ROOT_SIGNATURE featureData = {};
@@ -352,7 +356,7 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
         D3D12_DESCRIPTOR_RANGE_FLAG_NONE); //Now it does change every frame, so no static flag.
     ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_NONE);
 
-    CD3DX12_ROOT_PARAMETER1 rootParameters[4] = {}; // 7 DWORDs total, well under the 64 limit.
+    CD3DX12_ROOT_PARAMETER1 rootParameters[6] = {}; // 10 DWORDs total, well under the 64 limit.
 
     // No descriptor ranges needed!
     // b0 : ViewProj Constant Buffer (Root Descriptor)
@@ -365,6 +369,14 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
     // InstanceSlotOf[gpuInstanceIndex] first, then the record at that slot - the two-load form
     // that makes a transform edit a 4-byte flip instead of a 64-byte overwrite (10M plan Step 4).
     rootParameters[3].InitAsShaderResourceView(1, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_VERTEX);
+    // t2 : VisibilityMask, 8 bytes per gpuInstanceIndex (10M plan Step 5).
+    rootParameters[4].InitAsShaderResourceView(2, 0, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_VERTEX);
+    /* b2 : the drawing Viewport's SubTab bit index. Deliberately a SEPARATE root constant range
+    from b1 rather than a second value inside it: b1 is written per command by the command signature
+    (D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT, Num32BitValuesToSet = 1), and mixing a render-thread-set
+    value into the range ExecuteIndirect overwrites is a trap waiting to be sprung. Adding
+    parameters here is safe for the command signature below because it addresses index 2, unchanged. */
+    rootParameters[5].InitAsConstants(1, 2, 0, D3D12_SHADER_VISIBILITY_VERTEX);
 
     CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
     rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters,
@@ -468,12 +480,14 @@ void शंकर::CleanupTabResources(DX12ResourcesPerTab& tabRes) {
 
     tabRes.instanceArena.Shutdown();
     tabRes.instanceSlotOf.Shutdown();
+    tabRes.visibilityMask.Shutdown();
     tabRes.instanceCount = 0;
     tabRes.instanceSlotCount = 0;
     tabRes.freeInstanceIndexes.clear();
     tabRes.freeInstanceSlots.clear();
     tabRes.pendingFreeInstanceIndexes.clear();
     tabRes.pendingFreeInstanceSlots.clear();
+    tabRes.hiddenInstanceMasks.clear();
     tabRes.registry.Shutdown();
 
     CleanupSelection3DResources(tabRes);
@@ -727,6 +741,8 @@ size_t PruneRetiredGpuResources(uint64_t* outSafeRetireFence) {
         gCopyStats.pendingSlots.store(sweepTabRes.pendingFreeInstanceSlots.size(),
             std::memory_order_relaxed);
         gCopyStats.freeSlots.store(sweepTabRes.freeInstanceSlots.size(),
+            std::memory_order_relaxed);
+        gCopyStats.hiddenInstances.store(sweepTabRes.hiddenInstanceMasks.size(),
             std::memory_order_relaxed);
 
         if (allTabs[tabList[i]].cad2d) {

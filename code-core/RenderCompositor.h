@@ -11,7 +11,10 @@ struct DATASETTAB;
 // Which container/view a window displays this frame. Resolved once per window per frame by the
 // render thread (GpuRenderThread) before dispatching to the Scene3D / Page2D renderers.
 struct WindowViewTarget {
-    uint64_t containerMemoryId = 0; // 0 = nothing to render (e.g. view extracted elsewhere).
+    uint64_t containerMemoryId = 0; // Primary container. 0 = nothing to render (view extracted elsewhere).
+    // Every container this SubTab draws (10M plan Step 6). Empty when there is nothing to render;
+    // the renderers consult this rather than containerMemoryId, which stays for identity/UI use.
+    SubTabContainerSet containers;
     VishwakarmaStorage::ObjectType containerType = VishwakarmaStorage::ObjectType::Unknown;
     int renderSlot = -1;            // Sub-tab slot this window displays. -1 = none.
     CameraState camera;             // Per-view camera (Scene3D) or tab-level fallback.

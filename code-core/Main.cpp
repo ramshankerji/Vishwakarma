@@ -583,6 +583,12 @@ void ProcessPendingUIActions() {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::ZOOM_WINDOW_BEGIN);
         } else if (action.id == static_cast<uint32_t>(Commands::TOGGLE_AUTO_RANDOM)) {
             PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::TOGGLE_AUTO_RANDOM_GEOMETRY);
+        } else if (action.id == static_cast<uint32_t>(Commands::HIDE_SELECTED)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::HIDE_SELECTED_OBJECTS);
+        } else if (action.id == static_cast<uint32_t>(Commands::HIDE_UNSELECTED)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::HIDE_UNSELECTED_OBJECTS);
+        } else if (action.id == static_cast<uint32_t>(Commands::HIDE_RESET)) {
+            PushSystemTodoToTab(GetActiveTabForUIAction(), ACTION_TYPE::HIDE_RESET_OBJECTS);
         } else if (action.id == static_cast<uint32_t>(Commands::IMPORT_STD)) {
             ExtensionCommunications::QueueImportStdCommand(GetActiveTabForUIAction());
         } else if (action.id == static_cast<uint32_t>(Commands::IMPORT_DXF)) {

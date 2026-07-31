@@ -61,15 +61,10 @@ struct NETWORK_INTERFACE {
     char* ipAddress[16]; // IPv6 are 128 byte (=16 Byte), IPv4 will 32 bits i.e. 1st 4 Byte Only. 
 };
 
-struct VIEW_INSIDE_DATASETTAB {
-    // Each dataSet tab can have multiple views.
-    uint64_t viewID; //Unique view ID inside this dataSet tab. Randomly generated.
-	bool isExtratedInOwnWindow = false; //If true, this view is shown in some other window.
-	std::wstring viewName; //User assigned name of the view.
-    float backgroundColor[4]; //RGBA
-    float backgroundColorHue; // 0 to 360 degree.
-
-};
+// VIEW_INSIDE_DATASETTAB is gone (graphics.md, 10M plan Step 6 item 1). It was the first sketch of
+// a "view", predating the fixed-slot subTabs[] registry that actually shipped, and by the end it was
+// referenced by nothing but its own declaration. The live concepts are InternalSubTab (what content
+// is shown) and Viewport (how it is shown - camera, rectangle, input ownership).
 
 struct StoredGeometryObject3D {
     VishwakarmaStorage::ObjectType objectType = VishwakarmaStorage::ObjectType::Unknown;
@@ -83,13 +78,34 @@ struct StoredLogicalObject {
     META_DATA* object = nullptr;
 };
 
+/* One open SubTab: WHAT content is shown. A SubTab has exactly one content type - Scene3D or
+Page2D, never mixed, because a mixed SubTab would have ambiguous renderer and interaction
+semantics - and holds a SET of containers of that type (graphics.md, 10M plan Step 6). */
 struct InternalSubTab {
     VishwakarmaStorage::ObjectType containerType = VishwakarmaStorage::ObjectType::Unknown;
+    // Primary container: the one the sub-tab is titled after and that new geometry is parented to.
+    // It is also always containers.ids[0]; the rest of the set is additional content shown
+    // alongside it. Kept as a named field because the identity of a sub-tab is still "its"
+    // container - the set governs rendering, not identity.
     uint64_t containerMemoryId = 0;
+    SubTabContainerSet containers;
     std::string title;
-    // Per-view camera (Scene3D views). Engineering thread writes, render threads read lock-free,
-    // same 1-frame-staleness contract as the rest of the camera pipeline.
-    CameraState camera;
+};
+
+/* One Viewport: HOW that content is shown (graphics.md, 10M plan Step 6, item 2).
+
+The split matters because the two have genuinely different lifetimes and cardinalities. A SubTab is
+content selection; a Viewport is a camera pointed at it. SEVERAL Viewports may reference ONE SubTab
+with different cameras - two windows showing the same Scene3D from different angles, or a window
+later hosting several side by side - which is impossible while the camera lives inside the SubTab.
+
+Today the mapping is 1:1 (viewport slot i drives sub-tab slot i), so this changes no behaviour; what
+it changes is that nothing outside here assumes the mapping. Engineering thread writes, render
+threads read lock-free - the same benign 1-frame-staleness contract the camera always had. */
+struct Viewport {
+    int16_t subTabSlot = -1;    // SubTab whose content this Viewport draws. -1 = unused slot.
+    CameraState camera;         // Scene3D view state.
+    Cad2DViewState page2DView;  // Page2D pan/zoom view state.
 };
 
 // Lifecycle of one fixed sub-tab slot inside DATASETTAB.
@@ -108,8 +124,6 @@ struct DATASETTAB {
     uint64_t tabID;
     std::wstring fileName;
     std::wstring storageFilePath;
-	std::vector<VIEW_INSIDE_DATASETTAB> views; //All views need not be inside single windows. Some views can be in other windows.
-    int activeViewIndex = 0;
     float color[4] = {};
     float colorHue = 0;
 
@@ -155,6 +169,9 @@ struct DATASETTAB {
     // published); the index list is double buffered and published atomically so render/UI threads
     // read it lock-free. Fixed size avoids std::vector reallocation issues.
     InternalSubTab subTabs[MV_MAX_SUBTABS];
+    // Viewports, one per sub-tab slot today (viewports[i] draws subTabs[i]). Separate array so the
+    // 1:1 mapping is a current fact rather than a structural assumption - see Viewport.
+    Viewport viewports[MV_MAX_SUBTABS];
     uint16_t subTabIndexesA[MV_MAX_SUBTABS] = {}, subTabIndexesB[MV_MAX_SUBTABS] = {};
     std::atomic<uint16_t*> publishedSubTabIndexes{ nullptr };
     std::atomic<uint16_t>  publishedSubTabCount{ 0 };

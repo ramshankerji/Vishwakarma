@@ -29,7 +29,26 @@ struct InstanceRecord {
 };
 StructuredBuffer<InstanceRecord> Instances : register(t0);
 StructuredBuffer<uint> InstanceSlotOf : register(t1);
+/* Per-object SubTab membership, 64 bits carried as uint2 for broad compatibility (10M plan
+Step 5). Bit N set = visible in the sub-tab occupying slot N. Mirrored in
+ShaderScenePickVertex.hlsl. */
+StructuredBuffer<uint2> VisibilityMask : register(t2);
 cbuffer PerDraw : register(b1) { uint gpuInstanceIndex; };
+cbuffer PerView : register(b2) { uint subTabBit; };
+
+/* One bit test against one 32-bit half of the membership word. Because a reader only ever touches
+ONE of the two halves, a mask observed part-way through an 8-byte write still cannot be read
+inconsistently - which is what lets the copy thread mutate it in place under invariant 2.
+
+subTabBit >= 64 means this Viewport has no mask-addressable bit (kNoSubTabBit for a sub-tab slot
+past 63, or a draw with no sub-tab at all such as the print path). Those views show everything
+rather than nothing. */
+bool IsVisibleInSubTab(uint instanceIndex, uint bit) {
+    if (bit >= 64u) return true;
+    uint2 mask = VisibilityMask[instanceIndex];
+    uint word = bit < 32u ? mask.x : mask.y;
+    return (word & (1u << (bit & 31u))) != 0u;
+}
 
 float3 InstanceTransformPoint(InstanceRecord r, float3 p) {
     float4 h = float4(p, 1.0f);
@@ -50,6 +69,17 @@ struct PSInput {
 PSInput main(float3 position : POSITION, float4 normal : NORMAL, float4 color : COLOR)
 {
     PSInput result;
+    /* Hidden objects collapse to a degenerate primitive. Every vertex of the object takes this same
+    branch, so all three corners of every triangle land on the identical position and nothing is
+    rasterised. Vertex shading still runs for hidden geometry - the accepted interim cost until
+    Step 7's compute compaction drops hidden objects before they ever become draw commands. */
+    if (!IsVisibleInSubTab(gpuInstanceIndex, subTabBit)) {
+        result.position = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        result.color = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        result.normal = float3(0.0f, 0.0f, 1.0f);
+        return result;
+    }
+
     // Two loads, not one. The redirect is what lets a move rewrite 4 bytes instead of 64: a reader
     // sees the old slot or the new one, both holding a valid transform, never a torn record.
     uint slot = InstanceSlotOf[gpuInstanceIndex];

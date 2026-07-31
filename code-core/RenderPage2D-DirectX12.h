@@ -65,10 +65,10 @@ using Page2DGpuResources = DX12Resources2DPerTab;
 
 struct TabCad2DStorage {
     Page2DGpuResources dx;
-    // Pan/zoom is per view: each open Page2D sub-tab slot owns its own view state, so the same
-    // tab's two Page2Ds (inline + extracted, or two extracted windows) pan/zoom independently.
-    // Indexed by sub-tab slot; input resolves the interacting slot, render/print the shown slot.
-    Cad2DViewState views[MV_MAX_SUBTABS];
+    // Pan/zoom moved OUT of here into DATASETTAB::viewports[slot].page2DView (graphics.md, 10M plan
+    // Step 6, item 2). It is view state, not content state, and it now sits beside the Scene3D
+    // camera in the Viewport that owns both - which is what lets several Viewports show one Page2D
+    // panned differently. This struct keeps only what belongs to the CONTENT.
 
     // 2D click-selection (CPU hit-testing). Selected object ids; the copy thread reads this while
     // rebuilding pages and stamps kCad2DSelectedFlag into the matching GPU records.
@@ -155,9 +155,12 @@ struct TabCad2DStorage {
 
 void InitCad2DTabResources(TabCad2DStorage& storage);
 void CleanupCad2DTabResources(TabCad2DStorage& storage);
+// Takes the pan/zoom as a parameter, mirroring how the Scene3D renderer takes a camera: the two
+// renderers receive a container, a view state and a viewport, and never reach for view state
+// themselves (graphics.md, "Key boundary rule" + 10M plan Step 6).
 void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     TabCad2DStorage& storage, DX12ResourcesUI& uiResources, int monitorId,
-    uint64_t activeContainerMemoryId, int viewSlot);
+    uint64_t activeContainerMemoryId, const Cad2DViewState& view);
 void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch);
 void PruneCad2DRetiredResources(TabCad2DStorage& storage, uint64_t safeRetireFence);
 void ReleaseCad2DRetiredResources(TabCad2DStorage& storage);
