@@ -1794,6 +1794,63 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
                         PushUIAction(InternalSubTabs::kOpenUIAction,
                             static_cast<uint32_t>(activeTabIndex), hoveredBranchObjectId);
                     }
+                    // Arm a potential drag-to-compose from this branch. It only becomes a real drag
+                    // below once the pointer moves past a threshold, so a plain click still selects
+                    // and a double-click still opens (10M plan Step 6). Non-Scene3D branches arm too;
+                    // the engineering-thread handler rejects a drop that is not a Scene3D.
+                    window.draggedContainerId = hoveredBranchObjectId;
+                    window.draggedContainerOriginX = input.mouseX;
+                    window.draggedContainerOriginY = input.mouseY;
+                    window.draggingContainer = false;
+                }
+            }
+
+            /* Drag-to-compose: a container dragged out of the tree and released over the scene area
+            is composed into the active SubTab's container set (10M plan Step 6). Promoted past a
+            small threshold so a plain click/double-click is unaffected; the drop is valid only below
+            the ribbon and outside the tree, i.e. over the inline 3D scene. */
+            if (window.draggedContainerId != 0) {
+                if (!input.leftButtonDown || input.leftButtonReleasedThisFrame) {
+                    if (window.draggingContainer) {
+                        const bool overScene =
+                            input.mouseY > static_cast<float>(topUITotalHeightPx) &&
+                            !DataTreeView::ContainsPoint(treeLayout, input.mouseX, input.mouseY);
+                        if (overScene) {
+                            PushUIAction(InternalSubTabs::kAddContainerToViewUIAction,
+                                static_cast<uint32_t>(activeTabIndex), window.draggedContainerId);
+                        }
+                    }
+                    window.draggedContainerId = 0;
+                    window.draggingContainer = false;
+                } else {
+                    const float dragDX = input.mouseX - window.draggedContainerOriginX;
+                    const float dragDY = input.mouseY - window.draggedContainerOriginY;
+                    constexpr float kComposeDragThresholdPx = 6.0f;
+                    if (dragDX * dragDX + dragDY * dragDY >
+                        kComposeDragThresholdPx * kComposeDragThresholdPx) {
+                        window.draggingContainer = true;
+                    }
+                    if (window.draggingContainer) {
+                        // Drag ghost: a small chip near the cursor carrying the container's name.
+                        const char32_t* ghostLabel = U"";
+                        for (const DataTreeView::Row& row : treeRows) {
+                            if (row.objectId == window.draggedContainerId) {
+                                ghostLabel = row.label.c_str();
+                                break;
+                            }
+                        }
+                        const float ghostTextWidth = MeasureUIStringWidth(ghostLabel, uiTextScale);
+                        const float ghostPadX = 6.0f * uiTextScale;
+                        const float ghostH = 20.0f * uiTextScale;
+                        const float ghostW = ghostTextWidth + ghostPadX * 2.0f;
+                        const float ghostX = input.mouseX + 12.0f;
+                        const float ghostY = input.mouseY + 12.0f;
+                        PushRoundedRectangle(ctx, ghostX, ghostY, ghostW, ghostH,
+                            4.0f * uiTextScale, 0xCC3399FFu, uiRes);
+                        pushTextClipped(ghostX + ghostPadX,
+                            textBaselineY(ghostY, ghostH, uiTextScale), ghostLabel,
+                            ghostTextWidth + 1.0f, 0xFFFFFFFFu, uiTextScale);
+                    }
                 }
             }
 
@@ -1816,6 +1873,93 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
 
                 pushTextClipped(row.textX, baselineY, row.label.c_str(), row.textMaxWidth,
                     labelColor, uiTextScale, row.isActiveBranch);
+            }
+        }
+
+        /* Composed-container chips (10M plan Step 6). When the active Scene3D SubTab shows more than
+        its home container, a strip at the top-centre of the scene names each composed Scene3D; the
+        home has no close control, every additional one carries an 'x' that drops it from the set.
+        Drawn independent of the data tree so it survives hiding the tree. Names are resolved under
+        storageObjectsMutex, the same locked read the tree build uses. */
+        if (activeInternalSubTabType == VishwakarmaStorage::ObjectType::Scene3D &&
+            activeInternalSubTabMemoryId != 0 && tab.storageObjectsMutex) {
+            struct ComposedChip { uint64_t id; std::u32string label; bool isHome; };
+            std::vector<ComposedChip> chips;
+            {
+                std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
+                const int slot = FindPublishedSubTabSlot(tab, activeInternalSubTabMemoryId);
+                if (slot >= 0 && tab.subTabs[slot].containers.count > 1) {
+                    const InternalSubTab& subTab = tab.subTabs[slot];
+                    for (uint8_t i = 0; i < subTab.containers.count; ++i) {
+                        ComposedChip chip;
+                        chip.id = subTab.containers.ids[i];
+                        chip.isHome = (chip.id == subTab.containerMemoryId);
+                        if (chip.isHome) {
+                            chip.label = DataTreeView::AsciiToDisplayText(subTab.title.c_str());
+                        } else {
+                            for (const StoredLogicalObject& obj : tab.storageLogicalObjects) {
+                                if (obj.object && obj.memoryId == chip.id) {
+                                    chip.label = BuildTreeNodeLabel(obj.objectType, obj.object,
+                                        obj.memoryId);
+                                    break;
+                                }
+                            }
+                            if (chip.label.empty()) chip.label = U"Scene3D";
+                        }
+                        chips.push_back(std::move(chip));
+                    }
+                }
+            }
+
+            if (!chips.empty()) {
+                const float chipH = 22.0f * uiTextScale;
+                const float chipPadX = 8.0f * uiTextScale;
+                const float chipGap = 4.0f * uiTextScale;
+                const float closeW = chipH; // Square close hit area on composed chips.
+                std::vector<float> chipW(chips.size());
+                float totalW = 0.0f;
+                for (size_t i = 0; i < chips.size(); ++i) {
+                    const float textW = MeasureUIStringWidth(chips[i].label.c_str(), uiTextScale);
+                    chipW[i] = textW + chipPadX * 2.0f + (chips[i].isHome ? 0.0f : closeW);
+                    totalW += chipW[i] + (i > 0 ? chipGap : 0.0f);
+                }
+                float chipX = std::round((W - totalW) * 0.5f);
+                const float chipY = static_cast<float>(topUITotalHeightPx) + 6.0f;
+                for (size_t i = 0; i < chips.size(); ++i) {
+                    const uint32_t bg = chips[i].isHome ? 0xCC444444u : 0xCC2E6DA8u;
+                    PushRoundedRectangle(ctx, chipX, chipY, chipW[i], chipH, 4.0f * uiTextScale,
+                        bg, uiRes);
+                    pushTextClipped(chipX + chipPadX, textBaselineY(chipY, chipH, uiTextScale),
+                        chips[i].label.c_str(),
+                        chipW[i] - chipPadX * 2.0f - (chips[i].isHome ? 0.0f : closeW),
+                        0xFFFFFFFFu, uiTextScale);
+                    if (!chips[i].isHome) {
+                        const float closeX = chipX + chipW[i] - closeW;
+                        const bool closeHovered = input.mouseX >= closeX &&
+                            input.mouseX < closeX + closeW && input.mouseY >= chipY &&
+                            input.mouseY < chipY + chipH;
+                        const char32_t closeText[2] = { U'x', U'\0' };
+                        const float closeTextW = MeasureUIStringWidth(closeText, uiTextScale);
+                        // Hover affordance matching the sub-tab close button: a rounded background
+                        // behind the glyph so the 'x' clearly reads as a removable control. A
+                        // brighter grey at rest (vs the sub-tab band's dull grey) keeps it legible
+                        // against the blue composed-chip fill so removal is discoverable.
+                        if (closeHovered) {
+                            const float closeInset = 2.0f * uiTextScale;
+                            PushRoundedRectangle(ctx, closeX + closeInset, chipY + closeInset,
+                                closeW - 2.0f * closeInset, chipH - 2.0f * closeInset,
+                                3.0f * uiTextScale, 0xFF444444u, uiRes);
+                        }
+                        pushTextClipped(closeX + (closeW - closeTextW) * 0.5f,
+                            textBaselineY(chipY, chipH, uiTextScale), closeText, closeTextW + 1.0f,
+                            closeHovered ? 0xFFFFFFFFu : 0xFFCCCCCCu, uiTextScale);
+                        if (closeHovered && input.leftButtonPressedThisFrame) {
+                            PushUIAction(InternalSubTabs::kRemoveContainerFromViewUIAction,
+                                static_cast<uint32_t>(activeTabIndex), chips[i].id);
+                        }
+                    }
+                    chipX += chipW[i] + chipGap;
+                }
             }
         }
     }

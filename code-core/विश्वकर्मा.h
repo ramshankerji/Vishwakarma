@@ -280,6 +280,14 @@ struct SingleUIWindow {
     // Drag-to-extract state (owned by the render thread that draws this window, immediate-mode UI).
     int pressedTabId = -1;      // Tab button under the initial left-button press. -1 = none.
     int pressedSubTabSlot = -1; // Sub-tab button under the initial left-button press. -1 = none.
+
+    // Drag-a-Scene3D-from-the-data-tree-onto-the-Viewport state (compose; 10M plan Step 6). Armed on
+    // a tree-branch press; promoted to a real drag once the pointer moves past a threshold; a release
+    // over the scene area composes the container into the active SubTab's set. Immediate-mode, owned
+    // by this window's render thread like the extract-drag state above.
+    uint64_t draggedContainerId = 0; // Container under the initial tree-branch press. 0 = none.
+    float draggedContainerOriginX = 0.0f, draggedContainerOriginY = 0.0f; // Press origin, for the threshold.
+    bool draggingContainer = false;  // True once past the movement threshold (vs a plain click).
     std::atomic<uint32_t> migrationState{ 0 };
     /*  0 : Normal rendering, 1 : UI requested migration, 2 : Source render thread released window
     3 : Destination render thread acquiring, 4 : Destination initialized resources, 0 : Back to normal */

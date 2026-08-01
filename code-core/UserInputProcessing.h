@@ -135,7 +135,12 @@ enum class ACTION_TYPE : uint16_t { // Specifying uint16_t ensures that it is of
     // cloned, no argument buffer rebuilt, nothing published.
     HIDE_SELECTED_OBJECTS = 30031,   // Hide the current selection in this view.
     HIDE_UNSELECTED_OBJECTS = 30032, // Hide everything in this view EXCEPT the current selection.
-    HIDE_RESET_OBJECTS = 30033       // Show everything again in this view.
+    HIDE_RESET_OBJECTS = 30033,      // Show everything again in this view.
+    // Compose a Scene3D container into / out of the active SubTab's container set (graphics.md,
+    // 10M plan Step 6). objectId = the Scene3D being added / removed; no geometry is copied - the
+    // set is a list of container IDs the renderers iterate.
+    ADD_CONTAINER_TO_SUBTAB = 30034,
+    REMOVE_CONTAINER_FROM_SUBTAB = 30035
 };
 
 struct ACTION_DETAILS_OLD {

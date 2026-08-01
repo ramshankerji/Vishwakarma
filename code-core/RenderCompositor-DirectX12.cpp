@@ -91,6 +91,26 @@ void GpuRenderThread(int monitorId, int refreshRate) {
     // Command lists are created in the recording state, but our loop expects them closed initially.
     threadRes.commandList->Close();
 
+    // GPU draw-command compaction scratch for this monitor (10M plan Step 7 slice). Both are UAV
+    // targets, so they need ALLOW_UNORDERED_ACCESS; created in COMMON (buffers decay to COMMON at
+    // every ExecuteCommandLists boundary, which the per-frame state reset below relies on).
+    {
+        CD3DX12_HEAP_PROPERTIES defaultHeap(D3D12_HEAP_TYPE_DEFAULT);
+        auto visibleDesc = CD3DX12_RESOURCE_DESC::Buffer(
+            static_cast<uint64_t>(SceneCullScratch::kMaxCommands) * sizeof(IndirectCommand),
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        ThrowIfFailed(gpu.device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE,
+            &visibleDesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
+            IID_PPV_ARGS(&threadRes.cullScratch.visibleIndirect)));
+        threadRes.cullScratch.visibleIndirect->SetName(L"Visible Indirect");
+        auto countDesc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(uint32_t),
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        ThrowIfFailed(gpu.device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE,
+            &countDesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
+            IID_PPV_ARGS(&threadRes.cullScratch.visibleCount)));
+        threadRes.cullScratch.visibleCount->SetName(L"Visible Count");
+    }
+
     uint64_t lastRenderedFrame = 0;
     const auto frameDuration = std::chrono::milliseconds(1000 / refreshRate);
 
@@ -107,6 +127,10 @@ void GpuRenderThread(int monitorId, int refreshRate) {
         auto& allocator = threadRes.commandAllocators[threadRes.allocatorIndex];
         allocator->Reset();
         threadRes.commandList->Reset(allocator.Get(), nullptr); // Pass 'nullptr' for the PSO here so we don't enforce a state yet.
+        // New command list == new ExecuteCommandLists: the scratch buffers have decayed to COMMON,
+        // so the per-page barrier tracking must start from COMMON again (10M plan Step 7 slice).
+        threadRes.cullScratch.visibleState = D3D12_RESOURCE_STATE_COMMON;
+        threadRes.cullScratch.countState = D3D12_RESOURCE_STATE_COMMON;
 
         bool didRender = false;
         // Picks recorded this frame; promoted to in-flight (with the frame's fence) after Signal.
@@ -265,7 +289,8 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                 else {
                     ClearSceneSkyGradient(threadRes.commandList.Get(), winRes, monitorId);
                     gpu.RenderScene3D(threadRes.commandList.Get(), winRes, tabRes, tab.geometry,
-                        camera, monitorId, viewTarget.containers, subTabBit);// Renders geometry.
+                        camera, monitorId, viewTarget.containers, subTabBit,
+                        threadRes.cullScratch);// Renders geometry.
 
                     // Selection highlight + rotation-cube overlay (still inside the scene RTV/DSV +
                     // scene viewport bound by RenderScene3D, so this draws before the UI).

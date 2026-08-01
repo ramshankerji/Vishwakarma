@@ -497,6 +497,44 @@ static void ActivateInternalSubTab(DATASETTAB* targetTab, uint64_t memoryId) {
     }
 }
 
+/* Compose a Scene3D container INTO the active SubTab's container set (graphics.md, 10M plan Step 6).
+No geometry is copied: the set is a list of container IDs the renderers iterate, so the dragged
+Scene3D's pages are simply drawn alongside the home container's. The active SubTab is the drop target
+because the same-window drag drops onto the inline viewport, which shows the active SubTab. Mutating
+under storageObjectsMutex matches how the set is seeded at open time; render threads read it lock-free
+next frame (ResolveWindowViewTarget copies it by value). */
+static void AddContainerToActiveSubTab(DATASETTAB* targetTab, uint64_t containerId) {
+    if (!targetTab || containerId == 0 || !targetTab->storageObjectsMutex) return;
+
+    std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+    const int slot = FindPublishedSubTabSlot(*targetTab, targetTab->activeInternalSubTabMemoryId);
+    if (slot < 0) return;
+    InternalSubTab& subTab = targetTab->subTabs[slot];
+    // Composition is Scene3D-only: a mixed-type SubTab has ambiguous renderer/interaction semantics.
+    if (subTab.containerType != VishwakarmaStorage::ObjectType::Scene3D) return;
+    // The dragged id must be an existing Scene3D in this tab (not a Page2D, folder or logical node).
+    bool isScene3D = false;
+    for (const StoredLogicalObject& entry : targetTab->storageLogicalObjects) {
+        if (entry.object && entry.memoryId == containerId &&
+            entry.objectType == VishwakarmaStorage::ObjectType::Scene3D) { isScene3D = true; break; }
+    }
+    if (!isScene3D) return;
+    subTab.containers.Add(containerId); // Dedupes the home + duplicates, caps at 8.
+}
+
+// Remove a composed container from the active SubTab's set. The home/primary container defines the
+// SubTab and is never removable.
+static void RemoveContainerFromActiveSubTab(DATASETTAB* targetTab, uint64_t containerId) {
+    if (!targetTab || containerId == 0 || !targetTab->storageObjectsMutex) return;
+
+    std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+    const int slot = FindPublishedSubTabSlot(*targetTab, targetTab->activeInternalSubTabMemoryId);
+    if (slot < 0) return;
+    InternalSubTab& subTab = targetTab->subTabs[slot];
+    if (containerId == subTab.containerMemoryId) return; // Cannot drop the home container.
+    subTab.containers.Remove(containerId);
+}
+
 static void CloseInternalSubTab(DATASETTAB* targetTab, uint64_t memoryId) {
     if (!targetTab || memoryId == 0 || !targetTab->storageObjectsMutex) return;
 
@@ -2219,6 +2257,15 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                     std::cout << "[gpu][stress] queued " << remesh.size()
                               << " geometry re-meshes" << std::endl;
                 }
+                // Temporary Debug Key: "k" toggles the GPU draw-command compaction path
+                // (gUseComputeCull) against the legacy direct-ExecuteIndirect path, for A/B parity
+                // checking (graphics.md, 10M plan Step 7 slice). Hide a few objects, then flip this
+                // and confirm the image is identical - hidden objects are dropped pre-raster now.
+                if (input.x == 75 || input.x == 107) { // 'K' & 'k'
+                    gUseComputeCull = !gUseComputeCull;
+                    std::cout << "[gpu][stress] compute cull "
+                              << (gUseComputeCull ? "ON" : "OFF") << std::endl;
+                }
                 break;
 
             case ACTION_TYPE::CAPTURECHANGED:
@@ -2273,6 +2320,10 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 CloseInternalSubTab(myTab, nextWorkTODO.objectId);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::INTERNAL_SUB_TAB_EXTRACTED) {
                 HandleSubTabExtracted(myTab, nextWorkTODO.objectId);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::ADD_CONTAINER_TO_SUBTAB) {
+                AddContainerToActiveSubTab(myTab, nextWorkTODO.objectId);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::REMOVE_CONTAINER_FROM_SUBTAB) {
+                RemoveContainerFromActiveSubTab(myTab, nextWorkTODO.objectId);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_PRIMITIVE_CREATION3D) {
                 BeginPrimitive3DPlacement(myTab, static_cast<VishwakarmaStorage::ObjectType>(nextWorkTODO.x));
             } else if (nextWorkTODO.actionType == ACTION_TYPE::BEGIN_LINE_CREATION2D) {

@@ -6,6 +6,7 @@
 #include "UserInterface-DirectX12.h"
 #include "ShaderSceneVertex.h"
 #include "ShaderScenePixel.h"
+#include "ShaderSceneCull.h"
 #include "ShaderSkyGradientVertex.h"
 #include "ShaderSkyGradientPixel.h"
 #include <algorithm>
@@ -18,6 +19,10 @@
 
 extern शंकर gpu;
 extern std::atomic<uint64_t> atlasFence;
+
+// Defaults OFF: bring up the compaction path behind a debug key, so a defect there cannot break
+// normal rendering (10M plan Step 7 slice). Flip the default once verified at parity.
+bool gUseComputeCull = false;
 
 namespace {
 
@@ -126,6 +131,58 @@ void ClearSceneSkyGradient(ID3D12GraphicsCommandList* commandList, DX12Resources
 }
 
 
+void InitSceneCullResources(ID3D12Device* device) {
+    if (!device || gpu.sceneCullPSO) return;
+
+    // All root descriptors, no descriptor tables: the per-page draw structure is retained in this
+    // slice, so the compute pass needs no shader-visible descriptor heap (10M plan Step 7).
+    CD3DX12_ROOT_PARAMETER1 params[5] = {};
+    params[0].InitAsConstants(2, 0);            // b0: { templateCount, subTabBit }
+    params[1].InitAsShaderResourceView(0);      // t0: Templates (the page's indirectBuffer)
+    params[2].InitAsShaderResourceView(1);      // t1: VisibilityMask
+    params[3].InitAsUnorderedAccessView(0);     // u0: VisibleOut (compacted commands)
+    params[4].InitAsUnorderedAccessView(1);     // u1: VisibleCount (raw uint at byte 0)
+
+    CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootDesc;
+    rootDesc.Init_1_1(_countof(params), params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE);
+
+    ComPtr<ID3DBlob> signature;
+    ComPtr<ID3DBlob> errorBlob;
+    HRESULT hr = D3DX12SerializeVersionedRootSignature(&rootDesc, D3D_ROOT_SIGNATURE_VERSION_1_1,
+        &signature, &errorBlob);
+    if (FAILED(hr)) {
+        if (errorBlob)
+            std::cerr << "Scene Cull Root Signature Serialization Failed:\n"
+            << (char*)errorBlob->GetBufferPointer() << std::endl;
+        ThrowIfFailed(hr);
+    }
+    ThrowIfFailed(device->CreateRootSignature(0, signature->GetBufferPointer(),
+        signature->GetBufferSize(), IID_PPV_ARGS(&gpu.sceneCullRootSignature)));
+    gpu.sceneCullRootSignature->SetName(L"Scene Cull");
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.pRootSignature = gpu.sceneCullRootSignature.Get();
+    psoDesc.CS = CD3DX12_SHADER_BYTECODE(g_sceneCullShader, sizeof(g_sceneCullShader));
+    ThrowIfFailed(device->CreateComputePipelineState(&psoDesc, IID_PPV_ARGS(&gpu.sceneCullPSO)));
+
+    // 4-byte zero source: each page resets its visible-command count with a CopyBufferRegion from
+    // here before the dispatch, which keeps the reset root-descriptor-only (no ClearUAV, which would
+    // need both a CPU and a shader-visible descriptor).
+    CD3DX12_HEAP_PROPERTIES uploadHeap(D3D12_HEAP_TYPE_UPLOAD);
+    auto zeroDesc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(uint32_t));
+    ThrowIfFailed(device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &zeroDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&gpu.cullZeroBuffer)));
+    gpu.cullZeroBuffer->SetName(L"Cull Zero");
+    uint8_t* mapped = nullptr;
+    CD3DX12_RANGE readRange(0, 0);
+    ThrowIfFailed(gpu.cullZeroBuffer->Map(0, &readRange, reinterpret_cast<void**>(&mapped)));
+    const uint32_t zero = 0;
+    memcpy(mapped, &zero, sizeof(zero));
+    gpu.cullZeroBuffer->Unmap(0, nullptr);
+
+    std::wcout << L"Scene cull compaction pipeline initialized\n";
+}
+
 std::unique_ptr<GeometryPage> CreateNewPage(uint64_t containerMemoryId)
 //Do not make this static function. It accesses global gpu singleton.
 {
@@ -153,7 +210,7 @@ std::unique_ptr<GeometryPage> CreateNewPage(uint64_t containerMemoryId)
 void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
     DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage,
     const CameraState& camera, int monitorId, const SubTabContainerSet& containers,
-    uint32_t subTabBit) {
+    uint32_t subTabBit, SceneCullScratch& cullScratch) {
     // Update constant buffer with transformation matrices
 
     // Create view matrix (camera looking at scene from distance)
@@ -252,15 +309,77 @@ void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
                 vbv.StrideInBytes = sizeof(Vertex);
 
                 D3D12_INDEX_BUFFER_VIEW ibv{};
-                ibv.BufferLocation = page.buffer->GetGPUVirtualAddress() + page.indexTail;
-                ibv.SizeInBytes = page.pageSize - page.indexTail;
+                // Bind at the PAGE BASE covering the whole page, so StartIndexLocation is
+                // absolute (indexByteOffset / 2) and stable across appends - indexTail moves down
+                // on every append, which would silently invalidate an indexTail-relative start
+                // index (graphics.md, 10M plan Step 7, constraint 1). The low-byte overlap with
+                // the vertex region is harmless: no draw references indices down there.
+                ibv.BufferLocation = page.buffer->GetGPUVirtualAddress();
+                ibv.SizeInBytes = page.pageSize;
                 ibv.Format = DXGI_FORMAT_R16_UINT;
 
                 commandList->IASetVertexBuffers(0, 1, &vbv);
                 commandList->IASetIndexBuffer(&ibv);
 
-                commandList->ExecuteIndirect(tabRes.commandSignature.Get(),
-                    page.indirectCount, page.indirectBuffer.Get(), 0, nullptr, 0);
+                if (!gUseComputeCull) {
+                    // Legacy path: draw every live template; hidden objects collapse to a
+                    // degenerate primitive in the vertex shader (the interim Step 5 cost the
+                    // compute path below removes). Kept as the fallback until parity is confirmed.
+                    commandList->ExecuteIndirect(tabRes.commandSignature.Get(),
+                        page.indirectCount, page.indirectBuffer.Get(), 0, nullptr, 0);
+                    continue;
+                }
+
+                /* GPU DRAW-COMMAND COMPACTION (graphics.md, 10M plan Step 7 - vertical slice).
+                A compute pass copies only the templates whose VisibilityMask bit for this SubTab is
+                set into the per-monitor scratch, so hidden/filtered objects are DROPPED before they
+                become draw commands rather than vertex-shaded into degenerates. One ExecuteIndirect
+                per page then draws the compacted output, capped by the GPU-written count buffer.
+
+                The compute root signature and its arguments are independent of the graphics root
+                signature + arguments already bound above, so only the shared pipeline-state slot has
+                to be restored before the draw. VBV/IBV and viewport/scissor are IA/RS state and are
+                untouched by the dispatch. */
+                SceneCullScratch& s = cullScratch;
+                auto barrier = [&](ID3D12Resource* r, D3D12_RESOURCE_STATES& cur,
+                    D3D12_RESOURCE_STATES next) {
+                        if (cur == next) return;
+                        auto b = CD3DX12_RESOURCE_BARRIER::Transition(r, cur, next);
+                        commandList->ResourceBarrier(1, &b);
+                        cur = next;
+                    };
+
+                // Reset this page's visible-command count to 0 (root-descriptor-only clear).
+                barrier(s.visibleCount.Get(), s.countState, D3D12_RESOURCE_STATE_COPY_DEST);
+                commandList->CopyBufferRegion(s.visibleCount.Get(), 0, gpu.cullZeroBuffer.Get(), 0,
+                    sizeof(uint32_t));
+                barrier(s.visibleCount.Get(), s.countState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                barrier(s.visibleIndirect.Get(), s.visibleState,
+                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+                const uint32_t cullConstants[2] = { page.indirectCount, subTabBit };
+                commandList->SetComputeRootSignature(gpu.sceneCullRootSignature.Get());
+                commandList->SetPipelineState(gpu.sceneCullPSO.Get());
+                commandList->SetComputeRoot32BitConstants(0, 2, cullConstants, 0);
+                commandList->SetComputeRootShaderResourceView(1,
+                    page.indirectBuffer->GetGPUVirtualAddress());       // t0 templates
+                commandList->SetComputeRootShaderResourceView(2, tabRes.visibilityMask.va); // t1 mask
+                commandList->SetComputeRootUnorderedAccessView(3,
+                    s.visibleIndirect->GetGPUVirtualAddress());         // u0 compacted output
+                commandList->SetComputeRootUnorderedAccessView(4,
+                    s.visibleCount->GetGPUVirtualAddress());            // u1 count
+                commandList->Dispatch((page.indirectCount + 63) / 64, 1, 1);
+
+                // Hand the compacted commands + count to the draw as indirect arguments.
+                barrier(s.visibleIndirect.Get(), s.visibleState,
+                    D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+                barrier(s.visibleCount.Get(), s.countState, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+
+                // Restore graphics PSO (root signature + its arguments were never disturbed).
+                // MaxCommandCount is the template count; the count buffer caps the actual draws.
+                commandList->SetPipelineState(tabRes.pipelineState.Get());
+                commandList->ExecuteIndirect(tabRes.commandSignature.Get(), page.indirectCount,
+                    s.visibleIndirect.Get(), 0, s.visibleCount.Get(), 0);
             }
         }
     } // End of if (snapshot)
@@ -1132,7 +1251,10 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     ic.gpuInstanceIndex = obj.gpuInstanceIndex;
                     ic.drawArguments.IndexCountPerInstance = obj.indexCount;
                     ic.drawArguments.InstanceCount = 1;
-                    ic.drawArguments.StartIndexLocation = (obj.indexByteOffset - page->indexTail) / sizeof(uint16_t);
+                    // Absolute, page-base-relative: the IBV is bound at the page base, and this
+                    // value is stable for the object's stay in the page regardless of later
+                    // appends moving indexTail (graphics.md, 10M plan Step 7, constraint 1).
+                    ic.drawArguments.StartIndexLocation = obj.indexByteOffset / sizeof(uint16_t);
                     ic.drawArguments.BaseVertexLocation = obj.vertexByteOffset / sizeof(Vertex);
                     ic.drawArguments.StartInstanceLocation = 0;
 

@@ -70,7 +70,6 @@ struct Print3DPage {
     ComPtr<ID3D12Resource> indirectBuffer;
     uint32_t indirectCount = 0;
     uint32_t vertexHead = 0;
-    uint32_t indexTail = 0;
     uint32_t pageSize = 0;
 };
 
@@ -116,7 +115,6 @@ std::vector<Print3DPage> Collect3DPages(TabGeometryStorage& storage,
             copy.indirectBuffer = page->indirectBuffer;
             copy.indirectCount = page->indirectCount;
             copy.vertexHead = page->vertexHead;
-            copy.indexTail = page->indexTail;
             copy.pageSize = page->pageSize;
             result.push_back(std::move(copy));
         }
@@ -271,8 +269,10 @@ void Record3DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab,
         vbv.StrideInBytes = sizeof(Vertex);
 
         D3D12_INDEX_BUFFER_VIEW ibv{};
-        ibv.BufferLocation = page.buffer->GetGPUVirtualAddress() + page.indexTail;
-        ibv.SizeInBytes = page.pageSize - page.indexTail;
+        // Bind at the page base over the whole page: StartIndexLocation is absolute now
+        // (indexByteOffset / 2), matching RenderScene3D (graphics.md, 10M plan Step 7, constraint 1).
+        ibv.BufferLocation = page.buffer->GetGPUVirtualAddress();
+        ibv.SizeInBytes = page.pageSize;
         ibv.Format = DXGI_FORMAT_R16_UINT;
 
         cmd->IASetVertexBuffers(0, 1, &vbv);

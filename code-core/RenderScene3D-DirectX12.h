@@ -24,6 +24,16 @@ void InitSkyGradientResources(ID3D12Device* device);
 void ClearSceneSkyGradient(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     int monitorId);
 
+// GPU draw-command compaction pipeline (graphics.md, 10M plan Step 7 - vertical slice). Creates the
+// compute root signature, PSO and the shared 4-byte zero buffer on the gpu singleton. Call once,
+// before render threads start, alongside InitSkyGradientResources.
+void InitSceneCullResources(ID3D12Device* device);
+
+// Runtime toggle between the GPU-compacted per-page draw path (true) and the legacy direct
+// ExecuteIndirect-of-all-templates path (false). Defaults to false during bring-up so a broken
+// compaction path cannot break normal rendering; a debug key flips it. See RenderScene3D.
+extern bool gUseComputeCull;
+
 // A fresh 4 MB double-ended geometry page (COMMON state) for the given container. Foundation's
 // GpuCopyThread and the Scene3D copy path both allocate through here.
 std::unique_ptr<GeometryPage> CreateNewPage(uint64_t containerMemoryId);

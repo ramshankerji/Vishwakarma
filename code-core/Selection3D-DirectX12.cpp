@@ -249,8 +249,10 @@ void BindPageBuffers(ID3D12GraphicsCommandList* cmd, GeometryPage& page) {
     vbv.SizeInBytes = page.vertexHead;
     vbv.StrideInBytes = sizeof(Vertex);
     D3D12_INDEX_BUFFER_VIEW ibv{};
-    ibv.BufferLocation = page.buffer->GetGPUVirtualAddress() + page.indexTail;
-    ibv.SizeInBytes = page.pageSize - page.indexTail;
+    // Bind at the page base over the whole page so StartIndexLocation is absolute
+    // (indexByteOffset / 2), matching RenderScene3D (graphics.md, 10M plan Step 7, constraint 1).
+    ibv.BufferLocation = page.buffer->GetGPUVirtualAddress();
+    ibv.SizeInBytes = page.pageSize;
     ibv.Format = DXGI_FORMAT_R16_UINT;
     cmd->IASetVertexBuffers(0, 1, &vbv);
     cmd->IASetIndexBuffer(&ibv);
@@ -405,8 +407,9 @@ void RecordSelectionOverlays(ID3D12GraphicsCommandList* commandList, DX12Resourc
                 for (const GeometryPlacementRecordInPage& obj : page.objects) {
                     if (obj.isDeleted || selectedSet.find(obj.objectID) == selectedSet.end()) continue;
                     if (!boundBuffers) { BindPageBuffers(commandList, page); boundBuffers = true; }
+                    // Absolute (page-base-relative), matching the IBV bound at the page base.
                     const UINT startIndex =
-                        (obj.indexByteOffset - page.indexTail) / static_cast<UINT>(sizeof(uint16_t));
+                        obj.indexByteOffset / static_cast<UINT>(sizeof(uint16_t));
                     const INT baseVertex =
                         static_cast<INT>(obj.vertexByteOffset / sizeof(Vertex));
                     commandList->SetGraphicsRoot32BitConstant(2, obj.gpuInstanceIndex, 0);

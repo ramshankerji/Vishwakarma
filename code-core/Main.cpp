@@ -479,6 +479,18 @@ void ProcessPendingUIActions() {
             if (action.p1 < MV_MAX_TABS) {
                 ExtractViewToNewWindow(static_cast<uint16_t>(action.p1), action.p2);
             }
+        } else if (action.id == InternalSubTabs::kAddContainerToViewUIAction) {
+            // Compose a dragged Scene3D into the active SubTab's container set (engineering thread
+            // owns the set). The Application Tab has no data tree to drag from, so it never emits this.
+            if (action.p1 < MV_MAX_TABS) {
+                PushSystemTodoToTab(&allTabs[static_cast<uint16_t>(action.p1)],
+                    ACTION_TYPE::ADD_CONTAINER_TO_SUBTAB, 0, 0, 0, action.p2);
+            }
+        } else if (action.id == InternalSubTabs::kRemoveContainerFromViewUIAction) {
+            if (action.p1 < MV_MAX_TABS) {
+                PushSystemTodoToTab(&allTabs[static_cast<uint16_t>(action.p1)],
+                    ACTION_TYPE::REMOVE_CONTAINER_FROM_SUBTAB, 0, 0, 0, action.p2);
+            }
         } else if (action.id == kExtractTabUIAction) {
             if (action.p1 < MV_MAX_TABS) {
                 ExtractTabToNewWindow(static_cast<uint16_t>(action.p1));
@@ -899,6 +911,7 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     InitUIResources(gpu.uiResources, gpu.device.Get()); //Prepare and upload UI resources (e.g. fonts, icons) to GPU.
     //Above function depends on GpuCopyThread, hence it can't be done earlier.
     InitSkyGradientResources(gpu.device.Get()); //Scene3D background pipeline, read by every render thread.
+    InitSceneCullResources(gpu.device.Get()); //GPU draw-command compaction pipeline (10M plan Step 7).
     std::wcout << L"Hello...." << std::endl;
     // LAUNCH THE ENGINEERING THREAD of the one initial tab. Main logic thread, the ringmaster of
     // the application: one per engineering tab, created with the tab and joined when it closes.

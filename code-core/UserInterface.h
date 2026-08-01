@@ -359,6 +359,10 @@ constexpr uint32_t kOpenUIAction = 0xE0000010u;
 constexpr uint32_t kActivateUIAction = 0xE0000011u;
 constexpr uint32_t kCloseUIAction = 0xE0000012u;
 constexpr uint32_t kExtractUIAction = 0xE0000013u; // p1 = tab index, p2 = containerMemoryId.
+// Compose a Scene3D container into / out of the active SubTab's container set (drag-to-compose).
+// p1 = tab index, p2 = containerMemoryId being added / removed.
+constexpr uint32_t kAddContainerToViewUIAction = 0xE0000014u;
+constexpr uint32_t kRemoveContainerFromViewUIAction = 0xE0000015u;
 }
 
 // Window management (only the UI thread creates/destroys OS windows; render threads request).

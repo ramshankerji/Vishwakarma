@@ -44,6 +44,18 @@ struct SubTabContainerSet {
         if (containerMemoryId == 0 || Contains(containerMemoryId)) return;
         if (count < MV_MAX_CONTAINERS_PER_SUBTAB) ids[count++] = containerMemoryId;
     }
+    // Remove one id, compacting the inline array; silently ignores an absent id. Same benign-
+    // staleness contract as Add: a render thread copying the set mid-edit sees old-or-new, and the
+    // worst case is one frame of a container drawn twice or dropped a frame early - both visually
+    // identical, since a container's pages rasterise to the same pixels regardless of set position.
+    void Remove(uint64_t containerMemoryId) {
+        for (uint8_t i = 0; i < count; ++i) {
+            if (ids[i] != containerMemoryId) continue;
+            for (uint8_t j = static_cast<uint8_t>(i + 1); j < count; ++j) ids[j - 1] = ids[j];
+            --count;
+            return;
+        }
+    }
     void Clear() { count = 0; }
 };
 

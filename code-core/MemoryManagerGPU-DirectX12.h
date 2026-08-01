@@ -510,6 +510,21 @@ struct DX12ResourcesPerWindow {// Presentation Logic
 using PlatformTabGpu    = DX12ResourcesPerTab;
 using PlatformWindowGpu = DX12ResourcesPerWindow;
 
+/* Per-render-thread scratch for GPU draw-command compaction (graphics.md, 10M plan Step 7 - slice).
+The compute pass compacts each page's draw templates into `visibleIndirect` (dropping hidden /
+filtered objects) and writes the surviving command count into `visibleCount`; one ExecuteIndirect
+per page then draws from them. One scratch per monitor - each render thread owns its own, so two
+monitors never alias. `visibleIndirect` is sized for the densest possible 4 MB page. The two state
+fields track the buffers across pages/windows WITHIN a frame; they reset to COMMON each frame after
+the command list is reset, because a buffer decays to COMMON at every ExecuteCommandLists boundary. */
+struct SceneCullScratch {
+    ComPtr<ID3D12Resource> visibleIndirect; // 65536 * sizeof(IndirectCommand) = 1.5 MB.
+    ComPtr<ID3D12Resource> visibleCount;    // One uint at byte 0, written via InterlockedAdd.
+    D3D12_RESOURCE_STATES visibleState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES countState = D3D12_RESOURCE_STATE_COMMON;
+    static constexpr uint32_t kMaxCommands = 65536; // Densest 4 MB page holds ~45k; safe headroom.
+};
+
 struct DX12ResourcesPerRenderThread { // This one is created 1 for each monitor.
     // For convenience only. It simply points to OneMonitorController.commandQueue
 	ComPtr<ID3D12CommandQueue> commandQueue;
@@ -522,6 +537,9 @@ struct DX12ResourcesPerRenderThread { // This one is created 1 for each monitor.
 
     // The Command List (The recording pen). Can be reset and reused for multiple windows within the same frame.
     ComPtr<ID3D12GraphicsCommandList> commandList;
+
+    // GPU draw-command compaction scratch, one per monitor (10M plan Step 7 slice).
+    SceneCullScratch cullScratch;
 
     // Synchronization (Per Window VSync)
     HANDLE fenceEvent = nullptr;
@@ -662,6 +680,15 @@ public:
     ComPtr<ID3D12RootSignature> skyGradientRootSignature;
     ComPtr<ID3D12PipelineState> skyGradientPSO;
 
+    /* GPU draw-command compaction pipeline (graphics.md, 10M plan Step 7 - vertical slice). Compute
+    root signature is all root descriptors - no shader-visible descriptor heap - because the per-page
+    draw structure is kept in this slice. Created once by InitSceneCullResources before render threads
+    start, then only read while recording. cullZeroBuffer is a 4-byte zero source used to reset each
+    page's visible-command count via CopyBufferRegion (keeps the reset root-descriptor-only). */
+    ComPtr<ID3D12RootSignature> sceneCullRootSignature;
+    ComPtr<ID3D12PipelineState> sceneCullPSO;
+    ComPtr<ID3D12Resource> cullZeroBuffer;
+
     //Following to be added latter.
     //ID3D12DescriptorHeapMgr    ← Global descriptor allocator
     //Shader& PSO Cache         ← Shared by all threads
@@ -723,10 +750,12 @@ public:
     // containers: the SubTab's container set - only their pages are visited (Step 6).
     // subTabBit: which of the 64 VisibilityMask bits this view tests, i.e. the sub-tab slot being
     // drawn, or kNoSubTabBit when the view has no mask-addressable bit (slot >= 64, or no sub-tab).
+    // cullScratch: this render thread's compaction scratch, used only when gUseComputeCull is on
+    // (10M plan Step 7 slice). Its state fields are reset to COMMON by the caller each frame.
     void RenderScene3D(ID3D12GraphicsCommandList* cmdList, //Called by per monitor render thread.
         DX12ResourcesPerWindow& winRes, const DX12ResourcesPerTab& tabRes, TabGeometryStorage& storage,
         const CameraState& camera, int monitorId, const SubTabContainerSet& containers,
-        uint32_t subTabBit);
+        uint32_t subTabBit, SceneCullScratch& cullScratch);
     void WaitForPreviousFrame(const DX12ResourcesPerRenderThread& dx);
     void ResizeD3DWindow(DX12ResourcesPerWindow& dx, UINT newWidth, UINT newHeight);
 
