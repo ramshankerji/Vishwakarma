@@ -11,7 +11,9 @@
 
 // Called at the very start of wWinMain. If a newer verified setup is staged, it launches
 // that setup with --update and returns true: the application must then exit immediately.
-bool SoftwareUpdateOnAppLaunch();
+// relaunchApp = false additionally passes --no-launch, so the installer leaves the machine
+// without a window: used by the background scheduled task, where nobody asked for the app.
+bool SoftwareUpdateOnAppLaunch(bool relaunchApp = true);
 
 // Starts the detached background thread which periodically (random 10 minutes to 4 hours)
 // fetches the signed release manifest and stages a newer setup for the next launch.

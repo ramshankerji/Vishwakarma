@@ -649,7 +649,8 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int) {
     }
 
     if (installed) {
-        CreateDesktopShortcut(exe);
+        // Install time only. An update must not resurrect a shortcut the user deliberately deleted.
+        if (!updateMode) CreateDesktopShortcut(exe);
         UpdateState st = LoadUpdateState();
         st.lastInstalledVersion = newVersion;
         SaveUpdateState(st);
@@ -951,7 +952,7 @@ static void RunUpdateCheckOnce(long long currentVersion) {
 }
 
 // ------------------------------------------------------------------ Public entry points
-bool SoftwareUpdateOnAppLaunch() {
+bool SoftwareUpdateOnAppLaunch(bool relaunchApp) {
     long long currentVersion = InstalledVersion();
     if (currentVersion <= 0) return false; // Developer / unpackaged build: no update handling.
 
@@ -967,8 +968,10 @@ bool SoftwareUpdateOnAppLaunch() {
             // Rule: no two apply-update operations concurrently.
             HANDLE applyLock = CreateMutexW(nullptr, TRUE, L"Local\\MissionVishwakarmaAppLaunchLock");
             bool alreadyApplying = applyLock && GetLastError() == ERROR_ALREADY_EXISTS;
-            if (!alreadyApplying && LaunchProcess(setupPath, L"--update")) {
-                // Installer overwrites us, deletes the marker and relaunches the new version.
+            std::wstring installerArgs = relaunchApp ? L"--update" : L"--update --no-launch";
+            if (!alreadyApplying && LaunchProcess(setupPath, installerArgs)) {
+                // Installer overwrites us, deletes the marker and (unless --no-launch) relaunches
+                // the new version.
                 if (applyLock) CloseHandle(applyLock);
                 return true;
             }
@@ -1050,7 +1053,9 @@ int RunBackgroundUpdate() {
 
     // Apply only when we are the sole instance, so we never overwrite the exe of a running app.
     if (AnotherAppInstanceRunning()) return 0;
-    SoftwareUpdateOnAppLaunch(); // Launches the staged setup with --update, which replaces us.
+    // relaunchApp = false: the user did not ask for the application, the scheduled task did. An
+    // update applied here must leave no window behind, otherwise Vishwakarma appears out of nowhere.
+    SoftwareUpdateOnAppLaunch(false); // Launches the staged setup with --update --no-launch.
     return 0;
 }
 

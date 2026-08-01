@@ -126,7 +126,9 @@ Phase 1 is implemented in `code-core/SoftwareUpdate.cpp` / `.h` (single file, co
 
 **Client does not verify Authenticode; SHA-256 + Ed25519 are the security anchor.** Our code signing certificate (MV-CodeSigner-01) chains to our own self-signed root, which is not in the Microsoft trust store, so WinVerifyTrust would always fail on user machines. Binaries ARE Authenticode-signed (with RFC 3161 timestamp), but the updater trusts the Ed25519 signature over the manifest plus the SHA-256 hash of the downloaded setup. The manifest therefore carries `"authenticodeRequired": false`. This flips to true the day we purchase a certificate chaining to the Microsoft trust store.
 
-**Update apply sequence.** The design said: launch `setup --update --no-launch`, then launch the new Vishwakarma.exe. An exiting application cannot launch the new exe after the install finishes (it would have to outlive the install). Instead the application launches the staged setup with `--update` only and exits; the installer swaps the binary and relaunches the new Vishwakarma.exe itself. `--no-launch` remains available for scripted installs.
+**Update apply sequence.** The design said: launch `setup --update --no-launch`, then launch the new Vishwakarma.exe. An exiting application cannot launch the new exe after the install finishes (it would have to outlive the install). Instead the application launches the staged setup with `--update` only and exits; the installer swaps the binary and relaunches the new Vishwakarma.exe itself. The `VishwakarmaUpgrade` scheduled task is the one exception: it passes `--update --no-launch`, because there the update was never requested by the user and a window appearing on its own would be a surprise. `--no-launch` is also available for scripted installs.
+
+**Desktop shortcut is created at install time only.** The philosophy section above says a shortcut is always created. `--update` runs skip it: the shortcut already exists from the first install, and re-creating it on every update would silently resurrect one the user deliberately deleted.
 
 **No A/B install folder.** A running exe on Windows cannot be overwritten but can be renamed. The installer parks the old binary as `Vishwakarma.exe.old`, writes the new one, and removes the leftover opportunistically. This gives the same safety as A/B folders (the old file is restored if activation fails) with half the disk footprint and no folder-switching logic.
 
@@ -165,7 +167,7 @@ Application executable — `Vishwakarma.exe` (handled in `code-core/Main.cpp` `w
 
 | Flag | Launched by | Effect |
 | --- | --- | --- |
-| `--background-update` | the `VishwakarmaUpgrade` scheduled task | Headless: run one update check (`RunBackgroundUpdate`) and exit. |
+| `--background-update` | the `VishwakarmaUpgrade` scheduled task | Headless: run one update check (`RunBackgroundUpdate`) and exit. Stays headless end to end — if it applies a staged update it invokes the setup with `--no-launch`, so no window ever opens. |
 | `--uninstall` | the Windows "Apps & features" uninstall entry | Headless: remove the install, desktop shortcut, scheduled task and registry entry (`RunUninstall`) and exit. |
 
 Setup executable — `Vishwakarma_UserSetup_win10_win11_x64.exe` (handled in `code-core/SoftwareUpdate.cpp` `wWinMain`):
@@ -174,7 +176,7 @@ Setup executable — `Vishwakarma_UserSetup_win10_win11_x64.exe` (handled in `co
 | --- | --- |
 | *(none)* | Interactive per-user install into `%LocalAppData%\Programs\Mission Vishwakarma`; shows the license prompt and launches the app on completion. |
 | `--allUsers` | Try to install into `C:\Program Files\Mission Vishwakarma`; silently falls back to the per-user location if permission is denied. |
-| `--update` | Silent in-place update: skip the license prompt, swap the running binary and relaunch the new `Vishwakarma.exe`. This is how a staged update is applied on restart. |
-| `--no-launch` | Do not launch the application after the install finishes; intended for scripted installs. |
+| `--update` | Silent in-place update: skip the license prompt and the desktop shortcut, swap the running binary and relaunch the new `Vishwakarma.exe`. This is how a staged update is applied on restart. |
+| `--no-launch` | Do not launch the application after the install finishes. Combined with `--update` by the scheduled task so a background upgrade never opens a window; also intended for scripted installs. |
 
 Only one installer runs at a time (named mutex `Global\MissionVishwakarmaInstallerLock`, falling back to the `Local\` namespace).
