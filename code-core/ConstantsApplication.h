@@ -29,9 +29,16 @@ of containers of one type, not a single one. Fixed and small on purpose: render 
 lock-free every frame, so it must be inline storage rather than a heap buffer the engineering thread
 could reallocate underneath them.*/
 static const int MV_MAX_CONTAINERS_PER_SUBTAB = 8;
-/*Maximum simultaneously GPU-resident Scene3D objects in ONE tab. This is the size of the per-tab
-instance arena's reserved (tiled) virtual address range: 10485760 records x 64 bytes = 640 MB of GPU
-virtual address reserved per tab, with physical 64 KB tiles committed only as the arena grows, so an
-empty tab still costs zero physical bytes. Raising it costs nothing but address space; lowering it
-caps how many objects a tab can hold. See website/content/software/graphics.md, 10M plan Step 2.*/
+/*Maximum simultaneously GPU-resident Scene3D GRAPHICS objects in ONE tab - not engineering objects.
+One engineering object can emit several graphics objects (a pipe as walls plus end caps, an object
+plus its centerline), each with its own gpuInstanceIndex, transform, appearance and visibility, so
+the engineering count this supports is this figure divided by the average parts per object.
+
+This is the size of the per-tab instance arena's reserved (tiled) virtual address range: 10485760
+records x 64 bytes = 640 MB of GPU virtual address reserved per tab, with physical 64 KB tiles
+committed only as the arena grows, so an empty tab still costs zero physical bytes. Lowering it caps
+how many objects a tab can hold. Raising it is NOT free above ~33M: D3D12's
+MaxGPUVirtualAddressBitsPerResource can be as low as 31 bits (2 GB) on the lowest tier, and
+MaxGPUVirtualAddressBitsPerProcess bounds the sum across open tabs. See
+website/content/software/graphics.md, 10M plan Step 2 and "Goal and workload".*/
 static const uint32_t MV_MAX_INSTANCES_PER_TAB = 10 * 1024 * 1024;

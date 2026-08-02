@@ -123,15 +123,25 @@ struct AppStats {
     std::vector<TabStats> tabs; // Engineering tabs only - tab 0 holds no geometry.
 };
 
-// Copy a tab's file name into fixed storage, filtering to printable ASCII. Read without a lock,
-// the same way the data tree already reads tab.fileName one frame earlier.
-void CopyTabName(char (&out)[48], const std::wstring& fileName) {
+// Copy a wide string into fixed storage, filtering to printable ASCII - the English MSDF atlas has
+// no other glyphs. Tab file names are read without a lock, the same way the data tree already reads
+// tab.fileName one frame earlier.
+void CopyAscii(char (&out)[48], const std::wstring& text) {
     size_t at = 0;
-    for (wchar_t wide : fileName) {
+    for (wchar_t wide : text) {
         if (at >= sizeof(out) - 1) break;
         out[at++] = (wide >= 32 && wide < 127) ? static_cast<char>(wide) : '?';
     }
     out[at] = '\0';
+}
+
+const char* OrientationName(DWORD orientation) {
+    switch (orientation) {
+    case DMDO_90:  return "Portrait (90)";
+    case DMDO_180: return "Landscape (180)";
+    case DMDO_270: return "Portrait (270)";
+    default:       return "Landscape";
+    }
 }
 
 AppStats SampleStats() {
@@ -150,7 +160,7 @@ AppStats SampleStats() {
 
         TabStats perTab{};
         perTab.tabIndex = tabIndex;
-        CopyTabName(perTab.name, tab.fileName);
+        CopyAscii(perTab.name, tab.fileName);
         perTab.registryCommitted =
             tab.dx.registry.committedCount.load(std::memory_order_acquire);
 
@@ -200,15 +210,24 @@ void FormatPair(char (&buffer)[48], uint64_t a, uint64_t b) {
     *at = '\0';
 }
 
-// "Tab <index> - <name>". The heading of one per-tab block.
-void FormatTabHeading(char (&buffer)[96], const TabStats& tab) {
+// "<a><separator><b>". Signed, because a monitor's desktop origin legitimately goes negative.
+// The Hardware rows want " x " for the dimension pairs and ", " for that origin.
+void FormatTwoInts(char (&buffer)[48], int64_t a, int64_t b, const char* separator) {
+    char* at = std::to_chars(buffer, buffer + sizeof(buffer) - 1, a).ptr;
+    for (const char* p = separator; *p; ++p) *at++ = *p;
+    at = std::to_chars(at, buffer + sizeof(buffer) - 1, b).ptr;
+    *at = '\0';
+}
+
+// "<prefix> <index> - <name>". The heading of one per-tab or per-monitor block.
+void FormatBlockHeading(char (&buffer)[96], const char* prefix, uint32_t index, const char* name) {
     size_t at = 0;
-    for (const char* p = "Tab "; *p; ++p) buffer[at++] = *p;
-    at = static_cast<size_t>(std::to_chars(buffer + at, buffer + sizeof(buffer) - 1,
-        static_cast<uint32_t>(tab.tabIndex)).ptr - buffer);
-    if (tab.name[0] != '\0') {
+    for (const char* p = prefix; *p; ++p) buffer[at++] = *p;
+    buffer[at++] = ' ';
+    at = static_cast<size_t>(std::to_chars(buffer + at, buffer + sizeof(buffer) - 1, index).ptr - buffer);
+    if (name[0] != '\0') {
         buffer[at++] = ' '; buffer[at++] = '-'; buffer[at++] = ' ';
-        for (const char* p = tab.name; *p && at < sizeof(buffer) - 1; ++p) buffer[at++] = *p;
+        for (const char* p = name; *p && at < sizeof(buffer) - 1; ++p) buffer[at++] = *p;
     }
     buffer[at] = '\0';
 }
@@ -306,6 +325,10 @@ void BuildApplicationTabOverlay(UIDrawContext& ctx, DX12ResourcesUI& uiRes, cons
         FormatPair(value, a, b);
         Row(label, value);
     };
+    auto RowSize = [&](const char* label, int64_t a, int64_t b) {
+        FormatTwoInts(value, a, b, " x ");
+        Row(label, value);
+    };
     auto Heading = [&](const char* text) {
         contentY += rowHeightPx * 0.6f; // Breathing room above a section.
         const float y = clipTop + contentY - scrollPx;
@@ -328,6 +351,46 @@ void BuildApplicationTabOverlay(UIDrawContext& ctx, DX12ResourcesUI& uiRes, cons
             static_cast<uint64_t>(stats.cpuChunks) * (SMALL_ALLOCATOR_CHUNK_SIZE / kBytesPerMB));
         RowValue("Scene3D geometry pages (all tabs)", stats.gpuGeometryPages);
         RowValue("Scene3D page VRAM (MB)", stats.gpuGeometryBytes / kBytesPerMB);
+
+        /* One block per attached monitor, straight out of gpu.screens[] - the global monitor table
+        every other subsystem reads. No snapshot is taken: these fields are written only by
+        MonitorEnumProc, and re-enumeration (FetchAllMonitorDetails / RestartRenderThreads) runs with
+        the render threads JOINED, so a frame can never see the table change under it. That is the
+        same guarantee RenderUIOverlay already relies on to read this monitor's SRV heap.
+
+        The index is the one the rest of the engine uses (SingleUIWindow::currentMonitorIndex, one
+        render thread per index), so this is what to read a "Monitor 1" in a log against. A headless
+        run shows the single virtual display instead; a count of 0 draws nothing, and cannot be seen
+        anyway - no monitors means no render threads, and no render thread means nobody draws this. */
+        Heading("HARDWARE");
+        char monitorHeading[96];
+        char monitorName[48];
+        for (int i = 0; i < gpu.currentMonitorCount; ++i) {
+            const OneMonitorController& screen = gpu.screens[i];
+            // Both names are std::wstring; the English MSDF atlas needs printable ASCII.
+            CopyAscii(monitorName, screen.friendlyName);
+            FormatBlockHeading(monitorHeading, "Monitor", static_cast<uint32_t>(i), monitorName);
+            Heading(monitorHeading);
+            CopyAscii(monitorName, screen.monitorName);
+            Row("Device", monitorName);
+            Row("Primary", screen.isPrimary ? "Yes" : "No");
+            Row("Virtual display (headless)", screen.isVirtualMonitor ? "Yes" : "No");
+            RowSize("Resolution (px)", screen.screenPixelWidth, screen.screenPixelHeight);
+            // Top-left in virtual-desktop coords. Negative is normal - a monitor placed above or
+            // to the left of the primary one starts there.
+            FormatTwoInts(value, screen.monitorRect.left, screen.monitorRect.top, ", ");
+            Row("Desktop origin (px)", value);
+            RowSize("Work area (px)", screen.workAreaRect.right - screen.workAreaRect.left,
+                screen.workAreaRect.bottom - screen.workAreaRect.top);
+            RowSize("Physical size (mm)", screen.screenPhysicalWidth, screen.screenPhysicalHeight);
+            RowSize("Effective DPI", screen.dpiX, screen.dpiY);      // What Windows scales by.
+            RowSize("Raw DPI", screen.rawDpiX, screen.rawDpiY);      // Native hardware DPI.
+            RowSize("Physical DPI", screen.physicalDpiX, screen.physicalDpiY); // From size in mm.
+            RowValue("Scale (%)", static_cast<uint32_t>(screen.scaleFactor * 100.0 + 0.5));
+            RowValue("Refresh rate (Hz)", static_cast<uint32_t>(screen.refreshRate));
+            RowValue("Color depth (bits)", static_cast<uint32_t>(screen.colorDepth));
+            Row("Orientation", OrientationName(screen.orientation));
+        }
 
         // Cumulative since launch. These only ever climb, so a rate has to be read by watching
         // them change - they answer "how much work has this session done", not "how busy is it now".
@@ -381,7 +444,7 @@ void BuildApplicationTabOverlay(UIDrawContext& ctx, DX12ResourcesUI& uiRes, cons
         // One block per engineering tab. Tab 0 is skipped by SampleStats - it holds no geometry.
         char tabHeading[96];
         for (const TabStats& perTab : stats.tabs) {
-            FormatTabHeading(tabHeading, perTab);
+            FormatBlockHeading(tabHeading, "Tab", perTab.tabIndex, perTab.name);
             Heading(tabHeading);
             RowValue("Scene3D pages", perTab.scenePages);
             RowValue("Page2D pages", perTab.page2DPages);
