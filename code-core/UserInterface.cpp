@@ -1640,7 +1640,7 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
     // Drawn here, after the bands and before the right-side overlay, so the icon bar and panes
     // still land on top of it (tabs.md "Rendering the application views").
     if (activeTabIndex >= 0 && ApplicationTab::IsApplicationTab(static_cast<uint64_t>(activeTabIndex))) {
-        ApplicationTab::BuildApplicationTabOverlay(ctx, uiRes, activeInternalSubTabMemoryId,
+        ApplicationTab::BuildApplicationTabOverlay(ctx, uiRes, input, activeInternalSubTabMemoryId,
             topUITotalHeightPx, W, H, buttonHeightPx, uiTextScale);
     }
 

@@ -9,6 +9,7 @@
 
 struct DATASETTAB;
 struct UIDrawContext;   // UserInterface.h
+struct UIInput;         // UserInterface.h - the Stats view scrolls, so it needs wheel/mouse state.
 struct DX12ResourcesUI; // Platform GPU resources; full definition in UserInterface-<Platform>.h.
 
 namespace ApplicationTab {
@@ -59,7 +60,8 @@ void ActivateApplicationTabView(uint64_t containerMemoryId);
 
 // Draws tab 0's content area - one opaque panel from contentTopPx down, then the active view.
 // Called from BuildUIOverlay on a render thread, so it only reads published/atomic state.
-void BuildApplicationTabOverlay(UIDrawContext& ctx, DX12ResourcesUI& uiRes,
+// `input` drives the Stats view's scrollbar (wheel + thumb drag), immediate-mode like the rest.
+void BuildApplicationTabOverlay(UIDrawContext& ctx, DX12ResourcesUI& uiRes, const UIInput& input,
     uint64_t activeViewContainerId, float contentTopPx, float widthPx, float heightPx,
     float rowHeightPx, float textScale);
 
