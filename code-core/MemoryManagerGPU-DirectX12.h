@@ -76,11 +76,32 @@ struct GpuResourceVertexIndexInfo {
 static_assert(sizeof(IndirectCommand::DrawIndexedArguments) == sizeof(D3D12_DRAW_INDEXED_ARGUMENTS),
     "IndirectCommand::DrawIndexedArguments must match D3D12_DRAW_INDEXED_ARGUMENTS bit for bit.");
 
+/* Initial capacity of a page's ExecuteIndirect argument buffer, expressed in bytes because that is
+what the VRAM budget cares about (graphics.md, Phase 6 "right-size the per-page indirect buffer").
+
+It used to be a flat 65,536 commands = 1.5 MB on EVERY page, which was 27% of each page's 5.5 MB
+footprint and sized for a pathological page of single triangles. Measured against a real scene - 56
+pages holding ~178 objects each - that reserved 84 MB to hold 240 KB, a ~350x over-reservation, and
+at 10M objects the reservation alone would have approached 2.4 GB.
+
+256 KB is a deliberate middle, NOT the measured minimum: a page densely packed with cuboids holds
+~6,470 objects and fits inside this, and instancing will raise objects-per-page further since shared
+geometry lets one page back far more of them. Pages that genuinely need more grow - see
+`indirectCapacity` - so this is a starting point rather than a ceiling. */
+constexpr uint32_t kIndirectInitialBytes = 256 * 1024;
+
 struct GeometryPage {
     // GPU RESOURCES. Single unified 4 MB buffer
     Microsoft::WRL::ComPtr<ID3D12Resource> buffer;// Layout:[Vertex Region ↑ ][Free Space][ Index Region ↓ ]
     Microsoft::WRL::ComPtr<ID3D12Resource> indirectBuffer;// ExecuteIndirect argument buffer for this page
     uint32_t indirectCount = 0; // Number of valid indirect draw commands
+    /* Commands the indirectBuffer can hold. Grown by RebuildIndirectBuffer when a page turns out to
+    hold more objects than the initial reservation covers, which is safe precisely because that
+    function only ever runs on clones and brand-new pages - never on a published one, so no render
+    thread can be reading the buffer being replaced. `indirectCount <= indirectCapacity` always: all
+    three readers (legacy draw, cull dispatch, pick/print) are bounded by indirectCount, and the cull
+    path binds this as a ROOT SRV, which carries no bounds check at all. */
+    uint32_t indirectCapacity = 0;
     uint64_t containerMemoryId = 0; // High-level Scene3D/Page2D/etc. owning every object in this page.
 
     // ALLOCATION STATE (CPU-side only)
@@ -191,6 +212,10 @@ struct GpuCopyStats {
     std::atomic<uint64_t> liveRetireBacklog{ 0 };
     std::atomic<uint64_t> peakRetireBacklog{ 0 };
     std::atomic<uint64_t> maxActivePages{ 0 };  // Largest active page count seen in one tab.
+    // Times a page needed a bigger ExecuteIndirect argument buffer than the 256 KB starting
+    // reservation. This is the number that says whether kIndirectInitialBytes was chosen well:
+    // a steady non-zero rate means pages routinely hold more objects than it covers.
+    std::atomic<uint64_t> indirectGrowths{ 0 };
     std::atomic<uint64_t> pendingIndexes{ 0 };  // gpuInstanceIndexes in their zombie interval (Step 3).
     std::atomic<uint64_t> freeIndexes{ 0 };     // gpuInstanceIndexes available for reuse.
     std::atomic<uint64_t> pendingSlots{ 0 };    // Arena slots waiting on a fence (Step 4).

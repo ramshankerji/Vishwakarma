@@ -683,7 +683,7 @@ fence-cleared matrix slots back to the free list.
 Called from two places: once per copy-thread iteration (the classic sweep), and once per PUBLISHED
 CHUNK inside ProcessScene3DCopyBatch. The second caller is not an optimisation - it is required.
 Per-chunk publish retires the append-target page on every chunk, so a batch that produces many
-chunks would otherwise pile up hundreds of 5.5 MB pages with no reclaim until the whole batch
+chunks would otherwise pile up hundreds of ~4.25 MB pages with no reclaim until the whole batch
 returned, and exhaust VRAM. (Observed: E_OUTOFMEMORY partway through a bulk import.)
 
 Returns the largest per-tab retire backlog still outstanding, or SIZE_MAX when no monitor fence

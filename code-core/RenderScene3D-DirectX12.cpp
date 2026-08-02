@@ -273,6 +273,26 @@ void FinalizeVisibleCountFence(SceneCullScratch& cullScratch, uint64_t frameFenc
     cullScratch.readbackFence = frameFenceValue;
 }
 
+/* (Re)allocate a page's ExecuteIndirect argument buffer to hold at least `commands`, and record the
+capacity. Replacing an existing buffer here is safe ONLY because every caller is on an unpublished
+page - a fresh page, or an RCU clone before PublishPages - so no render thread can hold the old one.
+Never call this on a page that is already published.
+
+Rounds up to a power of two so a page that keeps growing reallocates O(log n) times, not per append. */
+static void AllocateIndirectBuffer(GeometryPage& page, uint32_t commands) {
+    uint32_t capacity = kIndirectInitialBytes / sizeof(IndirectCommand);
+    while (capacity < commands) capacity *= 2;
+    if (page.indirectBuffer && page.indirectCapacity >= capacity) return;
+    if (page.indirectBuffer) gCopyStats.indirectGrowths.fetch_add(1, std::memory_order_relaxed);
+
+    CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);
+    auto indirectDesc = CD3DX12_RESOURCE_DESC::Buffer(
+        static_cast<uint64_t>(capacity) * sizeof(IndirectCommand));
+    ThrowIfFailed(gpu.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &indirectDesc,
+        D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&page.indirectBuffer)));
+    page.indirectCapacity = capacity;
+}
+
 std::unique_ptr<GeometryPage> CreateNewPage(uint64_t containerMemoryId)
 //Do not make this static function. It accesses global gpu singleton.
 {
@@ -288,9 +308,7 @@ std::unique_ptr<GeometryPage> CreateNewPage(uint64_t containerMemoryId)
     // catches this exception and drops the batch instead of aborting.
     ThrowIfFailed(gpu.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
         D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&page->buffer)));
-    auto indirectDesc = CD3DX12_RESOURCE_DESC::Buffer(65536 * sizeof(IndirectCommand));
-    ThrowIfFailed(gpu.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &indirectDesc,
-        D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&page->indirectBuffer)));
+    AllocateIndirectBuffer(*page, kIndirectInitialBytes / sizeof(IndirectCommand));
 
     static std::atomic<uint64_t> totalPages = 0; //Telemetry helper / counter.
     //std::wcout << "New page allocated. New Page Counter: " << ++totalPages << std::endl;
@@ -682,7 +700,7 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                         // Empty-page GC: every object in this clone was deleted or relocated.
                         // It was never published (snapshot is built below from activePages) and
                         // its only GPU work, the Pass-2 clone copy, has already been fence-waited,
-                        // so dropping it frees its ~5.5 MB now instead of parking a dead page in
+                        // so dropping it frees its ~4.25 MB now instead of parking a dead page in
                         // activePages forever (pages have no compaction yet).
                         storage.activePages.erase(it);
                     } else {
@@ -801,7 +819,7 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 /* Same reasoning for a MOVE (10M plan Step 4): it writes one fresh instance record
                 and flips one redirect entry, and touches nothing inside the geometry page - not the
                 bytes, not the placement records, not the indirect arguments. Cloning the page would
-                copy ~5.5 MB only to publish a byte-identical replacement and retire the original.
+                copy ~4.25 MB only to publish a byte-identical replacement and retire the original.
                 This line is what makes Step 4's stated criterion - "moving N scattered objects
                 clones zero geometry pages" - actually true. */
                 if (IsTransformOnlyEdit(cmd)) continue;
@@ -1424,6 +1442,14 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 page->indirectCount = static_cast<uint32_t>(commands.size());
                 if (commands.empty()) return; // nothing to upload
 
+                /* Grow the argument buffer if this page turned out to hold more objects than the
+                256 KB starting reservation covers - a page filled with very small objects can. This
+                is the only growth point, and it is safe here and nowhere else: every page reaching
+                RebuildIndirectBuffer is a clone or a brand-new page, neither of which is published,
+                so replacing the buffer cannot be observed by a render thread. The rebuild below
+                rewrites the whole buffer anyway, so a fresh one loses nothing. */
+                AllocateIndirectBuffer(*page, page->indirectCount);
+
                 const uint64_t commandBytes = commands.size() * sizeof(IndirectCommand);
                 uint8_t* mapped = nullptr;
                 ID3D12Resource* stagingResource = nullptr;
@@ -1508,11 +1534,11 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             RetireReleasedIdentities(); // Fence read after the publish - see the lambda.
 
             // Reclaim between chunks. Each chunk retires the page it appended to, so without this
-            // a many-chunk batch accumulates 5.5 MB per chunk with nothing freeing it until the
+            // a many-chunk batch accumulates ~4.25 MB per chunk with nothing freeing it until the
             // whole batch returns - which exhausts VRAM outright on a bulk import. When monitors
             // cannot keep up, give them a few short breathers rather than racing ahead: this
             // throttles the copy thread instead of letting retained pages grow without bound.
-            constexpr size_t kRetireBacklogCap = 64;      // ~350 MB of pages held back.
+            constexpr size_t kRetireBacklogCap = 64;      // ~270 MB of pages held back.
             constexpr int kMaxBacklogWaits = 8;           // Bounded: a frozen monitor must not hang us.
             for (int attempt = 0; attempt <= kMaxBacklogWaits; ++attempt) {
                 const size_t backlog = PruneRetiredGpuResources();
