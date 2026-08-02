@@ -17,8 +17,13 @@ Current state of art software failed ! Anyway 1000 is far more than normal human
 static const int MV_MAX_TABS = 1024;//Maximum number of tabs.
 /*Maximum sub-tabs (views such as Page2D / Scene3D containers) open per tab. Fixed array inside
 DATASETTAB avoids std::vector reallocation issues and enables delayed slot release after the
-respective GPU assets are drained.*/
-static const int MV_MAX_SUBTABS = 128;
+respective GPU assets are drained.
+Deliberately EQUAL to the 64 bits of the per-object VisibilityMask membership word (10M plan Step 5),
+so every open sub-tab is mask-addressable and there is no second class of slot that has to fall back
+to "show everything". It was 128 until 2026-08-02; the mismatch bought nothing and made the fallback
+path reachable in normal use. Raising it past 64 therefore needs a second mask word, not just a
+bigger array here.*/
+static const int MV_MAX_SUBTABS = 64;
 /*Containers a single sub-tab may draw at once (graphics.md, 10M plan Step 6). A sub-tab holds a SET
 of containers of one type, not a single one. Fixed and small on purpose: render threads read the set
 lock-free every frame, so it must be inline storage rather than a heap buffer the engineering thread

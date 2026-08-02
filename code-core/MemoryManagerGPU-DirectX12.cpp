@@ -16,6 +16,7 @@
 extern शंकर gpu;
 UploadQueue gUploadQueue;
 GpuCopyStats gCopyStats;
+GpuRenderStats gRenderStats;
 extern std::atomic<uint64_t> atlasFence;
 
 // --- Global upload ring (graphics.md, 10M plan Step 0) ------------------------------------------
@@ -447,6 +448,34 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
     ThrowIfFailed(gpu.device->CreateCommandSignature(// root signature NOT required (already bound)
         &sigDesc, tabRes.rootSignature.Get(), IID_PPV_ARGS(&tabRes.commandSignature)));
 
+    /* Second signature: the ONE ExecuteIndirect per Viewport that the GPU compaction pass feeds
+    (graphics.md, 10M plan Step 7). It differs from the signature above only by carrying the vertex
+    and index buffer views per command, which is precisely what lets commands from DIFFERENT pages
+    share one buffer - the draw loop then binds no IA state at all and issues one call for the whole
+    Viewport instead of one per page.
+
+    Both signatures coexist on purpose. The per-page one above still drives the legacy draw path, the
+    GPU pick pass and the print path, all of which read a page's 24-byte templates directly.
+
+    Argument ORDER must match VisibleIndirectCommand field for field: D3D12 packs the arguments
+    tightly in this order, and views-first is what keeps the two GPU virtual addresses 8-byte
+    aligned. The draw must be last, which D3D12 requires anyway. */
+    D3D12_INDIRECT_ARGUMENT_DESC visibleArgs[4] = {};
+    visibleArgs[0].Type = D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW;
+    visibleArgs[0].VertexBuffer.Slot = 0;
+    visibleArgs[1].Type = D3D12_INDIRECT_ARGUMENT_TYPE_INDEX_BUFFER_VIEW;
+    visibleArgs[2].Type = D3D12_INDIRECT_ARGUMENT_TYPE_CONSTANT;
+    visibleArgs[2].Constant.RootParameterIndex = 2;   // b1 gpuInstanceIndex
+    visibleArgs[2].Constant.Num32BitValuesToSet = 1;
+    visibleArgs[2].Constant.DestOffsetIn32BitValues = 0;
+    visibleArgs[3].Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
+    D3D12_COMMAND_SIGNATURE_DESC visibleSigDesc = {};
+    visibleSigDesc.pArgumentDescs = visibleArgs;
+    visibleSigDesc.NumArgumentDescs = _countof(visibleArgs);
+    visibleSigDesc.ByteStride = sizeof(VisibleIndirectCommand);
+    ThrowIfFailed(gpu.device->CreateCommandSignature(&visibleSigDesc, tabRes.rootSignature.Get(),
+        IID_PPV_ARGS(&tabRes.visibleCommandSignature)));
+
     // 3D click-selection GPU resources (pick / highlight PSOs, rotation-cube pipeline).
     // Requires tabRes.rootSignature (created above), so initialize it here.
     InitSelection3DResources(tabRes);
@@ -496,6 +525,7 @@ void शंकर::CleanupTabResources(DX12ResourcesPerTab& tabRes) {
     tabRes.rootSignature.Reset();
     tabRes.pipelineState.Reset();
     tabRes.commandSignature.Reset();
+    tabRes.visibleCommandSignature.Reset();
 
     std::wcout << "Cleaned up Tab Geometry Resources." << std::endl;
 }

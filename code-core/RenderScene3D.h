@@ -8,6 +8,7 @@
 #pragma once
 #include <atomic>
 #include <condition_variable>
+#include <cstddef> // offsetof, used by the VisibleIndirectCommand alignment asserts.
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -154,17 +155,19 @@ is deliberately NOT how "this whole container belongs to that SubTab" is express
 test on the geometry page stays the cheap first-level reject (10M plan Step 6, item 3). */
 constexpr uint64_t kVisibleInAllSubTabs = ~0ull;
 
-/* Per-draw SubTab bit for a Viewport that has no mask-addressable bit - a sub-tab in slot >= 64
-(MV_MAX_SUBTABS is 128, the mask is 64 bits), or a draw with no sub-tab at all such as the print
-path. The vertex shader skips the membership test entirely for this value, so those views show
-everything rather than nothing. */
+/* Per-draw SubTab bit for a Viewport that has no mask-addressable bit. Since MV_MAX_SUBTABS became
+64 - equal to the mask width - no OPEN sub-tab can produce this any more; it is now reached only by a
+draw with no sub-tab at all, such as the print path. The vertex and cull shaders skip the membership
+test entirely for this value, so those views show everything rather than nothing. */
 constexpr uint32_t kNoSubTabBit = 0xFFFFFFFFu;
 
-/* Sub-tab slot -> VisibilityMask bit. MV_MAX_SUBTABS is 128 while the mask holds 64 SubTabs, which
-is the design limit rather than an oversight: if more than 64 SIMULTANEOUSLY MASKED SubTabs are ever
-needed the remedy is a second mask word, not a change here. Slots past 63 therefore show everything
-instead of failing closed. */
+/* Sub-tab slot -> VisibilityMask bit. MV_MAX_SUBTABS and the mask are both 64, so this is the
+identity for every valid slot and the sentinel branch below is defensive only - it used to be
+reachable when the slot array was 128 wide. Widening past 64 means adding a second mask word, not
+just enlarging the array; a slot with no bit fails OPEN (shows everything) rather than closed. */
 inline uint32_t SubTabVisibilityBit(int subTabSlot) {
+    static_assert(MV_MAX_SUBTABS <= 64,
+        "A sub-tab slot must have a VisibilityMask bit; widening past 64 needs a second mask word.");
     return subTabSlot >= 0 && subTabSlot < 64 ? static_cast<uint32_t>(subTabSlot) : kNoSubTabBit;
 }
 
@@ -189,6 +192,47 @@ struct IndirectCommand { // OPTIMIZED Indirect Command
     } drawArguments;// 20 Bytes
 }; // Total size: 24 Bytes (down from 56 Bytes!)
 static_assert(sizeof(IndirectCommand) == 24, "IndirectCommand must be exactly 24 bytes.");
+
+/* Output ABI of the GPU draw-command compaction pass - ONE ExecuteIndirect per Viewport
+(graphics.md, 10M plan Step 7). The 24-byte IndirectCommand above stays the persistent per-page
+TEMPLATE format; this is the transient compacted form the compute shader writes and the single
+per-Viewport ExecuteIndirect consumes.
+
+WHY IT CARRIES THE BUFFER VIEWS AGAIN. A template is drawable only against its own page's vertex and
+index buffers, which is exactly why the draw loop used to bind them per page and issue one
+ExecuteIndirect per page. Putting the two views back INTO the command lets commands from different
+pages sit in one buffer, so the whole Viewport collapses to a single ExecuteIndirect with no IA binds
+at all. The 32 bytes are paid only for VISIBLE commands in a per-monitor scratch, never per object in
+VRAM - the templates stay 24 bytes.
+
+MEMBER ORDER IS LOAD-BEARING, not stylistic. D3D12 packs indirect arguments tightly in the order of
+the command signature's argument descs, and the two D3D12_GPU_VIRTUAL_ADDRESS fields must land on
+8-byte boundaries. Views first puts them at offsets 0 and 16, and the 56-byte stride is a multiple of
+8, so every command in the buffer keeps that alignment. Leading with the 4-byte root constant would
+put the first address at offset 4 and every one after it on an odd 4-byte boundary.
+
+Three definitions must stay in lockstep: this struct, the command signature built in InitD3DPerTab,
+and the VisibleCommand struct in ShaderSceneCull.hlsl. */
+struct VisibleIndirectCommand {
+    // D3D12_INDIRECT_ARGUMENT_TYPE_VERTEX_BUFFER_VIEW (slot 0) == D3D12_VERTEX_BUFFER_VIEW.
+    uint64_t vertexBufferLocation;
+    uint32_t vertexSizeInBytes;
+    uint32_t vertexStrideInBytes;
+    // D3D12_INDIRECT_ARGUMENT_TYPE_INDEX_BUFFER_VIEW == D3D12_INDEX_BUFFER_VIEW. Note that the
+    // index FORMAT rides along per command here, so 16-bit and 32-bit pages could be drawn by one
+    // call - the page-kind axis no longer has to keep them apart on this path (Phase 5 item).
+    uint64_t indexBufferLocation;
+    uint32_t indexSizeInBytes;
+    uint32_t indexFormat; // DXGI_FORMAT_R16_UINT today.
+    uint32_t gpuInstanceIndex; // Root Constant b1, same meaning as in IndirectCommand.
+    IndirectCommand::DrawIndexedArguments drawArguments;
+};
+static_assert(sizeof(VisibleIndirectCommand) == 56,
+    "VisibleIndirectCommand must be exactly 56 bytes - it is the ExecuteIndirect byte stride, and "
+    "the shader writes it as 14 tightly packed uints.");
+static_assert(offsetof(VisibleIndirectCommand, vertexBufferLocation) % 8 == 0 &&
+    offsetof(VisibleIndirectCommand, indexBufferLocation) % 8 == 0,
+    "Both GPU virtual addresses must be 8-byte aligned within the command.");
 
 /* Page Metadata: GeometryPlacementRecordInPage (CPU-side only).
 One entry per geometry object inside a GeometryPage. Used by Copy Thread for defragmentation,

@@ -20,9 +20,12 @@
 extern शंकर gpu;
 extern std::atomic<uint64_t> atlasFence;
 
-// Defaults OFF: bring up the compaction path behind a debug key, so a defect there cannot break
-// normal rendering (10M plan Step 7 slice). Flip the default once verified at parity.
-bool gUseComputeCull = false;
+/* Defaults ON since the compaction path became one ExecuteIndirect per Viewport (10M plan Step 7).
+Before that it was strictly a lateral move - per-page draws either way - so it stayed off. Now it
+draws a whole view in one call with no IA binds and no per-page barriers, which the legacy path
+cannot match, so it is the primary path and the 'k' debug key is for A/B comparison rather than for
+bringing it up. The legacy path remains maintained; see the branch in RenderScene3D. */
+bool gUseComputeCull = true;
 
 namespace {
 
@@ -36,6 +39,31 @@ namespace {
     };
     static_assert(sizeof(SkyGradientConstants) == 8 * sizeof(float),
         "SkyGradientConstants must stay 8 root constants wide");
+
+    /* Root constants (b0) of the draw-command compaction pass. Layout must match the CullParams
+    cbuffer in ShaderSceneCull.hlsl member for member.
+
+    The first three are per Viewport; the eight view fields are per page, and carrying them here is
+    exactly what lets one ExecuteIndirect draw templates from several pages (10M plan Step 7). Every
+    member is a scalar uint, so nothing straddles a float4 register and the cbuffer is a clean 12
+    DWORDs - `cullPadding` is what rounds it there. */
+    struct SceneCullConstants {
+        uint32_t templateCount;
+        uint32_t subTabBit;
+        uint32_t maxCommands;
+        uint32_t vertexAddressLo;
+        uint32_t vertexAddressHi;
+        uint32_t vertexSizeInBytes;
+        uint32_t vertexStrideInBytes;
+        uint32_t indexAddressLo;
+        uint32_t indexAddressHi;
+        uint32_t indexSizeInBytes;
+        uint32_t indexFormat;
+        uint32_t cullPadding;
+    };
+    constexpr uint32_t kSceneCullConstantCount = sizeof(SceneCullConstants) / sizeof(uint32_t);
+    static_assert(kSceneCullConstantCount == 12,
+        "SceneCullConstants must stay 12 root constants wide - the HLSL cbuffer declares 12.");
 } // namespace
 
 int SceneTopUIHeightPx(int monitorId, const DX12ResourcesPerWindow& winRes) {
@@ -134,10 +162,13 @@ void ClearSceneSkyGradient(ID3D12GraphicsCommandList* commandList, DX12Resources
 void InitSceneCullResources(ID3D12Device* device) {
     if (!device || gpu.sceneCullPSO) return;
 
-    // All root descriptors, no descriptor tables: the per-page draw structure is retained in this
-    // slice, so the compute pass needs no shader-visible descriptor heap (10M plan Step 7).
+    // All root descriptors, no descriptor tables, and no shader-visible descriptor heap: the page's
+    // buffer views travel in the root constants rather than in a GPU-side page directory the shader
+    // would have to look them up in (10M plan Step 7).
     CD3DX12_ROOT_PARAMETER1 params[5] = {};
-    params[0].InitAsConstants(2, 0);            // b0: { templateCount, subTabBit }
+    // b0: 12 DWORDs - { templateCount, subTabBit, maxCommands } plus the page's VBV and IBV.
+    // Must equal the CullParams cbuffer size in ShaderSceneCull.hlsl exactly.
+    params[0].InitAsConstants(kSceneCullConstantCount, 0);
     params[1].InitAsShaderResourceView(0);      // t0: Templates (the page's indirectBuffer)
     params[2].InitAsShaderResourceView(1);      // t1: VisibilityMask
     params[3].InitAsUnorderedAccessView(0);     // u0: VisibleOut (compacted commands)
@@ -181,6 +212,65 @@ void InitSceneCullResources(ID3D12Device* device) {
     gpu.cullZeroBuffer->Unmap(0, nullptr);
 
     std::wcout << L"Scene cull compaction pipeline initialized\n";
+}
+
+/* Consume the counts recorded by an EARLIER frame, once that frame's fence has passed (10M plan
+Step 7). A one-frame delay is inherent: the count is produced on the GPU timeline, so reading it any
+sooner would either stall the render thread or read a value the GPU has not written yet.
+
+Reported as a live gauge - what the last completed frame actually drew on this monitor - rather than
+a running total, because that is the number the plan's "reduce each SubTab to what its camera needs"
+is measured by. A count above the cap means the shader dropped commands and the view was visibly
+incomplete, which is counted separately. */
+void PublishVisibleCountReadback(SceneCullScratch& cullScratch) {
+    cullScratch.readbackSlotsRecorded = 0; // Starting a new frame's recording.
+    if (cullScratch.readbackFence == 0 || !cullScratch.countReadback) return;
+    if (gpu.renderFenceValue.load(std::memory_order_acquire) == 0) return;
+
+    // The fence to test is the monitor's own: this scratch is written only by this render thread.
+    // A frame that never got as far as signalling leaves readbackFence at 0 and is skipped above.
+    uint64_t completed = 0;
+    for (int i = 0; i < gpu.currentMonitorCount; ++i) {
+        if (!gpu.screens[i].renderFence) continue;
+        // Any monitor's completed value works as a lower bound here; the counts are diagnostics and
+        // reading them one frame late is harmless. Using the global fence keeps this free of a
+        // monitorId parameter the caller would otherwise have to thread through.
+        completed = (std::max)(completed, gpu.screens[i].renderFence->GetCompletedValue());
+    }
+    if (completed == UINT64_MAX) return;          // Device lost; nothing to read.
+    if (completed < cullScratch.readbackFence) return; // Not retired yet - try again next frame.
+
+    const uint32_t slots = (std::min)(cullScratch.readbackSlotsPending,
+        SceneCullScratch::kCountReadbackSlots);
+    uint32_t* counts = nullptr;
+    CD3DX12_RANGE readRange(0, slots * sizeof(uint32_t));
+    if (FAILED(cullScratch.countReadback->Map(0, &readRange, reinterpret_cast<void**>(&counts)))) {
+        cullScratch.readbackFence = 0;
+        return;
+    }
+    uint64_t drawn = 0;
+    uint64_t overflows = 0;
+    for (uint32_t i = 0; i < slots; ++i) {
+        // The shader lets the count run past the cap on purpose so the overflow is visible here;
+        // the draw itself was clamped by MaxCommandCount, so only the excess was lost.
+        if (counts[i] > SceneCullScratch::kMaxCommands) ++overflows;
+        drawn += (std::min)(counts[i], SceneCullScratch::kMaxCommands);
+    }
+    CD3DX12_RANGE noWrite(0, 0);
+    cullScratch.countReadback->Unmap(0, &noWrite);
+
+    gRenderStats.drawnCommands.store(drawn, std::memory_order_relaxed);
+    if (overflows) gRenderStats.commandOverflows.fetch_add(overflows, std::memory_order_relaxed);
+    cullScratch.readbackFence = 0;
+}
+
+// Tag the counts recorded during this frame with the fence they must wait on. Mirrors the pick
+// pass's FinalizePickFence, and for the same reason: the fence value is not known until after the
+// frame has been submitted and signalled.
+void FinalizeVisibleCountFence(SceneCullScratch& cullScratch, uint64_t frameFenceValue) {
+    if (cullScratch.readbackSlotsRecorded == 0) return;
+    cullScratch.readbackSlotsPending = cullScratch.readbackSlotsRecorded;
+    cullScratch.readbackFence = frameFenceValue;
 }
 
 std::unique_ptr<GeometryPage> CreateNewPage(uint64_t containerMemoryId)
@@ -289,99 +379,169 @@ void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
         // it is set once for the whole view, unlike b1 which ExecuteIndirect rewrites per command.
         commandList->SetGraphicsRootShaderResourceView(4, tabRes.visibilityMask.va);
         commandList->SetGraphicsRoot32BitConstant(5, subTabBit, 0);
+
+        SceneCullScratch& s = cullScratch;
+        auto barrier = [&](ID3D12Resource* r, D3D12_RESOURCE_STATES& cur,
+            D3D12_RESOURCE_STATES next) {
+                if (cur == next) return;
+                auto b = CD3DX12_RESOURCE_BARRIER::Transition(r, cur, next);
+                commandList->ResourceBarrier(1, &b);
+                cur = next;
+            };
+
         /* Walk only the containers this SubTab shows, via the snapshot's directory (10M plan
         Step 6, items 3-4). This replaces "visit every page, bind its buffers, then discover the
         argument count is 0": the container test now happens ABOVE the two IA binds instead of
         after them, and pages belonging to other containers are never touched at all. */
-        for (uint8_t c = 0; c < containers.count; ++c) {
-            auto containerPages = snapshot->pagesByContainer.find(containers.ids[c]);
-            if (containerPages == snapshot->pagesByContainer.end()) continue;
-            for (GeometryPage* pagePtr : containerPages->second) {
-                GeometryPage& page = *pagePtr;
-                if (!page.published.load(std::memory_order_acquire)) continue;
-                if (page.indirectCount == 0) continue; //Some safety checks.
-                if (page.vertexHead == 0) continue;
-                if (page.indexTail == page.pageSize) continue;
+        auto ForEachPage = [&](auto&& visit) {
+            for (uint8_t c = 0; c < containers.count; ++c) {
+                auto containerPages = snapshot->pagesByContainer.find(containers.ids[c]);
+                if (containerPages == snapshot->pagesByContainer.end()) continue;
+                for (GeometryPage* pagePtr : containerPages->second) {
+                    GeometryPage& page = *pagePtr;
+                    if (!page.published.load(std::memory_order_acquire)) continue;
+                    if (page.indirectCount == 0) continue; //Some safety checks.
+                    if (page.vertexHead == 0) continue;
+                    if (page.indexTail == page.pageSize) continue;
+                    visit(page);
+                }
+            }
+            };
 
-                D3D12_VERTEX_BUFFER_VIEW vbv{};
-                vbv.BufferLocation = page.buffer->GetGPUVirtualAddress();
-                vbv.SizeInBytes = page.vertexHead;
-                vbv.StrideInBytes = sizeof(Vertex);
+        // One page's buffer views. Shared by both paths so they can never drift apart: the legacy
+        // path binds them on the IA, the compute path copies them into every command it emits.
+        auto PageVertexView = [](const GeometryPage& page) {
+            D3D12_VERTEX_BUFFER_VIEW vbv{};
+            vbv.BufferLocation = page.buffer->GetGPUVirtualAddress();
+            vbv.SizeInBytes = page.vertexHead;
+            vbv.StrideInBytes = sizeof(Vertex);
+            return vbv;
+            };
+        auto PageIndexView = [](const GeometryPage& page) {
+            D3D12_INDEX_BUFFER_VIEW ibv{};
+            // Bind at the PAGE BASE covering the whole page, so StartIndexLocation is
+            // absolute (indexByteOffset / 2) and stable across appends - indexTail moves down
+            // on every append, which would silently invalidate an indexTail-relative start
+            // index (graphics.md, 10M plan Step 7, constraint 1). The low-byte overlap with
+            // the vertex region is harmless: no draw references indices down there.
+            ibv.BufferLocation = page.buffer->GetGPUVirtualAddress();
+            ibv.SizeInBytes = page.pageSize;
+            ibv.Format = DXGI_FORMAT_R16_UINT;
+            return ibv;
+            };
 
-                D3D12_INDEX_BUFFER_VIEW ibv{};
-                // Bind at the PAGE BASE covering the whole page, so StartIndexLocation is
-                // absolute (indexByteOffset / 2) and stable across appends - indexTail moves down
-                // on every append, which would silently invalidate an indexTail-relative start
-                // index (graphics.md, 10M plan Step 7, constraint 1). The low-byte overlap with
-                // the vertex region is harmless: no draw references indices down there.
-                ibv.BufferLocation = page.buffer->GetGPUVirtualAddress();
-                ibv.SizeInBytes = page.pageSize;
-                ibv.Format = DXGI_FORMAT_R16_UINT;
-
+        if (!gUseComputeCull) {
+            /* LEGACY PATH: one ExecuteIndirect per page over that page's full template list, with
+            its buffers bound on the IA first. Hidden objects are still drawn here and collapse to a
+            degenerate primitive in the vertex shader - the interim Step 5 cost the compute path
+            below removes. Kept as a second maintained path: it is the A/B reference the compute
+            path is checked against, and the fallback if per-command buffer views ever misbehave on
+            some driver. Any change to what gets drawn must be made in BOTH branches. */
+            ForEachPage([&](GeometryPage& page) {
+                const D3D12_VERTEX_BUFFER_VIEW vbv = PageVertexView(page);
+                const D3D12_INDEX_BUFFER_VIEW ibv = PageIndexView(page);
                 commandList->IASetVertexBuffers(0, 1, &vbv);
                 commandList->IASetIndexBuffer(&ibv);
-
-                if (!gUseComputeCull) {
-                    // Legacy path: draw every live template; hidden objects collapse to a
-                    // degenerate primitive in the vertex shader (the interim Step 5 cost the
-                    // compute path below removes). Kept as the fallback until parity is confirmed.
-                    commandList->ExecuteIndirect(tabRes.commandSignature.Get(),
-                        page.indirectCount, page.indirectBuffer.Get(), 0, nullptr, 0);
-                    continue;
-                }
-
-                /* GPU DRAW-COMMAND COMPACTION (graphics.md, 10M plan Step 7 - vertical slice).
-                A compute pass copies only the templates whose VisibilityMask bit for this SubTab is
-                set into the per-monitor scratch, so hidden/filtered objects are DROPPED before they
-                become draw commands rather than vertex-shaded into degenerates. One ExecuteIndirect
-                per page then draws the compacted output, capped by the GPU-written count buffer.
-
-                The compute root signature and its arguments are independent of the graphics root
-                signature + arguments already bound above, so only the shared pipeline-state slot has
-                to be restored before the draw. VBV/IBV and viewport/scissor are IA/RS state and are
-                untouched by the dispatch. */
-                SceneCullScratch& s = cullScratch;
-                auto barrier = [&](ID3D12Resource* r, D3D12_RESOURCE_STATES& cur,
-                    D3D12_RESOURCE_STATES next) {
-                        if (cur == next) return;
-                        auto b = CD3DX12_RESOURCE_BARRIER::Transition(r, cur, next);
-                        commandList->ResourceBarrier(1, &b);
-                        cur = next;
-                    };
-
-                // Reset this page's visible-command count to 0 (root-descriptor-only clear).
-                barrier(s.visibleCount.Get(), s.countState, D3D12_RESOURCE_STATE_COPY_DEST);
-                commandList->CopyBufferRegion(s.visibleCount.Get(), 0, gpu.cullZeroBuffer.Get(), 0,
-                    sizeof(uint32_t));
-                barrier(s.visibleCount.Get(), s.countState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                barrier(s.visibleIndirect.Get(), s.visibleState,
-                    D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-
-                const uint32_t cullConstants[2] = { page.indirectCount, subTabBit };
-                commandList->SetComputeRootSignature(gpu.sceneCullRootSignature.Get());
-                commandList->SetPipelineState(gpu.sceneCullPSO.Get());
-                commandList->SetComputeRoot32BitConstants(0, 2, cullConstants, 0);
-                commandList->SetComputeRootShaderResourceView(1,
-                    page.indirectBuffer->GetGPUVirtualAddress());       // t0 templates
-                commandList->SetComputeRootShaderResourceView(2, tabRes.visibilityMask.va); // t1 mask
-                commandList->SetComputeRootUnorderedAccessView(3,
-                    s.visibleIndirect->GetGPUVirtualAddress());         // u0 compacted output
-                commandList->SetComputeRootUnorderedAccessView(4,
-                    s.visibleCount->GetGPUVirtualAddress());            // u1 count
-                commandList->Dispatch((page.indirectCount + 63) / 64, 1, 1);
-
-                // Hand the compacted commands + count to the draw as indirect arguments.
-                barrier(s.visibleIndirect.Get(), s.visibleState,
-                    D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
-                barrier(s.visibleCount.Get(), s.countState, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
-
-                // Restore graphics PSO (root signature + its arguments were never disturbed).
-                // MaxCommandCount is the template count; the count buffer caps the actual draws.
-                commandList->SetPipelineState(tabRes.pipelineState.Get());
-                commandList->ExecuteIndirect(tabRes.commandSignature.Get(), page.indirectCount,
-                    s.visibleIndirect.Get(), 0, s.visibleCount.Get(), 0);
-            }
+                commandList->ExecuteIndirect(tabRes.commandSignature.Get(),
+                    page.indirectCount, page.indirectBuffer.Get(), 0, nullptr, 0);
+                });
+            return;
         }
+
+        /* GPU DRAW-COMMAND COMPACTION - ONE ExecuteIndirect FOR THE WHOLE VIEWPORT
+        (graphics.md, 10M plan Step 7).
+
+        A compute pass per page copies only the templates whose VisibilityMask bit for this SubTab
+        is set, all into ONE per-monitor output buffer sharing ONE count. Hidden and filtered
+        objects are dropped before they become draw commands rather than vertex-shaded into
+        degenerates, and - because each emitted command carries its own page's vertex/index views -
+        every page's survivors can be drawn by a single call with no IA binds at all.
+
+        Three things this deliberately does NOT do, each of which the per-page form used to:
+          - no barrier between the page dispatches. They touch the count only through
+            InterlockedAdd, so they are order-independent and free to overlap; command order within
+            the buffer therefore varies, which is immaterial for depth-tested opaque draws.
+          - no count reset per page. One reset for the whole Viewport, before the first dispatch.
+          - no per-page IASetVertexBuffers / IASetIndexBuffer.
+
+        The compute root signature and its arguments are independent of the graphics root signature
+        + arguments already bound above, so only the shared pipeline-state slot has to be restored
+        before the draw. Viewport/scissor are RS state and are untouched by the dispatch. */
+
+        // Reset the Viewport's visible-command count to 0 (root-descriptor-only clear - ClearUAV
+        // would need both a CPU and a shader-visible descriptor, which this path does without).
+        barrier(s.visibleCount.Get(), s.countState, D3D12_RESOURCE_STATE_COPY_DEST);
+        commandList->CopyBufferRegion(s.visibleCount.Get(), 0, gpu.cullZeroBuffer.Get(), 0,
+            sizeof(uint32_t));
+        barrier(s.visibleCount.Get(), s.countState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        barrier(s.visibleIndirect.Get(), s.visibleState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+        // Page-invariant compute bindings, hoisted out of the loop. Only the templates SRV and the
+        // root constants change per page below.
+        commandList->SetComputeRootSignature(gpu.sceneCullRootSignature.Get());
+        commandList->SetPipelineState(gpu.sceneCullPSO.Get());
+        commandList->SetComputeRootShaderResourceView(2, tabRes.visibilityMask.va);   // t1 mask
+        commandList->SetComputeRootUnorderedAccessView(3,
+            s.visibleIndirect->GetGPUVirtualAddress());                               // u0 output
+        commandList->SetComputeRootUnorderedAccessView(4,
+            s.visibleCount->GetGPUVirtualAddress());                                  // u1 count
+
+        uint32_t totalTemplates = 0; // Upper bound on surviving commands, for MaxCommandCount.
+        ForEachPage([&](GeometryPage& page) {
+            const D3D12_VERTEX_BUFFER_VIEW vbv = PageVertexView(page);
+            const D3D12_INDEX_BUFFER_VIEW ibv = PageIndexView(page);
+
+            SceneCullConstants constants{};
+            constants.templateCount = page.indirectCount;
+            constants.subTabBit = subTabBit;
+            constants.maxCommands = SceneCullScratch::kMaxCommands;
+            constants.vertexAddressLo = static_cast<uint32_t>(vbv.BufferLocation);
+            constants.vertexAddressHi = static_cast<uint32_t>(vbv.BufferLocation >> 32);
+            constants.vertexSizeInBytes = vbv.SizeInBytes;
+            constants.vertexStrideInBytes = vbv.StrideInBytes;
+            constants.indexAddressLo = static_cast<uint32_t>(ibv.BufferLocation);
+            constants.indexAddressHi = static_cast<uint32_t>(ibv.BufferLocation >> 32);
+            constants.indexSizeInBytes = ibv.SizeInBytes;
+            constants.indexFormat = static_cast<uint32_t>(ibv.Format);
+
+            commandList->SetComputeRoot32BitConstants(0, kSceneCullConstantCount, &constants, 0);
+            commandList->SetComputeRootShaderResourceView(1,
+                page.indirectBuffer->GetGPUVirtualAddress());                         // t0 templates
+            commandList->Dispatch((page.indirectCount + 63) / 64, 1, 1);
+
+            totalTemplates += page.indirectCount;
+            });
+
+        // Nothing dispatched means nothing to draw. Leaving the buffers in UNORDERED_ACCESS is
+        // fine: the next Viewport (or the next frame's COMMON decay) transitions them again.
+        if (totalTemplates == 0) return;
+
+        /* Snapshot this Viewport's surviving-command count for telemetry (10M plan Step 7). It has
+        to happen HERE, between the dispatches and the draw, because the count is reset by the next
+        Viewport. The detour through COPY_SOURCE replaces the single UAV -> INDIRECT_ARGUMENT
+        transition below with two barriers on a 4-byte buffer, which is why it is affordable to
+        leave on in release builds - and a counter that only exists in debug catches nothing. */
+        if (s.countReadback &&
+            s.readbackSlotsRecorded < SceneCullScratch::kCountReadbackSlots) {
+            barrier(s.visibleCount.Get(), s.countState, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            commandList->CopyBufferRegion(s.countReadback.Get(),
+                s.readbackSlotsRecorded * sizeof(uint32_t), s.visibleCount.Get(), 0,
+                sizeof(uint32_t));
+            ++s.readbackSlotsRecorded;
+        }
+
+        // Hand the compacted commands + count to the draw as indirect arguments.
+        barrier(s.visibleIndirect.Get(), s.visibleState, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        barrier(s.visibleCount.Get(), s.countState, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+
+        // Restore graphics PSO (root signature + its arguments were never disturbed). ONE call for
+        // the whole Viewport. MaxCommandCount caps the draw independently of the GPU-written count,
+        // so a count the shader deliberately let overflow past kMaxCommands cannot read past the
+        // buffer - ExecuteIndirect executes min(MaxCommandCount, count) commands.
+        commandList->SetPipelineState(tabRes.pipelineState.Get());
+        commandList->ExecuteIndirect(tabRes.visibleCommandSignature.Get(),
+            (std::min)(totalTemplates, SceneCullScratch::kMaxCommands),
+            s.visibleIndirect.Get(), 0, s.visibleCount.Get(), 0);
     } // End of if (snapshot)
     // TODO: Add support for transparent pages with proper sorting and blending states.
     // TODO: Similarly for all varients of geometry, like wireframe, hugoObjects etc. all unique PSO.

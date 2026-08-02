@@ -12,6 +12,7 @@
 struct DX12ResourcesPerWindow;
 struct DX12ResourcesPerTab;
 struct GeometryPage;
+struct SceneCullScratch;
 struct CommandToCopyThread;
 struct DATASETTAB; // विश्वकर्मा.h
 
@@ -29,10 +30,19 @@ void ClearSceneSkyGradient(ID3D12GraphicsCommandList* commandList, DX12Resources
 // before render threads start, alongside InitSkyGradientResources.
 void InitSceneCullResources(ID3D12Device* device);
 
-// Runtime toggle between the GPU-compacted per-page draw path (true) and the legacy direct
-// ExecuteIndirect-of-all-templates path (false). Defaults to false during bring-up so a broken
-// compaction path cannot break normal rendering; a debug key flips it. See RenderScene3D.
+// Runtime toggle between the GPU-compacted one-ExecuteIndirect-per-Viewport draw path (true) and
+// the legacy per-page ExecuteIndirect-of-all-templates path (false). Defaults to TRUE: the compute
+// path draws a whole view in one call with no IA binds, which the legacy path cannot match. The
+// legacy path stays maintained as the A/B reference; a debug key flips between them.
 extern bool gUseComputeCull;
+
+// Per-monitor drawn-command telemetry (10M plan Step 7). Both are called by the render thread on
+// its own SceneCullScratch, and only ever record or read - neither affects what is drawn.
+// PublishVisibleCountReadback consumes the PREVIOUS frame's counts once its fence has passed, so
+// call it after the command list is reset and before recording; FinalizeVisibleCountFence tags the
+// counts recorded this frame, so call it right after the frame's fence has been signalled.
+void PublishVisibleCountReadback(SceneCullScratch& cullScratch);
+void FinalizeVisibleCountFence(SceneCullScratch& cullScratch, uint64_t frameFenceValue);
 
 // A fresh 4 MB double-ended geometry page (COMMON state) for the given container. Foundation's
 // GpuCopyThread and the Scene3D copy path both allocate through here.

@@ -412,7 +412,7 @@ static void CleanupReleasedSubTabs(DATASETTAB* targetTab) {
         std::lock_guard<std::mutex> lock(toCopyThreadMutex);
         for (uint16_t slot : freedSlots) {
             const uint32_t bit = SubTabVisibilityBit(slot);
-            if (bit == kNoSubTabBit) continue; // Slot past the 64 mask-addressable SubTabs.
+            if (bit == kNoSubTabBit) continue; // Defensive: every slot has a bit at MV_MAX_SUBTABS 64.
             CommandToCopyThread command;
             command.type = CommandToCopyThreadType::CLEAR_SUBTAB_HIDES;
             command.tabID = targetTab->tabID;
@@ -1106,14 +1106,30 @@ must not touch geometry at all.
 The bit is the sub-tab SLOT, so a hide applies to the view the user is looking at rather than to
 every view of the same Scene3D.
 
-KNOWN GAP: objects are filtered to the sub-tab's HOME container only. That was correct when a
-sub-tab showed exactly one container; Step 6 made it a SET (subTabs[slot].containers) and this
-producer was not updated. The pick pass walks the whole set, so an object in a composed container
-can be selected and then silently refuses to hide. TranslateSelectedSceneObjects has the identical
-gap. Both should iterate the set. Recorded in graphics.md under Step 6.
+Objects are filtered through SubTabDrawsContainer, i.e. by the sub-tab's whole container SET, so a
+composed container hides along with the home one - matching what the draw and pick paths already
+walk. Filtering by the home containerMemoryId instead (which this did until the set existed) let an
+object in a composed container be selected and then silently refuse to hide.
 
 Each action touches only the objects it names - "Hide Selected" does not silently un-hide everything
 else - so the three compose the way a user expects. */
+/* Does the sub-tab in `subTabSlot` draw objects parented to `containerMemoryId`?
+
+Every producer acting on "what the user is looking at" must ask THIS, not compare against the
+sub-tab's home containerMemoryId. Step 6 turned a sub-tab's content from one container into a SET
+(drag a Scene3D onto the view and it is composed in by reference), and the draw and pick paths were
+updated while the move and hide producers were not - so an object in a composed container could be
+selected and would then silently refuse to move or hide (graphics.md, 10M plan Step 6).
+
+The empty-set fallback to the home container mirrors ResolveWindowViewTarget exactly: a sub-tab
+whose set was never populated still behaves as it always did. */
+static bool SubTabDrawsContainer(const DATASETTAB& tab, int subTabSlot, uint64_t containerMemoryId) {
+    if (containerMemoryId == 0 || subTabSlot < 0 || subTabSlot >= MV_MAX_SUBTABS) return false;
+    const InternalSubTab& subTab = tab.subTabs[subTabSlot];
+    if (subTab.containers.Empty()) return containerMemoryId == subTab.containerMemoryId;
+    return subTab.containers.Contains(containerMemoryId);
+}
+
 enum class SceneVisibilityAction { HideSelected, HideUnselected, ShowAll };
 
 static void ApplySceneVisibilityAction(DATASETTAB* myTab, SceneVisibilityAction action) {
@@ -1122,9 +1138,8 @@ static void ApplySceneVisibilityAction(DATASETTAB* myTab, SceneVisibilityAction 
     if (viewSlot < 0) return;
     if (myTab->subTabs[viewSlot].containerType != VishwakarmaStorage::ObjectType::Scene3D) return;
     const uint32_t bit = SubTabVisibilityBit(viewSlot);
-    if (bit == kNoSubTabBit) return; // Slot past the 64 mask-addressable SubTabs; nothing to toggle.
-    const uint64_t containerMemoryId = myTab->subTabs[viewSlot].containerMemoryId;
-    if (containerMemoryId == 0) return;
+    if (bit == kNoSubTabBit) return; // Defensive: every slot has a bit at MV_MAX_SUBTABS 64.
+    if (myTab->subTabs[viewSlot].containerMemoryId == 0) return;
 
     std::vector<uint64_t> selected;
     if (action != SceneVisibilityAction::ShowAll) {
@@ -1138,7 +1153,9 @@ static void ApplySceneVisibilityAction(DATASETTAB* myTab, SceneVisibilityAction 
     // The engineering thread is the sole writer of storageObjects3D, so iteration needs no lock.
     std::vector<CommandToCopyThread> commands;
     for (const StoredGeometryObject3D& stored : myTab->storageObjects3D) {
-        if (!stored.object || stored.object->memoryIDParent != containerMemoryId) continue;
+        if (!stored.object) continue;
+        // The whole container SET the sub-tab draws, so a composed container hides too.
+        if (!SubTabDrawsContainer(*myTab, viewSlot, stored.object->memoryIDParent)) continue;
         const bool isSelected =
             std::find(selected.begin(), selected.end(), stored.memoryId) != selected.end();
         if (action == SceneVisibilityAction::HideSelected && !isSelected) continue;
@@ -1148,7 +1165,7 @@ static void ApplySceneVisibilityAction(DATASETTAB* myTab, SceneVisibilityAction 
         command.type = CommandToCopyThreadType::SET_VISIBILITY;
         command.id = stored.memoryId;
         command.tabID = myTab->tabID;
-        command.containerMemoryId = containerMemoryId;
+        command.containerMemoryId = stored.object->memoryIDParent;
         command.visibilityBits = 1ull << bit;
         command.visibilityVisible = action == SceneVisibilityAction::ShowAll;
         commands.push_back(std::move(command));
@@ -1190,8 +1207,7 @@ static size_t TranslateSelectedSceneObjects(DATASETTAB* myTab, const XMFLOAT3& d
     const int viewSlot = InputViewSlot(*myTab);
     if (viewSlot < 0) return 0;
     if (myTab->subTabs[viewSlot].containerType != VishwakarmaStorage::ObjectType::Scene3D) return 0;
-    const uint64_t containerMemoryId = myTab->subTabs[viewSlot].containerMemoryId;
-    if (containerMemoryId == 0) return 0;
+    if (myTab->subTabs[viewSlot].containerMemoryId == 0) return 0;
 
     std::vector<uint64_t> selected;
     {
@@ -1204,7 +1220,9 @@ static size_t TranslateSelectedSceneObjects(DATASETTAB* myTab, const XMFLOAT3& d
     // only the placement WRITE below does.
     std::vector<CommandToCopyThread> commands;
     for (const StoredGeometryObject3D& stored : myTab->storageObjects3D) {
-        if (!stored.object || stored.object->memoryIDParent != containerMemoryId) continue;
+        if (!stored.object) continue;
+        // The whole container SET the sub-tab draws, so a composed container moves too.
+        if (!SubTabDrawsContainer(*myTab, viewSlot, stored.object->memoryIDParent)) continue;
         if (std::find(selected.begin(), selected.end(), stored.memoryId) == selected.end()) continue;
 
         Placement3D* placement = PlacementForObject(stored.objectType, stored.object);
@@ -1226,7 +1244,7 @@ static size_t TranslateSelectedSceneObjects(DATASETTAB* myTab, const XMFLOAT3& d
         command.geometry = std::move(transformOnly);
         command.id = stored.memoryId;
         command.tabID = myTab->tabID;
-        command.containerMemoryId = containerMemoryId;
+        command.containerMemoryId = stored.object->memoryIDParent;
         commands.push_back(std::move(command));
     }
     if (commands.empty()) return 0;

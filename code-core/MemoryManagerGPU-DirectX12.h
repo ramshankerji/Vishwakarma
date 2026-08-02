@@ -442,6 +442,12 @@ struct DX12ResourcesPerTab { // (The Data) Geometry Data
     ComPtr<ID3D12PipelineState> pipelineState;
 
     ComPtr<ID3D12CommandSignature> commandSignature;// Indirect Drawing
+    /* The 56-byte signature the ONE-per-Viewport ExecuteIndirect uses (10M plan Step 7). Same root
+    signature and same root constant as `commandSignature`, plus a vertex and index buffer view per
+    command - which is what allows one call to draw templates originating in different pages. The
+    24-byte signature above is still what the legacy draw path, the GPU pick pass and the print path
+    execute, since those read a page's templates directly. */
+    ComPtr<ID3D12CommandSignature> visibleCommandSignature;
 
     // 3D click-selection: GPU picking + highlight + rotation-cube resources (Selection3D module).
     Selection3DResources selection3D;
@@ -510,20 +516,59 @@ struct DX12ResourcesPerWindow {// Presentation Logic
 using PlatformTabGpu    = DX12ResourcesPerTab;
 using PlatformWindowGpu = DX12ResourcesPerWindow;
 
-/* Per-render-thread scratch for GPU draw-command compaction (graphics.md, 10M plan Step 7 - slice).
-The compute pass compacts each page's draw templates into `visibleIndirect` (dropping hidden /
-filtered objects) and writes the surviving command count into `visibleCount`; one ExecuteIndirect
-per page then draws from them. One scratch per monitor - each render thread owns its own, so two
-monitors never alias. `visibleIndirect` is sized for the densest possible 4 MB page. The two state
-fields track the buffers across pages/windows WITHIN a frame; they reset to COMMON each frame after
-the command list is reset, because a buffer decays to COMMON at every ExecuteCommandLists boundary. */
+/* Per-render-thread scratch for GPU draw-command compaction (graphics.md, 10M plan Step 7). Every
+page of a Viewport dispatches into the SAME `visibleIndirect` and the SAME `visibleCount`, and one
+ExecuteIndirect then draws the lot - which is why each command carries its page's buffer views.
+
+One scratch per MONITOR, not per Viewport, and that is deliberate: two windows on two monitors can
+resolve to the same tab's active sub-tab (ResolveWindowViewTarget), so a per-Viewport buffer would
+have two owning render threads and break invariant 4. Per monitor, the owning thread is unique.
+
+Several Viewports on ONE monitor share this scratch safely because they are recorded in order into
+one command list: the next Viewport's barrier back to UNORDERED_ACCESS drains the previous one's
+ExecuteIndirect before its dispatches can overwrite anything.
+
+The two state fields track the buffers across pages/windows WITHIN a frame; they reset to COMMON each
+frame after the command list is reset, because a buffer decays to COMMON at every
+ExecuteCommandLists boundary. */
 struct SceneCullScratch {
-    ComPtr<ID3D12Resource> visibleIndirect; // 65536 * sizeof(IndirectCommand) = 1.5 MB.
+    ComPtr<ID3D12Resource> visibleIndirect; // kMaxCommands * sizeof(VisibleIndirectCommand) = 3.5 MB.
     ComPtr<ID3D12Resource> visibleCount;    // One uint at byte 0, written via InterlockedAdd.
     D3D12_RESOURCE_STATES visibleState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES countState = D3D12_RESOURCE_STATE_COMMON;
-    static constexpr uint32_t kMaxCommands = 65536; // Densest 4 MB page holds ~45k; safe headroom.
+    // Cap on commands per Viewport - a CPU-side constant by design (10M plan Step 7). The shader
+    // drops anything past it rather than wrapping, and ExecuteIndirect's MaxCommandCount enforces
+    // the same bound independently, so an overflow costs dropped draws and a telemetry count,
+    // never a buffer overrun.
+    static constexpr uint32_t kMaxCommands = 65536;
+
+    /* Fence-gated read-back of the surviving command count, purely for telemetry. Written on the
+    GPU timeline, so it can only be read once the frame that produced it has retired - hence a
+    fence value and a one-frame delay rather than a Map right after recording.
+
+    One slot per Viewport recorded this frame: the count is reset per Viewport, so a single slot
+    would report only the last one. A monitor showing more Viewports than there are slots simply
+    stops recording the surplus - this is a counter, not a correctness mechanism. */
+    static constexpr uint32_t kCountReadbackSlots = 8;
+    ComPtr<ID3D12Resource> countReadback;   // READBACK heap, kCountReadbackSlots uints.
+    uint32_t readbackSlotsRecorded = 0;     // Viewports whose count this frame recorded.
+    uint32_t readbackSlotsPending = 0;      // Same, for the frame `readbackFence` refers to.
+    uint64_t readbackFence = 0;             // 0 = nothing in flight.
 };
+
+/* Render-thread telemetry, the counterpart to the copy thread's GpuCopyStats and printed beside it
+on the debug heartbeat. Written by render threads, read by whichever one prints - hence atomic, all
+relaxed: diagnostics, never control flow. */
+struct GpuRenderStats {
+    // Commands actually drawn by the last completed frame's compaction pass, summed over that
+    // monitor's Viewports. A LIVE gauge, not a running total: it is what the 10M plan's "reduce
+    // each SubTab to what its camera needs" is ultimately measured by.
+    std::atomic<uint64_t> drawnCommands{ 0 };
+    // Times a Viewport's surviving commands exceeded SceneCullScratch::kMaxCommands and were
+    // dropped. Cumulative, and a non-zero value means the view was visibly incomplete.
+    std::atomic<uint64_t> commandOverflows{ 0 };
+};
+extern GpuRenderStats gRenderStats;
 
 struct DX12ResourcesPerRenderThread { // This one is created 1 for each monitor.
     // For convenience only. It simply points to OneMonitorController.commandQueue
@@ -749,7 +794,8 @@ public:
     // monitorId: index into gpu.screens[] for DPI/physical info used by UI layout calculations
     // containers: the SubTab's container set - only their pages are visited (Step 6).
     // subTabBit: which of the 64 VisibilityMask bits this view tests, i.e. the sub-tab slot being
-    // drawn, or kNoSubTabBit when the view has no mask-addressable bit (slot >= 64, or no sub-tab).
+    // drawn, or kNoSubTabBit when the draw has no sub-tab at all (the print path). Every open
+    // sub-tab has a bit, since MV_MAX_SUBTABS equals the 64-bit mask width.
     // cullScratch: this render thread's compaction scratch, used only when gUseComputeCull is on
     // (10M plan Step 7 slice). Its state fields are reset to COMMON by the caller each frame.
     void RenderScene3D(ID3D12GraphicsCommandList* cmdList, //Called by per monitor render thread.

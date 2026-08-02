@@ -40,9 +40,9 @@ cbuffer PerView : register(b2) { uint subTabBit; };
 ONE of the two halves, a mask observed part-way through an 8-byte write still cannot be read
 inconsistently - which is what lets the copy thread mutate it in place under invariant 2.
 
-subTabBit >= 64 means this Viewport has no mask-addressable bit (kNoSubTabBit for a sub-tab slot
-past 63, or a draw with no sub-tab at all such as the print path). Those views show everything
-rather than nothing. */
+subTabBit >= 64 means this Viewport has no mask-addressable bit. Since MV_MAX_SUBTABS became 64 -
+equal to the mask width - that is reached only by a draw with no sub-tab at all, such as the print
+path; every open sub-tab has a bit. Those views show everything rather than nothing. */
 bool IsVisibleInSubTab(uint instanceIndex, uint bit) {
     if (bit >= 64u) return true;
     uint2 mask = VisibilityMask[instanceIndex];

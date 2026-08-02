@@ -91,13 +91,15 @@ void GpuRenderThread(int monitorId, int refreshRate) {
     // Command lists are created in the recording state, but our loop expects them closed initially.
     threadRes.commandList->Close();
 
-    // GPU draw-command compaction scratch for this monitor (10M plan Step 7 slice). Both are UAV
+    // GPU draw-command compaction scratch for this monitor (10M plan Step 7). The first two are UAV
     // targets, so they need ALLOW_UNORDERED_ACCESS; created in COMMON (buffers decay to COMMON at
-    // every ExecuteCommandLists boundary, which the per-frame state reset below relies on).
+    // every ExecuteCommandLists boundary, which the per-frame state reset below relies on). The
+    // output holds the whole Viewport's surviving commands now, not one page's, and each command
+    // carries its page's buffer views - hence VisibleIndirectCommand rather than IndirectCommand.
     {
         CD3DX12_HEAP_PROPERTIES defaultHeap(D3D12_HEAP_TYPE_DEFAULT);
         auto visibleDesc = CD3DX12_RESOURCE_DESC::Buffer(
-            static_cast<uint64_t>(SceneCullScratch::kMaxCommands) * sizeof(IndirectCommand),
+            static_cast<uint64_t>(SceneCullScratch::kMaxCommands) * sizeof(VisibleIndirectCommand),
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         ThrowIfFailed(gpu.device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE,
             &visibleDesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
@@ -109,6 +111,17 @@ void GpuRenderThread(int monitorId, int refreshRate) {
             &countDesc, D3D12_RESOURCE_STATE_COMMON, nullptr,
             IID_PPV_ARGS(&threadRes.cullScratch.visibleCount)));
         threadRes.cullScratch.visibleCount->SetName(L"Visible Count");
+        // Drawn-command telemetry only: a failure here must not take the render thread down, so it
+        // is the one resource in this block that is not ThrowIfFailed. A null buffer simply leaves
+        // the counter at zero (both call sites test for it).
+        CD3DX12_HEAP_PROPERTIES readbackHeap(D3D12_HEAP_TYPE_READBACK);
+        auto readbackDesc = CD3DX12_RESOURCE_DESC::Buffer(
+            SceneCullScratch::kCountReadbackSlots * sizeof(uint32_t));
+        if (SUCCEEDED(gpu.device->CreateCommittedResource(&readbackHeap, D3D12_HEAP_FLAG_NONE,
+            &readbackDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&threadRes.cullScratch.countReadback)))) {
+            threadRes.cullScratch.countReadback->SetName(L"Visible Count Readback");
+        }
     }
 
     uint64_t lastRenderedFrame = 0;
@@ -128,9 +141,12 @@ void GpuRenderThread(int monitorId, int refreshRate) {
         allocator->Reset();
         threadRes.commandList->Reset(allocator.Get(), nullptr); // Pass 'nullptr' for the PSO here so we don't enforce a state yet.
         // New command list == new ExecuteCommandLists: the scratch buffers have decayed to COMMON,
-        // so the per-page barrier tracking must start from COMMON again (10M plan Step 7 slice).
+        // so the barrier tracking must start from COMMON again (10M plan Step 7).
         threadRes.cullScratch.visibleState = D3D12_RESOURCE_STATE_COMMON;
         threadRes.cullScratch.countState = D3D12_RESOURCE_STATE_COMMON;
+        // Consume the drawn-command counts an earlier frame recorded, now that its fence has
+        // passed, and reset the slot cursor for the frame about to be recorded.
+        PublishVisibleCountReadback(threadRes.cullScratch);
 
         bool didRender = false;
         // Picks recorded this frame; promoted to in-flight (with the frame's fence) after Signal.
@@ -411,6 +427,8 @@ void GpuRenderThread(int monitorId, int refreshRate) {
 
             // Tag picks recorded this frame with the fence they must wait on before readback.
             for (PickPassContext* pctx : pendingPickCtxs) FinalizePickFence(*pctx, currentFenceValue);
+            // Same for the drawn-command counts this frame's compaction passes wrote.
+            FinalizeVisibleCountFence(threadRes.cullScratch, currentFenceValue);
 
             // WAIT: Throttle CPU (Double Buffering Logic). We need to reuse the Command Allocator for the *next* frame.
             // Store the exact fence value we just signaled for THIS allocator
@@ -485,6 +503,14 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                      << " retireBacklog(live/peak)="
                      << gCopyStats.liveRetireBacklog.load(std::memory_order_relaxed)
                      << "/" << gCopyStats.peakRetireBacklog.load(std::memory_order_relaxed)
+                     << "\n";
+            // Render-thread side (10M plan Step 7). `drawn` is a LIVE gauge - commands the last
+            // completed frame actually issued on this monitor after compaction - so it should drop
+            // when objects are hidden and stay flat when they merely move. `overflow` must stay 0;
+            // any other value means a Viewport exceeded the command cap and drew incompletely.
+            copyLine << "[gpu][cull] path=" << (gUseComputeCull ? "compute" : "legacy")
+                     << " drawn=" << gRenderStats.drawnCommands.load(std::memory_order_relaxed)
+                     << " overflow=" << gRenderStats.commandOverflows.load(std::memory_order_relaxed)
                      << "\n";
             std::cout << copyLine.str() << std::flush;
         }
