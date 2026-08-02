@@ -778,7 +778,10 @@ static void RegisterGeneratedGeometryElement(DATASETTAB* targetTab, VishwakarmaS
         object->memoryIDParent = EnsureActiveScene3D(targetTab);
     }
     object->dataType = static_cast<uint16_t>(VishwakarmaStorage::ToNumber(objectType));
-    object->schemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
+    // Derived from the type, not hardcoded: this used to stamp kGeometry3DMvpSchemaVersion on every
+    // 3D object, which labelled a freshly drawn LINE_MEMBER one version behind the format its own
+    // payload used. Same function the load and save paths call.
+    object->schemaVersion = VishwakarmaStorage::DefaultSchemaVersionForObjectType(objectType);
 
     if (batch) { // Deferred: the caller hands everything over via FlushGeneratedGeometryBatch.
         batch->copyCommands.push_back({ CommandToCopyThreadType::ADD, std::move(geometry),
@@ -860,9 +863,11 @@ static void ModifyObjectProperty(DATASETTAB* myTab, uint64_t objectId, uint8_t f
 
     // Re-run the MVP validator against live values. The UI pre-validated, so this only fires on
     // races or bugs; on rejection we simply drop the commit.
+    // Both the validation snapshot and the incoming value are in the same space the pane showed -
+    // WORLD for point components. Every rule is placement-invariant, so the verdict is unchanged.
     float values[16] = {};
     const uint8_t count = table->fieldCount;
-    for (uint8_t i = 0; i < count; ++i) values[i] = table->fields[i].get(object);
+    ReadPropertyValuesForDisplay(*table, object, values);
     const float newValue = static_cast<float>(value);
     if (!ValidatePropertyEdit(*table, values, count, fieldIndex, newValue)) return;
 
@@ -870,7 +875,7 @@ static void ModifyObjectProperty(DATASETTAB* myTab, uint64_t objectId, uint8_t f
         // Hold storageObjectsMutex only for the store, so the render thread (which takes it every
         // frame) is not stalled by geometry generation.
         std::lock_guard<std::mutex> lock(*myTab->storageObjectsMutex);
-        table->fields[fieldIndex].set(object, newValue);
+        ApplyPropertyValueFromDisplay(*table, object, fieldIndex, newValue);
         object->dataVersion++;
     }
 
@@ -991,12 +996,15 @@ static void ApplyPickResult(DATASETTAB& tab, bool hit, uint64_t objectId,
     const PickPurpose purpose = static_cast<PickPurpose>(purposeRaw);
     CameraState& cam = ActiveSceneCamera(tab);
     if (purpose == PickPurpose::Select) {
-        {
-            std::lock_guard<std::mutex> lock(tab.selection.selectedMutex);
-            tab.selection.selectedObjectIds.clear();
-            if (objectId != 0) tab.selection.selectedObjectIds.push_back(objectId); // Single-select.
-        }
-        if (objectId != 0) CenterCameraOnPoint(cam, cg); // Focus on the selected object's CG.
+        std::lock_guard<std::mutex> lock(tab.selection.selectedMutex);
+        tab.selection.selectedObjectIds.clear();
+        if (objectId != 0) tab.selection.selectedObjectIds.push_back(objectId); // Single-select.
+        /* Selecting deliberately does NOT move the camera. It used to recenter the orbit target on
+        the picked object's CG, which meant every click re-framed the whole scene - fine for the
+        first pick, disorienting for the tenth. Picking is now a pure selection change; the view is
+        moved only by explicit navigation (orbit / wheel) or the Zoom commands. `cg` stays in the
+        signature because the pick resolve already computes it and the scroll-to-surface path below
+        is the other consumer of the same result. */
     } else if (purpose == PickPurpose::Recenter && hit) {
         // Only recenter when the surface is meaningfully off the current pivot, so a stationary
         // cursor doesn't jitter the view every scroll notch. Tunable UX; see selection.md.
@@ -1057,9 +1065,16 @@ static void ZoomSceneToExtents(DATASETTAB* myTab, bool selectedOnly) {
         if (filterBySelection &&
             std::find(selected.begin(), selected.end(), stored.memoryId) == selected.end()) continue;
         if (!GeometryForObject(stored.objectType, stored.object, geometry)) continue;
+        /* Vertices come out of the generator in AUTHORED space, so a placed object has to be
+        carried to world space before it can be framed - otherwise zoom-to-fit would point the
+        camera at where the object was drawn rather than where it is displayed. The vertex shader
+        applies exactly this matrix, so doing it here keeps the fit consistent with what is on
+        screen. Identity for anything that has never been moved, which is the common case. */
+        const DirectX::XMMATRIX world = DirectX::XMLoadFloat4x4(&geometry.worldMatrix);
         for (const Vertex& vertex : geometry.vertices) {
-            DirectX::XMVECTOR offset = DirectX::XMVectorSubtract(
-                DirectX::XMLoadFloat3(&vertex.position), target);
+            const DirectX::XMVECTOR worldPosition = DirectX::XMVector3Transform(
+                DirectX::XMLoadFloat3(&vertex.position), world);
+            DirectX::XMVECTOR offset = DirectX::XMVectorSubtract(worldPosition, target);
             const float alongForward = DirectX::XMVectorGetX(DirectX::XMVector3Dot(offset, forward));
             const float alongRight = DirectX::XMVectorGetX(DirectX::XMVector3Dot(offset, right));
             const float alongUp = DirectX::XMVectorGetX(DirectX::XMVector3Dot(offset, viewUp));
@@ -1143,6 +1158,83 @@ static void ApplySceneVisibilityAction(DATASETTAB* myTab, SceneVisibilityAction 
         }
     }
     toCopyThreadCV.notify_one();
+}
+
+/* THE MOVE PRODUCER (graphics.md, 10M plan Step 4 - the last missing piece of the Phase 5 hot-drag
+item). Translates the current selection by writing each object's rigid PLACEMENT and emitting a
+TRANSFORM-ONLY MODIFY: a GeometryData carrying a world matrix but no vertices and no indices, which
+is exactly what IsTransformOnlyEdit recognises.
+
+What that buys, and why the whole placement design exists: the copy thread answers such a command
+with one fresh 64-byte instance record plus one naturally-aligned 4-byte redirect flip. No geometry
+page is cloned, no argument buffer rebuilt, no snapshot published - so moving a thousand objects
+scattered over a thousand pages costs ~68 KB of writes instead of ~4 GB of page cloning. Regenerating
+geometry instead (which is what a MODIFY carrying vertices does) would clone every page touched.
+
+The delta ACCUMULATES into the existing placement rather than replacing it, so repeated moves
+compose and an object that was already placed is translated from where it actually is.
+
+Locking follows the property-edit path exactly: mutate under storageObjectsMutex (render threads read
+these objects every frame), release it, then push under toCopyThreadMutex. The two are never nested -
+taking the copy-thread mutex while holding the storage mutex would stall every render thread behind a
+copy-thread drain. */
+// Returns how many objects were actually moved, so a caller (the debug key) can report the truth
+// rather than assuming the call did something - an empty selection makes this a silent no-op.
+static size_t TranslateSelectedSceneObjects(DATASETTAB* myTab, const XMFLOAT3& delta) {
+    if (!myTab) return 0;
+    const int viewSlot = InputViewSlot(*myTab);
+    if (viewSlot < 0) return 0;
+    if (myTab->subTabs[viewSlot].containerType != VishwakarmaStorage::ObjectType::Scene3D) return 0;
+    const uint64_t containerMemoryId = myTab->subTabs[viewSlot].containerMemoryId;
+    if (containerMemoryId == 0) return 0;
+
+    std::vector<uint64_t> selected;
+    {
+        std::lock_guard<std::mutex> lock(myTab->selection.selectedMutex);
+        selected = myTab->selection.selectedObjectIds;
+    }
+    if (selected.empty()) return 0; // Moving nothing is a no-op, not "move everything".
+
+    // The engineering thread is the sole writer of storageObjects3D, so iteration needs no lock;
+    // only the placement WRITE below does.
+    std::vector<CommandToCopyThread> commands;
+    for (const StoredGeometryObject3D& stored : myTab->storageObjects3D) {
+        if (!stored.object || stored.object->memoryIDParent != containerMemoryId) continue;
+        if (std::find(selected.begin(), selected.end(), stored.memoryId) == selected.end()) continue;
+
+        Placement3D* placement = PlacementForObject(stored.objectType, stored.object);
+        if (!placement) continue; // Type carries no placement; nothing to move.
+
+        GeometryData transformOnly; // No vertices, no indices: THE transform-only encoding.
+        transformOnly.id = stored.memoryId;
+        {
+            std::lock_guard<std::mutex> lock(*myTab->storageObjectsMutex);
+            placement->origin.x += delta.x;
+            placement->origin.y += delta.y;
+            placement->origin.z += delta.z;
+            stored.object->dataVersion++;
+            XMStoreFloat4x4(&transformOnly.worldMatrix, placement->ToMatrix());
+        }
+
+        CommandToCopyThread command;
+        command.type = CommandToCopyThreadType::MODIFY;
+        command.geometry = std::move(transformOnly);
+        command.id = stored.memoryId;
+        command.tabID = myTab->tabID;
+        command.containerMemoryId = containerMemoryId;
+        commands.push_back(std::move(command));
+    }
+    if (commands.empty()) return 0;
+
+    const size_t moved = commands.size();
+    {   // One lock for the whole burst so the copy thread drains them as a single batch.
+        std::lock_guard<std::mutex> lock(toCopyThreadMutex);
+        for (CommandToCopyThread& command : commands) {
+            commandToCopyThreadQueue.push(std::move(command));
+        }
+    }
+    toCopyThreadCV.notify_one();
+    return moved;
 }
 
 // Zoom Window for the 3D scene: the two clicked pixels define a rectangle on the screen. The view
@@ -2265,6 +2357,24 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                     gUseComputeCull = !gUseComputeCull;
                     std::cout << "[gpu][stress] compute cull "
                               << (gUseComputeCull ? "ON" : "OFF") << std::endl;
+                }
+                /* Temporary Debug Key: "v" translates the SELECTION by +2 in Z through the real
+                producer path - it writes each object's placement and emits a transform-only MODIFY
+                (graphics.md, 10M plan Step 4). Unlike the older "m" key, which fabricates a raw
+                world matrix for every object in the container without touching stored state, this
+                goes through TranslateSelectedSceneObjects, so the move PERSISTS and survives a
+                save/reload. Acceptance is the heartbeat: `moves` must climb while `clones` and
+                `cloneMB` stay perfectly flat, and the selected objects must visibly rise. Repeated
+                presses accumulate, which is what proves the delta composes onto the existing
+                placement rather than replacing it. */
+                if (input.x == 86 || input.x == 118) { // 'V' & 'v'
+                    // Report the COUNT, not the intent: with an empty selection this is a no-op,
+                    // and a message that claims otherwise makes a missed selection look like a
+                    // broken move path (which is exactly how it read the first time).
+                    const size_t moved =
+                        TranslateSelectedSceneObjects(myTab, XMFLOAT3{ 0.0f, 0.0f, 2.0f });
+                    std::cout << "[gpu][stress] placement move: " << moved
+                              << " object(s) translated by +2 Z" << std::endl;
                 }
                 break;
 

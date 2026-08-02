@@ -200,15 +200,18 @@ bool CrossLineMember(const float* values, uint8_t count, uint8_t editIndex, floa
 
 } // namespace
 
+// The trailing { first fields } / count declare which field triples are POINTS and therefore get
+// carried to and from world space by the placement (see PropertyTypeDescriptor). Single-point types
+// list one triple; axis types list both ends. Everything after the points is a scalar.
 const PropertyTypeDescriptor kPropertyTables[] = {
-    { ObjectType::Sphere, kSphereFields, static_cast<uint8_t>(std::size(kSphereFields)), nullptr },
-    { ObjectType::Cylinder, kCylinderFields, static_cast<uint8_t>(std::size(kCylinderFields)), CrossTwoPoints },
-    { ObjectType::Cone, kConeFields, static_cast<uint8_t>(std::size(kConeFields)), nullptr },
-    { ObjectType::Torus, kTorusFields, static_cast<uint8_t>(std::size(kTorusFields)), CrossTorus },
-    { ObjectType::Ellipsoid, kEllipsoidFields, static_cast<uint8_t>(std::size(kEllipsoidFields)), nullptr },
-    { ObjectType::Pipe, kPipeFields, static_cast<uint8_t>(std::size(kPipeFields)), CrossPipe },
-    { ObjectType::FrustumOfCone, kFrustumOfConeFields, static_cast<uint8_t>(std::size(kFrustumOfConeFields)), CrossTwoPoints },
-    { ObjectType::LineMember, kLineMemberFields, static_cast<uint8_t>(std::size(kLineMemberFields)), CrossLineMember },
+    { ObjectType::Sphere, kSphereFields, static_cast<uint8_t>(std::size(kSphereFields)), nullptr, { 0, 0 }, 1 },
+    { ObjectType::Cylinder, kCylinderFields, static_cast<uint8_t>(std::size(kCylinderFields)), CrossTwoPoints, { 0, 3 }, 2 },
+    { ObjectType::Cone, kConeFields, static_cast<uint8_t>(std::size(kConeFields)), nullptr, { 0, 3 }, 2 },
+    { ObjectType::Torus, kTorusFields, static_cast<uint8_t>(std::size(kTorusFields)), CrossTorus, { 0, 0 }, 1 },
+    { ObjectType::Ellipsoid, kEllipsoidFields, static_cast<uint8_t>(std::size(kEllipsoidFields)), nullptr, { 0, 0 }, 1 },
+    { ObjectType::Pipe, kPipeFields, static_cast<uint8_t>(std::size(kPipeFields)), CrossPipe, { 0, 3 }, 2 },
+    { ObjectType::FrustumOfCone, kFrustumOfConeFields, static_cast<uint8_t>(std::size(kFrustumOfConeFields)), CrossTwoPoints, { 0, 3 }, 2 },
+    { ObjectType::LineMember, kLineMemberFields, static_cast<uint8_t>(std::size(kLineMemberFields)), CrossLineMember, { 0, 3 }, 2 },
     // PYRAMID, CUBOID, PARALLELEPIPED, FRUSTUM_OF_PYRAMID are vertex-list types: no table in the
     // MVP, so FindPropertyTable() returns nullptr and the pane shows Type + ID only.
 };
@@ -231,4 +234,69 @@ bool ValidatePropertyEdit(const PropertyTypeDescriptor& table, const float* valu
         return false;
     }
     return true;
+}
+
+namespace {
+
+// Which point triple a field belongs to, or kNoPointGroup when it is a scalar.
+uint8_t PointGroupOfField(const PropertyTypeDescriptor& table, uint8_t fieldIndex) {
+    for (uint8_t g = 0; g < table.pointGroupCount && g < kMaxPointGroups; ++g) {
+        const uint8_t first = table.pointGroupFirstField[g];
+        if (fieldIndex >= first && fieldIndex < static_cast<uint8_t>(first + 3)) return g;
+    }
+    return kNoPointGroup;
+}
+
+} // namespace
+
+void ReadPropertyValuesForDisplay(const PropertyTypeDescriptor& table, const META_DATA* object,
+    float* out) {
+    if (!object || !out) return;
+    for (uint8_t i = 0; i < table.fieldCount; ++i) out[i] = table.fields[i].get(object);
+
+    // const_cast: PlacementForObject is the one switch over the 15 types and hands back a mutable
+    // pointer because the move producer writes through it; this path only reads.
+    const Placement3D* placement =
+        PlacementForObject(table.objectType, const_cast<META_DATA*>(object));
+    if (!placement || placement->IsIdentity()) return; // Authored == world; nothing to convert.
+
+    for (uint8_t g = 0; g < table.pointGroupCount && g < kMaxPointGroups; ++g) {
+        const uint8_t b = table.pointGroupFirstField[g];
+        if (static_cast<uint8_t>(b + 3) > table.fieldCount) continue;
+        DirectX::XMFLOAT3 world;
+        DirectX::XMStoreFloat3(&world, placement->TransformPoint(
+            DirectX::XMVectorSet(out[b], out[b + 1], out[b + 2], 1.0f)));
+        out[b] = world.x; out[b + 1] = world.y; out[b + 2] = world.z;
+    }
+}
+
+void ApplyPropertyValueFromDisplay(const PropertyTypeDescriptor& table, META_DATA* object,
+    uint8_t fieldIndex, float newValue) {
+    if (!object || fieldIndex >= table.fieldCount) return;
+
+    Placement3D* placement = PlacementForObject(table.objectType, object);
+    const uint8_t group = PointGroupOfField(table, fieldIndex);
+    // A scalar, or an unplaced object: the displayed value IS the stored value.
+    if (group == kNoPointGroup || !placement || placement->IsIdentity()) {
+        table.fields[fieldIndex].set(object, newValue);
+        return;
+    }
+
+    const uint8_t b = table.pointGroupFirstField[group];
+    // Take the point to world space, replace the one component the user edited, come back.
+    DirectX::XMFLOAT3 world;
+    DirectX::XMStoreFloat3(&world, placement->TransformPoint(DirectX::XMVectorSet(
+        table.fields[b].get(object), table.fields[b + 1].get(object),
+        table.fields[b + 2].get(object), 1.0f)));
+    float component[3] = { world.x, world.y, world.z };
+    component[fieldIndex - b] = newValue;
+
+    DirectX::XMFLOAT3 authored;
+    DirectX::XMStoreFloat3(&authored, placement->InverseTransformPoint(
+        DirectX::XMVectorSet(component[0], component[1], component[2], 1.0f)));
+    // All three, not just the edited one: under a rotation each authored component depends on all
+    // three world components, so writing one axis alone would skew the object.
+    table.fields[b].set(object, authored.x);
+    table.fields[b + 1].set(object, authored.y);
+    table.fields[b + 2].set(object, authored.z);
 }

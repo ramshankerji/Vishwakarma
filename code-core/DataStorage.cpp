@@ -654,39 +654,9 @@ bool ObjectTypeFromNumber(uint32_t value, ObjectType& objectType) {
     }
 }
 
-uint16_t DefaultSchemaVersionForObjectType(ObjectType objectType) {
-    if (VishwakarmaStorage::IsLogicalObjectType(objectType)) {
-        return VishwakarmaStorage::kLogicalElementSchemaVersion;
-    }
-    if (objectType == ObjectType::LineMember) {
-        return VishwakarmaStorage::kGeometry3DLineMemberSchemaVersion;
-    }
-    if (objectType == ObjectType::Asset2DDefinition) {
-        return VishwakarmaStorage::kAsset2DDefinitionSchemaVersion;
-    }
-    if (objectType == ObjectType::Asset2DInsert) {
-        return VishwakarmaStorage::kAsset2DInsertSchemaVersion;
-    }
-    if (VishwakarmaStorage::IsGeometry2DObjectType(objectType)) {
-        switch (objectType) {
-        case ObjectType::Polyline2D:
-            return VishwakarmaStorage::kGeometry2DPolylineSchemaVersion;
-        case ObjectType::Polygon2D:
-            return VishwakarmaStorage::kGeometry2DPolygonSchemaVersion;
-        case ObjectType::Text2D:
-            return VishwakarmaStorage::kGeometry2DTextSchemaVersion;
-        case ObjectType::Circle2D:
-            return VishwakarmaStorage::kGeometry2DCircleSchemaVersion;
-        case ObjectType::Ellipse2D:
-            return VishwakarmaStorage::kGeometry2DEllipseSchemaVersion;
-        case ObjectType::Arc2D:
-            return VishwakarmaStorage::kGeometry2DArcSchemaVersion;
-        default:
-            return VishwakarmaStorage::kGeometry2DLineSchemaVersion;
-        }
-    }
-    return VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
-}
+// DefaultSchemaVersionForObjectType now lives in CommonNamedNumbers.h, beside the version constants
+// it returns, so object creation and serialization cannot drift apart. Unqualified calls below still
+// resolve to it: ADL finds it through the VishwakarmaStorage::ObjectType argument.
 
 bool SerializeGeometryObject(const StoredGeometryObject3D& entry, std::vector<uint8_t>& payload,
     std::string* errorMessage) {
@@ -899,6 +869,30 @@ bool DeserializeGeometryObject(ObjectType objectType, const std::vector<uint8_t>
 } // anonymous namespace — GeometryForObject is lifted to external linkage so the engineering thread
   // can reuse it for property-edit MODIFY (propertiesPane.md §5); declared in डेटा-सामान्य-3D.h.
 
+Placement3D* PlacementForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* object) {
+    using VishwakarmaStorage::ObjectType;
+    if (!object) return nullptr;
+
+    switch (objectType) {
+    case ObjectType::Pyramid:          return &static_cast<PYRAMID*>(object)->placement;
+    case ObjectType::Cuboid:           return &static_cast<CUBOID*>(object)->placement;
+    case ObjectType::Cone:             return &static_cast<CONE*>(object)->placement;
+    case ObjectType::Cylinder:         return &static_cast<CYLINDER*>(object)->placement;
+    case ObjectType::Parallelepiped:   return &static_cast<PARALLELEPIPED*>(object)->placement;
+    case ObjectType::Sphere:           return &static_cast<SPHERE*>(object)->placement;
+    case ObjectType::FrustumOfPyramid: return &static_cast<FRUSTUM_OF_PYRAMID*>(object)->placement;
+    case ObjectType::FrustumOfCone:    return &static_cast<FRUSTUM_OF_CONE*>(object)->placement;
+    case ObjectType::Pipe:             return &static_cast<PIPE*>(object)->placement;
+    case ObjectType::Torus:            return &static_cast<TORUS*>(object)->placement;
+    case ObjectType::Ellipsoid:        return &static_cast<ELLIPSOID*>(object)->placement;
+    case ObjectType::Elbow:            return &static_cast<ELBOW*>(object)->placement;
+    case ObjectType::Tee:              return &static_cast<TEE*>(object)->placement;
+    case ObjectType::Flange:           return &static_cast<FLANGE*>(object)->placement;
+    case ObjectType::LineMember:       return &static_cast<LINE_MEMBER*>(object)->placement;
+    default:                           return nullptr;
+    }
+}
+
 bool GeometryForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* object, GeometryData& geometry) {
     using VishwakarmaStorage::ObjectType;
     if (!object) return false;
@@ -906,52 +900,67 @@ bool GeometryForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* obj
     switch (objectType) {
     case ObjectType::Pyramid:
         geometry = static_cast<PYRAMID*>(object)->GetGeometry();
-        return true;
+        break;
     case ObjectType::Cuboid:
         geometry = static_cast<CUBOID*>(object)->GetGeometry();
-        return true;
+        break;
     case ObjectType::Cone:
         geometry = static_cast<CONE*>(object)->GetGeometry();
-        return true;
+        break;
     case ObjectType::Cylinder:
         geometry = static_cast<CYLINDER*>(object)->GetGeometry();
-        return true;
+        break;
     case ObjectType::Parallelepiped:
         geometry = static_cast<PARALLELEPIPED*>(object)->GetGeometry();
-        return true;
+        break;
     case ObjectType::Sphere:
         geometry = static_cast<SPHERE*>(object)->GetGeometry();
-        return true;
+        break;
     case ObjectType::FrustumOfPyramid:
         geometry = static_cast<FRUSTUM_OF_PYRAMID*>(object)->GetGeometry();
-        return true;
+        break;
     case ObjectType::FrustumOfCone:
         geometry = static_cast<FRUSTUM_OF_CONE*>(object)->GetGeometry();
-        return true;
+        break;
     case ObjectType::Pipe:
         geometry = static_cast<PIPE*>(object)->GetGeometry();
-        return true;
+        break;
     case ObjectType::Torus:
         geometry = static_cast<TORUS*>(object)->GetGeometry();
-        return true;
+        break;
     case ObjectType::Ellipsoid:
         geometry = static_cast<ELLIPSOID*>(object)->GetGeometry();
-        return true;
+        break;
     case ObjectType::Elbow:
         geometry = static_cast<ELBOW*>(object)->GetGeometry();
-        return true;
+        break;
     case ObjectType::Tee:
         geometry = static_cast<TEE*>(object)->GetGeometry();
-        return true;
+        break;
     case ObjectType::Flange:
         geometry = static_cast<FLANGE*>(object)->GetGeometry();
-        return true;
+        break;
     case ObjectType::LineMember:
         geometry = static_cast<LINE_MEMBER*>(object)->GetGeometry();
-        return true;
+        break;
     default:
         return false;
     }
+
+    /* THE SINGLE POINT WHERE A PLACEMENT TAKES EFFECT (graphics.md, 10M plan Step 4). Every
+    generator above emits vertices in the object's AUTHORED coordinates and leaves worldMatrix at
+    the identity GeometryData's constructor set; composing the placement here means every ADD,
+    geometry MODIFY, file load and import inherits it without any of them knowing it exists.
+
+    The copy thread turns this matrix into the object's 64-byte instance record, so a placement
+    reaches the GPU as a transform rather than as regenerated vertices - which is exactly what makes
+    a later move cost one record plus a 4-byte redirect flip instead of a page clone. */
+    if (const Placement3D* placement = PlacementForObject(objectType, object)) {
+        if (!placement->IsIdentity()) {
+            DirectX::XMStoreFloat4x4(&geometry.worldMatrix, placement->ToMatrix());
+        }
+    }
+    return true;
 }
 
 namespace { // Reopen the anonymous namespace for the remaining internal helpers.
@@ -1886,9 +1895,14 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         row.objectId = entry.object->persistedId;
         row.parentId = resolveParentId(entry.object);
         row.objectType = entry.objectType;
-        row.schemaVersion = entry.object->schemaVersion != 0
-            ? entry.object->schemaVersion
-            : DefaultSchemaVersionForObjectType(entry.objectType);
+        /* Stamp the version of the writer that just produced `payload`, derived from the type rather
+        than read back from entry.object->schemaVersion. Every path that stamps a version now calls
+        this same function, so the two agree by construction - but deriving it here keeps the
+        persisted value right even if a future creation path forgets to stamp at all, and it is the
+        honest answer to "which writer produced these bytes".
+        Re-stamping is not lossy: a current-version payload whose newer fields all sit at their
+        defaults is byte-identical to what the older writer produced. */
+        row.schemaVersion = DefaultSchemaVersionForObjectType(entry.objectType);
         row.lifecycleState = LifecycleForObject(*entry.object);
         row.payload = std::move(payload);
         rows.push_back(std::move(row));

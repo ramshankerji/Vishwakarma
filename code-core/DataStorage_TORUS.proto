@@ -13,4 +13,8 @@ message Torus {
   float major_radius = 2;
   float minor_radius = 3;
   Color4F color = 4;
+
+  // Rigid authored -> world transform. Field 20 in every 3D message by convention;
+  // absent means identity. See message Placement in DataStorage_Common3D.proto.
+  Placement placement = 20;
 }

@@ -18,3 +18,18 @@ message Color4F {
   float b = 3;
   float a = 4;
 }
+
+// Rigid authored -> world transform for one 3D object; see struct Placement3D in डेटा.h.
+// CONVENTION: this is field number 20 in EVERY 3D geometry message, so the field is stateable as
+// one rule instead of fifteen. An ABSENT placement means identity, which is what every object
+// written before this existed decodes to.
+message Placement {
+  Point3F origin = 1; // Translation.
+  // Rotation quaternion. Do NOT read these four directly: proto3 scalars default to 0, so an
+  // absent or partially written quaternion arrives as (0,0,0,0), which is not identity and would
+  // collapse every vertex onto the origin. ReadPlacement normalizes that back to (0,0,0,1).
+  float qx = 2;
+  float qy = 3;
+  float qz = 4;
+  float qw = 5;
+}

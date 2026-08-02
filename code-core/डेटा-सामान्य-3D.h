@@ -23,7 +23,13 @@ inline std::mt19937& GetRNG() {
 
 // Regenerates the render geometry for a stored object (switch over all 11 supported 3D types).
 // Defined once in DataStorage.cpp; reused by object creation and property-edit MODIFY paths.
+// Also composes the object's placement into GeometryData::worldMatrix - see PlacementForObject.
 bool GeometryForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* object, GeometryData& geometry);
+
+/* The object's rigid authored -> world placement, or nullptr when the type has none (2D, logical).
+Mutable on purpose: this is also how a move writes a new placement, so the two directions cannot
+drift apart into separate switches. Defined beside GeometryForObject in DataStorage.cpp. */
+Placement3D* PlacementForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* object);
 
 // The most basic 3D Shapes.: Pyramid, Cuboid, Cone, Cylinder, Parallelepiped, Sphere
 struct PYRAMID :public META_DATA{
@@ -38,6 +44,11 @@ struct PYRAMID :public META_DATA{
     uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
     uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
+
+	// Rigid authored -> world placement (struct Placement3D, in the base data header).
+	// Identity until this object is moved; a move rewrites it and emits a transform-only
+	// MODIFY instead of regenerating geometry.
+	Placement3D placement;
 
 	void Randomize(); // Assign random position, size, colors etc.
     GeometryData GetGeometry(); // Simply returns the vertices with colors and indexes.
@@ -58,6 +69,11 @@ struct CUBOID :public META_DATA {
     uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
     uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
+    // Rigid authored -> world placement (struct Placement3D, in the base data header).
+    // Identity until this object is moved; a move rewrites it and emits a transform-only
+    // MODIFY instead of regenerating geometry.
+    Placement3D placement;
+
     void Randomize();
     GeometryData GetGeometry();
     bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
@@ -78,6 +94,11 @@ struct CONE :public META_DATA {
     uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
     uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
+    // Rigid authored -> world placement (struct Placement3D, in the base data header).
+    // Identity until this object is moved; a move rewrites it and emits a transform-only
+    // MODIFY instead of regenerating geometry.
+    Placement3D placement;
+
     void Randomize();
     GeometryData GetGeometry();
     bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
@@ -97,6 +118,11 @@ struct CYLINDER :public META_DATA {
     uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
     uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
+    // Rigid authored -> world placement (struct Placement3D, in the base data header).
+    // Identity until this object is moved; a move rewrites it and emits a transform-only
+    // MODIFY instead of regenerating geometry.
+    Placement3D placement;
+
     void Randomize();
     GeometryData GetGeometry();
     bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
@@ -115,6 +141,11 @@ struct PARALLELEPIPED :public META_DATA {
     uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
     uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
+    // Rigid authored -> world placement (struct Placement3D, in the base data header).
+    // Identity until this object is moved; a move rewrites it and emits a transform-only
+    // MODIFY instead of regenerating geometry.
+    Placement3D placement;
+
     void Randomize();
     GeometryData GetGeometry();
     bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
@@ -134,6 +165,11 @@ struct SPHERE :public META_DATA {
     uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
     uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
+    // Rigid authored -> world placement (struct Placement3D, in the base data header).
+    // Identity until this object is moved; a move rewrites it and emits a transform-only
+    // MODIFY instead of regenerating geometry.
+    Placement3D placement;
+
     void Randomize();
     GeometryData GetGeometry();
     bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
@@ -152,6 +188,11 @@ struct TORUS :public META_DATA {
     uint32_t systemFlags = 0;
     uint32_t objectLifeCycleFlags = 0;
     c_string name;
+    // Rigid authored -> world placement (struct Placement3D, in the base data header).
+    // Identity until this object is moved; a move rewrites it and emits a transform-only
+    // MODIFY instead of regenerating geometry.
+    Placement3D placement;
+
     void Randomize();
     GeometryData GetGeometry();
     bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
@@ -171,6 +212,11 @@ struct ELLIPSOID :public META_DATA {
     uint32_t systemFlags = 0;
     uint32_t objectLifeCycleFlags = 0;
     c_string name;
+    // Rigid authored -> world placement (struct Placement3D, in the base data header).
+    // Identity until this object is moved; a move rewrites it and emits a transform-only
+    // MODIFY instead of regenerating geometry.
+    Placement3D placement;
+
     void Randomize();
     GeometryData GetGeometry();
     bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
@@ -189,6 +235,11 @@ struct FRUSTUM_OF_PYRAMID :public META_DATA {
     uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
     uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
+    // Rigid authored -> world placement (struct Placement3D, in the base data header).
+    // Identity until this object is moved; a move rewrites it and emits a transform-only
+    // MODIFY instead of regenerating geometry.
+    Placement3D placement;
+
     void Randomize();
     GeometryData GetGeometry();
     bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
@@ -208,6 +259,11 @@ struct  FRUSTUM_OF_CONE :public META_DATA {
     uint32_t systemFlags = 0;          // 32 booleans for internal use only. Not persisted.
     uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
+    // Rigid authored -> world placement (struct Placement3D, in the base data header).
+    // Identity until this object is moved; a move rewrites it and emits a transform-only
+    // MODIFY instead of regenerating geometry.
+    Placement3D placement;
+
     void Randomize();
     GeometryData GetGeometry();
     bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;
@@ -231,6 +287,11 @@ struct PIPE : public META_DATA {
     uint32_t systemFlags = 0;
     uint32_t objectLifeCycleFlags = 0;
     c_string name;
+
+    // Rigid authored -> world placement (struct Placement3D, in the base data header).
+    // Identity until this object is moved; a move rewrites it and emits a transform-only
+    // MODIFY instead of regenerating geometry.
+    Placement3D placement;
 
     void Randomize();
     GeometryData GetGeometry();

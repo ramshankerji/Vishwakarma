@@ -37,6 +37,7 @@ bool ELBOW::encode(std::vector<uint8_t>& payload, std::string* errorMessage) con
     WriteColor4(message.mutable_color_outer(), colorOuter);
     WriteColor4(message.mutable_color_inner(), colorInner);
     WriteColor4(message.mutable_color_cap(), colorCap);
+    if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -53,6 +54,7 @@ bool TEE::encode(std::vector<uint8_t>& payload, std::string* errorMessage) const
     WriteColor4(message.mutable_color_outer(), colorOuter);
     WriteColor4(message.mutable_color_inner(), colorInner);
     WriteColor4(message.mutable_color_cap(), colorCap);
+    if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -67,6 +69,7 @@ bool FLANGE::encode(std::vector<uint8_t>& payload, std::string* errorMessage) co
     WriteColor4(message.mutable_color_face(), colorFace);
     WriteColor4(message.mutable_color_rim(), colorRim);
     WriteColor4(message.mutable_color_bore(), colorBore);
+    if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -84,6 +87,7 @@ bool ELBOW::decode(const std::vector<uint8_t>& payload) {
     colorOuter = message.has_color_outer() ? ReadColor4(message.color_outer()) : DefaultColor4();
     colorInner = message.has_color_inner() ? ReadColor4(message.color_inner()) : DefaultColor4();
     colorCap = message.has_color_cap() ? ReadColor4(message.color_cap()) : DefaultColor4();
+    placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
     return true;
 }
 
@@ -102,6 +106,7 @@ bool TEE::decode(const std::vector<uint8_t>& payload) {
     colorOuter = message.has_color_outer() ? ReadColor4(message.color_outer()) : DefaultColor4();
     colorInner = message.has_color_inner() ? ReadColor4(message.color_inner()) : DefaultColor4();
     colorCap = message.has_color_cap() ? ReadColor4(message.color_cap()) : DefaultColor4();
+    placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
     return true;
 }
 
@@ -118,5 +123,6 @@ bool FLANGE::decode(const std::vector<uint8_t>& payload) {
     colorFace = message.has_color_face() ? ReadColor4(message.color_face()) : DefaultColor4();
     colorRim = message.has_color_rim() ? ReadColor4(message.color_rim()) : DefaultColor4();
     colorBore = message.has_color_bore() ? ReadColor4(message.color_bore()) : DefaultColor4();
+    placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
     return true;
 }

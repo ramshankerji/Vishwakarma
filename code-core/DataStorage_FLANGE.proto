@@ -18,4 +18,8 @@ message Flange {
   Color4F color_face = 7;
   Color4F color_rim = 8;
   Color4F color_bore = 9;
+
+  // Rigid authored -> world transform. Field 20 in every 3D message by convention;
+  // absent means identity. See message Placement in DataStorage_Common3D.proto.
+  Placement placement = 20;
 }

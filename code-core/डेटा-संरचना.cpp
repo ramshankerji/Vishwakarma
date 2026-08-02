@@ -33,6 +33,7 @@ bool LINE_MEMBER::encode(std::vector<uint8_t>& payload, std::string* errorMessag
     WriteColor4(message.mutable_color_cap(), colorCap);
     message.set_user_parameter1(userParameter1);
     message.set_user_parameter2(userParameter2);
+    if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -48,5 +49,6 @@ bool LINE_MEMBER::decode(const std::vector<uint8_t>& payload) {
     colorCap = message.has_color_cap() ? ReadColor4(message.color_cap()) : DefaultColor4();
     userParameter1 = message.user_parameter1(); // proto3 default 0 = catalog defaults (v1 files).
     userParameter2 = message.user_parameter2();
+    placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
     return true;
 }

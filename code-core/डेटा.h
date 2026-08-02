@@ -66,6 +66,52 @@ struct GeometryData
     }
 };
 
+/* Rigid placement of one 3D object: the transform from its AUTHORED coordinates - whatever its own
+point fields hold (SPHERE::center, CYLINDER::p1/p2, CUBOID::vertices, ...) - to WORLD coordinates.
+Identity for a newly created object and for every object authored before this field existed.
+
+This is what lets an interactive move cost nothing (website/software/graphics.md, 10M plan Step 4).
+Moving an object rewrites its placement and emits a TRANSFORM-ONLY MODIFY - one fresh 64-byte
+instance record plus one 4-byte redirect flip - instead of regenerating and re-uploading geometry.
+GeometryForObject composes it into GeometryData::worldMatrix above, and that is the SINGLE point
+where a placement takes effect; every ADD, geometry MODIFY, file load and import inherits it there.
+
+RIGID ONLY, deliberately: the rotation is a unit quaternion and there is no scale factor, matching
+the uniform-scale assumption the InstanceRecord shader path already documents. Being rigid also
+means every scalar dimension (radius, length, diameter) is unaffected by a placement, so only POINT
+fields ever need composing when converting between authored and world coordinates. */
+struct Placement3D {
+    XMFLOAT3 origin = { 0.0f, 0.0f, 0.0f };
+    XMFLOAT4 rotation = { 0.0f, 0.0f, 0.0f, 1.0f }; // Unit quaternion (x, y, z, w). Identity.
+
+    // Encoders skip writing an identity placement entirely, so a file of never-moved objects stays
+    // byte-identical to what the previous schema version produced.
+    bool IsIdentity() const {
+        return origin.x == 0.0f && origin.y == 0.0f && origin.z == 0.0f &&
+            rotation.x == 0.0f && rotation.y == 0.0f && rotation.z == 0.0f && rotation.w == 1.0f;
+    }
+
+    // Row-vector convention throughout the engine - the vertex shader computes `pos * W` - so this
+    // reads left to right as rotate, then translate.
+    XMMATRIX ToMatrix() const {
+        return XMMatrixRotationQuaternion(XMLoadFloat4(&rotation)) *
+            XMMatrixTranslation(origin.x, origin.y, origin.z);
+    }
+
+    // Authored -> world for a single point, and its exact inverse. Used by the Properties Pane to
+    // show and accept WORLD coordinates while the object keeps storing authored ones. Being rigid
+    // is what makes the inverse a plain un-rotate-then-un-translate rather than a matrix inversion.
+    XMVECTOR TransformPoint(FXMVECTOR authored) const {
+        return XMVectorAdd(XMVector3Rotate(authored, XMLoadFloat4(&rotation)),
+            XMLoadFloat3(&origin));
+    }
+
+    XMVECTOR InverseTransformPoint(FXMVECTOR world) const {
+        return XMVector3InverseRotate(XMVectorSubtract(world, XMLoadFloat3(&origin)),
+            XMLoadFloat4(&rotation));
+    }
+};
+
 inline XMUBYTE4 PackNormal(XMFLOAT3 n) {
     // Normalize first to be safe
     XMVECTOR v = XMLoadFloat3(&n);

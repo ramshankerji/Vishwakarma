@@ -31,6 +31,11 @@ struct LINE_MEMBER : public META_DATA {
     uint32_t objectLifeCycleFlags = 0; // 32 booleans used as compact stored object properties. Persisted.
     c_string name;
 
+    // Rigid authored -> world placement (struct Placement3D, in the base data header).
+    // Identity until this object is moved; a move rewrites it and emits a transform-only
+    // MODIFY instead of regenerating geometry.
+    Placement3D placement;
+
     void Randomize();
     GeometryData GetGeometry();
     bool encode(std::vector<uint8_t>& payload, std::string* errorMessage) const;

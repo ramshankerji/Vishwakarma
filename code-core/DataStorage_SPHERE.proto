@@ -12,4 +12,8 @@ message Sphere {
   Point3F center = 1;
   float radius = 2;
   Color4F color = 3;
+
+  // Rigid authored -> world transform. Field 20 in every 3D message by convention;
+  // absent means identity. See message Placement in DataStorage_Common3D.proto.
+  Placement placement = 20;
 }

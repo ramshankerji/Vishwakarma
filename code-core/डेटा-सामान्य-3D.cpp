@@ -43,6 +43,7 @@ bool PYRAMID::encode(std::vector<uint8_t>& payload, std::string* errorMessage) c
     for (const XMHALF4& color : colors) {
         WriteColor4(message.add_colors(), color);
     }
+    if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -52,6 +53,7 @@ bool CUBOID::encode(std::vector<uint8_t>& payload, std::string* errorMessage) co
         WritePoint3(message.add_vertices(), vertex);
     }
     WriteColor4(message.mutable_color(), colors);
+    if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -62,6 +64,7 @@ bool CONE::encode(std::vector<uint8_t>& payload, std::string* errorMessage) cons
     message.set_radius(radius);
     WriteColor4(message.mutable_color_base(), colorBase);
     WriteColor4(message.mutable_color_incline(), colorIncline);
+    if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -73,6 +76,7 @@ bool CYLINDER::encode(std::vector<uint8_t>& payload, std::string* errorMessage) 
     WriteColor4(message.mutable_color_base(), colorBase);
     WriteColor4(message.mutable_color_top(), colorTop);
     WriteColor4(message.mutable_color_incline(), colorIncline);
+    if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -82,6 +86,7 @@ bool PARALLELEPIPED::encode(std::vector<uint8_t>& payload, std::string* errorMes
         WritePoint3(message.add_vertices(), vertex);
     }
     WriteColor4(message.mutable_color(), colors);
+    if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -90,6 +95,7 @@ bool SPHERE::encode(std::vector<uint8_t>& payload, std::string* errorMessage) co
     WritePoint3(message.mutable_center(), center);
     message.set_radius(radius);
     WriteColor4(message.mutable_color(), color);
+    if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -99,6 +105,7 @@ bool TORUS::encode(std::vector<uint8_t>& payload, std::string* errorMessage) con
     message.set_major_radius(majorRadius);
     message.set_minor_radius(minorRadius);
     WriteColor4(message.mutable_color(), color);
+    if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -109,6 +116,7 @@ bool ELLIPSOID::encode(std::vector<uint8_t>& payload, std::string* errorMessage)
     message.set_radius_y(radiusY);
     message.set_radius_z(radiusZ);
     WriteColor4(message.mutable_color(), color);
+    if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -120,6 +128,7 @@ bool FRUSTUM_OF_PYRAMID::encode(std::vector<uint8_t>& payload, std::string* erro
     WriteColor4(message.mutable_color_base(), colorBase);
     WriteColor4(message.mutable_color_top(), colorTop);
     WriteColor4(message.mutable_color_incline(), colorIncline);
+    if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -132,6 +141,7 @@ bool FRUSTUM_OF_CONE::encode(std::vector<uint8_t>& payload, std::string* errorMe
     WriteColor4(message.mutable_color_base(), colorBase);
     WriteColor4(message.mutable_color_top(), colorTop);
     WriteColor4(message.mutable_color_incline(), colorIncline);
+    if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -144,6 +154,7 @@ bool PIPE::encode(std::vector<uint8_t>& payload, std::string* errorMessage) cons
     WriteColor4(message.mutable_color_outer(), colorOuter);
     WriteColor4(message.mutable_color_inner(), colorInner);
     WriteColor4(message.mutable_color_cap(), colorCap);
+    if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
 }
 
@@ -166,6 +177,7 @@ bool PYRAMID::decode(const std::vector<uint8_t>& payload) {
     }
     if (colors.empty()) colors.push_back(DefaultColor4());
 
+    placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
     return vertices.size() >= 4;
 }
 
@@ -179,6 +191,7 @@ bool CUBOID::decode(const std::vector<uint8_t>& payload) {
         vertices.push_back(ReadPoint3(message.vertices(i)));
     }
     colors = message.has_color() ? ReadColor4(message.color()) : DefaultColor4();
+    placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
     return vertices.size() >= 8;
 }
 
@@ -191,6 +204,7 @@ bool CONE::decode(const std::vector<uint8_t>& payload) {
     radius = message.radius();
     colorBase = message.has_color_base() ? ReadColor4(message.color_base()) : DefaultColor4();
     colorIncline = message.has_color_incline() ? ReadColor4(message.color_incline()) : DefaultColor4();
+    placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
     return true;
 }
 
@@ -204,6 +218,7 @@ bool CYLINDER::decode(const std::vector<uint8_t>& payload) {
     colorBase = message.has_color_base() ? ReadColor4(message.color_base()) : DefaultColor4();
     colorTop = message.has_color_top() ? ReadColor4(message.color_top()) : DefaultColor4();
     colorIncline = message.has_color_incline() ? ReadColor4(message.color_incline()) : DefaultColor4();
+    placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
     return true;
 }
 
@@ -217,6 +232,7 @@ bool PARALLELEPIPED::decode(const std::vector<uint8_t>& payload) {
         vertices.push_back(ReadPoint3(message.vertices(i)));
     }
     colors = message.has_color() ? ReadColor4(message.color()) : DefaultColor4();
+    placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
     return vertices.size() >= 8;
 }
 
@@ -227,6 +243,7 @@ bool SPHERE::decode(const std::vector<uint8_t>& payload) {
     center = message.has_center() ? ReadPoint3(message.center()) : XMFLOAT3{};
     radius = message.radius();
     color = message.has_color() ? ReadColor4(message.color()) : DefaultColor4();
+    placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
     return true;
 }
 
@@ -238,6 +255,7 @@ bool TORUS::decode(const std::vector<uint8_t>& payload) {
     majorRadius = message.major_radius() > 0.0f ? message.major_radius() : 0.5f;
     minorRadius = message.minor_radius() > 0.0f ? message.minor_radius() : 0.125f;
     color = message.has_color() ? ReadColor4(message.color()) : DefaultColor4();
+    placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
     return true;
 }
 
@@ -250,6 +268,7 @@ bool ELLIPSOID::decode(const std::vector<uint8_t>& payload) {
     radiusY = message.radius_y() > 0.0f ? message.radius_y() : 0.5f;
     radiusZ = message.radius_z() > 0.0f ? message.radius_z() : 0.5f;
     color = message.has_color() ? ReadColor4(message.color()) : DefaultColor4();
+    placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
     return true;
 }
 
@@ -265,6 +284,7 @@ bool FRUSTUM_OF_PYRAMID::decode(const std::vector<uint8_t>& payload) {
     colorBase = message.has_color_base() ? ReadColor4(message.color_base()) : DefaultColor4();
     colorTop = message.has_color_top() ? ReadColor4(message.color_top()) : DefaultColor4();
     colorIncline = message.has_color_incline() ? ReadColor4(message.color_incline()) : DefaultColor4();
+    placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
     return vertices.size() >= 8;
 }
 
@@ -279,6 +299,7 @@ bool FRUSTUM_OF_CONE::decode(const std::vector<uint8_t>& payload) {
     colorBase = message.has_color_base() ? ReadColor4(message.color_base()) : DefaultColor4();
     colorTop = message.has_color_top() ? ReadColor4(message.color_top()) : DefaultColor4();
     colorIncline = message.has_color_incline() ? ReadColor4(message.color_incline()) : DefaultColor4();
+    placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
     return true;
 }
 
@@ -293,5 +314,6 @@ bool PIPE::decode(const std::vector<uint8_t>& payload) {
     colorOuter = message.has_color_outer() ? ReadColor4(message.color_outer()) : DefaultColor4();
     colorInner = message.has_color_inner() ? ReadColor4(message.color_inner()) : DefaultColor4();
     colorCap = message.has_color_cap() ? ReadColor4(message.color_cap()) : DefaultColor4();
+    placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
     return true;
 }

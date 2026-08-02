@@ -46,8 +46,8 @@ enum class LifecycleState : uint32_t {
     PurgedStubOrArchiveBoundary = 3,
 };
 
-constexpr uint16_t kGeometry3DMvpSchemaVersion = 1;
-constexpr uint16_t kGeometry3DLineMemberSchemaVersion = 2; // v2: added user_parameter1/2.
+constexpr uint16_t kGeometry3DMvpSchemaVersion = 2;        // v2: added placement (field 20).
+constexpr uint16_t kGeometry3DLineMemberSchemaVersion = 3; // v2: user_parameter1/2. v3: placement.
 constexpr uint16_t kLogicalElementSchemaVersion = 1;
 constexpr uint16_t kGeometry2DLineSchemaVersion = 1;
 constexpr uint16_t kGeometry2DPolylineSchemaVersion = 1;
@@ -95,6 +95,32 @@ constexpr bool IsGeometry2DObjectType(ObjectType value) {
 constexpr bool IsAsset2DObjectType(ObjectType value) {
     return value == ObjectType::Asset2DDefinition ||
         value == ObjectType::Asset2DInsert;
+}
+
+/* The schema version the CURRENT encoder writes for a type - the single answer to "which version is
+this object", for every path that stamps one: object creation, file load and serialization.
+
+It lives here, beside the k*SchemaVersion constants it returns, because it was previously file-local
+to DataStorage.cpp while object creation stamped its own version independently. The two disagreed:
+creation hardcoded kGeometry3DMvpSchemaVersion for EVERY 3D type, so a freshly drawn LINE_MEMBER was
+labelled one version behind the format its payload actually used. One definition, no second opinion. */
+constexpr uint16_t DefaultSchemaVersionForObjectType(ObjectType objectType) {
+    if (IsLogicalObjectType(objectType)) return kLogicalElementSchemaVersion;
+    if (objectType == ObjectType::LineMember) return kGeometry3DLineMemberSchemaVersion;
+    if (objectType == ObjectType::Asset2DDefinition) return kAsset2DDefinitionSchemaVersion;
+    if (objectType == ObjectType::Asset2DInsert) return kAsset2DInsertSchemaVersion;
+    if (IsGeometry2DObjectType(objectType)) {
+        switch (objectType) {
+        case ObjectType::Polyline2D: return kGeometry2DPolylineSchemaVersion;
+        case ObjectType::Polygon2D:  return kGeometry2DPolygonSchemaVersion;
+        case ObjectType::Text2D:     return kGeometry2DTextSchemaVersion;
+        case ObjectType::Circle2D:   return kGeometry2DCircleSchemaVersion;
+        case ObjectType::Ellipse2D:  return kGeometry2DEllipseSchemaVersion;
+        case ObjectType::Arc2D:      return kGeometry2DArcSchemaVersion;
+        default:                     return kGeometry2DLineSchemaVersion;
+        }
+    }
+    return kGeometry3DMvpSchemaVersion;
 }
 
 inline const char* ObjectTypeDisplayName(ObjectType value) {

@@ -2086,9 +2086,9 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
                             table = FindPropertyTable(selType);
                             if (table) {
                                 fieldValueCount = table->fieldCount;
-                                for (uint8_t i = 0; i < fieldValueCount; ++i) {
-                                    fieldValues[i] = table->fields[i].get(stored.object);
-                                }
+                                // World space, so a moved object reads out where it is displayed
+                                // rather than where it was authored (10M plan Step 4).
+                                ReadPropertyValuesForDisplay(*table, stored.object, fieldValues);
                             }
                             break;
                         }
