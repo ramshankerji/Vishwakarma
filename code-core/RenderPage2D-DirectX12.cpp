@@ -97,35 +97,11 @@ ComPtr<ID3D12Resource> CreateDefaultBuffer(uint64_t sizeBytes) {
     return resource;
 }
 
-template <typename T>
-ComPtr<ID3D12Resource> CreateUploadWithData(const std::vector<T>& data) {
-    ComPtr<ID3D12Resource> upload;
-    const uint64_t sizeBytes = (std::max<uint64_t>)(data.size() * sizeof(T), 1);
-    CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_UPLOAD);
-    auto desc = CD3DX12_RESOURCE_DESC::Buffer(sizeBytes);
-    ThrowIfFailed(gpu.device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
-        &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)));
-
-    if (!data.empty()) {
-        uint8_t* mapped = nullptr;
-        CD3DX12_RANGE readRange(0, 0);
-        ThrowIfFailed(upload->Map(0, &readRange, reinterpret_cast<void**>(&mapped)));
-        memcpy(mapped, data.data(), data.size() * sizeof(T));
-        upload->Unmap(0, nullptr);
-    }
-    return upload;
-}
-
-template <typename T>
-void UploadVector(ID3D12GraphicsCommandList* commandList, ComPtr<ID3D12Resource>& defaultBuffer,
-    const std::vector<T>& data, std::vector<ComPtr<ID3D12Resource>>& uploads) {
-    if (data.empty()) return;
-    const uint64_t sizeBytes = data.size() * sizeof(T);
-    defaultBuffer = CreateDefaultBuffer(sizeBytes);
-    ComPtr<ID3D12Resource> upload = CreateUploadWithData(data);
-    commandList->CopyBufferRegion(defaultBuffer.Get(), 0, upload.Get(), 0, sizeBytes);
-    uploads.push_back(std::move(upload));
-}
+/* CreateUploadWithData / UploadVector are gone (graphics.md, 10M plan Step 0). They committed a
+fresh UPLOAD resource for every vector - up to six per container page, times every container, on
+every batch - which is precisely the per-object staging allocation the ring exists to delete. Their
+replacement lives inside ProcessCad2DCopyBatch as ring-backed lambdas, because it needs to be able
+to FLUSH the recording when the ring fills, and only that function owns the command list. */
 
 Cad2DLineGPURecord ToGpuLineRecord(const Cad2DLineRecordCPU& line) {
     Cad2DLineGPURecord gpuLine{};
@@ -814,7 +790,9 @@ static void ReportCad2DIngestStatsLocked(const TabCad2DStorage& storage, uint64_
 }
 #endif
 
-void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
+void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
+    ComPtr<ID3D12CommandAllocator>& commandAllocator,
+    ComPtr<ID3D12GraphicsCommandList>& commandList) {
     if (batch.empty()) return;
 
     std::unordered_map<uint64_t, std::vector<CommandToCopyThread2D>> byTab;
@@ -949,15 +927,93 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
             if (text.containerMemoryId != 0) containers[text.containerMemoryId].texts.push_back(text);
         }
 
-        ComPtr<ID3D12CommandAllocator> allocator;
-        ComPtr<ID3D12GraphicsCommandList> commandList;
-        ThrowIfFailed(gpu.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY,
-            IID_PPV_ARGS(&allocator)));
-        ThrowIfFailed(gpu.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COPY,
-            allocator.Get(), nullptr, IID_PPV_ARGS(&commandList)));
+        /* Staging for this tab's rebuild (graphics.md, 10M plan Step 0). The allocator and list are
+        the copy thread's, handed in rather than created per batch, and every byte goes through the
+        one global ring instead of a committed UPLOAD resource per vector.
 
-        std::vector<ComPtr<ID3D12Resource>> uploads;
+        Unlike the Scene3D path, this one cannot pre-chunk: a 2D batch rebuilds EVERY container's
+        page wholesale, so the total is not known until the records have been expanded. Submission
+        is therefore driven by the ring itself - AcquireStaging flushes when it cannot satisfy a
+        request, which is the same "one submit per ring-full" rule reached from the other side.
+
+        Flushing mid-rebuild is safe because every destination here is a freshly created page that
+        no render thread can reach: nothing becomes visible until PublishCad2DPages at the end. */
+        ThrowIfFailed(commandAllocator->Reset());
+        ThrowIfFailed(commandList->Reset(commandAllocator.Get(), nullptr));
+
+        std::vector<ComPtr<ID3D12Resource>> oversizeStaging;
         std::vector<std::unique_ptr<Cad2DPageGPU>> pages;
+
+        // Close, execute, signal, tag the ring, and wait. `reopen` distinguishes a mid-rebuild
+        // flush from the final submit, which must leave the list closed for the Scene3D batch that
+        // runs next. The CPU wait is the back-pressure, not a stall to optimise away.
+        auto SubmitRecording = [&](bool reopen) {
+            ThrowIfFailed(commandList->Close());
+            ID3D12CommandList* lists[] = { commandList.Get() };
+            gpu.copyCommandQueue->ExecuteCommandLists(1, lists);
+            const uint64_t fenceValue = gpu.copyFenceValue.fetch_add(1);
+            gpu.copyCommandQueue->Signal(gpu.copyFence.Get(), fenceValue);
+            gpu.uploadRing.TagSubmission(fenceValue); // Ring space returns when this fence passes.
+            if (gpu.copyFence->GetCompletedValue() < fenceValue) {
+                gpu.copyFence->SetEventOnCompletion(fenceValue, gpu.copyFenceEvent);
+                WaitForSingleObject(gpu.copyFenceEvent, INFINITE);
+            }
+            oversizeStaging.clear(); // Fallback buffers are safe to free once the copies completed.
+            if (!reopen) return;
+            ThrowIfFailed(commandAllocator->Reset());
+            ThrowIfFailed(commandList->Reset(commandAllocator.Get(), nullptr));
+            };
+
+        // Mirrors the Scene3D AcquireStaging, plus the flush-and-retry the 2D path needs. A payload
+        // larger than the whole ring can never be satisfied by waiting, so it goes straight to a
+        // one-off committed buffer rather than flushing pointlessly first.
+        auto AcquireStaging = [&](uint64_t bytes, uint8_t*& outCpu,
+            ID3D12Resource*& outResource, uint64_t& outOffset) {
+                if (gpu.uploadRing.Allocate(bytes, outCpu, outOffset)) {
+                    outResource = gpu.uploadRing.buffer.Get();
+                    gCopyStats.ringBytes.fetch_add(bytes, std::memory_order_relaxed);
+                    return;
+                }
+                if (bytes <= GpuUploadRing::kCapacity) {
+                    // The ring is merely full. Flush what is staged; the fence wait inside releases
+                    // every in-flight region, so the retry cannot fail.
+                    SubmitRecording(true);
+                    if (gpu.uploadRing.Allocate(bytes, outCpu, outOffset)) {
+                        outResource = gpu.uploadRing.buffer.Get();
+                        gCopyStats.ringBytes.fetch_add(bytes, std::memory_order_relaxed);
+                        return;
+                    }
+                }
+                ComPtr<ID3D12Resource> fallback;
+                CD3DX12_HEAP_PROPERTIES uploadHeap(D3D12_HEAP_TYPE_UPLOAD);
+                auto uploadDesc = CD3DX12_RESOURCE_DESC::Buffer(bytes);
+                ThrowIfFailed(gpu.device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE,
+                    &uploadDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                    IID_PPV_ARGS(&fallback)));
+                CD3DX12_RANGE readRange(0, 0);
+                ThrowIfFailed(fallback->Map(0, &readRange, reinterpret_cast<void**>(&outCpu)));
+                outResource = fallback.Get();
+                outOffset = 0;
+                oversizeStaging.push_back(std::move(fallback));
+                gCopyStats.oversizeStaging.fetch_add(1, std::memory_order_relaxed);
+            };
+
+        /* Create the destination page buffer, stage the records and record the copy. Order matters:
+        AcquireStaging may flush, which closes and re-opens the command list, so the CopyBufferRegion
+        must be recorded AFTER it. CreateDefaultBuffer is untouched by a flush - it records nothing. */
+        auto UploadVector = [&](ComPtr<ID3D12Resource>& defaultBuffer, const auto& data) {
+            if (data.empty()) return; // Also what makes data[0] below safe.
+            const uint64_t sizeBytes = data.size() * sizeof(data[0]);
+            defaultBuffer = CreateDefaultBuffer(sizeBytes);
+
+            uint8_t* mapped = nullptr;
+            ID3D12Resource* stagingResource = nullptr;
+            uint64_t stagingOffset = 0;
+            AcquireStaging(sizeBytes, mapped, stagingResource, stagingOffset);
+            memcpy(mapped, data.data(), sizeBytes);
+            commandList->CopyBufferRegion(defaultBuffer.Get(), 0, stagingResource, stagingOffset,
+                sizeBytes);
+            };
 
         for (const auto& [containerMemoryId, records] : containers) {
             auto page = std::make_unique<Cad2DPageGPU>();
@@ -996,7 +1052,7 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
                 AppendPolygonLineRecords(polygon, gpuLines);
                 stampSelected(before, polygon.objectId);
             }
-            UploadVector(commandList.Get(), page->lineBuffer, gpuLines, uploads);
+            UploadVector(page->lineBuffer, gpuLines);
             page->lineCount = static_cast<uint32_t>(gpuLines.size());
 
             if (!gpuLines.empty()) {
@@ -1005,7 +1061,7 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
                 drawArgs[0].InstanceCount = page->lineCount;
                 drawArgs[0].StartVertexLocation = 0;
                 drawArgs[0].StartInstanceLocation = 0;
-                UploadVector(commandList.Get(), page->lineIndirectBuffer, drawArgs, uploads);
+                UploadVector(page->lineIndirectBuffer, drawArgs);
             }
 
             std::vector<Cad2DCurveGPURecord> gpuCurves;
@@ -1033,7 +1089,7 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
                     stampCurveSelected(arc.objectId);
                 }
             }
-            UploadVector(commandList.Get(), page->curveBuffer, gpuCurves, uploads);
+            UploadVector(page->curveBuffer, gpuCurves);
             page->curveCount = static_cast<uint32_t>(gpuCurves.size());
 
             if (!gpuCurves.empty()) {
@@ -1042,7 +1098,7 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
                 drawArgs[0].InstanceCount = page->curveCount;
                 drawArgs[0].StartVertexLocation = 0;
                 drawArgs[0].StartInstanceLocation = 0;
-                UploadVector(commandList.Get(), page->curveIndirectBuffer, drawArgs, uploads);
+                UploadVector(page->curveIndirectBuffer, drawArgs);
             }
 
             std::vector<Cad2DTextVertex> textVertices;
@@ -1050,24 +1106,18 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch) {
             for (const Cad2DTextRecordCPU& text : records.texts) {
                 AppendTextRecordGeometry(text, textVertices, textIndices);
             }
-            UploadVector(commandList.Get(), page->textVertexBuffer, textVertices, uploads);
-            UploadVector(commandList.Get(), page->textIndexBuffer, textIndices, uploads);
+            UploadVector(page->textVertexBuffer, textVertices);
+            UploadVector(page->textIndexBuffer, textIndices);
             page->textVertexCount = static_cast<uint32_t>(textVertices.size());
             page->textIndexCount = static_cast<uint32_t>(textIndices.size());
 
             pages.push_back(std::move(page));
         }
 
-        ThrowIfFailed(commandList->Close());
-        ID3D12CommandList* lists[] = { commandList.Get() };
-        gpu.copyCommandQueue->ExecuteCommandLists(1, lists);
-        const uint64_t fenceValue = gpu.copyFenceValue.fetch_add(1);
-        gpu.copyCommandQueue->Signal(gpu.copyFence.Get(), fenceValue);
-        if (gpu.copyFence->GetCompletedValue() < fenceValue) {
-            gpu.copyFence->SetEventOnCompletion(fenceValue, gpu.copyFenceEvent);
-            WaitForSingleObject(gpu.copyFenceEvent, INFINITE);
-        }
-        uploads.clear();
+        // Final submit for this tab. Leaves the list CLOSED, which is what the Scene3D batch
+        // running next expects, and what GpuCopyThread's exception handler assumes.
+        SubmitRecording(false);
+        gCopyStats.ringHighWater.store(gpu.uploadRing.highWaterBytes, std::memory_order_relaxed);
 
         PublishCad2DPages(storage, std::move(pages));
     }

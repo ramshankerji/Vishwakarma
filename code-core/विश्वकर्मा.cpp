@@ -1104,8 +1104,13 @@ rebuilt, no snapshot published. That is the entire point: hiding half of a ten-m
 must not touch geometry at all.
 
 The bit is the sub-tab SLOT, so a hide applies to the view the user is looking at rather than to
-every view of the same Scene3D. Objects are filtered to that view's container because a sub-tab
-shows exactly one container today (Step 6 turns that into a set).
+every view of the same Scene3D.
+
+KNOWN GAP: objects are filtered to the sub-tab's HOME container only. That was correct when a
+sub-tab showed exactly one container; Step 6 made it a SET (subTabs[slot].containers) and this
+producer was not updated. The pick pass walks the whole set, so an object in a composed container
+can be selected and then silently refuses to hide. TranslateSelectedSceneObjects has the identical
+gap. Both should iterate the set. Recorded in graphics.md under Step 6.
 
 Each action touches only the objects it names - "Hide Selected" does not silently un-hide everything
 else - so the three compose the way a user expects. */

@@ -877,7 +877,9 @@ void GpuCopyThread() {
         // The failed batch is dropped (logged); rendering continues from the last published snapshot.
         try {
             if (!cad2DBatch.empty()) {
-                ProcessCad2DCopyBatch(cad2DBatch);
+                // Shares this thread's allocator/list and the global ring. Runs before the 3D
+                // batch and leaves the list closed, so the 3D path's per-chunk Reset is legal.
+                ProcessCad2DCopyBatch(cad2DBatch, commandAllocator, commandList);
             }
             // 3D geometry batch: RCU page cloning/building/publish moved to RenderScene3D-DirectX12.cpp.
             if (!batch.empty()) gCopyStats.batches.fetch_add(1, std::memory_order_relaxed);

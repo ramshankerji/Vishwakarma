@@ -20,6 +20,38 @@ MODIFY command to the GPU copy thread.
    Radius`; Cylinder: `P1 X/Y/Z, P2 X/Y/Z, Radius`; etc. Edits map 1:1 to memory, no
    derived-field inverse mapping. Derived rows (center + orientation vector + length) are a
    documented future extension; the descriptor format reserves room for them.
+
+   ***Amended August 2026 — point fields are no longer raw.*** Objects gained a rigid **placement**
+   (origin + quaternion) so that moving one costs no geometry regeneration; see the *Object
+   placement* section of `graphics.md`. The consequence for this pane is that a struct's
+   stored coordinates became **authored** space — where the object was drawn — while the user cares
+   about where it *is*. Showing them raw would make a moved sphere report its original position.
+
+   So the rule now splits:
+
+   - **Point components** (`Center X/Y/Z`, `P1`/`P2`, `Apex`, `Bottom/Top Center`, …) are composed
+     to world space on read and solved back to authored space on write. This *is* the
+     derived-field inverse mapping the original decision ruled out — it was unavoidable once
+     position stopped being stored directly, and it is deliberately confined to points.
+   - **Scalars** (`Radius`, diameters, section parameters) remain exactly raw. A rigid placement
+     cannot change a length, so there is nothing to convert.
+
+   Two properties of the write path are load-bearing. An edit to **one** world component rewrites
+   **all three** authored components, because under a rotation each authored component depends on
+   all three world ones — writing only the edited axis would silently skew the object. And which
+   field triples are points is declared **per type** (`pointGroupFirstField[]` on
+   `PropertyTypeDescriptor`), not inferred from "the first three fields are a point" — true of
+   every table today, and exactly the assumption that breaks silently on the first table that puts
+   a scalar first.
+
+   Cross-field validators are unaffected: they only ask whether two points coincide (which a rigid
+   transform preserves) and compare scalars, so they return the same verdict in either space.
+
+   **This layer is expected to be deleted, not extended.** If the generators later move to a
+   canonical local frame — shape around the origin, position entirely in the placement, endpoints
+   kept as the stored truth for axis-defined types — then every type's stored fields become its
+   world truth again and the conversion disappears. Treat its removal as the acceptance test for
+   that refactor.
 2. **Overlay, not viewport shrink.** The icon bar and pane draw on top of the 3D scene like the
    rest of the UI overlay. Scene rendering, GPU picking and placement math stay untouched; input
    over the bar/pane is swallowed before it reaches the engineering thread's scene handling.
@@ -342,6 +374,10 @@ Per the locked decision, edit state stays on the UI thread, but drafts can flow 
   undo/redo integration, persistence of `rightPaneOpen`, localization of new labels beyond
   registering `UITextID`s, and the viewport-shrink layout. Each is listed so it is a conscious
   cut, not an oversight.
+
+  *Of these, one arrived early and not by choice:* the world↔authored conversion for point fields
+  (see the amendment to decision 1) is a derived-field inverse mapping, forced by object placement
+  rather than adopted as a feature. Orientation-vector and length rows remain out of scope.
 
 ## Open questions (defaults chosen, change before implementation if desired)
 

@@ -161,6 +161,11 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage);
 void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     TabCad2DStorage& storage, DX12ResourcesUI& uiResources, int monitorId,
     uint64_t activeContainerMemoryId, const Cad2DViewState& view);
-void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch);
+// 2D half of the copy thread. Staging goes through the global upload ring and the COPY-type
+// allocator/list are owned by GpuCopyThread and passed in, exactly as ProcessScene3DCopyBatch takes
+// them (graphics.md, 10M plan Step 0). Contract: the list is CLOSED on entry and CLOSED on return.
+void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator>& commandAllocator,
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList>& commandList);
 void PruneCad2DRetiredResources(TabCad2DStorage& storage, uint64_t safeRetireFence);
 void ReleaseCad2DRetiredResources(TabCad2DStorage& storage);
