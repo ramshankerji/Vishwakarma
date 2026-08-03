@@ -1108,6 +1108,15 @@ static bool IsClientPointOverDataTreeScrollbar(
         pt.y >= layout.scrollbarY && pt.y < layout.scrollbarY + layout.scrollbarHeight;
 }
 
+// The Application Tab owns its entire content area - one opaque panel below the top ribbon
+// (BuildUIOverlay draws it via BuildApplicationTabOverlay). Its Stats view scrolls, so the wheel
+// has to reach the per-window uiInput snapshot rather than being treated as a scene zoom.
+static bool IsClientPointOverApplicationTabPanel(const SingleUIWindow* window, const POINT& pt) {
+    if (!window || window->activeTabIndex < 0) return false;
+    if (!ApplicationTab::IsApplicationTab(static_cast<uint64_t>(window->activeTabIndex))) return false;
+    return static_cast<float>(pt.y) >= GetTopRibbonHeightPxForWindow(window);
+}
+
 // Right icon bar + properties pane overlay hit test. Width is published by the render thread each
 // frame (0 when nothing is drawn there). Primary click-through guard (propertiesPane.md §6).
 static bool IsClientPointOverRightOverlay(const SingleUIWindow* window, const POINT& pt) {
@@ -1537,16 +1546,21 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
         // does not scroll in the MVP, so we do not accumulate the delta (propertiesPane.md §6).
         const bool handledByRightOverlay =
             currentWindow && IsClientPointOverRightOverlay(currentWindow, uiPoint);
+        // Cannot collide with handledByRightOverlay: BuildUIOverlay draws no icon bar on the
+        // Application Tab, so it publishes a zero-width overlay there. The whole content area below
+        // the ribbon is the panel's, scrollbar included.
+        const bool handledByAppTabPanel = IsClientPointOverApplicationTabPanel(currentWindow, uiPoint);
 
         if (currentWindow) {
             currentWindow->uiInput.mouseX = static_cast<float>(uiPoint.x);
             currentWindow->uiInput.mouseY = static_cast<float>(uiPoint.y);
-            if (handledByTopRibbon || handledByDataTree) {
+            if (handledByTopRibbon || handledByDataTree || handledByAppTabPanel) {
                 currentWindow->uiInput.mouseWheelDelta += GET_WHEEL_DELTA_WPARAM(wParam);
                 SyncModifiersForWindow(currentWindow);
             }
         }
-        if (handledByTopRibbon || handledByDataTree || handledByRightOverlay) return 0;
+        if (handledByTopRibbon || handledByDataTree || handledByRightOverlay ||
+            handledByAppTabPanel) return 0;
 
         if (tab) {
             RouteSceneInputToWindowView(currentWindow, tab, uiPoint.y);

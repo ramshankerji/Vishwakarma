@@ -1965,7 +1965,10 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
     }
 
     // ---- Right icon bar + object properties pane (website/content/software/propertiesPane.md) ----
-    {
+    // Not drawn on the Application Tab: it holds no geometry, so there is nothing to inspect and the
+    // bar would be a dead strip - one that sits exactly on top of the Stats view's scrollbar and
+    // swallows the wheel meant for it.
+    if (!(activeTabIndex >= 0 && ApplicationTab::IsApplicationTab(static_cast<uint64_t>(activeTabIndex)))) {
         const float rightIconBarWidthPx = std::round(UI_RIGHT_ICONBAR_WIDTH_MM * pixelsPerMMx);
         const float rightPaneWidthPx = std::round(UI_RIGHT_PANE_WIDTH_MM * pixelsPerMMx);
         const float overlayTop = topUITotalHeightPx;
@@ -2274,6 +2277,13 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
         window.rightOverlayWidthPx.store(
             static_cast<uint32_t>(std::lround(rightIconBarWidthPx + paneWidthPx)), std::memory_order_release);
         window.uiKeyboardCaptureCount.store(edit.focusedFieldKey != 0 ? 1u : 0u, std::memory_order_release);
+    } else {
+        // Same published state as a closed pane, so the WndProc guards see no overlay to swallow
+        // input and no keyboard capture. Clearing the focused field matters because the pane that
+        // owned it is gone from this frame on - it must not stay focused behind the tab switch.
+        window.textEditState.focusedFieldKey = 0;
+        window.rightOverlayWidthPx.store(0, std::memory_order_release);
+        window.uiKeyboardCaptureCount.store(0, std::memory_order_release);
     }
 
     // ACTIVE DROPDOWN (placeholder)
