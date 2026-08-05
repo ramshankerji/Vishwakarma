@@ -4,7 +4,7 @@
 #include "RenderPage2D-DirectX12.h"
 #include "UserInterface-DirectX12.h"
 #include "RenderScene3D.h"
-#include "ShaderSceneVertex.h"
+#include "ShaderSceneVertex_16.h"
 #include "ShaderScenePixel.h"
 #include <algorithm>
 #include <cmath>
@@ -401,24 +401,25 @@ void शंकर::InitD3DPerTab(DX12ResourcesPerTab& tabRes) {
 
     // Shaders are compiled to DXIL during the build and embedded into the executable.
 
-    // Define the vertex input layout
+    /* The lean 16-byte vertex input layout - must match struct Vertex in डेटा.h and the input
+    signature of ShaderSceneVertex_16.hlsl. Selection3D::kSceneInputLayout is the second copy of
+    this, shared by the pick and highlight PSOs; change both together.
+
+    There is no COLOR element any more: color is one RGBA8 per OBJECT, read by the vertex shader
+    from InstanceRecord::packedColor. See struct Vertex for what that cost and why. */
     D3D12_INPUT_ELEMENT_DESC inputElementDescs[] = {
         // Position: 3 Floats (12 bytes)
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         // Normal: 4 Bytes Packed (Packed into 1 element, Offset 12)
         // DXGI_FORMAT_R8G8B8A8_SNORM automatically unpacks 0..255 to -1.0..1.0 float in shader
-        { "NORMAL"  , 0, DXGI_FORMAT_R8G8B8A8_SNORM,  0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },// Offset 12
-        // Note that DXGI_FORMAT_R16G16B16A16_FLOAT has 10 bits for Precision, so it is already HDR capable.
-        // Additional sign bit and exponent bit enable lighting calculation to exceed the [ 0 , 1 ] bracket.
-        // Eventually they are clamped by the GPU, when sending to Swap Chain.
-        { "COLOR"   , 0, DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 16, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }// Offset 12+4=16
+        { "NORMAL"  , 0, DXGI_FORMAT_R8G8B8A8_SNORM,  0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }// Offset 12
     };
 
     // Create the pipeline state object with depth testing enabled
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
     psoDesc.pRootSignature = tabRes.rootSignature.Get();
-    psoDesc.VS = CD3DX12_SHADER_BYTECODE(g_sceneVertexShader, sizeof(g_sceneVertexShader));
+    psoDesc.VS = CD3DX12_SHADER_BYTECODE(g_sceneVertexShader16, sizeof(g_sceneVertexShader16));
     psoDesc.PS = CD3DX12_SHADER_BYTECODE(g_scenePixelShader, sizeof(g_scenePixelShader));
     psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT); //(default = replace)

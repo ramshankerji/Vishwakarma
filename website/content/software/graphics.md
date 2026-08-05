@@ -33,9 +33,18 @@ Vertex layout is common to all geometry:
 - Initial development is on `R8G8B8A8`; when we implement HDR later we will upgrade. Some hardware may not support HDR, so keep both versions of the shaders.
 - Whether to load HDR or SDR shaders is decided at application startup. If the graphics card supports HDR and at least one monitor is HDR-capable, switch to HDR. Once HDR is ON, the application keeps HDR shaders even if the HDR monitor disconnects — until the app closes.
 
-*As implemented:* the 24-byte layout is live — position `R32G32B32_FLOAT` (12) + normal `R8G8B8A8_SNORM` (4) + color `R16G16B16A16_FLOAT` (8). Vertex color has been FP16 from day one, so the vertex format needs **no** change for HDR; the pending HDR work is entirely on the output side (render-target format, tonemap pass, swap chain) — see Phase 5.
+*Superseded — the 24-byte layout above is history.* It was live for the whole of Phases 1–4: position `R32G32B32_FLOAT` (12) + normal `R8G8B8A8_SNORM` (4) + color `R16G16B16A16_FLOAT` (8).
 
-*Planned:* once colour moves into the per-object instance record, those 8 bytes become dead weight for ordinary geometry and the base vertex drops to **16 bytes** — a 33% cut across the bulk of a model. Per-vertex colour is still genuinely needed (FEA contours, imported meshes with baked colour), but as separate *variants* with their own pipelines and their own pages rather than as a tax on every vertex. See *Appearance, variations and display state*.
+*As implemented, the base vertex is **16 bytes*** — position `R32G32B32_FLOAT` (12) + normal `R8G8B8A8_SNORM` (4), nothing else. Colour moved into the per-object instance record as `InstanceRecord::packedColor` (RGBA8, alpha = opacity), which the vertex shader unpacks once per vertex. That is a **33% cut on the vertex half of every page** across the bulk of a model. Per-vertex colour is still genuinely needed (FEA contours, imported meshes with baked colour), but as separate *variants* with their own pipelines and their own pages rather than as a tax on every vertex — see *Vertex format variants* below.
+
+**What it cost, stated plainly: per-face colour.** Every 3D type stores several face colours (`CONE::colorBase` / `colorIncline`, `PIPE::colorOuter` / `colorInner` / `colorCap`, …) and drew each face in its own. With one colour per object, each generator now nominates its **dominant surface** — incline for the cones and cylinders, outer wall for the pipes, `colorMain` for a line member, the annular faces for a flange — and writes it to `GeometryData::color`, a field that existed and had no reader until now. **Storage did not change at all:** every face colour is still in the struct and still in its `.proto`, so per-face colour returns intact with per-face disaggregation of an object, as a *variation* rather than as 8 bytes charged to every vertex in the model. Nothing in the file format had to move for this.
+
+Two consequences worth stating, because both were live traps:
+
+- **A transform-only edit must now carry appearance.** A move writes a whole fresh 64-byte instance record but arrives with empty vertex/index vectors, and the arena is device-local so the old record cannot be read back. `InstanceRegistryEntry` therefore shadows `packedColor` — free, as it landed in the struct's existing tail padding and the entry is still 40 bytes. Without it a drag repaints the object black. This is the defect Step 4 flagged and left waiting for a producer; the 16-byte vertex *is* that producer, so the two had to ship together.
+- **Per-object colour is now RGBA8, not FP16.** Vertex colour had been FP16 from day one, which is why the vertex format needed no change for HDR. An 8-bit per-object colour cannot exceed 1.0, so an emissive / overbright *base* colour is no longer expressible. Nothing visible changes today — CAD surface colours are authored in `[0,1]` and tonemapping is entirely output-side (render-target format, tonemap pass, swap chain — see Phase 5) — but the FP16 payload variant is where overbright would have to go if it is ever wanted.
+
+The shaders are split by stride rather than versioned in place: `ShaderSceneVertex_16.hlsl` / `ShaderScenePickVertex_16.hlsl` are what every PSO binds, and `_24` twins are kept compiling (nothing includes their headers) so the per-vertex-colour variants have a maintained starting point. The pixel shaders are **not** twinned — they are stride-independent, which is also why the 16-byte vertex shader deliberately does not mark its colour interpolant `nointerpolation`: that modifier would have to be matched in the shared pixel shader and would silently flat-shade the per-vertex-colour variant.
 
 ### Lighting
 
@@ -124,7 +133,7 @@ Total unique batches = 2 × 2 × 2 × 2 × N = **16 × N**. This ensures no pipe
 Once draw commands are compacted per Viewport rather than issued per page, the four axes above split into two kinds — and the split, not the count, is what should drive the design:
 
 - **PSO-only axes — transparency, topology, culling.** These change *pipeline state* and nothing else, so each can be a per-object bit that the compute pass reads to route commands into separate output regions: one `ExecuteIndirect` per non-empty bucket, with **pages free to mix them**. 2 × 2 × 2 = 8 buckets worst case, independent of N. *(Planned — today everything draws with one PSO; specified under* Appearance, variations and display state*.)*
-- **Layout axes — vertex format.** These change the *byte layout of the page itself*: stride drives `vertexByteOffset` alignment, `IsFull`, and `BaseVertexLocation = vertexByteOffset / stride`. No amount of bucketing helps, so vertex format must stay a **page** property. *(Planned.)*
+- **Layout axes — vertex format.** These change the *byte layout of the page itself*: stride drives `vertexByteOffset` alignment, `IsFull`, and `BaseVertexLocation = vertexByteOffset / stride`. No amount of bucketing helps, so vertex format must stay a **page** property. *(Planned — and note it is the one axis that costs a draw call as well: the input layout is PSO state and, unlike the index-buffer view below, does **not** ride in the compacted command, so N live vertex formats means N `ExecuteIndirect`s per Viewport. Only one format is live today, which is what keeps Step 7's single call per Viewport true.)*
 - **Index depth is neither — it stays a page property but is no longer a bucket key.** *(Implemented.)* This is the axis that has already changed. `StartIndexLocation` is an *element* offset in units of the command's own format, and each compacted command carries its own `D3D12_INDEX_BUFFER_VIEW` including `Format`; index format is not PSO state for triangle lists. So a 16-bit page and a 32-bit page draw in **one** call. Uniformity *within* a page is not enforced by the API — but keep it anyway, because the call-sharing benefit is already had between pages and mixing would put a per-object divisor back into the three sites that independently compute these offsets.
 
 Enabling 32-bit pages is therefore small: a `page.indexFormat`, and `RebuildIndirectBuffer` dividing by the page's element size instead of `sizeof(uint16_t)`. Index offsets are already 4-byte aligned, which satisfies `R32_UINT` unchanged. Note that 32-bit indices and the big-object fallback are *different* thresholds — 65,536 indices is only 128 KB, so a 100k-index mesh needs 32-bit indices while still fitting easily in a 4 MB page.
@@ -150,7 +159,9 @@ Putting the vertex and index buffer in the **same page** is the superior archite
 2. **Cache locality** — the GPU fetches vertices and indices from physically close VRAM (same page), slightly improving cache hit rates.
 3. **Double-ended layout** — vertices start at offset 0 and grow **up**; indices start at offset max (4 MB) and grow **down**. Free space is always the gap in the middle. The page is full when the vertex head pointer meets or crosses the index tail pointer. A mandatory 64-byte gap in the middle handles alignment concerns.
 
-**Vertex offsets are a whole number of vertices, always.** Every object's `vertexByteOffset` is rounded up to a multiple of `sizeof(Vertex)` (24), never to a power-of-two boundary, because the draw path addresses vertices by `BaseVertexLocation = vertexByteOffset / sizeof(Vertex)` in units of stride — and the Selection3D highlight path recomputes the same division independently. 24 already satisfies `CopyBufferRegion`, so a separate alignment buys nothing. Index offsets stay 4-byte aligned. Note the trap: 24 is not a power of two, so the usual `(v + a - 1) & ~(a - 1)` helper cannot express this and a separate round-up-to-multiple is required. An earlier revision aligned to 16 and survived only because every generator happened to emit an even vertex count; the first odd-count object — an imported mesh of N triangles gives 3N vertices — would have silently misaligned the *next* object in that page by 8 bytes, with no error or warning.
+**Vertex offsets are a whole number of vertices, always.** Every object's `vertexByteOffset` is rounded up to a multiple of `sizeof(Vertex)` (16 today), never to a power-of-two boundary *as such*, because the draw path addresses vertices by `BaseVertexLocation = vertexByteOffset / sizeof(Vertex)` in units of stride — and the Selection3D highlight path recomputes the same division independently. The stride already satisfies `CopyBufferRegion`, so a separate alignment buys nothing. Index offsets stay 4-byte aligned.
+
+The historic trap is worth keeping, because it comes back with the variants: **24 is not a power of two**, so the usual `(v + a - 1) & ~(a - 1)` helper could not express it and a separate round-up-to-multiple was required. An earlier revision aligned to 16 and survived only because every generator happened to emit an even vertex count; the first odd-count object — an imported mesh of N triangles gives 3N vertices — would have silently misaligned the *next* object in that page by 8 bytes, with no error or warning. The lean vertex being 16 makes the mask trick valid again, and `RoundUpToMultiple` was **deliberately left in place anyway**: it is correct for any stride, costs one divide per object append, and is exactly what the 24-byte variant needs back.
 
 **Lazy creation:**
 
@@ -220,7 +231,7 @@ On a desktop PC with two discrete GPUs and one integrated GPU, each driving one 
 
 As items complete, they move out of this pending list and into the design document proper.
 
-**Phases 1–3 — complete.** The visual baseline (lit 24-byte vertices, hemispherical lighting, mouse navigation), the RTT infrastructure and the API pivot (structured-buffer world matrices, `DrawIndexedInstanced` → `ExecuteIndirect`) are all live; their designs are described in the sections above.
+**Phases 1–3 — complete.** The visual baseline (lit vertices — 24-byte then, 16-byte now — hemispherical lighting, mouse navigation), the RTT infrastructure and the API pivot (structured-buffer world matrices, `DrawIndexedInstanced` → `ExecuteIndirect`) are all live; their designs are described in the sections above.
 
 **Phase 4 — the memory manager (the Vishwakarma core)**
 
@@ -260,7 +271,9 @@ A **render-thread** counterpart now sits beside it (`GpuRenderStats`, `[gpu][cul
 - [ ] Eviction frequency counters (ground work for Phase 7 residency).
 - [x] **Right-size the per-page indirect buffer — done.** Every 4 MB page used to reserve a flat 65,536 × 24 B = 1.5 MB argument buffer, sized for a pathological page of single triangles: **27% of each page's 5.5 MB footprint**, and ~2.4 GB of pure reservation at 10M objects. Measured against a real scene — 56 pages holding ~178 objects each — that was 84 MB reserved to hold 240 KB, a ~350× over-reservation. The starting reservation is now **256 KB** (`kIndirectInitialBytes`), taking a page from 5.5 MB to ~4.25 MB.
 
-  256 KB is deliberately *not* the measured minimum. A page densely packed with cuboids holds ~6,470 objects and fits comfortably inside it, and instancing will push objects-per-page higher still once shared geometry lets one page back many more of them — so the figure leaves room rather than tracking today's numbers. Pages that genuinely need more **grow**: `AllocateIndirectBuffer` doubles the capacity, and `RebuildIndirectBuffer` is the single growth point. That is safe there and nowhere else, because every page reaching it is a clone or a brand-new page — never a published one — so replacing the buffer cannot be observed by a render thread, and the rebuild rewrites the whole buffer anyway. A new `argGrow` counter on the heartbeat says whether the 256 KB was chosen well; a steady non-zero rate means pages routinely outgrow it. Measured 0 in testing.
+  256 KB is deliberately *not* the measured minimum. A page densely packed with cuboids holds ~9,200 objects and still fits inside it, and instancing will push objects-per-page higher still once shared geometry lets one page back many more of them — so the figure leaves room rather than tracking today's numbers.
+
+  **The 16-byte vertex ate most of that room, and this is the one place it cost something.** A denser vertex means more objects per 4 MB page and therefore more 24-byte arguments per page: the dense-cuboid case went from ~6,470 objects (155 KB, 59% of the reservation) to ~9,200 (216 KB, **84%**). It still fits, and `AllocateIndirectBuffer` doubling covers anything that does not, so this is a headroom note rather than a defect — but `argGrow` is now a much more sensitive instrument than it was, and a non-zero reading should be read as "the reservation is undersized for the new density", not as an exotic workload. Measured 0 both before and after. Pages that genuinely need more **grow**: `AllocateIndirectBuffer` doubles the capacity, and `RebuildIndirectBuffer` is the single growth point. That is safe there and nowhere else, because every page reaching it is a clone or a brand-new page — never a published one — so replacing the buffer cannot be observed by a render thread, and the rebuild rewrites the whole buffer anyway. A new `argGrow` counter on the heartbeat says whether the 256 KB was chosen well; a steady non-zero rate means pages routinely outgrow it. Measured 0 in testing.
 - [ ] Decision gate: segregated free-list allocator (from Phase 4) — build only if the page-selection scan shows up in these numbers.
 
 **Phase 7 — extreme performance (only after everything above is done and stable)**
@@ -372,13 +385,13 @@ These four rules are load-bearing. Every step below preserves them.
 3. **Everything shared per-tab retires on `min(all monitor render fences)`.** Render threads run at their monitors' refresh rates and never coordinate, so no fixed frame depth is correct for a shared resource.
 4. **Per-window / per-Viewport resources have exactly one owning render thread**, so classic N-deep buffering against that thread's own fence *is* correct for them.
 
-Why instance data is not paged alongside geometry: a 4 MB geometry page holds anywhere between ~170 objects (a 36×18 sphere) and ~6,470 (a cuboid), so the two page systems can never line up; objects change geometry page on modify and on defragmentation, which would destroy index stability, and the GPU pick id *is* the instance identity; and a per-page instance buffer forces one `ExecuteIndirect` per page forever, forfeiting the single-call-per-Viewport goal of Step 7.
+Why instance data is not paged alongside geometry: a 4 MB geometry page holds anywhere between ~224 objects (a 36×18 sphere) and ~9,200 (a cuboid), so the two page systems can never line up; objects change geometry page on modify and on defragmentation, which would destroy index stability, and the GPU pick id *is* the instance identity; and a per-page instance buffer forces one `ExecuteIndirect` per page forever, forfeiting the single-call-per-Viewport goal of Step 7.
 
 ### Per-tab stores
 
 | Store | Unit | Bytes at 10M | Mutability |
 |---|---|---:|---|
-| GeometryStore | 4 MB double-ended pages | ~6.5 GB for trivial solids | Immutable after publish; RCU clone on change |
+| GeometryStore | 4 MB double-ended pages | ~4.6 GB for trivial solids | Immutable after publish; RCU clone on change |
 | InstanceArena | 64-byte records, slot-allocated | 640 MB live + hole overhead | **Records immutable while published**; edits write a new slot |
 | InstanceRegistry (CPU) | 40-byte entry per `gpuInstanceIndex` | 400 MB host RAM | Copy-thread owned, read lock-free by the pick resolve |
 | InstanceSlotOf | `uint` per `gpuInstanceIndex` | 40 MB | Mutated in place, one aligned 4-byte store |
@@ -440,10 +453,10 @@ Within one chunk, clone → upload → argument rebuild is a **single** recordin
 
 | Object | Bytes each | Objects per 64 MB fill |
 |---|---:|---:|
-| Cuboid (24 vertices, 36 indices) | 648 B | ~100,000 |
-| Sphere (36 × 18) | ~24 KB | ~2,700 |
+| Cuboid (24 vertices, 36 indices) | 456 B | ~147,000 |
+| Sphere (36 × 18 — 684 vertices, 3,888 indices) | ~18 KB | ~3,600 |
 
-A lakh of cuboids is roughly one ring fill; a lakh of spheres is ~24 fills and ~1.5 GB of geometry. Argument and template staging is small beside this — even a densely packed 4 MB page rebuilds in ~155 KB.
+A lakh of cuboids is roughly *two-thirds* of one ring fill; a lakh of spheres is ~29 fills and ~1.9 GB of geometry. (Both figures are on the 16-byte vertex; they were 648 B / ~24 KB per object at 24 bytes, so every byte count in this section fell by about 30%.) Argument and template staging is small beside this — even a densely packed 4 MB page rebuilds in ~155 KB.
 
 ### Step 1 — Fence-gated slot retirement *(implemented)*
 
@@ -550,7 +563,14 @@ The three transform vectors retain the 3×3 part used for normals; the uniform-s
 
 Appearance is packed into the record for authored, infrequently changed state: material, base colour, opaque/transparent classification, opacity, render flags. High-frequency interaction state (hover, selection, SubTab membership, temporary hide) stays **out** of it — that state lives in Step 5's mask, so an interaction never allocates a slot.
 
-**Nothing writes or reads those 16 bytes yet, and there is a defect waiting there for whoever does.** A transform-only MODIFY allocates a *fresh* slot and writes all 64 bytes of a new record — but the copy thread has no source for the appearance half. `InstanceRegistryEntry` carries `memoryID`, page, pageSlot, `instanceSlot` and `worldCentre`, and no appearance; the arena is device-local and cannot be read back. So the moment appearance becomes real, **dragging an object silently resets its colour and opacity**. The fix belongs in the same change: carry the 16 bytes in the registry entry as the CPU shadow, 40 → 56 bytes, still one cache line. See *Appearance, variations and display state*.
+**The defect this section predicted has since fired, and is fixed — `packedColor` now has a producer.** The prediction was: a transform-only MODIFY allocates a *fresh* slot and writes all 64 bytes of a new record, but the copy thread has no source for the appearance half, and the arena is device-local so it cannot be read back — therefore the moment appearance became real, **dragging an object would silently reset its colour and opacity**. The 16-byte vertex made appearance real (see *Vertex format*), and the fix shipped in the same change, as required.
+
+Two details differ from what was written here in advance, both in the cheaper direction:
+
+- **Only 4 bytes are shadowed, not 16.** `materialIndex`, `renderFlags` and `packedParams` still have no producer, so there is nothing to preserve across a move yet; they are still written as zero. Each gains its shadow when it gains its producer.
+- **It was free, not 40 → 56 bytes.** `InstanceRegistryEntry` was 40 bytes with only 36 used — `uint32_t packedColor` landed in the existing tail padding, so the `static_assert(sizeof == 40)` did not move and the entry is still one cache line per lookup.
+
+*Verified:* select an object, move it, deselect — sampled RGB before `(44,159,73)` and after `(45,163,75)`, the 1.5% delta being the hemispherical lighting term at the new position. On the same run the heartbeat read `moves=1` with `clones` and `cloneMB` unchanged, so the move still clones nothing.
 
 ### Object placement — the producer side of the move path *(implemented)*
 
@@ -709,17 +729,17 @@ The hide row is the one worth reading twice: 181 objects left the frame for 181 
 - **Retiring the persistent per-page indirect buffers.** Much less urgent than it was: right-sizing the reservation to 256 KB (Phase 6) removed the ~2.4 GB of pure waste that made this the sharpest VRAM item, so what remains is the structural cleanup rather than a memory emergency. The templates become an SRV-only `DrawTemplateBuffer`, which in turn forces the GPU pick pass *and* the print path off the 24-byte per-page `ExecuteIndirect` they still execute, and needs the page directory so the shader can expand a `sourcePage` reference into buffer views. A template could also shed `InstanceCount` and `StartInstanceLocation` once it stops being executable, 24 → 16 bytes.
 - **Collapsing the per-page dispatches into one.** The draws are already one call; the dispatches are not. This is what the page directory actually buys, and it is worth little until page counts are large.
 
-### Appearance, variations and display state *(planned — nothing below is built)*
+### Appearance, variations and display state *(`packedColor` is built; the rest is planned)*
 
 Steps 1–7 built identity, memory and command generation. This is the layer that decides what an object *looks like* and which of several forms of it a given Viewport shows. It is designed as one piece because the four parts share machinery: the bucket keys live in the same 16 bytes, the variants are addressed by the same `memoryID` space, and per-Viewport display state is the same mask mechanism Step 5 already built.
 
 #### The 16-byte appearance payload
 
-The `InstanceRecord`'s second half finally acquires producers and consumers:
+The `InstanceRecord`'s second half finally acquires producers and consumers — **`packedColor` first**, because dropping per-vertex colour to reach the 16-byte vertex is what forced it (see *Vertex format*). The other three still have no producer:
 
 | Field | Holds |
 |---|---|
-| `packedColor` | RGBA8 — base colour **and** 0–255 opacity. No separate transparency field is needed. |
+| `packedColor` | RGBA8 — base colour **and** 0–255 opacity. No separate transparency field is needed. ***Built:*** written on ADD and geometry MODIFY from `GeometryData::color`, which each generator sets from its dominant face; shadowed in `InstanceRegistryEntry` so a transform-only edit preserves it. Opacity is carried but not yet *consumed* — everything still draws through the one opaque PSO until the render-flag buckets below exist. |
 | `materialIndex` | Index into a material table (texture ids, roughness, …), not a raw texture id — same 4 bytes, far more headroom. |
 | `renderFlags` | The three bucket keys — transparent, double-sided, line topology — plus depth-write behaviour. |
 | `packedParams` | Spare. |
@@ -746,15 +766,18 @@ Three costs to price in:
 
 Per-object colour makes the 8-byte per-vertex colour dead weight for ordinary geometry. It does not disappear — it moves into dedicated variants, each with its own pipeline and its own pages:
 
-| Variant | Vertex | Lifetime |
-|---|---|---|
-| Base (lean) | pos 12 + normal 4 = **16 B** | authored, persistent |
-| Scalar field (FEA results) | pos 12 + normal 4 + FP16 scalar = 18 B (pad 20) | computed, transient, per load case |
-| Baked vertex colour (imported PLY/OBJ/scan) | pos 12 + normal 4 + RGBA8 = **20 B** | authored, persistent |
+| Variant | Vertex | Lifetime | State |
+|---|---|---|---|
+| Base (lean) | pos 12 + normal 4 = **16 B** | authored, persistent | **Shipped — the only format the engine draws** |
+| Scalar field (FEA results) | pos 12 + normal 4 + FP16 scalar = 18 B (pad 20) | computed, transient, per load case | Planned |
+| Baked vertex colour (imported PLY/OBJ/scan) | pos 12 + normal 4 + RGBA8 = **20 B** | authored, persistent | Planned |
+| Legacy per-vertex FP16 colour | pos 12 + normal 4 + FP16 RGBA = **24 B** | — | Retired as the base; shaders parked as `*_24.hlsl` |
+
+**The 24-byte row is the starting point for the two planned variants, which is why its shaders are kept compiling rather than deleted.** `ShaderSceneVertex_24.hlsl` and `ShaderScenePickVertex_24.hlsl` are byte-for-byte what shipped through Phase 4, still registered as `FxCompile` items with their own `VariableName`s (`g_sceneVertexShader24`, …) so they cannot bit-rot, but nothing includes their generated headers. The pixel shaders are shared across strides and deliberately **not** twinned — which is the constraint that keeps the base vertex shader from marking its colour interpolant `nointerpolation`, since a flat modifier would have to be matched in the shared pixel shader and would defeat the two per-vertex-colour variants.
 
 **Storing the scalar rather than a baked RGBA is the decision that matters.** A contour is a scalar field pushed through a colormap; baking the colour means a full re-upload to change the colormap, the legend range, or linear↔log scaling. Keeping the scalar and putting colormap and range in a per-Viewport root constant plus a small 1D texture makes all three **free** — and dragging the legend range is the most-used interaction in results post-processing. Imported colours are almost always 8-bit at source, so RGBA8 rather than FP16; the shader expands, and HDR is unaffected since tonemapping is on the output side.
 
-Note the lean vertex is 16 bytes, a power of two, so lean pages get the cheap `AlignUp` mask; the non-power-of-two alignment problem moves to the variant strides rather than disappearing. `GeometryPage` gains a `vertexStride` and `VertexAlign` / `IsFull` stop being static — and **three independent sites** compute `vertexByteOffset / sizeof(Vertex)` (`RebuildIndirectBuffer`, the Selection3D highlight path, the compaction relocation), every one of which must switch to the page's stride. That is verbatim the trap that produced the 16-byte-alignment defect under *Page structure*; one of the three being missed is a silently misplaced draw, not a crash.
+Note the lean vertex is 16 bytes, a power of two, so lean pages *could* use the cheap `AlignUp` mask; `RoundUpToMultiple` was kept anyway, precisely because it is already correct for the non-power-of-two variant strides. The alignment problem moves to those strides rather than disappearing. **What the base downgrade deliberately did not build is the per-page part:** `sizeof(Vertex)` is still a single global constant, so `GeometryPage` has no `vertexStride` and `VertexAlign` / `IsFull` are still static. Adding a second live format is what forces all of that, and with it the **three independent sites** that compute `vertexByteOffset / sizeof(Vertex)` (`RebuildIndirectBuffer`, the Selection3D highlight path, the compaction relocation), every one of which must then switch to the page's stride. That is verbatim the trap that produced the 16-byte-alignment defect under *Page structure*; one of the three being missed is a silently misplaced draw, not a crash.
 
 **The duplication is accepted knowingly.** A contour variation repeats position and normal — 16 bytes per vertex, ~8 MB for a 500k-vertex model. The alternative, a parallel colour *stream* bound as vertex slot 1 (the command signature can carry a second `VERTEX_BUFFER_VIEW` with a different `Slot`), duplicates nothing but couples two page systems through byte offsets: defragmenting a geometry page would have to relocate the colour page in lockstep, forever. That is precisely the association invariant 1 forbids, and 8 MB is a cheap price for keeping the two independent. Separate pages also mean re-solving a load case re-uploads only the scalar pages and clones nothing of the base.
 

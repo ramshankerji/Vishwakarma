@@ -304,6 +304,7 @@ struct PIPE : public META_DATA {
 inline GeometryData PYRAMID::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
+    geometry.color = ToFloat4(colors[0]); // The generator already colored every face colors[0].
     geometry.vertices.resize(4);
 
     // Calculate the geometric centroid of the pyramid.
@@ -327,10 +328,10 @@ inline GeometryData PYRAMID::GetGeometry() {
 
     // Construct vertices with Position, Normal, and Color
     // Since we are using common vertex between different surfaces, Intentionally assigning colors[0] for uniformity.
-    geometry.vertices[0] = Vertex{ vertices[0], GetCentroidNormal(v0), colors[0] };
-    geometry.vertices[1] = Vertex{ vertices[1], GetCentroidNormal(v1), colors[0] };
-    geometry.vertices[2] = Vertex{ vertices[2], GetCentroidNormal(v2), colors[0] };
-    geometry.vertices[3] = Vertex{ vertices[3], GetCentroidNormal(v3), colors[0] };
+    geometry.vertices[0] = Vertex{ vertices[0], GetCentroidNormal(v0) };
+    geometry.vertices[1] = Vertex{ vertices[1], GetCentroidNormal(v1) };
+    geometry.vertices[2] = Vertex{ vertices[2], GetCentroidNormal(v2) };
+    geometry.vertices[3] = Vertex{ vertices[3], GetCentroidNormal(v3) };
 
     geometry.indices.resize(12);
     geometry.indices = { 0, 1, 2, 0, 3, 1, 1, 3, 2, 2, 3, 0 }; // //1st triangle is base, then 3 sides.
@@ -398,6 +399,7 @@ inline void CUBOID::Randomize() {
 inline GeometryData CUBOID::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
+    geometry.color = ToFloat4(colors);
     geometry.vertices.clear();
     geometry.indices.clear();
     geometry.vertices.reserve(24);
@@ -415,10 +417,10 @@ inline GeometryData CUBOID::GetGeometry() {
             XMUBYTE4 packedNormal = PackNormal(normalFloat);
             uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
 
-            geometry.vertices.push_back(Vertex{ vertices[i0], packedNormal, colors });
-            geometry.vertices.push_back(Vertex{ vertices[i1], packedNormal, colors });
-            geometry.vertices.push_back(Vertex{ vertices[i2], packedNormal, colors });
-            geometry.vertices.push_back(Vertex{ vertices[i3], packedNormal, colors });
+            geometry.vertices.push_back(Vertex{ vertices[i0], packedNormal });
+            geometry.vertices.push_back(Vertex{ vertices[i1], packedNormal });
+            geometry.vertices.push_back(Vertex{ vertices[i2], packedNormal });
+            geometry.vertices.push_back(Vertex{ vertices[i3], packedNormal });
 
             geometry.indices.insert(geometry.indices.end(), {
                 static_cast<uint16_t>(base + 0), static_cast<uint16_t>(base + 1),
@@ -459,6 +461,7 @@ inline void CONE::Randomize() {
 inline GeometryData CONE::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
+    geometry.color = ToFloat4(colorIncline); // Incline dominates; colorBase stays stored.
     const int numSegments = 36;
     geometry.vertices.clear();
     geometry.indices.clear();
@@ -470,8 +473,7 @@ inline GeometryData CONE::GetGeometry() {
     // Lambda to add a flat shaded triangle
     auto AddTriangle = [&](const XMFLOAT3& a,
         const XMFLOAT3& b,
-        const XMFLOAT3& c,
-        const XMHALF4& color)
+        const XMFLOAT3& c)
         {
             XMVECTOR v0 = XMLoadFloat3(&a);
             XMVECTOR v1 = XMLoadFloat3(&b);
@@ -483,9 +485,9 @@ inline GeometryData CONE::GetGeometry() {
 
             uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
 
-            geometry.vertices.push_back(Vertex{ a, packedNormal, color });
-            geometry.vertices.push_back(Vertex{ b, packedNormal, color });
-            geometry.vertices.push_back(Vertex{ c, packedNormal, color });
+            geometry.vertices.push_back(Vertex{ a, packedNormal });
+            geometry.vertices.push_back(Vertex{ b, packedNormal });
+            geometry.vertices.push_back(Vertex{ c, packedNormal });
 
             geometry.indices.push_back(base + 0);
             geometry.indices.push_back(base + 1);
@@ -508,8 +510,8 @@ inline GeometryData CONE::GetGeometry() {
         XMFLOAT3 r0 = { baseCenter.x + radius * c0, baseCenter.y, baseCenter.z + radius * s0 };
         XMFLOAT3 r1 = { baseCenter.x + radius * c1, baseCenter.y, baseCenter.z + radius * s1 };
 
-        AddTriangle(apex, r0, r1, colorIncline);// Side surface triangle (flat shaded)
-        AddTriangle(baseCenter, r1, r0, colorBase);// Base surface triangle (flat shaded, downward facing via winding)
+        AddTriangle(apex, r0, r1);// Side surface triangle (flat shaded)
+        AddTriangle(baseCenter, r1, r0);// Base surface triangle (flat shaded, downward facing via winding)
     }
 
     return geometry;
@@ -539,6 +541,7 @@ inline void CYLINDER::Randomize() {
 inline GeometryData CYLINDER::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
+    geometry.color = ToFloat4(colorIncline); // Incline dominates; colorBase / colorTop stay stored.
     const int numSegments = 36;
     geometry.vertices.clear();
     geometry.indices.clear();
@@ -551,8 +554,7 @@ inline GeometryData CYLINDER::GetGeometry() {
     XMVECTOR axis = XMVector3Normalize(vP2 - vP1);
 
     // Lambda to add a flat-shaded triangle
-    auto AddTriangle = [&](const XMFLOAT3& a, const XMFLOAT3& b, const XMFLOAT3& c,
-        const XMHALF4& color)
+    auto AddTriangle = [&](const XMFLOAT3& a, const XMFLOAT3& b, const XMFLOAT3& c)
         {
             XMVECTOR v0 = XMLoadFloat3(&a);
             XMVECTOR v1 = XMLoadFloat3(&b);
@@ -567,9 +569,9 @@ inline GeometryData CYLINDER::GetGeometry() {
 
             uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
 
-            geometry.vertices.push_back(Vertex{ a, packedNormal, color });
-            geometry.vertices.push_back(Vertex{ b, packedNormal, color });
-            geometry.vertices.push_back(Vertex{ c, packedNormal, color });
+            geometry.vertices.push_back(Vertex{ a, packedNormal });
+            geometry.vertices.push_back(Vertex{ b, packedNormal });
+            geometry.vertices.push_back(Vertex{ c, packedNormal });
 
             geometry.indices.push_back(base + 0);
             geometry.indices.push_back(base + 1);
@@ -580,8 +582,7 @@ inline GeometryData CYLINDER::GetGeometry() {
     auto AddQuad = [&](const XMFLOAT3& a,
         const XMFLOAT3& b,
         const XMFLOAT3& c,
-        const XMFLOAT3& d,
-        const XMHALF4& color)
+        const XMFLOAT3& d)
         {
             XMVECTOR v0 = XMLoadFloat3(&a);
             XMVECTOR v1 = XMLoadFloat3(&b);
@@ -592,10 +593,10 @@ inline GeometryData CYLINDER::GetGeometry() {
             XMUBYTE4 packedNormal = PackNormal(normalFloat);
             uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
 
-            geometry.vertices.push_back(Vertex{ a, packedNormal, color });
-            geometry.vertices.push_back(Vertex{ b, packedNormal, color });
-            geometry.vertices.push_back(Vertex{ c, packedNormal, color });
-            geometry.vertices.push_back(Vertex{ d, packedNormal, color });
+            geometry.vertices.push_back(Vertex{ a, packedNormal });
+            geometry.vertices.push_back(Vertex{ b, packedNormal });
+            geometry.vertices.push_back(Vertex{ c, packedNormal });
+            geometry.vertices.push_back(Vertex{ d, packedNormal });
 
             geometry.indices.insert(geometry.indices.end(), {
                 static_cast<uint16_t>(base + 0), static_cast<uint16_t>(base + 1),
@@ -621,9 +622,9 @@ inline GeometryData CYLINDER::GetGeometry() {
         XMFLOAT3 t0 = { p2.x + radius * c0, p2.y, p2.z + radius * s0 };// Top rim points
         XMFLOAT3 t1 = { p2.x + radius * c1, p2.y, p2.z + radius * s1 };
 
-        AddTriangle(p1, b1, b0, colorBase);// Bottom cap (flat, downward facing via winding)
-        AddTriangle(p2, t0, t1, colorTop);// Top cap (flat, upward facing via winding)
-        AddQuad(b0, b1, t1, t0, colorIncline);// Side wall (flat quad per segment)
+        AddTriangle(p1, b1, b0);// Bottom cap (flat, downward facing via winding)
+        AddTriangle(p2, t0, t1);// Top cap (flat, upward facing via winding)
+        AddQuad(b0, b1, t1, t0);// Side wall (flat quad per segment)
     }
 
     return geometry;
@@ -661,6 +662,7 @@ inline GeometryData PARALLELEPIPED::GetGeometry() {
 
     GeometryData geometry;
     geometry.id = memoryID;
+    geometry.color = ToFloat4(colors);
 
     geometry.vertices.clear();
     geometry.indices.clear();
@@ -684,10 +686,10 @@ inline GeometryData PARALLELEPIPED::GetGeometry() {
 
         uint16_t baseIndex = static_cast<uint16_t>(geometry.vertices.size());
 
-        geometry.vertices.push_back(Vertex{ vertices[i0], packedNormal, colors });
-        geometry.vertices.push_back(Vertex{ vertices[i1], packedNormal, colors });
-        geometry.vertices.push_back(Vertex{ vertices[i2], packedNormal, colors });
-        geometry.vertices.push_back(Vertex{ vertices[i3], packedNormal, colors });
+        geometry.vertices.push_back(Vertex{ vertices[i0], packedNormal });
+        geometry.vertices.push_back(Vertex{ vertices[i1], packedNormal });
+        geometry.vertices.push_back(Vertex{ vertices[i2], packedNormal });
+        geometry.vertices.push_back(Vertex{ vertices[i3], packedNormal });
 
         geometry.indices.insert(geometry.indices.end(), {
             static_cast<uint16_t>(baseIndex + 0), static_cast<uint16_t>(baseIndex + 1),
@@ -735,6 +737,7 @@ Updated implementation:
 inline GeometryData SPHERE::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
+    geometry.color = ToFloat4(color);
     const int sliceCount = 36;   // Longitude
     const int stackCount = 18;   // Latitude
     geometry.vertices.clear();
@@ -768,7 +771,7 @@ inline GeometryData SPHERE::GetGeometry() {
             };
 
             XMVECTOR vPos = XMLoadFloat3(&pos);
-            geometry.vertices.push_back( Vertex{ pos, GetSphericalNormal(vPos), color } );
+            geometry.vertices.push_back( Vertex{ pos, GetSphericalNormal(vPos) } );
         }
     }
 
@@ -807,6 +810,7 @@ inline void TORUS::Randomize() {
 inline GeometryData TORUS::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
+    geometry.color = ToFloat4(color);
     const int majorSegments = 36;
     const int minorSegments = 18;
     geometry.vertices.clear();
@@ -830,7 +834,7 @@ inline GeometryData TORUS::GetGeometry() {
                 center.z + ringRadius * sinTheta
             };
             XMFLOAT3 normal = { cosTheta * cosPhi, sinPhi, sinTheta * cosPhi };
-            geometry.vertices.push_back(Vertex{ position, PackNormal(normal), color });
+            geometry.vertices.push_back(Vertex{ position, PackNormal(normal) });
         }
     }
 
@@ -866,6 +870,7 @@ inline void ELLIPSOID::Randomize() {
 inline GeometryData ELLIPSOID::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
+    geometry.color = ToFloat4(color);
     const int sliceCount = 36;
     const int stackCount = 18;
     geometry.vertices.clear();
@@ -892,7 +897,7 @@ inline GeometryData ELLIPSOID::GetGeometry() {
                 (position.y - center.y) / (radiusY * radiusY),
                 (position.z - center.z) / (radiusZ * radiusZ)
             };
-            geometry.vertices.push_back(Vertex{ position, PackNormal(normal), color });
+            geometry.vertices.push_back(Vertex{ position, PackNormal(normal) });
         }
     }
 
@@ -950,6 +955,7 @@ inline void FRUSTUM_OF_PYRAMID::Randomize() {
 inline GeometryData FRUSTUM_OF_PYRAMID::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
+    geometry.color = ToFloat4(colorIncline); // Incline dominates; colorBase / colorTop stay stored.
     geometry.vertices.resize(8);
 
     // Calculate the geometric center (centroid) of the frustum.
@@ -971,7 +977,7 @@ inline GeometryData FRUSTUM_OF_PYRAMID::GetGeometry() {
     for (size_t i = 0; i < 8; ++i) {
         XMVECTOR vPos = XMLoadFloat3(&vertices[i]);
         //Since currently we are sharing vertices between faces, we can assign only 1 color.
-        geometry.vertices[i] = Vertex{ vertices[i], GetCentroidNormal(vPos), colorBase };
+        geometry.vertices[i] = Vertex{ vertices[i], GetCentroidNormal(vPos) };
     }
 
     geometry.indices = {
@@ -1010,13 +1016,14 @@ inline GeometryData FRUSTUM_OF_CONE::GetGeometry()
 {
     GeometryData geometry;
     geometry.id = memoryID;
+    geometry.color = ToFloat4(colorIncline); // Incline dominates; colorBase / colorTop stay stored.
     const int numSegments = 36;
     geometry.vertices.clear();
     geometry.indices.clear();
     geometry.vertices.reserve(numSegments * (3 + 3 + 4));
     geometry.indices.reserve(numSegments * (3 + 3 + 6));
 
-    auto AddTriangle = [&](const XMFLOAT3& p0, const XMFLOAT3& p1, const XMFLOAT3& p2, const XMHALF4& color) {
+    auto AddTriangle = [&](const XMFLOAT3& p0, const XMFLOAT3& p1, const XMFLOAT3& p2) {
         XMVECTOR v0 = XMLoadFloat3(&p0);
         XMVECTOR v1 = XMLoadFloat3(&p1);
         XMVECTOR v2 = XMLoadFloat3(&p2);
@@ -1026,17 +1033,16 @@ inline GeometryData FRUSTUM_OF_CONE::GetGeometry()
         XMUBYTE4 packedNormal = PackNormal(normalFloat);
         uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
 
-        geometry.vertices.push_back(Vertex{ p0, packedNormal, color });
-        geometry.vertices.push_back(Vertex{ p1, packedNormal, color });
-        geometry.vertices.push_back(Vertex{ p2, packedNormal, color });
+        geometry.vertices.push_back(Vertex{ p0, packedNormal });
+        geometry.vertices.push_back(Vertex{ p1, packedNormal });
+        geometry.vertices.push_back(Vertex{ p2, packedNormal });
 
         geometry.indices.push_back(base + 0);
         geometry.indices.push_back(base + 1);
         geometry.indices.push_back(base + 2);
     };
 
-    auto AddQuad = [&](const XMFLOAT3& p0, const XMFLOAT3& p1, const XMFLOAT3& p2, const XMFLOAT3& p3, 
-        const XMHALF4& color){
+    auto AddQuad = [&](const XMFLOAT3& p0, const XMFLOAT3& p1, const XMFLOAT3& p2, const XMFLOAT3& p3) {
 
         XMVECTOR v0 = XMLoadFloat3(&p0);
         XMVECTOR v1 = XMLoadFloat3(&p1);
@@ -1047,10 +1053,10 @@ inline GeometryData FRUSTUM_OF_CONE::GetGeometry()
         XMUBYTE4 packedNormal = PackNormal(normalFloat);
         uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
 
-        geometry.vertices.push_back(Vertex{ p0, packedNormal, color });
-        geometry.vertices.push_back(Vertex{ p1, packedNormal, color });
-        geometry.vertices.push_back(Vertex{ p2, packedNormal, color });
-        geometry.vertices.push_back(Vertex{ p3, packedNormal, color });
+        geometry.vertices.push_back(Vertex{ p0, packedNormal });
+        geometry.vertices.push_back(Vertex{ p1, packedNormal });
+        geometry.vertices.push_back(Vertex{ p2, packedNormal });
+        geometry.vertices.push_back(Vertex{ p3, packedNormal });
 
         geometry.indices.insert(geometry.indices.end(), {
             static_cast<uint16_t>(base + 0),
@@ -1078,9 +1084,9 @@ inline GeometryData FRUSTUM_OF_CONE::GetGeometry()
         XMFLOAT3 t0 = { topCenter.x + topRadius * c0, topCenter.y, topCenter.z + topRadius * s0 };
         XMFLOAT3 t1 = { topCenter.x + topRadius * c1, topCenter.y, topCenter.z + topRadius * s1 };
 
-        AddTriangle(bottomCenter, b1, b0, colorBase);// Bottom cap (normal automatically downward via winding)
-        AddTriangle(topCenter, t0, t1, colorTop);// Top cap (normal automatically upward)
-        AddQuad(b0, b1, t1, t0, colorIncline);// Side wall (flat quad)
+        AddTriangle(bottomCenter, b1, b0);// Bottom cap (normal automatically downward via winding)
+        AddTriangle(topCenter, t0, t1);// Top cap (normal automatically upward)
+        AddQuad(b0, b1, t1, t0);// Side wall (flat quad)
     }
 
     return geometry;
@@ -1112,6 +1118,7 @@ inline GeometryData PIPE::GetGeometry()
 {
     GeometryData geometry;
     geometry.id = memoryID;
+    geometry.color = ToFloat4(colorOuter); // Outer wall dominates; colorInner / colorCap stay stored.
     const int numSegments = 36;
     geometry.vertices.clear();
     geometry.indices.clear();
@@ -1134,7 +1141,7 @@ inline GeometryData PIPE::GetGeometry()
     XMVECTOR bitangent = XMVector3Cross(axis, tangent);
 
     auto AddQuad = [&](XMVECTOR a, XMVECTOR b, XMVECTOR c, XMVECTOR d,
-        XMVECTOR normalVec, const XMHALF4& color)
+        XMVECTOR normalVec)
         {
             XMFLOAT3 normalF;
             XMStoreFloat3(&normalF, XMVector3Normalize(normalVec));
@@ -1148,10 +1155,10 @@ inline GeometryData PIPE::GetGeometry()
             XMStoreFloat3(&pc, c);
             XMStoreFloat3(&pd, d);
 
-            geometry.vertices.push_back(Vertex{ pa, packedNormal, color });
-            geometry.vertices.push_back(Vertex{ pb, packedNormal, color });
-            geometry.vertices.push_back(Vertex{ pc, packedNormal, color });
-            geometry.vertices.push_back(Vertex{ pd, packedNormal, color });
+            geometry.vertices.push_back(Vertex{ pa, packedNormal });
+            geometry.vertices.push_back(Vertex{ pb, packedNormal });
+            geometry.vertices.push_back(Vertex{ pc, packedNormal });
+            geometry.vertices.push_back(Vertex{ pd, packedNormal });
 
             geometry.indices.insert(geometry.indices.end(), {
                 static_cast<uint16_t>(base + 0), static_cast<uint16_t>(base + 1),
@@ -1176,10 +1183,10 @@ inline GeometryData PIPE::GetGeometry()
         XMVECTOR i3 = p2 + dir1 * innerR;
         XMVECTOR i4 = p2 + dir0 * innerR;
 
-        AddQuad(o1, o2, o3, o4, dir0, colorOuter);// Outer wall
-        AddQuad(i4, i3, i2, i1, -dir0, colorInner);// Inner wall (reverse normal)
-        AddQuad(i2, i1, o1, o2, -axis, colorCap);// Start cap ring
-        AddQuad(o4, o3, i3, i4, axis, colorCap);// End cap ring
+        AddQuad(o1, o2, o3, o4, dir0);// Outer wall
+        AddQuad(i4, i3, i2, i1, -dir0);// Inner wall (reverse normal)
+        AddQuad(i2, i1, o1, o2, -axis);// Start cap ring
+        AddQuad(o4, o3, i3, i4, axis);// End cap ring
     }
 
     return geometry;

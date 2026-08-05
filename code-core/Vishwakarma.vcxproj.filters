@@ -347,8 +347,10 @@
     <FxCompile Include="VertexShader.hlsl" />
     <FxCompile Include="PixelShader.hlsl" />
     <FxCompile Include="ShaderScenePixel.hlsl" />
-    <FxCompile Include="ShaderSceneVertex.hlsl" />
-    <FxCompile Include="ShaderScenePickVertex.hlsl" />
+    <FxCompile Include="ShaderSceneVertex_16.hlsl" />
+    <FxCompile Include="ShaderSceneVertex_24.hlsl" />
+    <FxCompile Include="ShaderScenePickVertex_16.hlsl" />
+    <FxCompile Include="ShaderScenePickVertex_24.hlsl" />
     <FxCompile Include="ShaderScenePickPixel.hlsl" />
     <FxCompile Include="ShaderSceneHighlightPixel.hlsl" />
     <FxCompile Include="ShaderCubeVertex.hlsl" />

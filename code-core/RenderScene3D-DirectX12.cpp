@@ -4,7 +4,7 @@
 #include "MemoryManagerGPU-DirectX12.h"
 #include "RenderPage2D-DirectX12.h"
 #include "UserInterface-DirectX12.h"
-#include "ShaderSceneVertex.h"
+#include "ShaderSceneVertex_16.h"
 #include "ShaderScenePixel.h"
 #include "ShaderSceneCull.h"
 #include "ShaderSkyGradientVertex.h"
@@ -1070,14 +1070,18 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
 
             The world-centre shadow is refreshed here too. It is what the pick resolve reads now
             that the arena is device-local, and it must follow every transform edit, not just the
-            ones that touch geometry.
+            ones that touch geometry. `packedColor` is shadowed for the mirror-image reason: this
+            writes a WHOLE fresh record every time, so the caller must supply the appearance bytes
+            even when it is only moving the object. A transform-only edit has no GeometryData to
+            take them from, so it passes the shadow straight back in - see the REMOVE-free MODIFY
+            path below and InstanceRegistryEntry::packedColor.
 
             CONVENTION: transformA/B/C are the first three rows of transpose(world) - see
             InstanceRecord in RenderScene3D.h. The 4th row of the transpose is always (0,0,0,1),
             which is what makes 48 bytes enough. The CPU-side centre uses the ORIGINAL matrix,
             mirroring the shader's row-vector `pos * world`, not the transposed copy. */
             auto WriteInstanceRecord = [&](uint32_t gpuInstanceIndex, const XMFLOAT4X4& worldMatrix,
-                const GeometryPlacementRecordInPage& placement) -> uint32_t {
+                const GeometryPlacementRecordInPage& placement, uint32_t packedColor) -> uint32_t {
                 const uint32_t newSlot = AllocateInstanceSlot(tabRes);
 
                 uint8_t* mapped = nullptr;
@@ -1092,6 +1096,9 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 InstanceRecord record{};
                 // The record's 48-byte affine block IS the leading 3 rows of the transpose.
                 memcpy(record.transformA, &transposed, 3 * 4 * sizeof(float));
+                // The only one of the four appearance fields with a producer today: the object's
+                // single surface color, which the 16-byte vertex no longer carries.
+                record.packedColor = packedColor;
                 memcpy(mapped, &record, kInstanceRecordBytes);
                 memcpy(mapped + kInstanceRecordBytes, &newSlot, kInstanceSlotBytes);
 
@@ -1113,6 +1120,7 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 entry.worldCenterX = XMVectorGetX(worldCenter);
                 entry.worldCenterY = XMVectorGetY(worldCenter);
                 entry.worldCenterZ = XMVectorGetZ(worldCenter);
+                entry.packedColor = packedColor;
                 return newSlot;
                 };
 
@@ -1237,7 +1245,8 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     // Record + redirect flip last: the registry entry it updates must already
                     // carry the placement this new object's world centre is derived from.
                     tabRes.registry[gpuInstanceIndex].instanceSlot =
-                        WriteInstanceRecord(gpuInstanceIndex, geo->worldMatrix, rec);
+                        WriteInstanceRecord(gpuInstanceIndex, geo->worldMatrix, rec,
+                            PackColorRGBA8(geo->color));
                     /* A new object is visible in every SubTab. This write is MANDATORY, not an
                     optimisation to skip: a freshly committed D3D12 tile has undefined contents, so
                     an unwritten mask is not "all zeroes" but garbage - and a recycled index would
@@ -1270,8 +1279,12 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                         InstanceRegistryEntry& moved = tabRes.registry[gpuInstanceIndex];
                         if (!moved.page) break; // Not on the GPU yet; nothing to redirect.
                         releasedInstanceSlots.push_back(moved.instanceSlot);
+                        /* The shadow, NOT geo->color: a transform-only payload carries no geometry
+                        and therefore no color, so packing its default light-grey here would repaint
+                        the object on every drag. */
                         moved.instanceSlot = WriteInstanceRecord(gpuInstanceIndex,
-                            geo->worldMatrix, moved.page->objects[moved.pageSlot]);
+                            geo->worldMatrix, moved.page->objects[moved.pageSlot],
+                            moved.packedColor);
                         gCopyStats.transformOnlyEdits.fetch_add(1, std::memory_order_relaxed);
                         break;
                     }
@@ -1320,7 +1333,8 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                         static_cast<uint32_t>(modifyTargetPage->objects.size() - 1);
                     releasedInstanceSlots.push_back(tabRes.registry[gpuInstanceIndex].instanceSlot);
                     tabRes.registry[gpuInstanceIndex].instanceSlot =
-                        WriteInstanceRecord(gpuInstanceIndex, geo->worldMatrix, rec);
+                        WriteInstanceRecord(gpuInstanceIndex, geo->worldMatrix, rec,
+                            PackColorRGBA8(geo->color));
                     break;
 
                 case CommandToCopyThreadType::REMOVE:

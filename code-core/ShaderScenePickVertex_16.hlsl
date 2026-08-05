@@ -1,20 +1,25 @@
 // Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
 
-/* GPU picking vertex shader. Identical transform to ShaderSceneVertex, but instead of forwarding
-color/normal it forwards the per-draw gpuInstanceIndex (+1) as the object's pick id. The pixel
-shader writes this id and the NDC depth into the pick render targets so the CPU can identify the
-object and reconstruct the surface point under the cursor. See website/software/selection.md.
+/* GPU picking vertex shader for the LEAN 16-BYTE vertex (position 12 + normal 4). Identical
+transform to ShaderSceneVertex_16, but instead of forwarding color/normal it forwards the per-draw
+gpuInstanceIndex (+1) as the object's pick id. The pixel shader writes this id and the NDC depth into
+the pick render targets so the CPU can identify the object and reconstruct the surface point under
+the cursor. See website/software/selection.md.
 
 Because the id IS the stable dense instance index, the CPU resolves a hit with a single indexed
-read of the copy thread's registry (graphics.md, 10M plan Step 3) - no scan over pages. */
+read of the copy thread's registry (graphics.md, 10M plan Step 3) - no scan over pages.
+
+Only POSITION is declared. A vertex shader may consume a subset of the bound input layout, and this
+pass needs nothing else - the normal is present in the 16-byte vertex but irrelevant to a pick.
+ShaderScenePickVertex_24.hlsl is the parked twin for the future 24-byte variant. */
 
 cbuffer ConstantBuffer : register(b0) {
     float4x4 viewProj;
 };
 
-// Mirrors ShaderSceneVertex.hlsl (and InstanceRecord in RenderScene3D.h) so the pick pass consumes
-// the exact same transform as the visible scene - change all three together. See that file for the
-// transformA/B/C row convention.
+// Mirrors ShaderSceneVertex_16.hlsl (and InstanceRecord in RenderScene3D.h) so the pick pass
+// consumes the exact same transform as the visible scene - change all three together. See that file
+// for the transformA/B/C row convention.
 struct InstanceRecord {
     float4 transformA;
     float4 transformB;
@@ -30,8 +35,8 @@ StructuredBuffer<uint2> VisibilityMask : register(t2);
 cbuffer PerDraw : register(b1) { uint gpuInstanceIndex; };
 cbuffer PerView : register(b2) { uint subTabBit; };
 
-// Mirrors IsVisibleInSubTab in ShaderSceneVertex.hlsl - see there for the bit convention. The pick
-// pass MUST apply the identical test: an object the user cannot see must not be clickable either.
+// Mirrors IsVisibleInSubTab in ShaderSceneVertex_16.hlsl - see there for the bit convention. The
+// pick pass MUST apply the identical test: an object the user cannot see must not be clickable.
 bool IsVisibleInSubTab(uint instanceIndex, uint bit) {
     if (bit >= 64u) return true;
     uint2 mask = VisibilityMask[instanceIndex];
@@ -44,7 +49,7 @@ struct PSInput {
     nointerpolation uint id : PICKID; // gpuInstanceIndex + 1 (0 is reserved for background)
 };
 
-PSInput main(float3 position : POSITION, float4 normal : NORMAL, float4 color : COLOR) {
+PSInput main(float3 position : POSITION) {
     PSInput result;
     if (!IsVisibleInSubTab(gpuInstanceIndex, subTabBit)) {
         result.position = float4(0.0f, 0.0f, 0.0f, 0.0f);

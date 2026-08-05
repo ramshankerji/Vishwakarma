@@ -132,11 +132,16 @@ struct GeometryPage {
 		return (alignedVertexHead + incomingVertexBytes + SAFETY_GAP > alignedIndexTail);
     }
 
-    // Vertex offsets MUST be a whole number of vertices: RebuildIndirectBuffer derives
-    // BaseVertexLocation as vertexByteOffset / sizeof(Vertex), and the Selection3D highlight path
-    // repeats that division. sizeof(Vertex) is 24 - not a power of two - so AlignUp's mask trick
-    // cannot express this; a 16-byte alignment landed on a whole vertex only while the page's
-    // running vertex total happened to stay even (graphics.md, live defect 1).
+    /* Vertex offsets MUST be a whole number of vertices: RebuildIndirectBuffer derives
+    BaseVertexLocation as vertexByteOffset / sizeof(Vertex), and the Selection3D highlight path
+    repeats that division. Historically sizeof(Vertex) was 24 - not a power of two - so AlignUp's
+    mask trick could not express this, and a 16-byte alignment landed on a whole vertex only while
+    the page's running vertex total happened to stay even (graphics.md, live defect 1).
+
+    The lean vertex is now 16 bytes, so AlignUp WOULD work - deliberately not switched. Multiplying
+    is correct for any stride, costs one divide per object append, and is what the parked 24-byte
+    variant needs back. When vertex format becomes a per-PAGE property, this takes the page's stride
+    instead of sizeof(Vertex) and the choice matters again. */
     static uint32_t RoundUpToMultiple(uint32_t value, uint32_t multiple) {
         return ((value + multiple - 1) / multiple) * multiple;
     }
@@ -332,6 +337,17 @@ struct InstanceRegistryEntry {
     // "CPU-side transform shadow" Step 2 asks for: the arena is device-local now, so the pick
     // resolve can no longer read a mapped matrix pointer and transform a local AABB centre itself.
     float worldCenterX = 0.0f, worldCenterY = 0.0f, worldCenterZ = 0.0f;
+    /* CPU shadow of the object's InstanceRecord::packedColor, and it is REQUIRED, not a convenience.
+    A transform-only MODIFY allocates a FRESH arena slot and writes all 64 bytes of a new record,
+    but its GeometryData arrives with empty vertex/index vectors - carrying only a matrix - and the
+    arena is device-local, so the copy thread cannot read the old record back. Without this field a
+    drag would rewrite the record with packedColor = 0 and the object would silently turn black.
+    (graphics.md flagged exactly this defect under 10M plan Step 4, waiting for the first producer
+    of the appearance bytes; the 16-byte vertex is that producer.)
+
+    Only packedColor is shadowed. materialIndex / renderFlags / packedParams still have no producer,
+    so they are still written as zero and there is nothing to preserve across a move yet. */
+    uint32_t packedColor = 0;
 };
 static_assert(sizeof(InstanceRegistryEntry) == 40,
     "InstanceRegistryEntry must stay 40 bytes - one cache line covers any single lookup.");

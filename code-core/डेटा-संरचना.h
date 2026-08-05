@@ -105,8 +105,7 @@ inline void MemberSectionBasis(FXMVECTOR axis, XMVECTOR& u, XMVECTOR& v) {
 // convention TEE already uses; shared faces stay hidden inside the closed outer surfaces.
 inline void AppendExtrudedConvexPrism(GeometryData& geometry,
     const XMFLOAT3& c1, const XMFLOAT3& c2,
-    const XMFLOAT2* sectionPoints, int pointCount,
-    const XMHALF4& colorSides, const XMHALF4& colorCap) {
+    const XMFLOAT2* sectionPoints, int pointCount) {
 
     XMVECTOR p1 = XMLoadFloat3(&c1);
     XMVECTOR p2 = XMLoadFloat3(&c2);
@@ -117,11 +116,11 @@ inline void AppendExtrudedConvexPrism(GeometryData& geometry,
     auto WorldPoint = [&](XMVECTOR base, int i) {
         return base + u * sectionPoints[i].x + v * sectionPoints[i].y;
     };
-    auto PushVertex = [&](XMVECTOR position, XMVECTOR normal, const XMHALF4& color) {
+    auto PushVertex = [&](XMVECTOR position, XMVECTOR normal) {
         XMFLOAT3 p, n;
         XMStoreFloat3(&p, position);
         XMStoreFloat3(&n, normal);
-        geometry.vertices.push_back(Vertex{ p, PackNormal(n), color });
+        geometry.vertices.push_back(Vertex{ p, PackNormal(n) });
     };
 
     // Side walls. The outward normal of a CCW outline edge (ex, ey) is (ey, -ex).
@@ -131,10 +130,10 @@ inline void AppendExtrudedConvexPrism(GeometryData& geometry,
         const float ey = sectionPoints[next].y - sectionPoints[i].y;
         XMVECTOR normal = XMVector3Normalize(u * ey - v * ex);
         const uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
-        PushVertex(WorldPoint(p1, i), normal, colorSides);
-        PushVertex(WorldPoint(p1, next), normal, colorSides);
-        PushVertex(WorldPoint(p2, next), normal, colorSides);
-        PushVertex(WorldPoint(p2, i), normal, colorSides);
+        PushVertex(WorldPoint(p1, i), normal);
+        PushVertex(WorldPoint(p1, next), normal);
+        PushVertex(WorldPoint(p2, next), normal);
+        PushVertex(WorldPoint(p2, i), normal);
         geometry.indices.insert(geometry.indices.end(), {
             base, static_cast<uint16_t>(base + 1), static_cast<uint16_t>(base + 2),
             base, static_cast<uint16_t>(base + 2), static_cast<uint16_t>(base + 3) });
@@ -143,7 +142,7 @@ inline void AppendExtrudedConvexPrism(GeometryData& geometry,
     // End caps as triangle fans (valid because each piece is convex).
     auto AddCap = [&](XMVECTOR base, XMVECTOR normal, bool atStart) {
         const uint16_t first = static_cast<uint16_t>(geometry.vertices.size());
-        for (int i = 0; i < pointCount; ++i) PushVertex(WorldPoint(base, i), normal, colorCap);
+        for (int i = 0; i < pointCount; ++i) PushVertex(WorldPoint(base, i), normal);
         for (int i = 1; i + 1 < pointCount; ++i) {
             if (atStart) geometry.indices.insert(geometry.indices.end(),
                 { first, static_cast<uint16_t>(first + i + 1), static_cast<uint16_t>(first + i) });
@@ -162,6 +161,9 @@ inline void AppendExtrudedConvexPrism(GeometryData& geometry,
 inline GeometryData LINE_MEMBER::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
+    // The section walls are the whole member visually; colorInner (hollow CHS/RHS bores) and
+    // colorCap stay stored but no longer reach the GPU (डेटा.h, Vertex).
+    geometry.color = ToFloat4(colorMain);
 
     XMVECTOR p1 = XMLoadFloat3(&point1), p2 = XMLoadFloat3(&point2);
     if (XMVectorGetX(XMVector3LengthSq(p2 - p1)) < 1e-12f) return geometry; // Zero length: no axis.
@@ -170,12 +172,12 @@ inline GeometryData LINE_MEMBER::GetGeometry() {
     const SteelProfileRecord* profile = FindSteelProfileById(profileId);
     if (!profile) {
         // Unknown or unset profile: draw a fallback tube (114.3 x 5 CHS) so the member stays visible.
-        AppendPipeTube(geometry, point1, point2, 114.3f * s, 104.3f * s, colorMain, colorInner, colorCap);
+        AppendPipeTube(geometry, point1, point2, 114.3f * s, 104.3f * s);
         return geometry;
     }
 
     auto Piece = [&](const XMFLOAT2* points, int count) {
-        AppendExtrudedConvexPrism(geometry, point1, point2, points, count, colorMain, colorCap);
+        AppendExtrudedConvexPrism(geometry, point1, point2, points, count);
     };
     auto Rect = [&](float x0, float y0, float x1, float y1) {
         const XMFLOAT2 points[4] = { { x0, y0 }, { x1, y0 }, { x1, y1 }, { x0, y1 } };
@@ -242,7 +244,7 @@ inline GeometryData LINE_MEMBER::GetGeometry() {
     case SteelProfileFamily::CHS: {
         const float outside = profile->d * s;
         const float inside = (std::max)(profile->d - 2.0f * profile->t, 0.0f) * s;
-        AppendPipeTube(geometry, point1, point2, outside, inside, colorMain, colorInner, colorCap);
+        AppendPipeTube(geometry, point1, point2, outside, inside);
         break;
     }
     case SteelProfileFamily::RHS: {

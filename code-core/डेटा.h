@@ -44,17 +44,38 @@ extern uint32_t memoryGroupNo;
 
 // Data for a single geometry object. All 3D entities will generate one for their own graphics representation.
 // Currently we are using common heap, latter on we will transition them to our own heap allocator.
+/* The LEAN 16-byte vertex (website/software/graphics.md, "Vertex format"). The 8-byte FP16 color
+this used to carry moved into the object's 64-byte InstanceRecord as a single packed RGBA8 - a 33%
+cut across the bulk of a model, since the overwhelming majority of CAD geometry is one color per
+object anyway.
+
+WHAT IT COST: per-FACE color. A cylinder still STORES colorBase / colorTop / colorIncline and always
+will, but it now draws in one of them (the dominant surface - see each type's GetGeometry). Per-face
+color returns with per-face disaggregation of an object, as a geometry variation rather than as 8
+bytes charged to every vertex of every object in the model.
+
+16 is a power of two, unlike the 24 it replaces, so GeometryPage::VertexAlign could now use the
+cheap AlignUp mask - deliberately left on RoundUpToMultiple, which is correct for both and is what
+the 24-byte variant needs back. */
 struct Vertex { // Struct for vertex data
     XMFLOAT3 position; // 12 Bytes
     XMUBYTE4 normal; // 4 Bytes: Packed X, Y, Z, W (padding/0). Uses DXGI_FORMAT_R8G8B8A8_SNORM
-    XMHALF4  color;  // 8 Bytes
-}; // Total Stride = 24 Bytes (Perfect alignment!)
+}; // Total Stride = 16 Bytes (Perfect alignment!)
+static_assert(sizeof(Vertex) == 16,
+    "Vertex is the vertex-buffer byte stride: it feeds VertexAlign, IsFull, BaseVertexLocation "
+    "(vertexByteOffset / sizeof(Vertex), computed independently in three places) and the two input "
+    "layouts. Changing it silently misplaces draws rather than failing.");
 
 struct GeometryData
 {
     uint64_t id = 0; // Unique identifier for the geometry. It is the memoryID of the corresponding engineering object.
     std::vector<Vertex> vertices;
     std::vector<uint16_t> indices;
+    /* The object's single surface color, set by each generator from its dominant face. This is the
+    producer of InstanceRecord::packedColor now that the vertex carries no color: the copy thread
+    packs it to RGBA8 on ADD and on a geometry MODIFY, and shadows it in the InstanceRegistryEntry
+    so a transform-only MODIFY - which arrives with empty vertex/index vectors - can rewrite the
+    64-byte record without losing it. */
     XMFLOAT4 color;
     DirectX::XMFLOAT4X4 worldMatrix;
 	GeometryData() {
@@ -131,6 +152,31 @@ inline XMUBYTE4 PackNormal(XMFLOAT3 n) {
         };
 
     return XMUBYTE4(toSNORM(norm.x), toSNORM(norm.y), toSNORM(norm.z), 0);
+}
+
+/* The stored per-face colors are XMHALF4; GeometryData::color is XMFLOAT4. Each generator uses this
+to nominate one of its faces as the object's color, which is the only colour that reaches the GPU
+now that the vertex carries none. */
+inline XMFLOAT4 ToFloat4(const XMHALF4& color) {
+    XMFLOAT4 result;
+    XMStoreFloat4(&result, XMLoadHalf4(&color));
+    return result;
+}
+
+/* GeometryData::color -> InstanceRecord::packedColor. RGBA8 with red in the LOW byte, matching the
+XMUBYTE4 convention PackNormal already uses and UnpackColorRGBA8 in ShaderSceneVertex_16.hlsl.
+Alpha is the object's opacity, so no separate transparency field is needed.
+
+Values are clamped to [0,1]: the FP16 vertex color this replaces could exceed 1.0 and RGBA8 cannot.
+That costs nothing today - CAD surface colors are authored in range and HDR is an OUTPUT-side
+concern (render-target format + tonemap, graphics.md Phase 5) - but an emissive / overbright base
+color is no longer expressible, and would need the FP16 payload variant instead. */
+inline uint32_t PackColorRGBA8(const XMFLOAT4& color) {
+    auto toByte = [](float f) -> uint32_t {
+        return static_cast<uint32_t>(std::clamp(f, 0.0f, 1.0f) * 255.0f + 0.5f);
+        };
+    return toByte(color.x) | (toByte(color.y) << 8) | (toByte(color.z) << 16) |
+        (toByte(color.w) << 24);
 }
 
 struct META_DATA {

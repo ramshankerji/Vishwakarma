@@ -8,8 +8,8 @@
 #include <unordered_set>
 
 // Generated shader byte-code headers (see FxCompile entries in Vishwakarma.vcxproj).
-#include "ShaderSceneVertex.h"           // g_sceneVertexShader   (reused by the highlight PSO)
-#include "ShaderScenePickVertex.h"       // g_scenePickVertexShader
+#include "ShaderSceneVertex_16.h"           // g_sceneVertexShader16   (reused by the highlight PSO)
+#include "ShaderScenePickVertex_16.h"       // g_scenePickVertexShader16
 #include "ShaderScenePickPixel.h"        // g_scenePickPixelShader
 #include "ShaderSceneHighlightPixel.h"   // g_sceneHighlightPixelShader
 #include "ShaderCubeVertex.h"            // g_cubeVertexShader
@@ -21,12 +21,13 @@ extern शंकर gpu; // Global VRAM manager (defined in विश्वक�
 
 namespace {
 
-// The scene vertex input layout, shared by the pick and highlight PSOs so they consume the exact
-// same per-object geometry as the visible scene pipeline.
+// The lean 16-byte scene vertex input layout, shared by the pick and highlight PSOs so they consume
+// the exact same per-object geometry as the visible scene pipeline. Second copy of the layout in
+// InitD3DPerTab (MemoryManagerGPU-DirectX12.cpp) - change both together. No COLOR element: color is
+// one RGBA8 per object in InstanceRecord::packedColor now (see struct Vertex in डेटा.h).
 const D3D12_INPUT_ELEMENT_DESC kSceneInputLayout[] = {
     { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT,    0, 0,  D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-    { "NORMAL",   0, DXGI_FORMAT_R8G8B8A8_SNORM,     0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-    { "COLOR",    0, DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 16, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
+    { "NORMAL",   0, DXGI_FORMAT_R8G8B8A8_SNORM,     0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }
 };
 
 struct CubeConstantsCPU {
@@ -77,7 +78,7 @@ void CreatePickPSO(DX12ResourcesPerTab& tabRes) {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pso = {};
     pso.InputLayout = { kSceneInputLayout, _countof(kSceneInputLayout) };
     pso.pRootSignature = tabRes.rootSignature.Get(); // Same signature as the scene pipeline.
-    pso.VS = CD3DX12_SHADER_BYTECODE(g_scenePickVertexShader, sizeof(g_scenePickVertexShader));
+    pso.VS = CD3DX12_SHADER_BYTECODE(g_scenePickVertexShader16, sizeof(g_scenePickVertexShader16));
     pso.PS = CD3DX12_SHADER_BYTECODE(g_scenePickPixelShader, sizeof(g_scenePickPixelShader));
     pso.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT); // Back-cull, matches scene.
     pso.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
@@ -97,7 +98,7 @@ void CreateHighlightPSO(DX12ResourcesPerTab& tabRes) {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pso = {};
     pso.InputLayout = { kSceneInputLayout, _countof(kSceneInputLayout) };
     pso.pRootSignature = tabRes.rootSignature.Get();
-    pso.VS = CD3DX12_SHADER_BYTECODE(g_sceneVertexShader, sizeof(g_sceneVertexShader));
+    pso.VS = CD3DX12_SHADER_BYTECODE(g_sceneVertexShader16, sizeof(g_sceneVertexShader16));
     pso.PS = CD3DX12_SHADER_BYTECODE(g_sceneHighlightPixelShader, sizeof(g_sceneHighlightPixelShader));
     pso.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     pso.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);

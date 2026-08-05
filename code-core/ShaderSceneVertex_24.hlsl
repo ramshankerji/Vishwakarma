@@ -1,6 +1,15 @@
 // Copyright (c) 2026-Present : Ram Shanker: All rights reserved.
 
-/* 3D shader code with matrix transformations.
+/* PARKED: the 24-byte per-vertex-color vertex shader (position 12 + normal 4 + FP16 color 8). The
+engine draws with the lean 16-byte format today - see ShaderSceneVertex_16.hlsl, which is what every
+PSO actually binds. This file is kept compiling so the per-vertex-color variants specified under
+"Vertex format variants" in website/software/graphics.md (baked colors from imported meshes, FEA
+scalar fields) have a maintained starting point rather than one recovered from git history.
+
+Nothing includes its generated header yet. Keep it in step with the _16 twin on everything EXCEPT
+where color originates: here it arrives per vertex, there it is unpacked from the instance record.
+
+3D shader code with matrix transformations.
 Shaders are like a mini sub-program, which runs on the GPU FOR EACH VERTEX. Massively parallel.
 In the following shader code, we do only 1 transformation: Transform the vertex 3D co-ordinate
 to screen co-ordinate. Color is passed forward as it is without change.
@@ -12,7 +21,7 @@ cbuffer ConstantBuffer : register(b0) {
 };
 
 /* The per-tab instance arena and its redirect table (website/software/graphics.md, 10M plan
-Steps 2-4). Mirrored in ShaderScenePickVertex.hlsl and defined on the CPU as InstanceRecord in
+Steps 2-4). Mirrored in ShaderScenePickVertex_24.hlsl and defined on the CPU as InstanceRecord in
 RenderScene3D.h - change all three together.
 
 transformA/B/C are the first three ROWS of transpose(world), i.e. the COLUMNS of the row-vector
@@ -31,7 +40,7 @@ StructuredBuffer<InstanceRecord> Instances : register(t0);
 StructuredBuffer<uint> InstanceSlotOf : register(t1);
 /* Per-object SubTab membership, 64 bits carried as uint2 for broad compatibility (10M plan
 Step 5). Bit N set = visible in the sub-tab occupying slot N. Mirrored in
-ShaderScenePickVertex.hlsl. */
+ShaderScenePickVertex_24.hlsl. */
 StructuredBuffer<uint2> VisibilityMask : register(t2);
 cbuffer PerDraw : register(b1) { uint gpuInstanceIndex; };
 cbuffer PerView : register(b2) { uint subTabBit; };

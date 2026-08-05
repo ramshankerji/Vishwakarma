@@ -165,8 +165,7 @@ struct PIPELINE { // This is the main container object of piping activities.
 // Appends a hollow, capped circular tube between c1 and c2 to an existing GeometryData.
 // Same tessellation as PIPE; reused by TEE (main + branch) and FLANGE (body + raised face).
 inline void AppendPipeTube(GeometryData& geometry, const XMFLOAT3& c1, const XMFLOAT3& c2,
-    float outsideDiameter, float insideDiameter,
-    const XMHALF4& colorOuter, const XMHALF4& colorInner, const XMHALF4& colorCap) {
+    float outsideDiameter, float insideDiameter) {
     const int numSegments = 36;
     const float outerR = outsideDiameter * 0.5f;
     const float innerR = insideDiameter * 0.5f;
@@ -182,7 +181,7 @@ inline void AppendPipeTube(GeometryData& geometry, const XMFLOAT3& c1, const XMF
     XMVECTOR bitangent = XMVector3Cross(axis, tangent);
 
     auto AddQuad = [&](XMVECTOR a, XMVECTOR b, XMVECTOR c, XMVECTOR d,
-        XMVECTOR normalVec, const XMHALF4& color) {
+        XMVECTOR normalVec) {
             XMFLOAT3 normalF;
             XMStoreFloat3(&normalF, XMVector3Normalize(normalVec));
             XMUBYTE4 packedNormal = PackNormal(normalF);
@@ -194,10 +193,10 @@ inline void AppendPipeTube(GeometryData& geometry, const XMFLOAT3& c1, const XMF
             XMStoreFloat3(&pc, c);
             XMStoreFloat3(&pd, d);
 
-            geometry.vertices.push_back(Vertex{ pa, packedNormal, color });
-            geometry.vertices.push_back(Vertex{ pb, packedNormal, color });
-            geometry.vertices.push_back(Vertex{ pc, packedNormal, color });
-            geometry.vertices.push_back(Vertex{ pd, packedNormal, color });
+            geometry.vertices.push_back(Vertex{ pa, packedNormal });
+            geometry.vertices.push_back(Vertex{ pb, packedNormal });
+            geometry.vertices.push_back(Vertex{ pc, packedNormal });
+            geometry.vertices.push_back(Vertex{ pd, packedNormal });
 
             geometry.indices.insert(geometry.indices.end(), {
                 static_cast<uint16_t>(base + 0), static_cast<uint16_t>(base + 1),
@@ -222,10 +221,10 @@ inline void AppendPipeTube(GeometryData& geometry, const XMFLOAT3& c1, const XMF
         XMVECTOR i3 = p2 + dir1 * innerR;
         XMVECTOR i4 = p2 + dir0 * innerR;
 
-        AddQuad(o1, o2, o3, o4, dir0, colorOuter);   // Outer wall
-        AddQuad(i4, i3, i2, i1, -dir0, colorInner);  // Inner wall (reverse normal)
-        AddQuad(i2, i1, o1, o2, -axis, colorCap);    // Start cap ring
-        AddQuad(o4, o3, i3, i4, axis, colorCap);     // End cap ring
+        AddQuad(o1, o2, o3, o4, dir0);   // Outer wall
+        AddQuad(i4, i3, i2, i1, -dir0);  // Inner wall (reverse normal)
+        AddQuad(i2, i1, o1, o2, -axis);  // Start cap ring
+        AddQuad(o4, o3, i3, i4, axis);   // End cap ring
     }
 }
 
@@ -233,6 +232,9 @@ inline void AppendPipeTube(GeometryData& geometry, const XMFLOAT3& c1, const XMF
 inline GeometryData ELBOW::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
+    // The outer wall is what the user sees; colorInner / colorCap stay stored but no longer reach
+    // the GPU until per-face disaggregation lands (डेटा.h, Vertex).
+    geometry.color = ToFloat4(colorOuter);
     const int majorSegments = 32; // Along the bend sweep.
     const int minorSegments = 24; // Around the tube cross-section.
     const float outerR = outsideDiameter * 0.5f;
@@ -242,7 +244,7 @@ inline GeometryData ELBOW::GetGeometry() {
 
     // Emits one shell (outer or inner). facingOutward flips normal sign + winding so the
     // visible side is lit and not back-face culled.
-    auto AddShell = [&](float tubeRadius, bool facingOutward, const XMHALF4& color) {
+    auto AddShell = [&](float tubeRadius, bool facingOutward) {
         const uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
         for (int i = 0; i <= majorSegments; ++i) {
             const float theta = sweepAngleRadians * i / majorSegments;
@@ -254,7 +256,7 @@ inline GeometryData ELBOW::GetGeometry() {
                 XMFLOAT3 pos = { center.x + ring * ct, center.y + tubeRadius * sp, center.z + ring * st };
                 XMFLOAT3 nrm = { ct * cp, sp, st * cp };
                 if (!facingOutward) { nrm = { -nrm.x, -nrm.y, -nrm.z }; }
-                geometry.vertices.push_back(Vertex{ pos, PackNormal(nrm), color });
+                geometry.vertices.push_back(Vertex{ pos, PackNormal(nrm) });
             }
         }
         for (int i = 0; i < majorSegments; ++i) {
@@ -269,8 +271,8 @@ inline GeometryData ELBOW::GetGeometry() {
             }
         }
     };
-    AddShell(outerR, true, colorOuter);
-    AddShell(innerR, false, colorInner);
+    AddShell(outerR, true);
+    AddShell(innerR, false);
 
     // Annular end caps at theta = 0 and theta = sweep.
     auto AddCap = [&](float theta, bool atStart) {
@@ -284,8 +286,8 @@ inline GeometryData ELBOW::GetGeometry() {
             const float cp = cosf(phi), sp = sinf(phi);
             const float ringO = bendRadius + outerR * cp;
             const float ringI = bendRadius + innerR * cp;
-            geometry.vertices.push_back(Vertex{ { center.x + ringO * ct, center.y + outerR * sp, center.z + ringO * st }, packed, colorCap });
-            geometry.vertices.push_back(Vertex{ { center.x + ringI * ct, center.y + innerR * sp, center.z + ringI * st }, packed, colorCap });
+            geometry.vertices.push_back(Vertex{ { center.x + ringO * ct, center.y + outerR * sp, center.z + ringO * st }, packed });
+            geometry.vertices.push_back(Vertex{ { center.x + ringI * ct, center.y + innerR * sp, center.z + ringI * st }, packed });
         }
         for (int j = 0; j < minorSegments; ++j) {
             const int nj = (j + 1) % minorSegments;
@@ -329,11 +331,11 @@ inline void ELBOW::Randomize() {
 inline GeometryData TEE::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
+    geometry.color = ToFloat4(colorOuter); // Dominant surface; see ELBOW::GetGeometry.
     geometry.vertices.reserve(36 * 32);
     geometry.indices.reserve(36 * 48);
 
-    AppendPipeTube(geometry, center1, center2, mainOutsideDiameter, mainInsideDiameter,
-        colorOuter, colorInner, colorCap);
+    AppendPipeTube(geometry, center1, center2, mainOutsideDiameter, mainInsideDiameter);
 
     // Branch leaves the main-run midpoint at branchAngleDegrees from the main axis.
     XMVECTOR p1 = XMLoadFloat3(&center1);
@@ -349,8 +351,7 @@ inline GeometryData TEE::GetGeometry() {
     XMFLOAT3 branchStart, branchEnd;
     XMStoreFloat3(&branchStart, mid);
     XMStoreFloat3(&branchEnd, mid + branchDir * branchLength);
-    AppendPipeTube(geometry, branchStart, branchEnd, branchOutsideDiameter, branchInsideDiameter,
-        colorOuter, colorInner, colorCap);
+    AppendPipeTube(geometry, branchStart, branchEnd, branchOutsideDiameter, branchInsideDiameter);
 
     return geometry;
 }
@@ -384,12 +385,14 @@ inline void TEE::Randomize() {
 inline GeometryData FLANGE::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
+    // A flange reads as its annular faces far more than as its thin rim, so colorFace is the
+    // dominant surface here; colorRim / colorBore stay stored. See ELBOW::GetGeometry.
+    geometry.color = ToFloat4(colorFace);
     geometry.vertices.reserve(36 * 32);
     geometry.indices.reserve(36 * 48);
 
     // Flange body: outer rim, bore wall, and two annular faces.
-    AppendPipeTube(geometry, center1, center2, flangeOuterDiameter, boreDiameter,
-        colorRim, colorBore, colorFace);
+    AppendPipeTube(geometry, center1, center2, flangeOuterDiameter, boreDiameter);
 
     // Raised face: a shorter disc projecting past the center2 face.
     if (raisedFaceProjection > 0.0f && raisedFaceDiameter > boreDiameter) {
@@ -399,8 +402,7 @@ inline GeometryData FLANGE::GetGeometry() {
         XMFLOAT3 rfStart, rfEnd;
         XMStoreFloat3(&rfStart, c2);
         XMStoreFloat3(&rfEnd, c2 + axis * raisedFaceProjection);
-        AppendPipeTube(geometry, rfStart, rfEnd, raisedFaceDiameter, boreDiameter,
-            colorFace, colorBore, colorFace);
+        AppendPipeTube(geometry, rfStart, rfEnd, raisedFaceDiameter, boreDiameter);
     }
 
     return geometry;
