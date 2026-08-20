@@ -783,6 +783,20 @@ static void RegisterGeneratedGeometryElement(DATASETTAB* targetTab, VishwakarmaS
     // payload used. Same function the load and save paths call.
     object->schemaVersion = VishwakarmaStorage::DefaultSchemaVersionForObjectType(objectType);
 
+    /* Compose the object's local -> world matrix, exactly as the load / property-edit path does
+    inside GeometryForObject. Every interactive creation path funnels through here, and all of them
+    build their GeometryData by calling the type's GetGeometry() DIRECTLY - about 35 call sites
+    across CreatePrimitiveGeometryElement, addRandomGeometryElement and the importers - so this is
+    the one place that can give them all a correct matrix.
+
+    graphics.md already flagged those call sites as bypassing GeometryForObject, and called it
+    harmless "while new objects are unplaced". That stopped being true the moment a type emitted
+    vertices in a LOCAL frame: a generator's raw GeometryData carries an IDENTITY matrix, so a
+    freshly created SPHERE drew as a unit sphere at the world origin until something moved it. It
+    also fixes the originally predicted defect - an object created WITH a placement now shows it
+    immediately instead of only after a reload. */
+    DirectX::XMStoreFloat4x4(&geometry.worldMatrix, WorldMatrixForObject(objectType, object));
+
     if (batch) { // Deferred: the caller hands everything over via FlushGeneratedGeometryBatch.
         batch->copyCommands.push_back({ CommandToCopyThreadType::ADD, std::move(geometry),
             object->memoryID, targetTab->tabID, object->memoryIDParent });
@@ -1236,7 +1250,15 @@ static size_t TranslateSelectedSceneObjects(DATASETTAB* myTab, const XMFLOAT3& d
             placement->origin.y += delta.y;
             placement->origin.z += delta.z;
             stored.object->dataVersion++;
-            XMStoreFloat4x4(&transformOnly.worldMatrix, placement->ToMatrix());
+            /* WorldMatrixForObject, NOT placement->ToMatrix(). The placement is only the
+            authored -> world half; composing it alone silently drops the type's local -> authored
+            half, which is identity for every generator that bakes world coordinates into its
+            vertices - and is NOT identity for a canonical-frame type. Building it from the
+            placement alone redrew a moved SPHERE as a unit sphere at the placement origin, having
+            discarded its radius and centre. Same composition as the geometry path, by construction:
+            both call this one function. */
+            XMStoreFloat4x4(&transformOnly.worldMatrix,
+                WorldMatrixForObject(stored.objectType, stored.object));
         }
 
         CommandToCopyThread command;

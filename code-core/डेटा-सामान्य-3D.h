@@ -31,6 +31,31 @@ Mutable on purpose: this is also how a move writes a new placement, so the two d
 drift apart into separate switches. Defined beside GeometryForObject in DataStorage.cpp. */
 Placement3D* PlacementForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* object);
 
+/* THE object's full LOCAL -> WORLD matrix, and the ONLY place it is composed. This is what reaches
+the GPU as the object's 64-byte InstanceRecord, so anything that disagrees with it draws the object
+in the wrong place or at the wrong size (website/software/graphics.md, "World matrix and object
+placement").
+
+It is two transforms composed, in row-vector order:
+
+  local -> authored   whatever frame the type's GetGeometry emits vertices in. IDENTITY for every
+                      type that still bakes world coordinates into its vertices; for SPHERE, which
+                      emits a canonical UNIT sphere at the origin, it is scale(radius) then
+                      translate(center).
+  authored -> world   the object's rigid Placement3D, i.e. where it has been moved to since.
+
+WHY THIS IS A FUNCTION AND NOT INLINE IN GeometryForObject. There are TWO producers of an object's
+world matrix and only one of them regenerates geometry: a geometry ADD/MODIFY goes through
+GeometryForObject, while a MOVE emits a transform-only MODIFY carrying a matrix and NO vertices.
+The move path used to build that matrix from the placement alone, which was indistinguishable from
+correct only while every generator emitted authored-space vertices and left the local matrix at
+identity. The moment SPHERE stopped doing that, moving a sphere dropped its radius and centre and
+redrew it as a unit sphere at the placement origin. Both callers now go through here.
+
+ADDING A CANONICAL-FRAME TYPE MEANS EDITING THIS SWITCH, not just its generator - the two must
+describe the same frame, exactly as PlacementForObject and GeometryForObject must. */
+DirectX::XMMATRIX WorldMatrixForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* object);
+
 // The most basic 3D Shapes.: Pyramid, Cuboid, Cone, Cylinder, Parallelepiped, Sphere
 struct PYRAMID :public META_DATA{
     static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::Pyramid;
@@ -723,8 +748,8 @@ inline void SPHERE::Randomize() {
     color = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
 }
 
-/*For the sphere, the "suitable" normal for every vertex is exactly the normalized vector from the sphere's 
-center to that vertex. This results in perfectly smooth shading across the surface. 
+/*For the sphere, the "suitable" normal for every vertex is exactly the normalized vector from the sphere's
+center to that vertex. This results in perfectly smooth shading across the surface.
 Color randomization integrated directly into the vertex generation loop to accommodate the new Vertex structure.*/
 // SPHERE
 /*
@@ -733,7 +758,22 @@ Updated implementation:
 - Full latitude rings generated (including top and bottom)
 - Uniform quad-based indexing across stacks
 - Smooth shading via true spherical normals
-*/
+
+CANONICAL LOCAL FRAME (website/software/graphics.md, "World matrix and object placement"). This is
+the FIRST type migrated off authored-space vertices: the mesh emitted here is a UNIT sphere at the
+ORIGIN, and `center` / `radius` reach the GPU as the object's TRANSFORM instead of being baked into
+every position. Two things follow, and they are why this went first:
+
+  - Float32 precision stops being spent on the offset. A small sphere at world (4000, 2000, -300)
+    used to burn most of its mantissa carrying that position in all 684 vertices.
+  - The mesh no longer depends on the object's parameters AT ALL, which is the precondition for
+    every sphere in the process to share ONE library mesh (graphics.md, "Shared geometry and the
+    primitive libraries"). Until this change two spheres of different radius produced different
+    vertex bytes and could not share anything.
+
+The stored data does NOT change: `center` and `radius` are still the object's own authored fields,
+still persisted exactly as before, and the Properties Pane still reads and writes them. What changed
+is only where they take effect - in the world matrix rather than in the vertex buffer. */
 inline GeometryData SPHERE::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
@@ -745,15 +785,6 @@ inline GeometryData SPHERE::GetGeometry() {
     geometry.vertices.reserve((stackCount + 1) * sliceCount);
     geometry.indices.reserve(stackCount * sliceCount * 6);
 
-    XMVECTOR vCenter = XMLoadFloat3(&center);
-
-    // Helper for smooth spherical normal
-    auto GetSphericalNormal = [&](XMVECTOR vertexPos) -> XMUBYTE4 {
-        XMFLOAT3 normalFloat;
-        XMStoreFloat3(&normalFloat, XMVector3Normalize(vertexPos - vCenter));
-        return PackNormal(normalFloat);
-    };
-
     // Generate full latitude rings (including top and bottom)
     for (int i = 0; i <= stackCount; ++i) {
 
@@ -764,14 +795,13 @@ inline GeometryData SPHERE::GetGeometry() {
         for (int j = 0; j < sliceCount; ++j) {
             float theta = XM_2PI * j / sliceCount; // 0 → 2PI
 
-            XMFLOAT3 pos = {
-                center.x + radius * sinPhi * cosf(theta),
-                center.y + radius * cosPhi,
-                center.z + radius * sinPhi * sinf(theta)
-            };
+            // Unit sphere at the origin, so the outward normal IS the position and is already unit
+            // length - the normalize the authored form needed (position minus centre) is gone with
+            // the offset. PackNormal is still used rather than packing inline: it is the one place
+            // the SNORM byte convention lives, and its normalize is exact for a unit input.
+            XMFLOAT3 pos = { sinPhi * cosf(theta), cosPhi, sinPhi * sinf(theta) };
 
-            XMVECTOR vPos = XMLoadFloat3(&pos);
-            geometry.vertices.push_back( Vertex{ pos, GetSphericalNormal(vPos) } );
+            geometry.vertices.push_back( Vertex{ pos, PackNormal(pos) } );
         }
     }
 
@@ -790,6 +820,12 @@ inline GeometryData SPHERE::GetGeometry() {
             geometry.indices.push_back(r1 + next_j);
         }
     }
+
+    /* worldMatrix is deliberately left at the identity GeometryData's constructor sets, exactly as
+    every other generator leaves it. The matrix that carries this canonical mesh to `center` at
+    `radius` is composed in ONE place - WorldMatrixForObject - because a MOVE needs the same matrix
+    without regenerating any of the vertices above. Emitting it here as well would be a second
+    definition of the same frame, and the two would drift. */
     return geometry;
 }
 

@@ -947,20 +947,47 @@ bool GeometryForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* obj
         return false;
     }
 
-    /* THE SINGLE POINT WHERE A PLACEMENT TAKES EFFECT (graphics.md, 10M plan Step 4). Every
-    generator above emits vertices in the object's AUTHORED coordinates and leaves worldMatrix at
-    the identity GeometryData's constructor set; composing the placement here means every ADD,
-    geometry MODIFY, file load and import inherits it without any of them knowing it exists.
+    /* Local -> world, composed in the one place that composes it. Every ADD, geometry MODIFY, file
+    load and import inherits both halves here without knowing either exists: the type's local frame
+    (identity for authored-space types, scale+translate for SPHERE) and the object's placement.
 
     The copy thread turns this matrix into the object's 64-byte instance record, so a placement
     reaches the GPU as a transform rather than as regenerated vertices - which is exactly what makes
     a later move cost one record plus a 4-byte redirect flip instead of a page clone. */
-    if (const Placement3D* placement = PlacementForObject(objectType, object)) {
-        if (!placement->IsIdentity()) {
-            DirectX::XMStoreFloat4x4(&geometry.worldMatrix, placement->ToMatrix());
-        }
-    }
+    DirectX::XMStoreFloat4x4(&geometry.worldMatrix, WorldMatrixForObject(objectType, object));
     return true;
+}
+
+/* See the contract in डेटा-सामान्य-3D.h. Both producers of an object's world matrix - the geometry
+path above and the transform-only MOVE path in TranslateSelectedSceneObjects - come through here, so
+neither can compose it differently from the other. */
+DirectX::XMMATRIX WorldMatrixForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* object) {
+    using VishwakarmaStorage::ObjectType;
+    if (!object) return DirectX::XMMatrixIdentity();
+
+    // LOCAL -> AUTHORED. Row-vector order, so this reads left to right as scale, then translate.
+    DirectX::XMMATRIX world = DirectX::XMMatrixIdentity();
+    switch (objectType) {
+    case ObjectType::Sphere: {
+        /* The one canonical-frame type so far: GetGeometry emits a UNIT sphere at the origin, so
+        radius and centre live here instead of in 684 vertices. The 3x3 part is UNIFORM scale, which
+        normalize() in the pixel shaders cancels - a type scaled non-uniformly (a cylinder as
+        scale(r, r, L)) additionally needs the inverse-transpose normal transform described in
+        graphics.md, "Non-uniform scale and normals". */
+        const SPHERE* sphere = static_cast<const SPHERE*>(object);
+        world = DirectX::XMMatrixScaling(sphere->radius, sphere->radius, sphere->radius) *
+            DirectX::XMMatrixTranslation(sphere->center.x, sphere->center.y, sphere->center.z);
+        break;
+    }
+    default:
+        break; // Still bakes world coordinates into its vertices; local frame IS authored space.
+    }
+
+    // AUTHORED -> WORLD. Absent or identity for anything never moved, which is the common case.
+    if (const Placement3D* placement = PlacementForObject(objectType, object)) {
+        if (!placement->IsIdentity()) world = world * placement->ToMatrix();
+    }
+    return world;
 }
 
 namespace { // Reopen the anonymous namespace for the remaining internal helpers.

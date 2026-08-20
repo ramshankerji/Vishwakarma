@@ -429,6 +429,28 @@ That is enough for the move path to be free, because a move never changes the ve
 
 Moving the generators to a canonical local frame — shape around the origin, position entirely in the placement — is the natural follow-on. The axis-defined types (cylinder, cone, pipe, tee, line member) are the awkward ones: their two endpoints are engineering data, so for those the endpoints should stay the stored truth and the placement should be *derived* from them rather than replacing them.
 
+#### The canonical local frame, and its single composition point
+*(**`SPHERE` is migrated**; every other type still emits authored-space vertices)*
+
+`SPHERE::GetGeometry` emits a **unit sphere at the origin**. `center` and `radius` are unchanged as stored engineering data — they simply stop being baked into 684 vertices and become the object's transform instead. Nothing in the schema moved. On a unit sphere at the origin the outward normal *is* the position, so the per-vertex `normalize` the authored form needed is gone too.
+
+This is the prerequisite for instancing, not merely a precision win: until a sphere's vertex bytes stopped depending on its own parameters, no two spheres could share a mesh.
+
+**The load-bearing part is that an object's world matrix is now composed in exactly one place — `WorldMatrixForObject`.** It is two transforms, in row-vector order:
+
+```text
+local -> authored    identity for authored-space types; scale(radius) then translate(center) for SPHERE
+authored -> world    the object's rigid Placement3D
+```
+
+Why that has to be a function rather than a line inside `GeometryForObject` is the whole lesson of this step, and it cost two defects to learn:
+
+- **There are two producers of a world matrix and only one of them regenerates geometry.** A geometry ADD/MODIFY goes through `GeometryForObject`; a **move** emits a transform-only MODIFY carrying a matrix and *no vertices*, and built that matrix from `placement->ToMatrix()` alone. That was indistinguishable from correct for exactly as long as every generator left the local matrix at identity. The moment `SPHERE` stopped, moving a sphere silently discarded its radius and centre and redrew it as a **unit sphere at the placement origin**.
+- **The ~35 direct `GetGeometry()` call sites are no longer harmless.** Every interactive creation path (`CreatePrimitiveGeometryElement`, `addRandomGeometryElement`, the STD importer) builds its `GeometryData` by calling the type's generator directly, so it inherits an identity matrix. A *newly created* sphere therefore drew as a unit sphere at the world origin. The fix is one composition at `RegisterGeneratedGeometryElement`, the single choke point all of them funnel through — which also closes the "created with a placement will not show it until reload" defect recorded below, at the correct place rather than at 35 of them.
+
+**Adding the next canonical-frame type means editing that switch, not just its generator** — the two must describe the same frame, exactly as `PlacementForObject` and `GeometryForObject` must.
+
+
 #### Object placement — the producer side of the move path
 
 The instance arena and its redirect table make the GPU able to move an object for the price of one instance record and one redirect flip. Nothing could *ask* for that until an object had somewhere to record where it had been moved to. `Placement3D` is that field:
@@ -444,7 +466,7 @@ One per 3D object, on all 15 types, persisted as `Placement placement = 20` — 
 
 **It is rigid on purpose.** No scale factor: the `InstanceRecord` already documents a uniform-scale assumption, and rigidity is what makes every scalar dimension (radius, diameter, section parameter) invariant under a placement, so only *point* fields ever need converting between spaces.
 
-**`GeometryForObject` is the single point where a placement takes effect** — it composes the placement into `GeometryData::worldMatrix` after the per-type geometry switch. Every ADD, geometry MODIFY, file load and import inherits it there without knowing it exists. Three creation paths in `विश्वकर्मा.cpp` still call `GetGeometry()` directly and bypass this; harmless while new objects are unplaced, but an object *created* with a placement will not show it until reload.
+**`GeometryForObject` is the single point where a placement takes effect** — it composes the placement into `GeometryData::worldMatrix` after the per-type geometry switch. Every ADD, geometry MODIFY, file load and import inherits it there without knowing it exists. *(Superseded in the detail: the composition itself moved into `WorldMatrixForObject`, which `GeometryForObject` now calls, because the move path and the ~35 direct-`GetGeometry()` creation sites need the same matrix without regenerating geometry. The creation-path bypass this paragraph warned about — "an object created with a placement will not show it until reload" — is fixed at `RegisterGeneratedGeometryElement`. See *The canonical local frame, and its single composition point*.)*
 
 **A move writes the placement and emits a transform-only MODIFY.** No geometry is regenerated, so no page is cloned — measured on the heartbeat as `moves` climbing while `clones` and `cloneMB` stay flat.
 
@@ -604,7 +626,82 @@ To support hundreds of simultaneous tabs, we start with a small heap (say 4 MB p
 Each page carries a corresponding `ExecuteIndirect` argument buffer. When we defragment a page, we must simultaneously rebuild its argument buffer.
 
 ### Shared Geometry and the primitive libraries
-*Designed only*
+*Designed. Its prerequisite — the canonical local frame — is built for `SPHERE`; the library itself is not.*
+
+#### Build sequence: sphere first, in two steps
+
+The gate this step waited on is open: it had to follow the vertex-format migration so the library buffer is built once, in the lean 16-byte layout, and both the 16-byte vertex and the `packedColor` registry shadow have shipped. The remaining prerequisite that was *not* on the original list is the canonical local frame — a library mesh is only shareable if an object's vertex bytes stop depending on its own parameters — and that is now done for `SPHERE` (see *The canonical local frame, and its single composition point*).
+
+**Sphere only, to begin with.** A sphere is uniformly scaled, which means it needs no inverse-transpose normal transform; that work belongs with the cylinder, which is where non-uniform scale first appears. Cuboid, cylinder (both windings), disc and the tori follow once the mechanism is proven.
+
+The step splits in two, and the split is worth taking because it isolates a failure to one cause:
+
+**Step 1 — shared geometry, CPU-fixed LOD. No HLSL changes at all.** This is smaller than this section originally implied. The compacted command already carries its own buffer views, and *the CPU supplies them per page as root constants*, so a template-only page whose views name the library instead of `page.buffer` flows through `ShaderSceneCull.hlsl` **unmodified**. The CPU writes the fixed LOD's real offsets into an ordinary 24-byte template. What it touches:
+
+- `gpu.primitiveLibrary` plus a CPU-side `(shapeId, lod) → {indexCount, startIndexLocation, baseVertexLocation}` table, built and uploaded in `InitD3DDeviceOnly`.
+- `GeometryData::libraryShapeId` (`int16_t`, −1 = bespoke); `SPHERE::GetGeometry` emits a library reference and no vertices.
+- `IsTransformOnlyEdit` becomes *empty payload **and** `libraryShapeId < 0`*. This is what keeps the trap below from firing, and it costs nothing: a move arrives from `TranslateSelectedSceneObjects`, which knows nothing of libraries, so it is still correctly a redirect flip; a radius edit arrives through `GeometryForObject` carrying a shape id, so it takes the full path and rewrites the template. That path clones a **256 KB** template-only page, not 4 MB, so the cheaper "shape id unchanged → also transform-only" optimisation is deliberately *not* built — it needs a registry lookup and buys little until drag-resize exists.
+- `GeometryPage::kind`, the page-kind branch in the page walks and in `RebuildIndirectBuffer`, and template capacity as the append criterion.
+
+**Step 2 — LOD in the compute pass.** `CullParams` 12 → 16 DWORDs, three more root SRVs (redirect table, arena, library table), shape id riding in `StartInstanceLocation`. Signature ~30 of 64 DWORDs.
+
+**Doing LOD now, before the cull cache exists, is deliberate** — the cache is deferred with `SceneEpoch`, so camera-dependent command content can be designed into its key from the start rather than retrofitted. Step 2 also settles an open question in *Planned: draw buckets*, which asks whether the cull pass should reach `renderFlags` by binding the arena and redirect table or by copying flag bits into the template. LOD needs those two bound anyway, so the first option — the one that preserves "an appearance change never touches geometry" — becomes the incumbent at no extra cost.
+
+#### One draw call, not two — where the two kinds actually diverge
+
+The obvious reading of "a second page kind" is a second set of draw calls. It is not, and preserving that is the point.
+
+On the compute path a template-only page dispatches into the **same** output buffer under the **same** atomic counter as every bespoke page, so **a Viewport remains one `ExecuteIndirect`** whatever mix of page kinds it holds. Both kinds emit the identical 56-byte `VisibleIndirectCommand`, same PSO, same vertex shader; one command's views name a library, the other's name a geometry page. In Step 1 even the compute *shader* is shared — only the root-constant values differ.
+
+What actually changes is **one branch inside four page walks** — the scene loop, the pick pass, the highlight pass and the print path — selecting library views instead of `page.buffer` views. The three per-page paths still issue one call per page, but that is what they already did.
+
+#### Why the library is not a tab 0 GeometryPage
+
+The library must sit outside the RCU/page system, and the reason is sharper than "it never changes". A compacted command carries the **raw GPU virtual address** of its vertex buffer, and every `GeometryPage` is RCU-managed: any modify to any object in that page clones it to a new buffer at a new address and retires the old one. A cross-tab reference into a tab 0 page would hold an address the copy thread is free to invalidate. Tab 0 being un-closable does not help — the clone is what breaks it, not tab lifetime.
+
+So it is one immutable committed resource in the `शंकर` singleton, uploaded once in `InitD3DDeviceOnly` before any thread exists: fixed address for the process, no snapshot, no container directory, no retirement, no fence gating.
+
+#### Why a template-only page rather than mixing kinds in one page
+
+The cull dispatch passes **one VBV/IBV per page** as root constants. A page mixing library-sourced and page-sourced objects cannot do that, since the views differ per object. Mixing therefore forces one of two costs: per-command views in the **persistent** template, taking it from 24 to 56 bytes — **320 MB at 10M objects** — or a second dispatch per page with different constants. A template-only page keeps templates at 24 bytes and keeps Step 1 free of shader changes.
+
+Second-order win, unchanged from the original argument: such a page has no 4 MB geometry buffer, so it costs ~256 KB, and adding one sphere to a scene of 100,000 spheres clones 256 KB rather than 4.25 MB.
+
+One deviation from what this section says below: `GeometryPlacementRecordInPage` has **7 spare bytes**, so `(libraryShapeId, lod)` goes there rather than overloading the byte-offset fields. Leaving `vertexByteOffset` / `indexByteOffset` / `vertexSize` / `indexSize` at literal zero makes the hole accounting and compaction arithmetic correct by construction instead of needing guards.
+
+#### The sphere LOD ladder
+
+Eight levels, **LOD 0 coarsest**, keeping the existing UV-sphere parameterisation (`slices × stacks`, smooth normals — on a canonical unit sphere the normal *is* the position):
+
+| LOD | slices × stacks | triangles | vertices | indices | selected at |
+|---:|---|---:|---:|---:|---|
+| 0 | 4 × 2 | 16 | 12 | 48 | < 2 px |
+| 1 | 8 × 4 | 64 | 40 | 192 | 2–4 px |
+| 2 | 12 × 6 | 144 | 84 | 432 | 4–8 px |
+| 3 | 16 × 8 | 256 | 144 | 768 | 8–16 px |
+| 4 | 24 × 12 | 576 | 312 | 1728 | 16–32 px |
+| **5** | **36 × 18** | **1296** | **684** | **3888** | 32–64 px |
+| 6 | 48 × 24 | 2304 | 1200 | 6912 | 64–128 px |
+| 7 | 64 × 32 | 4096 | 2112 | 12288 | ≥ 128 px |
+
+The **whole ladder is ~123 KB** (72 KB vertices + 51 KB indices), once, for the entire process — less than one bespoke object's share of a page. The largest entry is 2112 vertices, so 16-bit indices stay valid with room to spare.
+
+**LOD 5 is byte-identical to the mesh that ships today**, which is what makes Step 1 verifiable as an unchanged image, and is why the UV sphere was kept over an icosphere — icosphere subdivision (20, 80, 320, 1280, 5120) fills only five of the eight slots naturally and would forfeit that check.
+
+**Selection is by projected pixel diameter, not raw distance.** Distance alone is wrong under zoom: the same sphere at the same distance deserves different tessellation at 4K and at 1080p, and at 20° FOV against 60°.
+
+```text
+focalPx    = sceneHeightPx / (2 · tan(fovY/2))                  // per Viewport, one root constant
+centre     = (transformA.w, transformB.w, transformC.w)
+radius     = length(float3(transformA.x, transformB.x, transformC.x))   // canonical radius is 1
+diameterPx = 2 · radius · focalPx / max(distance(cameraPos, centre), eps)
+lod        = clamp(floor(log2(max(diameterPx, 1))), 0, 7)
+```
+
+Coarsest-first ordering is what removes the subtraction. The input is bucketed by powers of two, so `firstbithigh((uint)max(diameterPx, 1))` gives the same answer in one integer instruction with no transcendental — clamp still required above 256 px. Note this makes typical scenes **coarser** than today, where every sphere pays 1296 triangles whether it covers 10 px or 500 px.
+
+A debug key pinning a fixed LOD belongs with Step 2, matching the existing `k` / `m` / `v` habit, so popping can be A/B'd against Step 1.
+
 #### LOD
 
 LOD is selected **per frame, in the compute pass**, from camera distance. Camera position is three more root constants in `CullParams`, which has a spare `cullPadding` — 12 DWORDs becomes 16. Object position comes from the instance record's `transformA/B/C.w`, so the shader binds the redirect table and arena, two more root SRVs with tab-lifetime fixed addresses — the same two-load pattern the vertex shaders already perform. The shader writes the chosen LOD's offsets into the output command; VBV/IBV are unchanged, since all 8 LODs live in the same library buffer.
@@ -631,16 +728,18 @@ reserve = min(MV_MAX_INSTANCES_PER_TAB, allowedByHardware × 0.75)
 
 `allowedByHardware` comes from `MaxGPUVirtualAddressBitsPerResource` — as low as **31 bits (2 GB)** on the lowest tier, capping one tab's arena at ~33M records — with `MaxGPUVirtualAddressBitsPerProcess` bounding the sum across open tabs. Both are queried at startup beside the existing Heap Tier 2 and `TiledResourcesTier` checks. The **25% margin** is deliberate headroom for everything else competing for the same address space: geometry pages, template buffers, textures, swap chains, the upload ring, and the redirect and mask buffers. A first estimate, to be tuned once there is real data.
 
-#### Build order, and four places the current code fails quietly
+#### Build order, and six places the current code fails quietly
 
-The library buffer is a VBV source, so its stride must match the PSO input layout. It is therefore built **only after the vertex format migration**, in the lean 16-byte layout, so it is never built twice. The sequence is: appearance payload and registry shadow → vertex 24 → 16 with the material table → this step.
+The library buffer is a VBV source, so its stride must match the PSO input layout. It is therefore built **only after the vertex format migration**, in the lean 16-byte layout, so it is never built twice. The sequence is: appearance payload and registry shadow → vertex 24 → 16 with the material table → canonical local frame → this step. Everything before the last item has shipped.
 
-Four things in the current implementation break *silently* under this design, which is why they are recorded here rather than discovered:
+Six things in the current implementation break *silently* under this design. The first four were predicted and have since been **confirmed against the code**; the last two were found only by reading it, which is the argument for doing that before writing any of it:
 
-- **`PageIsRenderable` rejects every template-only page.** It requires `vertexHead != 0 && indexTail != pageSize`, and a template-only page has neither — so the draw loop, pick pass and print path all skip instanced geometry with no error anywhere. The predicate must branch on page kind.
-- **`IsTransformOnlyEdit` misclassifies every instanced MODIFY.** It infers "transform-only" from an empty vertex/index payload — and an instanced object's payload is *always* empty. Moving a pipe and changing its schedule become indistinguishable: the first is correctly a redirect flip, the second silently keeps the old library entry, so the wall thickness never changes on screen. The instanced-MODIFY case needs an explicit marker. This is the transform-only edit's own lesson reappearing from the other direction.
+- **`PageIsRenderable` rejects every template-only page.** It requires `vertexHead != 0 && indexTail != pageSize`, and a template-only page has neither — so the draw loop, pick pass and print path all skip instanced geometry with no error anywhere. The predicate must branch on page kind. Note it is **duplicated three times, not centralised**: `Selection3D-DirectX12.cpp` owns the named function, the scene loop repeats it inline, and the print collector repeats it a third time. Fixing one and not the others makes instanced geometry vanish from that path alone.
+- **`IsTransformOnlyEdit` misclassifies every instanced MODIFY.** It infers "transform-only" from an empty vertex/index payload — and an instanced object's payload is *always* empty. Moving a pipe and changing its schedule become indistinguishable: the first is correctly a redirect flip, the second silently keeps the old library entry, so the wall thickness never changes on screen. The `libraryShapeId` discriminator above is the explicit marker this asks for. This is the transform-only edit's own lesson reappearing from the other direction.
 - **The registry's `worldCentre` has no source.** It is computed at upload time from the geometry's AABB, and an instanced object uploads none. It must come from the library entry's AABB transformed by the instance transform, or every instanced object reports (0,0,0) and silently breaks zoom-to-fit.
 - **Append-target page selection has no meaning for a template-only page.** "Largest middle gap" is a vertex/index-region concept; the criterion there is template capacity (`indirectCapacity`).
+- **The copy thread rejects empty geometry outright.** ADD logs `Skipping upload of empty geometry` and breaks; the geometry-MODIFY path does the same silently. Since an instanced payload is empty by definition, this is the *first* line that has to change — today an instanced ADD is dropped with a console warning and nothing is drawn.
+- **Zoom-to-fit iterates `geometry.vertices` on the CPU.** It regenerates geometry through `GeometryForObject` and walks the vertices, so instanced objects contribute nothing and a sphere-only scene makes zoom-to-fit a no-op. This is the same *shape* as the `worldCentre` gap but a **separate code path** — fixing the registry AABB does not fix it. It needs the canonical AABB's eight corners transformed by the world matrix.
 
 ## The draw path
 
@@ -1001,8 +1100,17 @@ A **render-thread** counterpart now sits beside it (`GpuRenderStats`, `[gpu][cul
 
 ## Next evolution steps
 
-### Now — <the 2–3 things actually next>
+### Now
+
+- [x] **Canonical local frame for `SPHERE`** — unit sphere at the origin, `center` / `radius` carried as the object's transform, with the composition consolidated into `WorldMatrixForObject`. The prerequisite for sharing a mesh between two spheres, and a float32-precision win on its own. See *The canonical local frame, and its single composition point*.
+- [ ] **Shared sphere geometry, Step 1** — `gpu.primitiveLibrary`, template-only pages, fixed LOD 5, no HLSL changes. Acceptance: an unchanged image, and sphere geometry VRAM falling from ~4.25 MB per ~224 spheres to a single ~123 KB library plus ~24 bytes per object.
+- [ ] **Compute LOD, Step 2** — `CullParams` 12 → 16 DWORDs, three more root SRVs, shape id in `StartInstanceLocation`. Settles the `renderFlags`-routing question in *Planned: draw buckets* as a side effect.
+
 ### Next
+
+- [ ] Cylinder, cuboid and disc in the library. The cylinder is what forces the inverse-transpose normal transform (*Non-uniform scale and normals*) and a 180° fallback for the degenerate from-to rotation; it would also fix the fact that `CYLINDER::GetGeometry` computes its own axis and then never uses it, building rims in the XZ plane so a non-Y-axis cylinder draws sheared.
+- [ ] Pipes as composed primitives, once more than one library shape exists.
+
 ### Later
 
 - [ ] **Page-type axes — no longer a page *kind*, but PSO buckets.** Pages are currently keyed by container only and everything draws with one PSO (opaque triangles, 16-bit indices, back-culled). The shape of the fix changed with GPU command compaction: instead of a page kind next to `containerMemoryId`, the three PSO-only axes (transparent / double-sided / line topology) become per-object `renderFlags` bits that the compute pass routes into separate output regions — one `ExecuteIndirect` per non-empty bucket, pages free to mix. Only *vertex format* stays a page property, and index width needs nothing beyond a `page.indexFormat`. This unlocks wireframe display modes, transparency and large meshes; none of the items below can start without it. Specified under *The axes do not behave alike any more* and *Appearance, variations and display state*.
