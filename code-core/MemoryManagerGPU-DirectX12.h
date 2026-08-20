@@ -90,8 +90,58 @@ geometry lets one page back far more of them. Pages that genuinely need more gro
 `indirectCapacity` - so this is a starting point rather than a ceiling. */
 constexpr uint32_t kIndirectInitialBytes = 256 * 1024;
 
+/* THE GLOBAL PRIMITIVE LIBRARY, DirectX12 side (graphics.md, "Shared geometry and the primitive
+libraries"). One immutable committed resource holding every (shape, LOD) mesh: vertices at offset 0,
+indices at `indexByteOffset`. Created and uploaded ONCE by InitD3DDeviceOnly, before any thread
+exists, and read-only for the rest of the process - so it needs no snapshot, no retirement and no
+fence gating, and its GPU virtual address can be handed straight to a draw command.
+
+~123 KB for the whole 8-LOD sphere ladder. Note it is NOT a GeometryPage on purpose: see the comment
+on PrimitiveLibraryTable in RenderScene3D.h for why an RCU-managed page cannot back a cross-tab
+reference. */
+struct PrimitiveLibrary {
+    Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
+    D3D12_GPU_VIRTUAL_ADDRESS va = 0;
+    uint32_t vertexBytes = 0;
+    uint32_t indexByteOffset = 0; // Where the index region starts inside `buffer`.
+    uint32_t indexBytes = 0;
+    PrimitiveLibraryTable table;
+
+    /* The same table as `table`, in the 12-byte GPU form, so the cull pass can look up the level it
+    picks per frame (Step 2). Tiny - 8 LODs per shape at 12 bytes - and as immutable as the mesh, so
+    it is a plain committed resource bound as a root SRV with no descriptor heap involved. */
+    Microsoft::WRL::ComPtr<ID3D12Resource> drawRangeBuffer;
+    D3D12_GPU_VIRTUAL_ADDRESS drawRangeVA = 0;
+
+    bool IsReady() const { return buffer != nullptr; }
+    D3D12_VERTEX_BUFFER_VIEW VertexView() const {
+        D3D12_VERTEX_BUFFER_VIEW vbv{};
+        vbv.BufferLocation = va;
+        vbv.SizeInBytes = vertexBytes;
+        vbv.StrideInBytes = sizeof(Vertex);
+        return vbv;
+    }
+    // Based at the index REGION, not the buffer base, so a template's startIndexLocation is a plain
+    // element offset within that region - the same "absolute within the bound view" rule the
+    // geometry pages follow.
+    D3D12_INDEX_BUFFER_VIEW IndexView() const {
+        D3D12_INDEX_BUFFER_VIEW ibv{};
+        ibv.BufferLocation = va + indexByteOffset;
+        ibv.SizeInBytes = indexBytes;
+        ibv.Format = DXGI_FORMAT_R16_UINT;
+        return ibv;
+    }
+};
+
 struct GeometryPage {
-    // GPU RESOURCES. Single unified 4 MB buffer
+    /* Bespoke pages own `buffer` below; INSTANCED pages leave it null and draw from the global
+    primitive library instead, holding only placement records and draw templates (~256 KB against
+    ~4.25 MB). Every predicate that reasons about a page's contents has to branch on this - and the
+    three that infer "has geometry" from `vertexHead != 0 && indexTail != pageSize` are exactly the
+    ones that would otherwise skip instanced geometry with no error anywhere. */
+    GeometryPageKind kind = GeometryPageKind::Bespoke;
+
+    // GPU RESOURCES. Single unified 4 MB buffer. NULL on an instanced page.
     Microsoft::WRL::ComPtr<ID3D12Resource> buffer;// Layout:[Vertex Region ↑ ][Free Space][ Index Region ↓ ]
     Microsoft::WRL::ComPtr<ID3D12Resource> indirectBuffer;// ExecuteIndirect argument buffer for this page
     uint32_t indirectCount = 0; // Number of valid indirect draw commands
@@ -125,6 +175,13 @@ struct GeometryPage {
 
     // UTILITY
     bool IsFull(uint32_t incomingVertexBytes, uint32_t incomingIndexBytes) const  {
+        /* An instanced page has no vertex or index region, so "largest middle gap" is meaningless
+        for it; what bounds it is how many DRAW TEMPLATES its argument buffer holds. Note the bound
+        is indirectCapacity rather than a fixed count: RebuildIndirectBuffer grows that buffer by
+        doubling, so this is the page's current capacity, not a ceiling. */
+        if (kind == GeometryPageKind::InstancedGlobal) {
+            return objects.size() >= indirectCapacity;
+        }
         //If: incomingIndexBytes > indexTail then : indexTail - incomingIndexBytes wraps to huge value.
         if (incomingIndexBytes > indexTail) return true;
         uint32_t alignedVertexHead = VertexAlign(vertexHead);
@@ -774,6 +831,12 @@ public:
     ComPtr<ID3D12RootSignature> sceneCullRootSignature;
     ComPtr<ID3D12PipelineState> sceneCullPSO;
     ComPtr<ID3D12Resource> cullZeroBuffer;
+
+    /* Shared geometry for every tab: one immutable mesh per (shape, LOD). Built by
+    InitD3DDeviceOnly before any thread starts and never written again, so render threads read its
+    address and table lock-free forever. Tab 0 owns it conceptually - it lives here rather than in a
+    tab so the draw loop never has to walk two tabs' snapshots to find it. */
+    PrimitiveLibrary primitiveLibrary;
 
     //Following to be added latter.
     //ID3D12DescriptorHeapMgr    ← Global descriptor allocator

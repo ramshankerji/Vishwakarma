@@ -66,6 +66,17 @@ static_assert(sizeof(Vertex) == 16,
     "(vertexByteOffset / sizeof(Vertex), computed independently in three places) and the two input "
     "layouts. Changing it silently misplaces draws rather than failing.");
 
+/* Shapes in the global primitive library (website/software/graphics.md, "Shared geometry and the
+primitive libraries"). A generator names one of these instead of emitting vertices; the mesh itself,
+its eight LODs and the table locating them live renderer-side in RenderScene3D.h, which generators
+never include. Only shapes whose sole freedom is SIZE belong here - one canonical mesh plus a
+non-uniform scale must cover every instance - so anything with an internal ratio (elbow, flange)
+stays bespoke rather than becoming an entry. */
+enum : int16_t {
+    kPrimitiveShapeSphere = 0,
+};
+constexpr uint32_t kPrimitiveShapeCount = 1;
+
 struct GeometryData
 {
     uint64_t id = 0; // Unique identifier for the geometry. It is the memoryID of the corresponding engineering object.
@@ -78,6 +89,17 @@ struct GeometryData
     64-byte record without losing it. */
     XMFLOAT4 color;
     DirectX::XMFLOAT4X4 worldMatrix;
+    /* SHARED GEOMETRY (website/software/graphics.md, "Shared geometry and the primitive libraries").
+    >= 0 means this object draws from the global primitive library instead of owning any geometry:
+    `vertices` and `indices` are EMPTY and stay that way, and size/position/orientation are carried
+    entirely by worldMatrix. -1 is an ordinary bespoke object that brings its own vertices.
+
+    It is also the discriminator that keeps IsTransformOnlyEdit honest. A move and an instanced edit
+    BOTH arrive with an empty payload, so "empty" alone cannot tell them apart - and guessing wrong
+    either clones a page for nothing or silently keeps the old library entry, so a radius change
+    never appears on screen. A move comes from TranslateSelectedSceneObjects, which knows nothing
+    about libraries and leaves this at -1; an instanced edit comes through GeometryForObject. */
+    int16_t libraryShapeId = -1;
 	GeometryData() {
         color = XMFLOAT4(0.8f, 0.8f, 0.8f, 1.0f); // Default color: light gray
         worldMatrix = {

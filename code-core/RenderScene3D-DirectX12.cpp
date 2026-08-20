@@ -10,6 +10,7 @@
 #include "ShaderSkyGradientVertex.h"
 #include "ShaderSkyGradientPixel.h"
 #include <algorithm>
+#include <set> // Append targets are keyed by (container, page kind), which needs no hash.
 #include <cfloat>
 #include <cmath>
 #include "विश्वकर्मा.h"
@@ -26,6 +27,7 @@ draws a whole view in one call with no IA binds and no per-page barriers, which 
 cannot match, so it is the primary path and the 'k' debug key is for A/B comparison rather than for
 bringing it up. The legacy path remains maintained; see the branch in RenderScene3D. */
 bool gUseComputeCull = true;
+bool gLodPinned = false;
 
 namespace {
 
@@ -44,9 +46,11 @@ namespace {
     cbuffer in ShaderSceneCull.hlsl member for member.
 
     The first three are per Viewport; the eight view fields are per page, and carrying them here is
-    exactly what lets one ExecuteIndirect draw templates from several pages (10M plan Step 7). Every
-    member is a scalar uint, so nothing straddles a float4 register and the cbuffer is a clean 12
-    DWORDs - `cullPadding` is what rounds it there. */
+    exactly what lets one ExecuteIndirect draw templates from several pages (10M plan Step 7).
+
+    The camera block is per VIEWPORT and drives per-frame LOD selection for instanced templates
+    ("Shared geometry and the primitive libraries", Step 2). Nothing straddles a float4 register and
+    the cbuffer is a clean 16 DWORDs - `cullPadding` is what rounds it there, as it did at 12. */
     struct SceneCullConstants {
         uint32_t templateCount;
         uint32_t subTabBit;
@@ -59,11 +63,20 @@ namespace {
         uint32_t indexAddressHi;
         uint32_t indexSizeInBytes;
         uint32_t indexFormat;
+        float    cameraX;   // Viewport's eye position, world space.
+        float    cameraY;
+        float    cameraZ;
+        /* Focal length in PIXELS: sceneHeightPx / (2 tan(fovY/2)). This is what makes LOD a
+        function of the object's SCREEN size rather than of raw distance - the same sphere at the
+        same distance deserves different tessellation at 4K and at 1080p, and at 20 degrees FOV
+        against 60. Zero or negative pins every instanced template to the level the CPU already
+        chose, which is what the LOD debug key toggles. */
+        float    focalPixels;
         uint32_t cullPadding;
     };
     constexpr uint32_t kSceneCullConstantCount = sizeof(SceneCullConstants) / sizeof(uint32_t);
-    static_assert(kSceneCullConstantCount == 12,
-        "SceneCullConstants must stay 12 root constants wide - the HLSL cbuffer declares 12.");
+    static_assert(kSceneCullConstantCount == 16,
+        "SceneCullConstants must stay 16 root constants wide - the HLSL cbuffer declares 16.");
 } // namespace
 
 int SceneTopUIHeightPx(int monitorId, const DX12ResourcesPerWindow& winRes) {
@@ -165,14 +178,25 @@ void InitSceneCullResources(ID3D12Device* device) {
     // All root descriptors, no descriptor tables, and no shader-visible descriptor heap: the page's
     // buffer views travel in the root constants rather than in a GPU-side page directory the shader
     // would have to look them up in (10M plan Step 7).
-    CD3DX12_ROOT_PARAMETER1 params[5] = {};
-    // b0: 12 DWORDs - { templateCount, subTabBit, maxCommands } plus the page's VBV and IBV.
-    // Must equal the CullParams cbuffer size in ShaderSceneCull.hlsl exactly.
+    CD3DX12_ROOT_PARAMETER1 params[8] = {};
+    // b0: 16 DWORDs - { templateCount, subTabBit, maxCommands }, the page's VBV and IBV, and the
+    // Viewport's camera. Must equal the CullParams cbuffer size in ShaderSceneCull.hlsl exactly.
     params[0].InitAsConstants(kSceneCullConstantCount, 0);
     params[1].InitAsShaderResourceView(0);      // t0: Templates (the page's indirectBuffer)
     params[2].InitAsShaderResourceView(1);      // t1: VisibilityMask
     params[3].InitAsUnorderedAccessView(0);     // u0: VisibleOut (compacted commands)
     params[4].InitAsUnorderedAccessView(1);     // u1: VisibleCount (raw uint at byte 0)
+    /* The last three exist for per-frame LOD selection ("Shared geometry and the primitive
+    libraries", Step 2). Reaching an object's transform needs the SAME two dependent loads the
+    scene vertex shader already performs - redirect table, then arena - because the arena is
+    addressed by instanceSlot and not by gpuInstanceIndex.
+
+    Binding these here also settles the open question in "Planned: draw buckets": routing by
+    renderFlags can now read them rather than copying flag bits into the draw template, which is
+    what preserves the property that an appearance change never touches geometry. */
+    params[5].InitAsShaderResourceView(2);      // t2: InstanceSlotOf (redirect table)
+    params[6].InitAsShaderResourceView(3);      // t3: Instances (the 64-byte arena records)
+    params[7].InitAsShaderResourceView(4);      // t4: PrimitiveLibrary (shapeId,lod) draw ranges
 
     CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootDesc;
     rootDesc.Init_1_1(_countof(params), params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE);
@@ -293,26 +317,136 @@ static void AllocateIndirectBuffer(GeometryPage& page, uint32_t commands) {
     page.indirectCapacity = capacity;
 }
 
-std::unique_ptr<GeometryPage> CreateNewPage(uint64_t containerMemoryId)
+std::unique_ptr<GeometryPage> CreateNewPage(uint64_t containerMemoryId, GeometryPageKind kind)
 //Do not make this static function. It accesses global gpu singleton.
 {
     auto page = std::make_unique<GeometryPage>();
-    page->pageSize = 4 * 1024 * 1024;
-    page->indexTail = page->pageSize;
+    page->kind = kind;
     page->containerMemoryId = containerMemoryId;
 
-    CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);
-    auto desc = CD3DX12_RESOURCE_DESC::Buffer(page->pageSize);
-    // ThrowIfFailed: a silent failure here (VRAM exhaustion) returns a page with null buffers,
-    // which crashes later at CopyResource with no indication of the real cause. The copy thread
-    // catches this exception and drops the batch instead of aborting.
-    ThrowIfFailed(gpu.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&page->buffer)));
+    /* An INSTANCED page has no geometry buffer: its objects draw from gpu.primitiveLibrary, so the
+    only GPU resource it needs is the draw-template argument buffer allocated below. pageSize,
+    vertexHead and indexTail all stay 0, which is what makes `holeBytes += vertexSize + indexSize`
+    and the compaction arithmetic trivially correct for it - an instanced object occupies no bytes,
+    and its placement record says so literally. ~256 KB against ~4.25 MB. */
+    if (kind == GeometryPageKind::Bespoke) {
+        page->pageSize = 4 * 1024 * 1024;
+        page->indexTail = page->pageSize;
+
+        CD3DX12_HEAP_PROPERTIES heap(D3D12_HEAP_TYPE_DEFAULT);
+        auto desc = CD3DX12_RESOURCE_DESC::Buffer(page->pageSize);
+        // ThrowIfFailed: a silent failure here (VRAM exhaustion) returns a page with null buffers,
+        // which crashes later at CopyResource with no indication of the real cause. The copy thread
+        // catches this exception and drops the batch instead of aborting.
+        ThrowIfFailed(gpu.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&page->buffer)));
+    }
     AllocateIndirectBuffer(*page, kIndirectInitialBytes / sizeof(IndirectCommand));
 
     static std::atomic<uint64_t> totalPages = 0; //Telemetry helper / counter.
     //std::wcout << "New page allocated. New Page Counter: " << ++totalPages << std::endl;
     return page;
+}
+
+D3D12_VERTEX_BUFFER_VIEW PageVertexBufferView(const GeometryPage& page) {
+    // An instanced page owns no buffer and names the global primitive library instead. That single
+    // substitution is the whole of the draw-side change for shared geometry - command format, PSO,
+    // vertex shader and compute shader are all untouched, and a Viewport is still ONE
+    // ExecuteIndirect however its pages are mixed, because both kinds write into the same output
+    // buffer under the same counter.
+    if (page.kind == GeometryPageKind::InstancedGlobal) return gpu.primitiveLibrary.VertexView();
+    D3D12_VERTEX_BUFFER_VIEW vbv{};
+    vbv.BufferLocation = page.buffer->GetGPUVirtualAddress();
+    vbv.SizeInBytes = page.vertexHead;
+    vbv.StrideInBytes = sizeof(Vertex);
+    return vbv;
+}
+
+D3D12_INDEX_BUFFER_VIEW PageIndexBufferView(const GeometryPage& page) {
+    if (page.kind == GeometryPageKind::InstancedGlobal) return gpu.primitiveLibrary.IndexView();
+    D3D12_INDEX_BUFFER_VIEW ibv{};
+    // Bind at the PAGE BASE covering the whole page, so StartIndexLocation is absolute
+    // (indexByteOffset / 2) and stable across appends - indexTail moves down on every append, which
+    // would silently invalidate an indexTail-relative start index (graphics.md, 10M plan Step 7,
+    // constraint 1). The low-byte overlap with the vertex region is harmless: no draw references
+    // indices down there.
+    ibv.BufferLocation = page.buffer->GetGPUVirtualAddress();
+    ibv.SizeInBytes = page.pageSize;
+    ibv.Format = DXGI_FORMAT_R16_UINT;
+    return ibv;
+}
+
+void InitPrimitiveLibrary(ID3D12Device* device) {
+    PrimitiveLibrary& library = gpu.primitiveLibrary;
+    if (library.IsReady()) return;
+
+    std::vector<Vertex> vertices;
+    std::vector<uint16_t> indices;
+    BuildPrimitiveLibraryMesh(vertices, indices, library.table);
+
+    library.vertexBytes = static_cast<uint32_t>(vertices.size() * sizeof(Vertex));
+    library.indexBytes = static_cast<uint32_t>(indices.size() * sizeof(uint16_t));
+    // The index region starts on a 256-byte boundary so both views are comfortably aligned; the
+    // gap is a handful of bytes against ~123 KB.
+    library.indexByteOffset = GeometryPage::AlignUp(library.vertexBytes, 256);
+    /* The (shapeId, lod) draw-range table rides in the SAME buffer, after the indices, so the whole
+    library is one resource and one upload. It is bound as its own root SRV at its own offset, which
+    is why it needs no descriptor - a root SRV is just an address. */
+    constexpr uint32_t kDrawRangeCount = kPrimitiveShapeCount * kPrimitiveLodCount;
+    const uint32_t drawRangeOffset =
+        GeometryPage::AlignUp(library.indexByteOffset + library.indexBytes, 256);
+    const uint32_t drawRangeBytes = kDrawRangeCount * sizeof(PrimitiveLibraryDrawRange);
+    const uint64_t totalBytes = static_cast<uint64_t>(drawRangeOffset) + drawRangeBytes;
+
+    CD3DX12_HEAP_PROPERTIES defaultHeap(D3D12_HEAP_TYPE_DEFAULT);
+    auto bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(totalBytes);
+    ThrowIfFailed(device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+        D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&library.buffer)));
+    library.buffer->SetName(L"PrimitiveLibrary");
+    library.va = library.buffer->GetGPUVirtualAddress();
+    library.drawRangeBuffer = library.buffer;   // Same resource, later offset.
+    library.drawRangeVA = library.va + drawRangeOffset;
+
+    /* A one-off committed upload plus its own allocator and command list, rather than the shared
+    upload ring: this runs before the copy thread exists, so the ring's fence bookkeeping has no
+    owner yet, and paying for a throwaway 123 KB staging buffer once at startup is cheaper than the
+    ordering argument the alternative would need. */
+    CD3DX12_HEAP_PROPERTIES uploadHeap(D3D12_HEAP_TYPE_UPLOAD);
+    ComPtr<ID3D12Resource> staging;
+    ThrowIfFailed(device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&staging)));
+    uint8_t* mapped = nullptr;
+    CD3DX12_RANGE readRange(0, 0);
+    ThrowIfFailed(staging->Map(0, &readRange, reinterpret_cast<void**>(&mapped)));
+    memcpy(mapped, vertices.data(), library.vertexBytes);
+    memcpy(mapped + library.indexByteOffset, indices.data(), library.indexBytes);
+    PrimitiveLibraryDrawRange drawRanges[kDrawRangeCount] = {};
+    library.table.ToDrawRanges(drawRanges);
+    memcpy(mapped + drawRangeOffset, drawRanges, drawRangeBytes);
+    staging->Unmap(0, nullptr);
+
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+    ThrowIfFailed(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COPY,
+        IID_PPV_ARGS(&allocator)));
+    ThrowIfFailed(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_COPY, allocator.Get(),
+        nullptr, IID_PPV_ARGS(&commandList)));
+    commandList->CopyBufferRegion(library.buffer.Get(), 0, staging.Get(), 0, totalBytes);
+    ThrowIfFailed(commandList->Close());
+    ID3D12CommandList* lists[] = { commandList.Get() };
+    gpu.copyCommandQueue->ExecuteCommandLists(1, lists);
+
+    // Block until it lands. The library is immutable and every tab reads it, so finishing here
+    // means no later path ever has to wonder whether it is resident.
+    const uint64_t fenceValue = gpu.copyFenceValue.fetch_add(1);
+    ThrowIfFailed(gpu.copyCommandQueue->Signal(gpu.copyFence.Get(), fenceValue));
+    if (gpu.copyFence->GetCompletedValue() < fenceValue) {
+        ThrowIfFailed(gpu.copyFence->SetEventOnCompletion(fenceValue, gpu.copyFenceEvent));
+        WaitForSingleObject(gpu.copyFenceEvent, INFINITE);
+    }
+
+    std::wcout << L"Primitive library: " << vertices.size() << L" vertices, " << indices.size()
+               << L" indices, " << (totalBytes / 1024) << L" KB." << std::endl;
 }
 
 void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
@@ -416,37 +550,17 @@ void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
                 auto containerPages = snapshot->pagesByContainer.find(containers.ids[c]);
                 if (containerPages == snapshot->pagesByContainer.end()) continue;
                 for (GeometryPage* pagePtr : containerPages->second) {
-                    GeometryPage& page = *pagePtr;
-                    if (!page.published.load(std::memory_order_acquire)) continue;
-                    if (page.indirectCount == 0) continue; //Some safety checks.
-                    if (page.vertexHead == 0) continue;
-                    if (page.indexTail == page.pageSize) continue;
-                    visit(page);
+                    if (!PageIsRenderable(*pagePtr)) continue;
+                    visit(*pagePtr);
                 }
             }
             };
 
-        // One page's buffer views. Shared by both paths so they can never drift apart: the legacy
-        // path binds them on the IA, the compute path copies them into every command it emits.
-        auto PageVertexView = [](const GeometryPage& page) {
-            D3D12_VERTEX_BUFFER_VIEW vbv{};
-            vbv.BufferLocation = page.buffer->GetGPUVirtualAddress();
-            vbv.SizeInBytes = page.vertexHead;
-            vbv.StrideInBytes = sizeof(Vertex);
-            return vbv;
-            };
-        auto PageIndexView = [](const GeometryPage& page) {
-            D3D12_INDEX_BUFFER_VIEW ibv{};
-            // Bind at the PAGE BASE covering the whole page, so StartIndexLocation is
-            // absolute (indexByteOffset / 2) and stable across appends - indexTail moves down
-            // on every append, which would silently invalidate an indexTail-relative start
-            // index (graphics.md, 10M plan Step 7, constraint 1). The low-byte overlap with
-            // the vertex region is harmless: no draw references indices down there.
-            ibv.BufferLocation = page.buffer->GetGPUVirtualAddress();
-            ibv.SizeInBytes = page.pageSize;
-            ibv.Format = DXGI_FORMAT_R16_UINT;
-            return ibv;
-            };
+        // One page's buffer views, shared by both draw paths and by the pick, highlight and print
+        // paths so they can never drift apart: the legacy path binds them on the IA, the compute
+        // path copies them into every command it emits.
+        auto PageVertexView = [](const GeometryPage& page) { return PageVertexBufferView(page); };
+        auto PageIndexView = [](const GeometryPage& page) { return PageIndexBufferView(page); };
 
         if (!gUseComputeCull) {
             /* LEGACY PATH: one ExecuteIndirect per page over that page's full template list, with
@@ -499,10 +613,27 @@ void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
         commandList->SetComputeRootSignature(gpu.sceneCullRootSignature.Get());
         commandList->SetPipelineState(gpu.sceneCullPSO.Get());
         commandList->SetComputeRootShaderResourceView(2, tabRes.visibilityMask.va);   // t1 mask
+        // Per-frame LOD needs the object's transform, reached the same two-load way the scene vertex
+        // shader reaches it, plus the library's (shapeId, lod) table. All three addresses are fixed
+        // for the tab's / process's lifetime, so they bind once per Viewport and never per page.
+        commandList->SetComputeRootShaderResourceView(5, tabRes.instanceSlotOf.va);   // t2 redirect
+        commandList->SetComputeRootShaderResourceView(6, tabRes.instanceArena.va);    // t3 arena
+        commandList->SetComputeRootShaderResourceView(7,
+            gpu.primitiveLibrary.drawRangeVA);                                        // t4 LOD table
         commandList->SetComputeRootUnorderedAccessView(3,
             s.visibleIndirect->GetGPUVirtualAddress());                               // u0 output
         commandList->SetComputeRootUnorderedAccessView(4,
             s.visibleCount->GetGPUVirtualAddress());                                  // u1 count
+
+        /* Per-Viewport LOD inputs. focalPixels converts a world radius into a screen radius:
+        projectedDiameterPx = 2 * radius * focalPixels / distance. `sceneHeight` is the scene area
+        below the top UI band, i.e. the pixels this Viewport actually rasterises into, which is why
+        resolution and FOV both fold in here rather than being re-derived in the shader.
+
+        gLodPinned makes it non-positive, which the shader reads as "keep the level the CPU already
+        chose" - that is the whole implementation of the LOD debug toggle. */
+        const float focalPixels = gLodPinned ? -1.0f
+            : static_cast<float>(sceneHeight) / (2.0f * tanf(camera.fov * 0.5f));
 
         uint32_t totalTemplates = 0; // Upper bound on surviving commands, for MaxCommandCount.
         ForEachPage([&](GeometryPage& page) {
@@ -510,6 +641,10 @@ void शंकर::RenderScene3D(ID3D12GraphicsCommandList* commandList,
             const D3D12_INDEX_BUFFER_VIEW ibv = PageIndexView(page);
 
             SceneCullConstants constants{};
+            constants.cameraX = camera.position.x;
+            constants.cameraY = camera.position.y;
+            constants.cameraZ = camera.position.z;
+            constants.focalPixels = focalPixels;
             constants.templateCount = page.indirectCount;
             constants.subTabBit = subTabBit;
             constants.maxCommands = SceneCullScratch::kMaxCommands;
@@ -639,6 +774,18 @@ static uint32_t AllocateInstanceIndex(DX12ResourcesPerTab& tabRes) {
     return index;
 }
 
+/* Append targets are chosen per (container, page kind): the two kinds never share a page, because a
+page carries ONE vertex/index buffer view for all of its templates. Ordered rather than hashed so a
+std::pair needs no hash specialisation; there are a handful of these per chunk. */
+using AppendTargetKey = std::pair<uint64_t, GeometryPageKind>;
+
+// Which page kind a command's geometry belongs in. An object naming a library shape brings no bytes
+// and goes in a template-only page; everything else owns its vertices.
+static GeometryPageKind PageKindFor(const CommandToCopyThread& command) {
+    return IsInstancedGeometry(command) ? GeometryPageKind::InstancedGlobal
+                                        : GeometryPageKind::Bespoke;
+}
+
 /* Copy-thread-only: the next free instanceSlot - a physical LOCATION in the arena, not an identity.
 Every transform edit burns one, so this churns far faster than the index allocator; slots come back
 through the same fence-gated sweep (10M plan Step 4). */
@@ -752,6 +899,7 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             std::unordered_set<GeometryPage*> affectedPages;
             std::unordered_map<GeometryPage*, std::unique_ptr<GeometryPage>> clonedPages;
             std::vector<std::unique_ptr<GeometryPage>> newPages;
+            std::set<AppendTargetKey> containersNeedingAppend;
 
             // Pre-Pass: Deduplicate commands for this tab. If the same object is modified twice,
             // or added then modified, etc., we need only FINAL state in this batch to persist.
@@ -829,9 +977,9 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 }
             }
 
-            // Find the page with the largest contiguous middle gap for each container receiving geometry.
-            // Pages never mix containers, so inactive pages can be hidden with ExecuteIndirect count 0.
-            std::unordered_set<uint64_t> containersNeedingAppend;
+            // Find the best append target for each (container, page kind) receiving geometry.
+            // Pages never mix containers, and never mix kinds.
+            containersNeedingAppend.clear();
             for (size_t ci = chunkStart; ci < chunkEnd; ++ci) {
                 const CommandToCopyThread& cmd = *deduplicatedBatch[ci];
                 if (!cmd.geometry.has_value()) continue;
@@ -846,25 +994,36 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 if (containerMemoryId == 0 && existing != kInvalidInstanceIndex) {
                     containerMemoryId = tabRes.registry[existing].page->containerMemoryId;
                 }
-                containersNeedingAppend.insert(containerMemoryId);
+                containersNeedingAppend.insert({ containerMemoryId, PageKindFor(cmd) });
             }
 
-            std::unordered_map<uint64_t, GeometryPage*> bestAppendCandidates;
-            std::unordered_map<uint64_t, size_t> maxHoleByContainer;
+            /* Append targets are per (container, KIND), not per container. The two kinds live in
+            separate pages, so a container receiving both a bespoke and an instanced object this
+            chunk needs one append target of each - keying on the container alone would route an
+            instanced object into a bespoke page's clone and silently draw it from the wrong
+            buffer. std::map rather than unordered_map only because a pair needs no hash written. */
+            std::map<AppendTargetKey, GeometryPage*> bestAppendCandidates;
+            std::map<AppendTargetKey, size_t> maxHoleByTarget;
             for (const auto& pagePtr : storage.activePages) {
                 GeometryPage* p = pagePtr.get();
                 if (!p->published.load(std::memory_order_acquire)) continue; //Just for extra safety.
-                if (containersNeedingAppend.find(p->containerMemoryId) == containersNeedingAppend.end()) continue;
+                const AppendTargetKey key{ p->containerMemoryId, p->kind };
+                if (containersNeedingAppend.find(key) == containersNeedingAppend.end()) continue;
 
-                size_t hole = p->indexTail - p->vertexHead;  // middle contiguous free space
-                size_t& maxHole = maxHoleByContainer[p->containerMemoryId];
+                // "Largest middle gap" is a vertex/index-region idea. An instanced page has no such
+                // region, so what decides there is remaining TEMPLATE capacity.
+                const size_t hole = p->kind == GeometryPageKind::InstancedGlobal
+                    ? (p->indirectCapacity > p->objects.size()
+                        ? p->indirectCapacity - p->objects.size() : 0)
+                    : static_cast<size_t>(p->indexTail - p->vertexHead);
+                size_t& maxHole = maxHoleByTarget[key];
                 if (hole > maxHole) {
                     maxHole = hole;
-                    bestAppendCandidates[p->containerMemoryId] = p;
+                    bestAppendCandidates[key] = p;
                 }
             }
             // Force-clone each append candidate so Pass 3 never mutates a published page.
-            for (const auto& [containerMemoryId, candidate] : bestAppendCandidates) {
+            for (const auto& [key, candidate] : bestAppendCandidates) {
                 affectedPages.insert(candidate);
             }
 
@@ -881,7 +1040,20 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             uninitialised is fine. */
             bool compactedThisChunk = false; // At most one page compacts per chunk - see below.
             for (GeometryPage* oldPage : affectedPages) {
-                auto clonedPage = CreateNewPage(oldPage->containerMemoryId);
+                auto clonedPage = CreateNewPage(oldPage->containerMemoryId, oldPage->kind);
+
+                /* An INSTANCED page has no geometry buffer to copy - only its CPU placement records
+                and the draw templates rebuilt from them below. So the RCU clone of a page backing
+                100,000 spheres moves ZERO bytes on the GPU, which is what makes adding one sphere
+                to such a scene cost ~256 KB instead of 4.25 MB. Compaction has nothing to do here
+                either: an instanced object occupies no bytes, so a page of them accrues no holes. */
+                if (oldPage->kind == GeometryPageKind::InstancedGlobal) {
+                    clonedPage->objects = oldPage->objects;
+                    clonedPage->objectCount = oldPage->objectCount;
+                    clonedPage->version = oldPage->version + 1;
+                    clonedPages[oldPage] = std::move(clonedPage);
+                    continue;
+                }
 
                 /* PAGE COMPACTION (graphics.md, "Defragmentation logic"). A page whose holes have
                 crossed the threshold is not copied wholesale: its clone is filled by copying each
@@ -963,10 +1135,10 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             // Route each container's appends at its cloned page. Purely CPU bookkeeping: the clone
             // copies recorded above stay in the same command list as the uploads that follow, and
             // the copy queue runs them in order, so there is nothing to wait for here.
-            std::unordered_map<uint64_t, GeometryPage*> addTargetPages;
-            for (const auto& [containerMemoryId, candidate] : bestAppendCandidates) {
+            std::map<AppendTargetKey, GeometryPage*> addTargetPages;
+            for (const auto& [key, candidate] : bestAppendCandidates) {
                 auto cloneIt = clonedPages.find(candidate);
-                addTargetPages[containerMemoryId] = cloneIt != clonedPages.end()
+                addTargetPages[key] = cloneIt != clonedPages.end()
                     ? cloneIt->second.get()
                     : candidate;
             }
@@ -1052,6 +1224,36 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     rec.minX = minX; rec.minY = minY; rec.minZ = minZ;
                     rec.maxX = maxX; rec.maxY = maxY; rec.maxZ = maxZ;
                 }
+                return rec;
+                };
+
+            /* The instanced counterpart of RecordGeometryUpload, and note what it does NOT do: it
+            stages nothing, copies nothing and touches no page bytes. An object drawing from the
+            global primitive library contributes zero vertex and zero index bytes anywhere, so all
+            that is recorded is WHICH mesh to draw.
+
+            The four byte-offset/size fields stay at literal zero, which is what makes the page's
+            hole accounting (`holeBytes += vertexSize + indexSize`) and its compaction arithmetic
+            correct with no special case: an instanced object genuinely occupies nothing.
+
+            The AABB comes from the library entry, in CANONICAL space, and it is load-bearing rather
+            than decorative. WriteInstanceRecord derives the registry's world-centre shadow from it,
+            and that shadow is what the pick resolve and zoom-to-fit read; leaving it zero would put
+            every instanced object's reported centre at the origin. */
+            auto MakeInstancedRecord = [&](const GeometryData& geo, uint32_t gpuInstanceIndex)
+                -> GeometryPlacementRecordInPage {
+                const uint32_t lod = kPrimitiveFixedLod; // Step 2 replaces this with per-frame LOD.
+                const PrimitiveLibraryEntry& entry =
+                    gpu.primitiveLibrary.table.At(geo.libraryShapeId, lod);
+
+                GeometryPlacementRecordInPage rec{};
+                rec.objectID = geo.id;
+                rec.gpuInstanceIndex = gpuInstanceIndex;
+                rec.libraryShapeId = geo.libraryShapeId;
+                rec.libraryLod = static_cast<uint8_t>(lod);
+                rec.indexCount = entry.indexCount;
+                rec.minX = entry.minX; rec.minY = entry.minY; rec.minZ = entry.minZ;
+                rec.maxX = entry.maxX; rec.maxY = entry.maxY; rec.maxZ = entry.maxZ;
                 return rec;
                 };
 
@@ -1158,7 +1360,7 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                 };
 
             uint32_t gpuInstanceIndex; // Stable renderer identity of the object being processed.
-            std::unordered_map<uint64_t, GeometryPage*> newestPagesByContainer;
+            std::map<AppendTargetKey, GeometryPage*> newestPagesByTarget;
             /* Indices vacated by REMOVE and slots vacated by REMOVE / MODIFY in this chunk. They do
             NOT go back on their free lists here: a later edit in this very chunk would take one and
             overwrite live data while render threads still draw the pre-publish snapshot, or still
@@ -1166,16 +1368,20 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
             std::vector<uint32_t> releasedInstanceIndexes;
             std::vector<uint32_t> releasedInstanceSlots;
 
-            auto AcquireAppendPage = [&](uint64_t containerMemoryId,
+            // Keyed by (container, kind): a container taking both an instanced and a bespoke object
+            // in one chunk needs one append target of each, since a page carries a single pair of
+            // buffer views for every template in it.
+            auto AcquireAppendPage = [&](uint64_t containerMemoryId, GeometryPageKind kind,
                 uint32_t incomingVertexBytes, uint32_t incomingIndexBytes) -> GeometryPage* {
-                GeometryPage*& targetPage = addTargetPages[containerMemoryId];
+                const AppendTargetKey key{ containerMemoryId, kind };
+                GeometryPage*& targetPage = addTargetPages[key];
                 if (targetPage && !targetPage->IsFull(incomingVertexBytes, incomingIndexBytes)) {
                     return targetPage;
                 }
 
-                GeometryPage*& newestPage = newestPagesByContainer[containerMemoryId];
+                GeometryPage*& newestPage = newestPagesByTarget[key];
                 if (!newestPage || newestPage->IsFull(incomingVertexBytes, incomingIndexBytes)) {
-                    newPages.push_back(CreateNewPage(containerMemoryId));
+                    newPages.push_back(CreateNewPage(containerMemoryId, kind));
                     newestPage = newPages.back().get();
                 }
                 targetPage = newestPage;
@@ -1216,7 +1422,11 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     geo = &(cmd.geometry.value());
                     vertexBytes = static_cast<uint32_t>(geo->vertices.size() * sizeof(Vertex));
                     indexBytes = static_cast<uint32_t>(geo->indices.size() * sizeof(uint16_t));
-                    if (vertexBytes == 0 || indexBytes == 0) {
+                    /* An INSTANCED object is empty BY DEFINITION - it names a library shape and
+                    brings no bytes - so this guard has to let it through. Without the exception it
+                    is the first thing that would reject shared geometry, and it would do so with a
+                    console warning and nothing drawn rather than a failure anyone would notice. */
+                    if (!IsInstancedGeometry(cmd) && (vertexBytes == 0 || indexBytes == 0)) {
                         std::wcout << "Warning: Skipping upload of empty geometry ID " << cmd.id << std::endl;
                         break; // Exit this case, process next command
                     }
@@ -1224,16 +1434,21 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     // The object's renderer identity for its whole GPU lifetime (10M plan Step 3).
                     gpuInstanceIndex = AllocateInstanceIndex(tabRes); // Commits arena tiles if full.
 
-                    GeometryPage* addTargetPage =
-                        AcquireAppendPage(targetContainerMemoryId, vertexBytes, indexBytes);
+                    GeometryPage* addTargetPage = AcquireAppendPage(targetContainerMemoryId,
+                        PageKindFor(cmd), vertexBytes, indexBytes);
 
-                    // Record the geometry upload into commandList
-                    rec = RecordGeometryUpload(addTargetPage, *geo, gpuInstanceIndex);
+                    // Record the geometry upload into commandList - or, for an instanced object,
+                    // record only WHICH library mesh to draw. Nothing is staged or copied there.
+                    rec = IsInstancedGeometry(cmd)
+                        ? MakeInstancedRecord(*geo, gpuInstanceIndex)
+                        : RecordGeometryUpload(addTargetPage, *geo, gpuInstanceIndex);
 
                     // Update page CPU state
                     addTargetPage->objects.push_back(rec);
-                    addTargetPage->vertexHead = rec.vertexByteOffset + rec.vertexSize;
-                    addTargetPage->indexTail = rec.indexByteOffset;
+                    if (addTargetPage->kind == GeometryPageKind::Bespoke) {
+                        addTargetPage->vertexHead = rec.vertexByteOffset + rec.vertexSize;
+                        addTargetPage->indexTail = rec.indexByteOffset;
+                    } // An instanced page has no vertex or index region to advance.
                     addTargetPage->objectCount++;
 
                     // Publish identity -> location in the copy thread's private registry.
@@ -1292,7 +1507,8 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     newVertexBytes = static_cast<uint32_t>(geo->vertices.size() * sizeof(Vertex));
                     newIndexBytes = static_cast<uint32_t>(geo->indices.size() * sizeof(uint16_t));
 
-                    if (newVertexBytes == 0 || newIndexBytes == 0) break;
+                    // Instanced again: empty is the normal case, so the guard must not reject it.
+                    if (!IsInstancedGeometry(cmd) && (newVertexBytes == 0 || newIndexBytes == 0)) break;
 
                     // Object exists — work on its owning cloned page
                     oldPage = tabRes.registry[gpuInstanceIndex].page;
@@ -1314,18 +1530,28 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
                     workPage->holeBytes += oldRec->vertexSize + oldRec->indexSize;
                     workPage->objectCount--;
 
-                    modifyTargetPage =
-                        AcquireAppendPage(targetContainerMemoryId, newVertexBytes, newIndexBytes);
+                    modifyTargetPage = AcquireAppendPage(targetContainerMemoryId,
+                        PageKindFor(cmd), newVertexBytes, newIndexBytes);
 
                     /* GEOMETRY CHANGED - relocate into the cloned page as before, PLUS a new
                     instance slot. gpuInstanceIndex is unchanged: identity survives a modify, and
                     only the two locations (page and arena slot) move. Writing a fresh slot rather
                     than overwriting the old record in place is what keeps an in-flight frame from
-                    reading a half-written matrix. */
-                    rec = RecordGeometryUpload(modifyTargetPage, *geo, gpuInstanceIndex);
+                    reading a half-written matrix.
+
+                    An INSTANCED edit lands here too, and deliberately so: its template names a
+                    (shape, LOD) that this edit may have changed, so the page's argument buffer has
+                    to be rebuilt. It is not a transform-only move even though its payload is empty
+                    - that is exactly the confusion libraryShapeId exists to prevent. The clone it
+                    forces is ~256 KB, not 4 MB, because an instanced page carries no geometry. */
+                    rec = IsInstancedGeometry(cmd)
+                        ? MakeInstancedRecord(*geo, gpuInstanceIndex)
+                        : RecordGeometryUpload(modifyTargetPage, *geo, gpuInstanceIndex);
                     modifyTargetPage->objects.push_back(rec);
-                    modifyTargetPage->vertexHead = rec.vertexByteOffset + rec.vertexSize;
-                    modifyTargetPage->indexTail = rec.indexByteOffset;
+                    if (modifyTargetPage->kind == GeometryPageKind::Bespoke) {
+                        modifyTargetPage->vertexHead = rec.vertexByteOffset + rec.vertexSize;
+                        modifyTargetPage->indexTail = rec.indexByteOffset;
+                    }
                     modifyTargetPage->objectCount++;
 
                     tabRes.registry[gpuInstanceIndex].page = modifyTargetPage;
@@ -1441,14 +1667,22 @@ void ProcessScene3DCopyBatch(const std::vector<CommandToCopyThread>& batch,
 
                     IndirectCommand ic{};
                     ic.gpuInstanceIndex = obj.gpuInstanceIndex;
-                    ic.drawArguments.IndexCountPerInstance = obj.indexCount;
                     ic.drawArguments.InstanceCount = 1;
-                    // Absolute, page-base-relative: the IBV is bound at the page base, and this
-                    // value is stable for the object's stay in the page regardless of later
-                    // appends moving indexTail (graphics.md, 10M plan Step 7, constraint 1).
-                    ic.drawArguments.StartIndexLocation = obj.indexByteOffset / sizeof(uint16_t);
-                    ic.drawArguments.BaseVertexLocation = obj.vertexByteOffset / sizeof(Vertex);
-                    ic.drawArguments.StartInstanceLocation = 0;
+                    /* Absolute within whatever view this page draws through: page-base-relative for
+                    a bespoke page, library-region-relative for an instanced one. Stable for the
+                    object's stay in the page regardless of later appends moving indexTail
+                    (graphics.md, 10M plan Step 7, constraint 1). One shared resolver rather than
+                    the division written out here - see ResolveObjectDrawRange. */
+                    ResolveObjectDrawRange(obj, gpu.primitiveLibrary.table,
+                        ic.drawArguments.IndexCountPerInstance,
+                        ic.drawArguments.StartIndexLocation,
+                        ic.drawArguments.BaseVertexLocation);
+                    /* Which library shape this template draws, as `shapeId + 1` (0 = bespoke). The
+                    cull pass reads it to decide whether to override the three offsets above with a
+                    per-frame LOD; the legacy, pick and print paths execute the template as-is and
+                    therefore keep drawing the CPU-chosen level. See TemplateShapeMarker. */
+                    ic.drawArguments.StartInstanceLocation =
+                        TemplateShapeMarker(obj.libraryShapeId);
 
                     commands.push_back(ic);
                 }

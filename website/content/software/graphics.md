@@ -626,7 +626,7 @@ To support hundreds of simultaneous tabs, we start with a small heap (say 4 MB p
 Each page carries a corresponding `ExecuteIndirect` argument buffer. When we defragment a page, we must simultaneously rebuild its argument buffer.
 
 ### Shared Geometry and the primitive libraries
-*Designed. Its prerequisite — the canonical local frame — is built for `SPHERE`; the library itself is not.*
+***Shipped for `SPHERE`*** *(global library, template-only pages, per-frame LOD in the compute pass). Every other shape is still bespoke.*
 
 #### Build sequence: sphere first, in two steps
 
@@ -636,14 +636,18 @@ The gate this step waited on is open: it had to follow the vertex-format migrati
 
 The step splits in two, and the split is worth taking because it isolates a failure to one cause:
 
-**Step 1 — shared geometry, CPU-fixed LOD. No HLSL changes at all.** This is smaller than this section originally implied. The compacted command already carries its own buffer views, and *the CPU supplies them per page as root constants*, so a template-only page whose views name the library instead of `page.buffer` flows through `ShaderSceneCull.hlsl` **unmodified**. The CPU writes the fixed LOD's real offsets into an ordinary 24-byte template. What it touches:
+**Step 1 — shared geometry, CPU-fixed LOD. No HLSL changes at all. *Shipped.***  The compacted command already carries its own buffer views, and *the CPU supplies them per page as root constants*, so a template-only page whose views name the library instead of `page.buffer` flows through `ShaderSceneCull.hlsl` **unmodified** — not one line of shader changed. The CPU writes the fixed LOD's real offsets into an ordinary 24-byte template. What it touched:
 
 - `gpu.primitiveLibrary` plus a CPU-side `(shapeId, lod) → {indexCount, startIndexLocation, baseVertexLocation}` table, built and uploaded in `InitD3DDeviceOnly`.
 - `GeometryData::libraryShapeId` (`int16_t`, −1 = bespoke); `SPHERE::GetGeometry` emits a library reference and no vertices.
 - `IsTransformOnlyEdit` becomes *empty payload **and** `libraryShapeId < 0`*. This is what keeps the trap below from firing, and it costs nothing: a move arrives from `TranslateSelectedSceneObjects`, which knows nothing of libraries, so it is still correctly a redirect flip; a radius edit arrives through `GeometryForObject` carrying a shape id, so it takes the full path and rewrites the template. That path clones a **256 KB** template-only page, not 4 MB, so the cheaper "shape id unchanged → also transform-only" optimisation is deliberately *not* built — it needs a registry lookup and buys little until drag-resize exists.
 - `GeometryPage::kind`, the page-kind branch in the page walks and in `RebuildIndirectBuffer`, and template capacity as the append criterion.
 
-**Step 2 — LOD in the compute pass.** `CullParams` 12 → 16 DWORDs, three more root SRVs (redirect table, arena, library table), shape id riding in `StartInstanceLocation`. Signature ~30 of 64 DWORDs.
+*Two things it turned out to need that were not on the list, both found by reading the code rather than by running it:* the **buffer-view construction was written out separately in three files** (scene loop, `BindPageBuffers`, print collector), so a second page kind would have been three places to remember — they now share `PageVertexBufferView` / `PageIndexBufferView`; and the **`vertexByteOffset / sizeof(Vertex)` division** that graphics.md already flagged as triplicated would have become six sites, so it is now one `ResolveObjectDrawRange`. Both are net deletions of duplication rather than additions to it, which is the only reason the page-kind branch is as small as it is.
+
+An instanced page's RCU clone copies no vertex or index data because there is none to copy. `drawn` tracks `commands` exactly and `overflow` stayed 0 throughout, so the compaction pass is still emitting one `ExecuteIndirect` per Viewport across both page kinds.
+
+**Step 2 — LOD in the compute pass.** `CullParams` 12 → 16 DWORDs, three more root SRVs (redirect table, arena, library table), shape id riding in `StartInstanceLocation`. Signature 30 of 64 DWORDs. The library's `(shapeId, lod)` table rides in the same buffer as the mesh, after the indices, so the whole library stays one resource and one upload. Details and the three consequences are under *LOD* below.
 
 **Doing LOD now, before the cull cache exists, is deliberate** — the cache is deferred with `SceneEpoch`, so camera-dependent command content can be designed into its key from the start rather than retrofitted. Step 2 also settles an open question in *Planned: draw buckets*, which asks whether the cull pass should reach `renderFlags` by binding the arena and redirect table or by copying flag bits into the template. LOD needs those two bound anyway, so the first option — the one that preserves "an appearance change never touches geometry" — becomes the incumbent at no extra cost.
 
@@ -704,11 +708,24 @@ A debug key pinning a fixed LOD belongs with Step 2, matching the existing `k` /
 
 #### LOD
 
-LOD is selected **per frame, in the compute pass**, from camera distance. Camera position is three more root constants in `CullParams`, which has a spare `cullPadding` — 12 DWORDs becomes 16. Object position comes from the instance record's `transformA/B/C.w`, so the shader binds the redirect table and arena, two more root SRVs with tab-lifetime fixed addresses — the same two-load pattern the vertex shaders already perform. The shader writes the chosen LOD's offsets into the output command; VBV/IBV are unchanged, since all 8 LODs live in the same library buffer.
+LOD is selected **per frame, in the compute pass**. Camera position plus a focal length go into `CullParams`, which had a spare `cullPadding` — 12 DWORDs becomes 16. Object position comes from the instance record's `transformA/B/C.w`, so the shader binds the redirect table and arena, two more root SRVs with tab-lifetime fixed addresses — the same two-load pattern the vertex shaders already perform. The shader writes the chosen LOD's offsets into the output command; VBV/IBV are unchanged, since all 8 LODs live in the same library buffer.
 
-An instanced template carries its shape id in `StartInstanceLocation`, otherwise always 0, and the compute pass writes 0 into the output command — no template format change and no second template struct.
+**The metric is projected size in pixels, not raw distance.** Distance alone is the wrong quantity: the same sphere at the same distance deserves different tessellation at 4K and at 1080p, and at 20° FOV against 60°. `focalPixels = sceneHeightPx / (2·tan(fovY/2))` folds resolution and FOV in on the CPU, and the shader needs one divide:
 
-Two consequences: **the legacy path draws instanced geometry at a CPU-fixed LOD**, since its templates are static (correct, just not adaptive — acceptable for a reference path); and **camera motion must join the cull-cache key**, because the deferred `(epoch, filter revision, visibility revision)` cache from GPU command compaction no longer holds once command *content* is camera-dependent. That cache exists for static Viewports, so it is a fair trade — but it has to be designed in, not discovered.
+```text
+diameterPx = 2 · radius · focalPixels / distance(camera, centre)
+lod        = clamp(floor(log2(max(diameterPx, 1))), 0, 7)
+```
+
+`radius` is the transform's scale — the length of the world matrix's first row, which for a canonical *unit* sphere is exactly the object's world radius under the uniform-scale assumption the `InstanceRecord` documents. A non-uniformly scaled shape needs the largest of the three row lengths times the entry's canonical bounding radius; that belongs with the first such shape, not before it. Because the ladder buckets by powers of two, `floor(log2(x))` is `firstbithigh` — one integer instruction, no transcendental — and *coarsest-first LOD ordering is what removes the subtraction* a fine-first ladder would need.
+
+An instanced template carries its shape id in `StartInstanceLocation` as **`shapeId + 1`**, so 0 still means "bespoke" and shape 0 stays distinguishable — no template format change and no second template struct. That field is otherwise dead weight, but it *is* a real draw argument and the legacy, pick and print paths execute these templates directly; it is inert only because nothing here uses `SV_InstanceID` or a per-instance vertex stream. The compacted output command therefore always writes 0 rather than passing the marker through. **Adding either of those two things would break this silently.**
+
+Three consequences. **The legacy path draws instanced geometry at a CPU-fixed LOD**, since its templates are static — correct, just not adaptive, which is acceptable for a reference path. **Camera motion must join the cull-cache key**, because the deferred `(epoch, filter revision, visibility revision)` cache from GPU command compaction no longer holds once command *content* is camera-dependent; that cache exists for static Viewports, so it is a fair trade, but it has to be designed in rather than discovered.
+
+The third was not predicted and is worth recording, because it is visible rather than subtle: **the selection highlight z-fights the object it highlights.** The overlay redraws the same object through an ordinary CPU draw at the CPU-fixed level while the scene draws a level the GPU picked, so two tessellations of one sphere sit at nearly equal depth and `LESS_EQUAL` passes in some pixels and fails in others — the object's own colour speckles through the highlight in a lattice following the tessellation. Matching the two levels is not cheaply possible from the CPU: the transform it would need to compute the same LOD lives in the device-local arena. The fix is a negative **depth bias** on the highlight pipeline, which also covers every future case where an overlay mesh and the scene mesh disagree rather than only this one. Depth write stays off, so nothing downstream inherits the shifted depth.
+
+A debug key (`l`) pins instanced templates back to the CPU-chosen level, which is what makes LOD popping — a tuning question rather than a correctness one — A/B-able without a rebuild.
 
 #### Non-uniform scale and normals
 
@@ -732,7 +749,7 @@ reserve = min(MV_MAX_INSTANCES_PER_TAB, allowedByHardware × 0.75)
 
 The library buffer is a VBV source, so its stride must match the PSO input layout. It is therefore built **only after the vertex format migration**, in the lean 16-byte layout, so it is never built twice. The sequence is: appearance payload and registry shadow → vertex 24 → 16 with the material table → canonical local frame → this step. Everything before the last item has shipped.
 
-Six things in the current implementation break *silently* under this design. The first four were predicted and have since been **confirmed against the code**; the last two were found only by reading it, which is the argument for doing that before writing any of it:
+Six things broke *silently* under this design. The first four were predicted, the last two were found only by reading the code — and **all six are fixed as of Step 1**. They are kept here because each one is a trap the *next* shape will walk into again, and because none of them would have failed loudly:
 
 - **`PageIsRenderable` rejects every template-only page.** It requires `vertexHead != 0 && indexTail != pageSize`, and a template-only page has neither — so the draw loop, pick pass and print path all skip instanced geometry with no error anywhere. The predicate must branch on page kind. Note it is **duplicated three times, not centralised**: `Selection3D-DirectX12.cpp` owns the named function, the scene loop repeats it inline, and the print collector repeats it a third time. Fixing one and not the others makes instanced geometry vanish from that path alone.
 - **`IsTransformOnlyEdit` misclassifies every instanced MODIFY.** It infers "transform-only" from an empty vertex/index payload — and an instanced object's payload is *always* empty. Moving a pipe and changing its schedule become indistinguishable: the first is correctly a redirect flip, the second silently keeps the old library entry, so the wall thickness never changes on screen. The `libraryShapeId` discriminator above is the explicit marker this asks for. This is the transform-only edit's own lesson reappearing from the other direction.
@@ -1103,8 +1120,8 @@ A **render-thread** counterpart now sits beside it (`GpuRenderStats`, `[gpu][cul
 ### Now
 
 - [x] **Canonical local frame for `SPHERE`** — unit sphere at the origin, `center` / `radius` carried as the object's transform, with the composition consolidated into `WorldMatrixForObject`. The prerequisite for sharing a mesh between two spheres, and a float32-precision win on its own. See *The canonical local frame, and its single composition point*.
-- [ ] **Shared sphere geometry, Step 1** — `gpu.primitiveLibrary`, template-only pages, fixed LOD 5, no HLSL changes. Acceptance: an unchanged image, and sphere geometry VRAM falling from ~4.25 MB per ~224 spheres to a single ~123 KB library plus ~24 bytes per object.
-- [ ] **Compute LOD, Step 2** — `CullParams` 12 → 16 DWORDs, three more root SRVs, shape id in `StartInstanceLocation`. Settles the `renderFlags`-routing question in *Planned: draw buckets* as a side effect.
+- [x] **Shared sphere geometry, Step 1** — `gpu.primitiveLibrary` (123 KB, eight LODs), template-only pages, fixed LOD 5, zero HLSL changes. Measured: six spheres added `+0 MB` of clone traffic against `+24 MB` for six cuboids, with the same number of page clones either way.
+- [x] **Compute LOD, Step 2** — per-frame level from projected pixel size, `CullParams` 12 → 16 DWORDs, three more root SRVs. Settles the `renderFlags`-routing question in *Planned: draw buckets*: the cull pass now binds the arena and redirect table anyway, so routing can read them instead of copying flag bits into the draw template — which is what preserves "an appearance change never touches geometry".
 
 ### Next
 

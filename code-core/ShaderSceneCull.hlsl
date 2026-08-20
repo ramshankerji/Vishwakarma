@@ -74,14 +74,39 @@ struct VisibleCommand {
     uint StartInstanceLocation;
 };
 
+/* One (shape, LOD) mesh's location inside the primitive library buffer. Mirrors
+PrimitiveLibraryDrawRange in RenderScene3D.h - 12 bytes, indexed as (shapeId * 8 + lod). */
+struct PrimitiveLod {
+    uint indexCount;
+    uint startIndexLocation;
+    int  baseVertexLocation;
+};
+
+/* The instance arena record, as the two scene vertex shaders declare it. Only the transform half is
+read here. transformA/B/C are the first three ROWS of transpose(world), so the translation is their
+.w components and COLUMN i of the row-vector world matrix is (transformA[i], transformB[i],
+transformC[i]) - see InstanceRecord in RenderScene3D.h. */
+struct InstanceRecord {
+    float4 transformA;
+    float4 transformB;
+    float4 transformC;
+    uint   materialIndex;
+    uint   packedColor;
+    uint   renderFlags;
+    uint   packedParams;
+};
+
 StructuredBuffer<IndirectCommand>   Templates      : register(t0); // = the page's indirectBuffer.
 StructuredBuffer<uint2>             VisibilityMask : register(t1); // Per gpuInstanceIndex, uint2.
+StructuredBuffer<uint>              InstanceSlotOf : register(t2); // Redirect: index -> arena slot.
+StructuredBuffer<InstanceRecord>    Instances      : register(t3); // The arena, by instanceSlot.
+StructuredBuffer<PrimitiveLod>      LibraryLods    : register(t4); // (shapeId * 8 + lod).
 RWStructuredBuffer<VisibleCommand>  VisibleOut     : register(u0); // Compacted output, whole Viewport.
 RWByteAddressBuffer                 VisibleCount   : register(u1); // Command count at byte 0.
 
-/* Twelve scalar uints. Every member is a scalar, so none can straddle a float4 register and the
-cbuffer is exactly 12 DWORDs - which is what the root signature declares and what the render thread
-pushes with SetComputeRoot32BitConstants. Only the first three change meaning per Viewport; the
+/* Sixteen scalars. Every member is a scalar, so none can straddle a float4 register and the cbuffer
+is exactly 16 DWORDs - which is what the root signature declares and what the render thread pushes
+with SetComputeRoot32BitConstants. The first three and the camera block change per Viewport; the
 eight view fields change per page, which is the entire reason the dispatch stays per page. */
 cbuffer CullParams : register(b0) {
     uint templateCount;      // Number of templates in THIS page (== page.indirectCount).
@@ -96,6 +121,10 @@ cbuffer CullParams : register(b0) {
     uint indexAddressHi;
     uint indexSizeInBytes;
     uint indexFormat;
+    float cameraX;           // This Viewport's eye position, world space.
+    float cameraY;
+    float cameraZ;
+    float focalPixels;       // sceneHeightPx / (2 tan(fovY/2)). <= 0 pins the CPU-chosen LOD.
     uint cullPadding;        // Pads the cbuffer to a whole register. Unused.
 };
 
@@ -104,6 +133,38 @@ bool IsVisibleInSubTab(uint instanceIndex, uint bit) {
     uint2 mask = VisibilityMask[instanceIndex];
     uint word = bit < 32u ? mask.x : mask.y;
     return (word & (1u << (bit & 31u))) != 0u;
+}
+
+/* PER-FRAME LOD, from the object's PROJECTED SIZE IN PIXELS rather than from raw distance. Distance
+alone is the wrong metric: the same sphere at the same distance deserves different tessellation at
+4K and at 1080p, and at 20 degrees FOV against 60. Screen size folds resolution and FOV in, and it
+is also the quantity the tessellation ladder was tuned against (LOD 7 at >= 128 px down to LOD 0
+below 2 px).
+
+Two dependent loads to reach the transform - redirect table, then arena - exactly as the scene
+vertex shader does, because the arena is addressed by instanceSlot and not by gpuInstanceIndex.
+
+The radius comes from the transform's SCALE. Row 0 of the row-vector world matrix is
+(transformA.x, transformB.x, transformC.x); its length is the scale along X, which for a canonical
+UNIT sphere is the object's world radius. That is exact under the uniform-scale assumption the
+InstanceRecord documents. A non-uniformly scaled shape (a cylinder as scale(r, r, L)) would need the
+LARGEST of the three row lengths times the entry's canonical bounding radius - worth doing when the
+first such shape lands, and wrong to guess at now. */
+uint SelectLodForInstance(uint gpuInstanceIndex) {
+    uint slot = InstanceSlotOf[gpuInstanceIndex];
+    InstanceRecord instance = Instances[slot];
+
+    float3 centre = float3(instance.transformA.w, instance.transformB.w, instance.transformC.w);
+    float radius = length(float3(instance.transformA.x, instance.transformB.x, instance.transformC.x));
+    float distanceToEye = max(distance(float3(cameraX, cameraY, cameraZ), centre), 1e-4f);
+    float diameterPixels = 2.0f * radius * focalPixels / distanceToEye;
+
+    /* One integer instruction instead of log2: the ladder buckets by powers of two, so the index of
+    the highest set bit IS floor(log2(x)). The max() guards firstbithigh(0), which is undefined, and
+    the clamp covers anything at or above 256 px. Coarsest-first LOD ordering is what removes the
+    subtraction that a fine-first ladder would need here. */
+    uint bucket = (uint)max(diameterPixels, 1.0f);
+    return clamp(firstbithigh(bucket), 0u, 7u);
 }
 
 [numthreads(64, 1, 1)]
@@ -134,10 +195,30 @@ void main(uint3 id : SV_DispatchThreadID) {
     out_.indexSizeInBytes     = indexSizeInBytes;
     out_.indexFormat          = indexFormat;
     out_.gpuInstanceIndex     = cmd.gpuInstanceIndex;
-    out_.IndexCountPerInstance = cmd.IndexCountPerInstance;
     out_.InstanceCount        = cmd.InstanceCount;
-    out_.StartIndexLocation   = cmd.StartIndexLocation;
-    out_.BaseVertexLocation   = cmd.BaseVertexLocation;
-    out_.StartInstanceLocation = cmd.StartInstanceLocation;
+
+    /* SHAPE MARKER, not a draw argument. A template drawing from the primitive library carries
+    `libraryShapeId + 1` in StartInstanceLocation; 0 means bespoke. See TemplateShapeMarker in
+    RenderScene3D.h for why that field and why the +1.
+
+    Only the three offsets differ between levels - all eight LODs live in the SAME library buffer -
+    so the command's vertex and index VIEWS are untouched by the choice, which is exactly what lets
+    LOD selection happen here without splitting the draw. */
+    uint shapeMarker = cmd.StartInstanceLocation;
+    if (shapeMarker != 0u && focalPixels > 0.0f) {
+        uint lod = SelectLodForInstance(cmd.gpuInstanceIndex);
+        PrimitiveLod entry = LibraryLods[(shapeMarker - 1u) * 8u + lod];
+        out_.IndexCountPerInstance = entry.indexCount;
+        out_.StartIndexLocation   = entry.startIndexLocation;
+        out_.BaseVertexLocation   = entry.baseVertexLocation;
+    } else {
+        // Bespoke, or LOD pinned by the debug key: draw exactly what the CPU put in the template.
+        out_.IndexCountPerInstance = cmd.IndexCountPerInstance;
+        out_.StartIndexLocation   = cmd.StartIndexLocation;
+        out_.BaseVertexLocation   = cmd.BaseVertexLocation;
+    }
+    // ALWAYS 0: we draw one instance starting at 0. Passing the marker through would make it a live
+    // draw argument again, which is the one thing the marker encoding must never do.
+    out_.StartInstanceLocation = 0u;
     VisibleOut[slot] = out_;
 }

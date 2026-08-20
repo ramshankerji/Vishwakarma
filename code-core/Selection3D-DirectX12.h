@@ -32,6 +32,7 @@ SelectionState. */
 struct DX12ResourcesPerTab;
 struct DX12ResourcesPerWindow;
 struct TabGeometryStorage;
+struct GeometryPage;        // MemoryManagerGPU-DirectX12.h
 struct CameraState;         // RenderScene3D.h
 struct SubTabContainerSet;  // RenderScene3D.h - the containers a SubTab draws (10M plan Step 6).
 
@@ -123,6 +124,16 @@ struct PickPassContext {
 // --- API ----------------------------------------------------------------------------------------
 void InitSelection3DResources(DX12ResourcesPerTab& tabRes);
 void CleanupSelection3DResources(DX12ResourcesPerTab& tabRes);
+
+/* Is this page worth visiting at all - published, holding at least one draw template, and backed by
+whatever it draws from. Container membership is NOT checked: callers reach pages through the
+snapshot's container directory, so a page they can see already belongs to the SubTab.
+
+Shared by the scene loop, the pick and highlight passes and the print collector. It was three
+separate inline copies of the same predicate until an instanced page - which has no vertex or index
+region and so fails the bespoke test - would have had to be special-cased in all three, and a missed
+one is geometry that silently disappears from that path alone. */
+bool PageIsRenderable(const GeometryPage& page);
 
 // Draw selection highlight + rotation-center cube into the currently bound scene render target.
 // Must be called after RenderScene3D (so b0 view-proj constants are already populated) and

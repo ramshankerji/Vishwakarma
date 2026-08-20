@@ -748,84 +748,29 @@ inline void SPHERE::Randomize() {
     color = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
 }
 
-/*For the sphere, the "suitable" normal for every vertex is exactly the normalized vector from the sphere's
-center to that vertex. This results in perfectly smooth shading across the surface.
-Color randomization integrated directly into the vertex generation loop to accommodate the new Vertex structure.*/
-// SPHERE
-/*
-Updated implementation:
-- No explicit pole vertices
-- Full latitude rings generated (including top and bottom)
-- Uniform quad-based indexing across stacks
-- Smooth shading via true spherical normals
+/* SPHERE emits NO GEOMETRY AT ALL - it names a shape in the global primitive library and lets the
+world matrix carry `center` and `radius` (website/software/graphics.md, "Shared geometry and the
+primitive libraries"). Every sphere in the process therefore shares ONE mesh, at eight levels of
+detail; a scene of 100,000 spheres stores a sphere once.
 
-CANONICAL LOCAL FRAME (website/software/graphics.md, "World matrix and object placement"). This is
-the FIRST type migrated off authored-space vertices: the mesh emitted here is a UNIT sphere at the
-ORIGIN, and `center` / `radius` reach the GPU as the object's TRANSFORM instead of being baked into
-every position. Two things follow, and they are why this went first:
+That became possible only when the mesh stopped depending on the object's own parameters. The
+canonical-local-frame step did that - a UNIT sphere at the ORIGIN - and the ring/quad tessellation
+that used to live here now lives in AppendUnitSphereMesh, parameterised by slice and stack count so
+the library can build all eight levels from it. LOD 5 is 36x18, exactly what this function emitted.
 
-  - Float32 precision stops being spent on the offset. A small sphere at world (4000, 2000, -300)
-    used to burn most of its mantissa carrying that position in all 684 vertices.
-  - The mesh no longer depends on the object's parameters AT ALL, which is the precondition for
-    every sphere in the process to share ONE library mesh (graphics.md, "Shared geometry and the
-    primitive libraries"). Until this change two spheres of different radius produced different
-    vertex bytes and could not share anything.
+Eligibility is unconditional: an instanced object costs ZERO geometry bytes, so instancing a one-off
+still beats not instancing it, and there is no repeat-count threshold to tune.
 
-The stored data does NOT change: `center` and `radius` are still the object's own authored fields,
-still persisted exactly as before, and the Properties Pane still reads and writes them. What changed
-is only where they take effect - in the world matrix rather than in the vertex buffer. */
+Stored data is untouched. `center` and `radius` are still this object's own authored fields, still
+persisted exactly as before, and the Properties Pane still reads and writes them - `libraryShapeId`
+is runtime-only and never reaches disk, so files written before the library existed load unchanged.
+worldMatrix is left at identity here: WorldMatrixForObject composes it, and is the only place that
+does, because a MOVE needs the same matrix without regenerating anything. */
 inline GeometryData SPHERE::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
     geometry.color = ToFloat4(color);
-    const int sliceCount = 36;   // Longitude
-    const int stackCount = 18;   // Latitude
-    geometry.vertices.clear();
-    geometry.indices.clear();
-    geometry.vertices.reserve((stackCount + 1) * sliceCount);
-    geometry.indices.reserve(stackCount * sliceCount * 6);
-
-    // Generate full latitude rings (including top and bottom)
-    for (int i = 0; i <= stackCount; ++i) {
-
-        float phi = XM_PI * i / stackCount; // 0 → PI
-        float sinPhi = sinf(phi);
-        float cosPhi = cosf(phi);
-
-        for (int j = 0; j < sliceCount; ++j) {
-            float theta = XM_2PI * j / sliceCount; // 0 → 2PI
-
-            // Unit sphere at the origin, so the outward normal IS the position and is already unit
-            // length - the normalize the authored form needed (position minus centre) is gone with
-            // the offset. PackNormal is still used rather than packing inline: it is the one place
-            // the SNORM byte convention lives, and its normalize is exact for a unit input.
-            XMFLOAT3 pos = { sinPhi * cosf(theta), cosPhi, sinPhi * sinf(theta) };
-
-            geometry.vertices.push_back( Vertex{ pos, PackNormal(pos) } );
-        }
-    }
-
-    // Connect stacks with quads (2 triangles each)
-    for (int i = 0; i < stackCount; ++i) {
-        for (int j = 0; j < sliceCount; ++j) {
-            int next_j = (j + 1) % sliceCount;
-            int r0 = i * sliceCount;
-            int r1 = (i + 1) * sliceCount;
-
-            geometry.indices.push_back(r0 + j);
-            geometry.indices.push_back(r1 + j);
-            geometry.indices.push_back(r0 + next_j);
-            geometry.indices.push_back(r0 + next_j);
-            geometry.indices.push_back(r1 + j);
-            geometry.indices.push_back(r1 + next_j);
-        }
-    }
-
-    /* worldMatrix is deliberately left at the identity GeometryData's constructor sets, exactly as
-    every other generator leaves it. The matrix that carries this canonical mesh to `center` at
-    `radius` is composed in ONE place - WorldMatrixForObject - because a MOVE needs the same matrix
-    without regenerating any of the vertices above. Emitting it here as well would be a second
-    definition of the same frame, and the two would drift. */
+    geometry.libraryShapeId = kPrimitiveShapeSphere;
     return geometry;
 }
 

@@ -101,6 +101,19 @@ void CreateHighlightPSO(DX12ResourcesPerTab& tabRes) {
     pso.VS = CD3DX12_SHADER_BYTECODE(g_sceneVertexShader16, sizeof(g_sceneVertexShader16));
     pso.PS = CD3DX12_SHADER_BYTECODE(g_sceneHighlightPixelShader, sizeof(g_sceneHighlightPixelShader));
     pso.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    /* Pull the highlight slightly toward the camera. Without this it z-fights the object it is
+    highlighting, and visibly: the overlay redraws the SAME object through a CPU draw, while the
+    scene now draws instanced geometry at a LOD the compute pass chooses per frame ("Shared geometry
+    and the primitive libraries", Step 2). Two different tessellations of one sphere sit at nearly
+    equal depth, so LESS_EQUAL passes in some pixels and fails in others - which showed up as the
+    object's own colour speckling through the highlight in a lattice following the tessellation.
+
+    Depth bias rather than matching the LODs, because the CPU cannot cheaply learn which level the
+    GPU picked: the transform it would need lives in the device-local instance arena. Biasing also
+    covers every future case where the overlay mesh and the scene mesh disagree, instead of only
+    this one. Depth write stays OFF, so nothing downstream inherits the shifted depth. */
+    pso.RasterizerState.DepthBias = -2000;
+    pso.RasterizerState.SlopeScaledDepthBias = -1.5f;
     pso.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
     pso.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
     pso.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL; // Redraw at same depth.
@@ -243,28 +256,32 @@ void EnsurePickTargets(PickPassContext& ctx, UINT w, UINT h) {
 }
 
 // Bind whole-page vertex/index buffers exactly like RenderScene3D does, so per-object
-// StartIndexLocation / BaseVertexLocation match the indirect-draw arithmetic.
+// StartIndexLocation / BaseVertexLocation match the indirect-draw arithmetic. An instanced page owns
+// no buffer and draws from the global primitive library instead - the same substitution
+// RenderScene3D's PageVertexView / PageIndexView make, so pick and highlight see what the scene did.
 void BindPageBuffers(ID3D12GraphicsCommandList* cmd, GeometryPage& page) {
-    D3D12_VERTEX_BUFFER_VIEW vbv{};
-    vbv.BufferLocation = page.buffer->GetGPUVirtualAddress();
-    vbv.SizeInBytes = page.vertexHead;
-    vbv.StrideInBytes = sizeof(Vertex);
-    D3D12_INDEX_BUFFER_VIEW ibv{};
-    // Bind at the page base over the whole page so StartIndexLocation is absolute
-    // (indexByteOffset / 2), matching RenderScene3D (graphics.md, 10M plan Step 7, constraint 1).
-    ibv.BufferLocation = page.buffer->GetGPUVirtualAddress();
-    ibv.SizeInBytes = page.pageSize;
-    ibv.Format = DXGI_FORMAT_R16_UINT;
+    const D3D12_VERTEX_BUFFER_VIEW vbv = PageVertexBufferView(page);
+    const D3D12_INDEX_BUFFER_VIEW ibv = PageIndexBufferView(page);
     cmd->IASetVertexBuffers(0, 1, &vbv);
     cmd->IASetIndexBuffer(&ibv);
 }
 
-// Container membership is no longer checked here: callers reach pages through the snapshot's
-// container directory, so a page they see already belongs to the SubTab (10M plan Step 6).
+// Definition of the predicate declared in Selection3D-DirectX12.h. Deliberately NOT in this file's
+// anonymous namespace any more: the scene loop and the print collector call it too, and three
+// private copies of it were exactly how an instanced page could vanish from one path alone.
+} // namespace
+
+/* The vertex/index test is a BESPOKE-page test. An instanced page has no geometry region at all -
+it draws from the global primitive library - so `vertexHead != 0 && indexTail != pageSize` is false
+for every one of them, and applying it unbranched would make instanced geometry silently invisible
+with no error anywhere. Holding at least one draw template is the whole requirement there. */
 bool PageIsRenderable(const GeometryPage& page) {
-    return page.published.load(std::memory_order_acquire) && page.indirectCount != 0 &&
-        page.vertexHead != 0 && page.indexTail != page.pageSize;
+    if (!page.published.load(std::memory_order_acquire) || page.indirectCount == 0) return false;
+    if (page.kind == GeometryPageKind::InstancedGlobal) return gpu.primitiveLibrary.IsReady();
+    return page.vertexHead != 0 && page.indexTail != page.pageSize;
 }
+
+namespace {
 
 // Visit every page of every container in the SubTab's set. Mirrors the loop in RenderScene3D so
 // the pick and highlight passes see exactly the pages the visible scene drew.
@@ -408,13 +425,14 @@ void RecordSelectionOverlays(ID3D12GraphicsCommandList* commandList, DX12Resourc
                 for (const GeometryPlacementRecordInPage& obj : page.objects) {
                     if (obj.isDeleted || selectedSet.find(obj.objectID) == selectedSet.end()) continue;
                     if (!boundBuffers) { BindPageBuffers(commandList, page); boundBuffers = true; }
-                    // Absolute (page-base-relative), matching the IBV bound at the page base.
-                    const UINT startIndex =
-                        obj.indexByteOffset / static_cast<UINT>(sizeof(uint16_t));
-                    const INT baseVertex =
-                        static_cast<INT>(obj.vertexByteOffset / sizeof(Vertex));
+                    // Absolute within whichever views BindPageBuffers just bound - the page's own
+                    // buffer, or the primitive library for an instanced page.
+                    uint32_t indexCount = 0, startIndex = 0;
+                    int32_t baseVertex = 0;
+                    ResolveObjectDrawRange(obj, gpu.primitiveLibrary.table, indexCount, startIndex,
+                        baseVertex);
                     commandList->SetGraphicsRoot32BitConstant(2, obj.gpuInstanceIndex, 0);
-                    commandList->DrawIndexedInstanced(obj.indexCount, 1, startIndex, baseVertex, 0);
+                    commandList->DrawIndexedInstanced(indexCount, 1, startIndex, baseVertex, 0);
                 }
             });
         }

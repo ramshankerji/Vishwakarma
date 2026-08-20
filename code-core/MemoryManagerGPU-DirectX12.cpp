@@ -298,6 +298,10 @@ void शंकर::InitD3DDeviceOnly() {
     // GpuUploadRing::Reclaim reads. Render threads have not started yet.
     uploadRing.Initialize();
 
+    // Shared geometry for every tab. Needs the copy queue and fence above; runs before any thread
+    // starts, so the library is resident before anything can reference it.
+    InitPrimitiveLibrary(device.Get());
+
     rttFormat = DXGI_FORMAT_R8G8B8A8_UNORM; //Initially. Latter upgrade during HDR implementation.
     //When implementing HDR, check if hardware support this.
 }

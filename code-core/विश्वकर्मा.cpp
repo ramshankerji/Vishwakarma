@@ -1085,9 +1085,9 @@ static void ZoomSceneToExtents(DATASETTAB* myTab, bool selectedOnly) {
         applies exactly this matrix, so doing it here keeps the fit consistent with what is on
         screen. Identity for anything that has never been moved, which is the common case. */
         const DirectX::XMMATRIX world = DirectX::XMLoadFloat4x4(&geometry.worldMatrix);
-        for (const Vertex& vertex : geometry.vertices) {
-            const DirectX::XMVECTOR worldPosition = DirectX::XMVector3Transform(
-                DirectX::XMLoadFloat3(&vertex.position), world);
+        auto framePoint = [&](DirectX::FXMVECTOR localPosition) {
+            const DirectX::XMVECTOR worldPosition =
+                DirectX::XMVector3Transform(localPosition, world);
             DirectX::XMVECTOR offset = DirectX::XMVectorSubtract(worldPosition, target);
             const float alongForward = DirectX::XMVectorGetX(DirectX::XMVector3Dot(offset, forward));
             const float alongRight = DirectX::XMVectorGetX(DirectX::XMVector3Dot(offset, right));
@@ -1098,6 +1098,26 @@ static void ZoomSceneToExtents(DATASETTAB* myTab, bool selectedOnly) {
             requiredDistance = (std::max)(requiredDistance, std::abs(alongUp) / tanHalfFovY - alongForward);
             requiredDistance = (std::max)(requiredDistance, cam.nearZ - alongForward);
             hasPoints = true;
+        };
+
+        /* An INSTANCED object has NO vertices to walk - its shape lives in the global primitive
+        library - so framing it needs the eight corners of that shape's canonical AABB instead.
+        Without this branch a sphere-only scene contributes nothing at all and zoom-to-fit becomes a
+        silent no-op. Note this is a SEPARATE code path from the registry's world-centre shadow,
+        which has the same gap for the same reason and is fixed independently on the copy thread. */
+        if (geometry.libraryShapeId >= 0) {
+            const PrimitiveLibraryEntry& entry =
+                gpu.primitiveLibrary.table.At(geometry.libraryShapeId, kPrimitiveFixedLod);
+            for (int corner = 0; corner < 8; ++corner) {
+                framePoint(DirectX::XMVectorSet(
+                    (corner & 1) ? entry.maxX : entry.minX,
+                    (corner & 2) ? entry.maxY : entry.minY,
+                    (corner & 4) ? entry.maxZ : entry.minZ, 1.0f));
+            }
+            continue;
+        }
+        for (const Vertex& vertex : geometry.vertices) {
+            framePoint(DirectX::XMLoadFloat3(&vertex.position));
         }
     }
     if (!hasPoints) return;
@@ -2402,6 +2422,17 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                     gUseComputeCull = !gUseComputeCull;
                     std::cout << "[gpu][stress] compute cull "
                               << (gUseComputeCull ? "ON" : "OFF") << std::endl;
+                }
+                /* Temporary Debug Key: "l" pins every instanced object to the CPU-chosen LOD instead
+                of picking one per frame from projected screen size (graphics.md, "Shared geometry
+                and the primitive libraries", Step 2). Zoom in and out with this ON and OFF: pinned
+                keeps one tessellation at every distance, unpinned should coarsen as objects shrink
+                and refine as they grow, with the silhouette staying round throughout. */
+                if (input.x == 76 || input.x == 108) { // 'L' & 'l'
+                    gLodPinned = !gLodPinned;
+                    std::cout << "[gpu][stress] instanced LOD "
+                              << (gLodPinned ? "PINNED to CPU level" : "per-frame from screen size")
+                              << std::endl;
                 }
                 /* Temporary Debug Key: "v" translates the SELECTION by +2 in Z through the real
                 producer path - it writes each object's placement and emits a transform-only MODIFY

@@ -171,6 +171,173 @@ inline uint32_t SubTabVisibilityBit(int subTabSlot) {
     return subTabSlot >= 0 && subTabSlot < 64 ? static_cast<uint32_t>(subTabSlot) : kNoSubTabBit;
 }
 
+/* THE GLOBAL PRIMITIVE LIBRARY (website/software/graphics.md, "Shared geometry and the primitive
+libraries"). One immutable mesh per (shape, LOD), built in code at startup, alive for the process and
+shared by every tab. An eligible object emits a REFERENCE plus a transform instead of vertices, so a
+scene of 100,000 spheres stores one sphere.
+
+WHY IT IS NOT A GeometryPage. A compacted draw command carries the RAW GPU VIRTUAL ADDRESS of its
+vertex buffer, and every GeometryPage is RCU-managed: any modify to any object in it clones the page
+to a new buffer at a new address and retires the old one. A cross-tab reference into such a page
+would hold an address the copy thread is free to invalidate. Tab 0 being un-closable does not help -
+the CLONE is what breaks it, not tab lifetime. So the library is one plain committed resource with a
+fixed address, deliberately outside the page system: no snapshot, no retirement, no fence gating.
+
+The shape IDS live in डेटा.h beside GeometryData::libraryShapeId - that is the generators' half of
+the contract ("which shape am I") and they never include this header. Everything below is the
+renderer's half ("where are that shape's bytes"). */
+// Always 8, even where fewer are meaningful - uniform array width keeps the Step 2 shader
+// branch-free, and a duplicate table entry costs 24 bytes.
+constexpr uint32_t kPrimitiveLodCount = 8;
+/* Step 1 selects ONE level on the CPU; Step 2 replaces this with per-frame selection in the compute
+pass. LOD 5 is 36x18 - byte-identical to the mesh SPHERE::GetGeometry emitted before the library
+existed, which is what makes Step 1 verifiable as an unchanged image. */
+constexpr uint32_t kPrimitiveFixedLod = 5;
+
+// Where one (shape, LOD) mesh sits inside the single library buffer, plus its canonical-space
+// bounds. The AABB is NOT decoration: an instanced object uploads no vertices, so this is the only
+// source for the registry's world-centre shadow and for zoom-to-fit (graphics.md records both as
+// silent failures otherwise).
+struct PrimitiveLibraryEntry {
+    uint32_t indexCount = 0;
+    uint32_t startIndexLocation = 0; // Indices from the library's index-region base.
+    int32_t  baseVertexLocation = 0; // Vertices from the library's vertex-region base.
+    float minX = 0.0f, minY = 0.0f, minZ = 0.0f;
+    float maxX = 0.0f, maxY = 0.0f, maxZ = 0.0f;
+};
+
+/* The GPU's half of a library entry: just enough to fill in a draw command, 12 bytes. The AABB
+above stays CPU-only - it feeds the registry's world-centre shadow and zoom-to-fit, neither of which
+the shader can reach. Mirrored as `PrimitiveLod` in ShaderSceneCull.hlsl; keep the two in step. */
+struct PrimitiveLibraryDrawRange {
+    uint32_t indexCount = 0;
+    uint32_t startIndexLocation = 0;
+    int32_t  baseVertexLocation = 0;
+};
+static_assert(sizeof(PrimitiveLibraryDrawRange) == 12,
+    "PrimitiveLibraryDrawRange is a StructuredBuffer element stride the cull shader indexes.");
+
+struct PrimitiveLibraryTable {
+    PrimitiveLibraryEntry entries[kPrimitiveShapeCount * kPrimitiveLodCount];
+
+    const PrimitiveLibraryEntry& At(int16_t shapeId, uint32_t lod) const {
+        return entries[static_cast<uint32_t>(shapeId) * kPrimitiveLodCount + lod];
+    }
+    PrimitiveLibraryEntry& At(int16_t shapeId, uint32_t lod) {
+        return entries[static_cast<uint32_t>(shapeId) * kPrimitiveLodCount + lod];
+    }
+
+    // Flatten to the 12-byte form the cull shader indexes, in the same (shapeId * 8 + lod) order.
+    void ToDrawRanges(PrimitiveLibraryDrawRange* out) const {
+        for (uint32_t i = 0; i < kPrimitiveShapeCount * kPrimitiveLodCount; ++i) {
+            out[i].indexCount = entries[i].indexCount;
+            out[i].startIndexLocation = entries[i].startIndexLocation;
+            out[i].baseVertexLocation = entries[i].baseVertexLocation;
+        }
+    }
+};
+
+/* How a draw TEMPLATE says which library shape it draws: `StartInstanceLocation` carries
+`libraryShapeId + 1`, so 0 means "bespoke, use my own offsets". The +1 is what keeps shape 0 (the
+sphere) distinguishable from an ordinary template, which always writes 0 there.
+
+That field is otherwise dead weight - we draw one instance starting at 0 - but it IS a real
+D3D12 draw argument, and the legacy, pick and print paths execute these templates DIRECTLY. A
+non-zero StartInstanceLocation offsets SV_InstanceID and per-instance vertex fetch, neither of which
+any shader here uses, so those paths are unaffected today. **Adding a per-instance vertex stream or
+reading SV_InstanceID would break that silently**, and the compacted output command therefore always
+writes 0 rather than passing this value through. */
+constexpr uint32_t kBespokeTemplateMarker = 0;
+inline uint32_t TemplateShapeMarker(int16_t libraryShapeId) {
+    return libraryShapeId < 0 ? kBespokeTemplateMarker : static_cast<uint32_t>(libraryShapeId) + 1;
+}
+
+/* Sphere tessellation per LOD, coarsest first: {slices, stacks}, giving slices*stacks*2 triangles.
+LOD 0 is 16 triangles for a sub-pixel sphere; LOD 7 is 4096 for one covering 128 px or more. Every
+slice count is a multiple of 4, so each level's vertices reach exactly +/-1 on all three axes.
+
+The whole ladder is ~123 KB (4588 vertices, 26256 indices) ONCE for the process. Largest level is
+2112 vertices, comfortably inside the 16-bit index limit, which is what lets every entry keep
+object-relative indices resolved through BaseVertexLocation. */
+constexpr uint32_t kSphereLodSlices[kPrimitiveLodCount] = { 4, 8, 12, 16, 24, 36, 48, 64 };
+constexpr uint32_t kSphereLodStacks[kPrimitiveLodCount] = { 2, 4,  6,  8, 12, 18, 24, 32 };
+
+/* Append one canonical UNIT sphere at the origin. Same ring/quad topology SPHERE::GetGeometry used
+before the library took the mesh over - full latitude rings including both poles, quads between
+stacks - so LOD 5 reproduces it exactly. On a unit sphere at the origin the outward normal IS the
+position, already unit length. */
+inline void AppendUnitSphereMesh(uint32_t sliceCount, uint32_t stackCount,
+    std::vector<Vertex>& vertices, std::vector<uint16_t>& indices) {
+    for (uint32_t i = 0; i <= stackCount; ++i) {
+        const float phi = 3.14159265358979323846f * static_cast<float>(i) / static_cast<float>(stackCount);
+        const float sinPhi = sinf(phi);
+        const float cosPhi = cosf(phi);
+        for (uint32_t j = 0; j < sliceCount; ++j) {
+            const float theta = 6.28318530717958647692f * static_cast<float>(j) / static_cast<float>(sliceCount);
+            const XMFLOAT3 position = { sinPhi * cosf(theta), cosPhi, sinPhi * sinf(theta) };
+            vertices.push_back(Vertex{ position, PackNormal(position) });
+        }
+    }
+    for (uint32_t i = 0; i < stackCount; ++i) {
+        for (uint32_t j = 0; j < sliceCount; ++j) {
+            const uint32_t nextJ = (j + 1) % sliceCount;
+            const uint32_t r0 = i * sliceCount;
+            const uint32_t r1 = (i + 1) * sliceCount;
+            const uint16_t quad[6] = {
+                static_cast<uint16_t>(r0 + j),     static_cast<uint16_t>(r1 + j),
+                static_cast<uint16_t>(r0 + nextJ), static_cast<uint16_t>(r0 + nextJ),
+                static_cast<uint16_t>(r1 + j),     static_cast<uint16_t>(r1 + nextJ),
+            };
+            indices.insert(indices.end(), quad, quad + 6);
+        }
+    }
+}
+
+/* Build every LOD of every library shape into one vertex array and one index array, filling in the
+table. Platform-agnostic: the caller uploads the two arrays into whatever a backend calls a buffer.
+Indices are OBJECT-RELATIVE (they start at 0 for each entry) and resolved per draw through
+BaseVertexLocation, exactly as an ordinary geometry page's are. */
+inline void BuildPrimitiveLibraryMesh(std::vector<Vertex>& vertices, std::vector<uint16_t>& indices,
+    PrimitiveLibraryTable& table) {
+    vertices.clear();
+    indices.clear();
+    for (uint32_t lod = 0; lod < kPrimitiveLodCount; ++lod) {
+        PrimitiveLibraryEntry& entry = table.At(kPrimitiveShapeSphere, lod);
+        entry.baseVertexLocation = static_cast<int32_t>(vertices.size());
+        entry.startIndexLocation = static_cast<uint32_t>(indices.size());
+        const size_t firstVertex = vertices.size();
+        AppendUnitSphereMesh(kSphereLodSlices[lod], kSphereLodStacks[lod], vertices, indices);
+        entry.indexCount = static_cast<uint32_t>(indices.size()) - entry.startIndexLocation;
+
+        // Measured rather than assumed to be the unit cube: a coarse level's vertices only reach
+        // +/-1 because every slice count here is a multiple of 4, and that is a property of the
+        // table above rather than of the topology.
+        float minX = FLT_MAX, minY = FLT_MAX, minZ = FLT_MAX;
+        float maxX = -FLT_MAX, maxY = -FLT_MAX, maxZ = -FLT_MAX;
+        for (size_t v = firstVertex; v < vertices.size(); ++v) {
+            const XMFLOAT3& p = vertices[v].position;
+            minX = (std::min)(minX, p.x); maxX = (std::max)(maxX, p.x);
+            minY = (std::min)(minY, p.y); maxY = (std::max)(maxY, p.y);
+            minZ = (std::min)(minZ, p.z); maxZ = (std::max)(maxZ, p.z);
+        }
+        entry.minX = minX; entry.minY = minY; entry.minZ = minZ;
+        entry.maxX = maxX; entry.maxY = maxY; entry.maxZ = maxZ;
+    }
+}
+
+/* Which source a GeometryPage's vertices and indices come from. An INSTANCED page owns NO geometry
+buffer at all - it holds only placement records and draw templates, ~256 KB against an ordinary
+page's ~4.25 MB - and names the global primitive library as its source instead.
+
+The kinds are kept in SEPARATE pages rather than mixed because the cull dispatch passes ONE vertex
+and index buffer view per page as root constants. A page mixing both would have to carry views per
+COMMAND in the persistent 24-byte template, taking it to 56 bytes - 320 MB at 10M objects - or pay a
+second dispatch per page. Keeping them apart costs one branch in the four page walks instead. */
+enum class GeometryPageKind : uint8_t {
+    Bespoke = 0,        // Owns a geometry buffer; vertices uploaded per object.
+    InstancedGlobal = 1 // Draws from the global primitive library.
+};
+
 struct IndirectCommand { // OPTIMIZED Indirect Command
     // Dense renderer identity of the object this command draws (Root Constant b1). STABLE for the
     // object's whole GPU lifetime: unchanged by MODIFY and by an RCU clone relocating the object to
@@ -260,10 +427,47 @@ struct GeometryPlacementRecordInPage {
 
     // Optional padding for perfect 8-byte alignment (not needed – compiler will pad anyway)
 	bool isDeleted = false; // Marked for deletion (soft delete, for defragmentation)
+
+    /* Shared geometry: >= 0 means this object draws from the global primitive library, and the four
+    byte-offset/size fields above stay at LITERAL ZERO. graphics.md originally proposed overloading
+    those fields to carry (shapeId, lod); putting them in the struct's spare bytes instead is what
+    keeps `holeBytes += vertexSize + indexSize` and the compaction arithmetic correct BY
+    CONSTRUCTION - an instanced object genuinely occupies no bytes - rather than needing a guard at
+    every site that touches them. There were 7 spare bytes; this uses 3. */
+    int16_t libraryShapeId = -1;
+    uint8_t libraryLod = 0;
 };
 
 static_assert(sizeof(GeometryPlacementRecordInPage) == 64,
     "GeometryPlacementRecordInPage must be exactly 64 bytes for optimal cache/line usage.");
+
+/* Where one object's indices and vertices live, in the units DrawIndexedInstanced wants: index
+elements from the bound index view's base, and vertices from the bound vertex view's base.
+
+This exists to stop a FOURTH copy of the same arithmetic appearing. graphics.md records that
+`vertexByteOffset / sizeof(Vertex)` was already computed independently in three places -
+RebuildIndirectBuffer, the Selection3D highlight path and the compaction relocation - and that one
+of them being missed is a silently misplaced draw rather than a crash. Shared geometry adds a second
+case to every one of them, so the resolution is centralised here instead.
+
+BESPOKE: divide the byte offsets by the strides, exactly as before. INSTANCED: the record's byte
+offsets are literal zero and the real location comes from the library table entry the record names.
+The caller must have bound the matching views - page buffer for one, primitive library for the
+other; BindPageBuffers and PageVertexView / PageIndexView are what guarantee that. */
+inline void ResolveObjectDrawRange(const GeometryPlacementRecordInPage& record,
+    const PrimitiveLibraryTable& library, uint32_t& indexCount, uint32_t& startIndexLocation,
+    int32_t& baseVertexLocation) {
+    if (record.libraryShapeId >= 0) {
+        const PrimitiveLibraryEntry& entry = library.At(record.libraryShapeId, record.libraryLod);
+        indexCount = entry.indexCount;
+        startIndexLocation = entry.startIndexLocation;
+        baseVertexLocation = entry.baseVertexLocation;
+        return;
+    }
+    indexCount = record.indexCount;
+    startIndexLocation = record.indexByteOffset / static_cast<uint32_t>(sizeof(uint16_t));
+    baseVertexLocation = static_cast<int32_t>(record.vertexByteOffset / sizeof(Vertex));
+}
 
 /* Commands sent from Generator thread(s) to the Copy thread.
 
@@ -300,7 +504,17 @@ because GeometryData already carries the matrix, and an empty payload is otherwi
 ADD is never transform-only - a new object needs geometry. */
 inline bool IsTransformOnlyEdit(const CommandToCopyThread& command) {
     return command.type == CommandToCopyThreadType::MODIFY && command.geometry.has_value() &&
+        // An INSTANCED edit is also empty-payload, and the two must not be confused: a move is
+        // correctly a redirect flip, while an instanced edit has to rewrite its page's draw
+        // template or the shape silently keeps its old library entry. See GeometryData.
+        command.geometry->libraryShapeId < 0 &&
         command.geometry->vertices.empty() && command.geometry->indices.empty();
+}
+
+// Draws from the global primitive library rather than owning geometry. Never transform-only: the
+// template names a (shape, LOD) that an edit may have changed.
+inline bool IsInstancedGeometry(const CommandToCopyThread& command) {
+    return command.geometry.has_value() && command.geometry->libraryShapeId >= 0;
 }
 
 // A pure VisibilityMask write: touches no geometry page and must be kept out of the per-object

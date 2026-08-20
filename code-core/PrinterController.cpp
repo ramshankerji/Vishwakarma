@@ -65,12 +65,16 @@ struct Print2DPage {
 };
 
 // Same idea for the 3D geometry pages of one Scene3D container.
+/* The print path takes ComPtr COPIES rather than visiting pages in place, so it keeps whatever it
+draws from alive for the duration. The two views are resolved at collect time through the shared
+PageVertexBufferView / PageIndexBufferView, which is what lets an instanced page - whose `buffer` is
+null and whose geometry lives in the immortal primitive library - print exactly as it renders. */
 struct Print3DPage {
-    ComPtr<ID3D12Resource> buffer;
+    ComPtr<ID3D12Resource> buffer; // Keeps a bespoke page resident; null for an instanced page.
     ComPtr<ID3D12Resource> indirectBuffer;
     uint32_t indirectCount = 0;
-    uint32_t vertexHead = 0;
-    uint32_t pageSize = 0;
+    D3D12_VERTEX_BUFFER_VIEW vertexView{};
+    D3D12_INDEX_BUFFER_VIEW indexView{};
 };
 
 std::vector<Print2DPage> Collect2DPages(TabCad2DStorage& storage, uint64_t containerMemoryId) {
@@ -108,14 +112,15 @@ std::vector<Print3DPage> Collect3DPages(TabGeometryStorage& storage,
         auto containerPages = snapshot->pagesByContainer.find(containers.ids[c]);
         if (containerPages == snapshot->pagesByContainer.end()) continue;
         for (GeometryPage* page : containerPages->second) {
-            if (!page || !page->published.load(std::memory_order_acquire)) continue;
-            if (page->indirectCount == 0 || page->vertexHead == 0 || page->indexTail == page->pageSize) continue;
+            // Same predicate the scene, pick and highlight paths use - it branches on page kind, so
+            // an instanced page (no vertex or index region) is not silently dropped here.
+            if (!page || !PageIsRenderable(*page)) continue;
             Print3DPage copy;
             copy.buffer = page->buffer;
             copy.indirectBuffer = page->indirectBuffer;
             copy.indirectCount = page->indirectCount;
-            copy.vertexHead = page->vertexHead;
-            copy.pageSize = page->pageSize;
+            copy.vertexView = PageVertexBufferView(*page);
+            copy.indexView = PageIndexBufferView(*page);
             result.push_back(std::move(copy));
         }
     }
@@ -263,20 +268,9 @@ void Record3DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab,
     cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     for (const Print3DPage& page : pages) {
-        D3D12_VERTEX_BUFFER_VIEW vbv{};
-        vbv.BufferLocation = page.buffer->GetGPUVirtualAddress();
-        vbv.SizeInBytes = page.vertexHead;
-        vbv.StrideInBytes = sizeof(Vertex);
-
-        D3D12_INDEX_BUFFER_VIEW ibv{};
-        // Bind at the page base over the whole page: StartIndexLocation is absolute now
-        // (indexByteOffset / 2), matching RenderScene3D (graphics.md, 10M plan Step 7, constraint 1).
-        ibv.BufferLocation = page.buffer->GetGPUVirtualAddress();
-        ibv.SizeInBytes = page.pageSize;
-        ibv.Format = DXGI_FORMAT_R16_UINT;
-
-        cmd->IASetVertexBuffers(0, 1, &vbv);
-        cmd->IASetIndexBuffer(&ibv);
+        // Views were resolved by Collect3DPages through the shared page-view helpers.
+        cmd->IASetVertexBuffers(0, 1, &page.vertexView);
+        cmd->IASetIndexBuffer(&page.indexView);
         cmd->ExecuteIndirect(tabRes.commandSignature.Get(), page.indirectCount,
             page.indirectBuffer.Get(), 0, nullptr, 0);
     }
