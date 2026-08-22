@@ -181,10 +181,18 @@
             max-width: 100%;
             box-sizing: border-box;
         }
+        pre, code {
+            text-align: left;
+        }
         pre {
             overflow-x: auto;
             white-space: pre-wrap;
-            word-wrap: break-word;
+            overflow-wrap: anywhere;
+        }
+        /* Hugo wraps each code line in a display:flex span; allow it to shrink so long tokens wrap instead of scrolling */
+        pre > code > span,
+        pre > code > span > span {
+            min-width: 0;
         }
         header {
             display: flex;
