@@ -1360,7 +1360,7 @@ static bool CreatePrimitiveGeometryElement(DATASETTAB* targetTab, VishwakarmaSto
     case VishwakarmaStorage::ObjectType::Cuboid: {
         CUBOID* shape = new (targetTab->tabNo) CUBOID();
         shape->Randomize();
-        TranslatePoints(shape->vertices, OffsetTo(AveragePoint(shape->vertices), placementPoint));
+        shape->center = placementPoint; // The centre IS the stored anchor now - nothing to average.
         geometry = shape->GetGeometry();
         object = shape;
         break;

@@ -64,9 +64,16 @@ float3 InstanceTransformPoint(InstanceRecord r, float3 p) {
     return float3(dot(h, r.transformA), dot(h, r.transformB), dot(h, r.transformC));
 }
 
+// Inverse-transpose normal transform for non-uniform scale, kept in step with the shipping
+// ShaderSceneVertex_16.hlsl twin - that file carries the derivation and the scale -> rotate ->
+// translate rule it depends on.
 float3 InstanceTransformNormal(InstanceRecord r, float3 n) {
-    // Uniform-scale assumption stands; inverse-transpose is a later revision.
-    return float3(dot(n, r.transformA.xyz), dot(n, r.transformB.xyz), dot(n, r.transformC.xyz));
+    float3 row0 = float3(r.transformA.x, r.transformB.x, r.transformC.x);
+    float3 row1 = float3(r.transformA.y, r.transformB.y, r.transformC.y);
+    float3 row2 = float3(r.transformA.z, r.transformB.z, r.transformC.z);
+    float3 scaleSquared = max(float3(dot(row0, row0), dot(row1, row1), dot(row2, row2)), 1e-12f);
+    float3 m = n / scaleSquared;
+    return float3(dot(m, r.transformA.xyz), dot(m, r.transformB.xyz), dot(m, r.transformC.xyz));
 }
 
 struct PSInput {

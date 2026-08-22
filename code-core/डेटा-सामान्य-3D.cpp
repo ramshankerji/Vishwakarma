@@ -49,9 +49,12 @@ bool PYRAMID::encode(std::vector<uint8_t>& payload, std::string* errorMessage) c
 
 bool CUBOID::encode(std::vector<uint8_t>& payload, std::string* errorMessage) const {
     pbv::Cuboid message;
-    for (const XMFLOAT3& vertex : vertices) {
-        WritePoint3(message.add_vertices(), vertex);
-    }
+    WritePoint3(message.mutable_center(), center);
+    WritePoint3(message.mutable_size(), size);
+    message.set_qx(orientation.x);
+    message.set_qy(orientation.y);
+    message.set_qz(orientation.z);
+    message.set_qw(orientation.w);
     WriteColor4(message.mutable_color(), colors);
     if (!placement.IsIdentity()) WritePlacement(message.mutable_placement(), placement);
     return SerializeMessage(message, payload, errorMessage);
@@ -185,14 +188,16 @@ bool CUBOID::decode(const std::vector<uint8_t>& payload) {
     pbv::Cuboid message;
     if (!ParseMessage(payload, message)) return false;
 
-    vertices.clear();
-    vertices.reserve(message.vertices_size());
-    for (int i = 0; i < message.vertices_size(); ++i) {
-        vertices.push_back(ReadPoint3(message.vertices(i)));
-    }
+    center = message.has_center() ? ReadPoint3(message.center()) : XMFLOAT3{};
+    size = message.has_size() ? ReadPoint3(message.size()) : XMFLOAT3{ 1.0f, 1.0f, 1.0f };
+    orientation =
+        ReadQuaternionOrIdentity(message.qx(), message.qy(), message.qz(), message.qw());
     colors = message.has_color() ? ReadColor4(message.color()) : DefaultColor4();
     placement = message.has_placement() ? ReadPlacement(message.placement()) : Placement3D{};
-    return vertices.size() >= 8;
+    /* A file written before the storage reshape carries only the reserved corner-vertex field, so
+    every field read above defaults and this box arrives 1x1x1 at the origin. That is a STALE FILE,
+    not a decode failure - the software is unreleased and there is no migration. Delete and remake. */
+    return true;
 }
 
 bool CONE::decode(const std::vector<uint8_t>& payload) {

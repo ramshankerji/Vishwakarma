@@ -115,8 +115,11 @@ the first three COLUMNS of W:
 
 The dropped fourth row of transpose(W) is always (0,0,0,1), which is exactly why 48 bytes suffice -
 and exactly why a shader may NOT hand this to a generic float4x4 `mul` any more. Point transform is
-three dots against float4(pos,1); normal transform is three dots against the .xyz parts (uniform
-scale assumed, inverse-transpose left to a later revision).
+three dots against float4(pos,1); the NORMAL transform is those same three dots after dividing the
+normal by the three squared row lengths, which is inverse(transpose(W3x3)) for any scale -> rotate
+-> translate composition. Non-uniform scale is live (CYLINDER is (r, r, L), CUBOID is the box's
+three sizes); a SHEARED transform would break the shortcut and none is composed today. See
+InstanceTransformNormal in ShaderSceneVertex_16.hlsl.
 
 Byte-for-byte this is the leading 48 bytes of the XMFLOAT4X4 the arena stored before Step 4, so the
 CPU writer is still one XMMatrixTranspose - it just stops copying the last row. */
@@ -204,17 +207,27 @@ struct PrimitiveLibraryEntry {
     int32_t  baseVertexLocation = 0; // Vertices from the library's vertex-region base.
     float minX = 0.0f, minY = 0.0f, minZ = 0.0f;
     float maxX = 0.0f, maxY = 0.0f, maxZ = 0.0f;
+    /* Largest |vertex| in CANONICAL space - the radius of the smallest origin-centred sphere
+    containing the mesh. This is the missing half of the LOD size estimate: the shader multiplies it
+    by the transform's largest row length to get the object's world radius. A unit sphere's is
+    exactly 1.0, which is why the sphere-only version of that formula could leave it implicit; the
+    unit cylinder's is sqrt(1 + 0.25) = 1.118 and the unit cube's is sqrt(3)/2 = 0.866. MEASURED
+    from the built vertices rather than assumed, because a coarse level does not necessarily reach
+    as far as its ideal shape does. */
+    float boundingRadius = 0.0f;
 };
 
-/* The GPU's half of a library entry: just enough to fill in a draw command, 12 bytes. The AABB
-above stays CPU-only - it feeds the registry's world-centre shadow and zoom-to-fit, neither of which
-the shader can reach. Mirrored as `PrimitiveLod` in ShaderSceneCull.hlsl; keep the two in step. */
+/* The GPU's half of a library entry: just enough to fill in a draw command plus the canonical
+bounding radius the LOD selector needs, 16 bytes. The AABB above stays CPU-only - it feeds the
+registry's world-centre shadow and zoom-to-fit, neither of which the shader can reach. Mirrored as
+`PrimitiveLod` in ShaderSceneCull.hlsl; keep the two in step. */
 struct PrimitiveLibraryDrawRange {
     uint32_t indexCount = 0;
     uint32_t startIndexLocation = 0;
     int32_t  baseVertexLocation = 0;
+    float    boundingRadius = 0.0f;
 };
-static_assert(sizeof(PrimitiveLibraryDrawRange) == 12,
+static_assert(sizeof(PrimitiveLibraryDrawRange) == 16,
     "PrimitiveLibraryDrawRange is a StructuredBuffer element stride the cull shader indexes.");
 
 struct PrimitiveLibraryTable {
@@ -227,12 +240,13 @@ struct PrimitiveLibraryTable {
         return entries[static_cast<uint32_t>(shapeId) * kPrimitiveLodCount + lod];
     }
 
-    // Flatten to the 12-byte form the cull shader indexes, in the same (shapeId * 8 + lod) order.
+    // Flatten to the 16-byte form the cull shader indexes, in the same (shapeId * 8 + lod) order.
     void ToDrawRanges(PrimitiveLibraryDrawRange* out) const {
         for (uint32_t i = 0; i < kPrimitiveShapeCount * kPrimitiveLodCount; ++i) {
             out[i].indexCount = entries[i].indexCount;
             out[i].startIndexLocation = entries[i].startIndexLocation;
             out[i].baseVertexLocation = entries[i].baseVertexLocation;
+            out[i].boundingRadius = entries[i].boundingRadius;
         }
     }
 };
@@ -293,6 +307,138 @@ inline void AppendUnitSphereMesh(uint32_t sliceCount, uint32_t stackCount,
     }
 }
 
+/* WINDING CONVENTION FOR EVERY MESH IN THIS FILE, and it is the opposite of the obvious one.
+
+The scene, pick and highlight PSOs all back-cull (CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT), i.e.
+CULL_BACK with FrontCounterClockwise = FALSE) and the camera matrices are LEFT-handed
+(XMMatrixLookAtLH / XMMatrixPerspectiveFovLH). Under that pair a triangle is FRONT-facing when
+cross(v1 - v0, v2 - v0) - the ordinary RIGHT-hand rule - points AWAY from the viewer, i.e. INTO the
+solid. Winding and the stored per-vertex normal therefore point in OPPOSITE directions, deliberately:
+the normal is outward because lighting needs it outward, the winding is inward because the
+rasterizer's front-face test needs it inward.
+
+AppendUnitSphereMesh above already obeys this; get it backwards and the near surface is culled while
+the far one survives, which reads as a hole in one end of a solid rather than as a winding mistake.
+
+Append one canonical UNIT CUBE: edges of length 1, centred at the origin, so the canonical scale IS
+the box's full size. Same six faces, same outward per-face normals and the same 24-vertex /
+36-index bifurcation CUBOID::GetGeometry emitted before the library took the mesh over; the corner
+coordinates became +/-0.5 instead of eight stored world points, and the winding was corrected -
+the bespoke generator wound its faces outward, so a cuboid had always been rasterised from its FAR
+faces, shaded by normals belonging to surfaces the viewer cannot see.
+
+A cuboid has nothing to tessellate away, so this single mesh serves all eight LOD slots. */
+inline void AppendUnitCubeMesh(std::vector<Vertex>& vertices, std::vector<uint16_t>& indices) {
+    // Indices are ENTRY-RELATIVE - they must start at 0 for this mesh and be resolved through the
+    // entry's BaseVertexLocation, exactly as AppendUnitSphereMesh's are. Using the global
+    // vertices.size() here would add the library offset a second time and draw a different shape.
+    const size_t vertexBase = vertices.size();
+    const XMFLOAT3 corner[8] = {
+        { -0.5f, -0.5f, -0.5f }, {  0.5f, -0.5f, -0.5f }, {  0.5f,  0.5f, -0.5f },
+        { -0.5f,  0.5f, -0.5f }, { -0.5f, -0.5f,  0.5f }, {  0.5f, -0.5f,  0.5f },
+        {  0.5f,  0.5f,  0.5f }, { -0.5f,  0.5f,  0.5f },
+    };
+    // Six outward faces: four corner indices each, then the face's own outward normal.
+    const uint8_t face[6][4] = {
+        { 0, 3, 2, 1 }, { 4, 5, 6, 7 }, { 4, 7, 3, 0 },
+        { 1, 2, 6, 5 }, { 3, 7, 6, 2 }, { 0, 1, 5, 4 },
+    };
+    const XMFLOAT3 faceNormal[6] = {
+        { 0.0f, 0.0f, -1.0f }, { 0.0f, 0.0f, 1.0f }, { -1.0f, 0.0f, 0.0f },
+        { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, -1.0f, 0.0f },
+    };
+    for (uint32_t f = 0; f < 6; ++f) {
+        const uint16_t base = static_cast<uint16_t>(vertices.size() - vertexBase);
+        const XMUBYTE4 packedNormal = PackNormal(faceNormal[f]);
+        for (uint32_t c = 0; c < 4; ++c) {
+            vertices.push_back(Vertex{ corner[face[f][c]], packedNormal });
+        }
+        // 0-2-1 and 0-3-2, not 0-1-2 and 0-2-3: the corner order above traces the face
+        // anticlockwise seen from OUTSIDE, and the convention note says front is the other way.
+        const uint16_t quad[6] = {
+            static_cast<uint16_t>(base + 0), static_cast<uint16_t>(base + 2),
+            static_cast<uint16_t>(base + 1), static_cast<uint16_t>(base + 0),
+            static_cast<uint16_t>(base + 3), static_cast<uint16_t>(base + 2),
+        };
+        indices.insert(indices.end(), quad, quad + 6);
+    }
+}
+
+/* Append one canonical UNIT CYLINDER: a SOLID rod along +Z, radius 1, length 1, spanning
+z -0.5..+0.5, wall plus both caps. Centred rather than base-at-origin (graphics.md, "Shared geometry
+and the primitive libraries", 9.2): it makes the instance transform's translation the object's true
+geometric centre, which is what the compute pass's LOD selector reads as its position, and it
+tightens the canonical bounding radius from sqrt(2) to sqrt(1.25).
+
+Flat shaded and bifurcated exactly as CYLINDER::GetGeometry was - 10 vertices and 12 indices per
+radial segment (3 + 3 for the two cap triangles, 4 + 6 for the wall quad) - so a pinned LOD 5 draws
+the same 36-segment tessellation the bespoke generator did.
+
+NORMALS POINT OUTWARD, which the old bespoke generator's did not: every one of its cross products
+was wound the wrong way round, so cylinders were lit as though from inside while spheres and cuboids
+were lit from outside. An inward-facing bore is a genuinely different surface and would be its OWN
+library entry with reversed winding, never this mesh under a flipped rasterizer state - that would
+cost a second PSO and therefore a second ExecuteIndirect per Viewport. Deferred with PIPE, which is
+the only thing that would consume it. */
+inline void AppendUnitCylinderMesh(uint32_t segmentCount, std::vector<Vertex>& vertices,
+    std::vector<uint16_t>& indices) {
+    // ENTRY-RELATIVE indices, as in AppendUnitCubeMesh above - see the note there.
+    const size_t vertexBase = vertices.size();
+    const XMUBYTE4 bottomNormal = PackNormal(XMFLOAT3{ 0.0f, 0.0f, -1.0f });
+    const XMUBYTE4 topNormal = PackNormal(XMFLOAT3{ 0.0f, 0.0f, 1.0f });
+    for (uint32_t i = 0; i < segmentCount; ++i) {
+        const float a0 = 6.28318530717958647692f * static_cast<float>(i) / static_cast<float>(segmentCount);
+        const float a1 = 6.28318530717958647692f * static_cast<float>(i + 1) / static_cast<float>(segmentCount);
+        const float c0 = cosf(a0), s0 = sinf(a0);
+        const float c1 = cosf(a1), s1 = sinf(a1);
+
+        const XMFLOAT3 b0 = { c0, s0, -0.5f }, b1 = { c1, s1, -0.5f };
+        const XMFLOAT3 t0 = { c0, s0,  0.5f }, t1 = { c1, s1,  0.5f };
+        uint16_t base = static_cast<uint16_t>(vertices.size() - vertexBase);
+
+        // Bottom cap fan triangle: normal -Z, wound the other way round per the convention note.
+        vertices.push_back(Vertex{ XMFLOAT3{ 0.0f, 0.0f, -0.5f }, bottomNormal });
+        vertices.push_back(Vertex{ b0, bottomNormal });
+        vertices.push_back(Vertex{ b1, bottomNormal });
+        indices.insert(indices.end(), { base, static_cast<uint16_t>(base + 1),
+            static_cast<uint16_t>(base + 2) });
+
+        // Top cap fan triangle: normal +Z, wound the other way round per the convention note.
+        base = static_cast<uint16_t>(vertices.size() - vertexBase);
+        vertices.push_back(Vertex{ XMFLOAT3{ 0.0f, 0.0f, 0.5f }, topNormal });
+        vertices.push_back(Vertex{ t1, topNormal });
+        vertices.push_back(Vertex{ t0, topNormal });
+        indices.insert(indices.end(), { base, static_cast<uint16_t>(base + 1),
+            static_cast<uint16_t>(base + 2) });
+
+        /* Wall quad, flat shaded: one normal for the whole facet, the outward radial direction at
+        the segment's MID angle. That is exactly what a cross product of the quad's own edges would
+        return, computed directly instead. */
+        const float aMid = 0.5f * (a0 + a1);
+        const XMUBYTE4 wallNormal = PackNormal(XMFLOAT3{ cosf(aMid), sinf(aMid), 0.0f });
+        base = static_cast<uint16_t>(vertices.size() - vertexBase);
+        // b0 -> t0 -> t1 -> b1, the order the bespoke generator used: it is already the
+        // front-facing one under the convention note, unlike that generator's caps.
+        vertices.push_back(Vertex{ b0, wallNormal });
+        vertices.push_back(Vertex{ t0, wallNormal });
+        vertices.push_back(Vertex{ t1, wallNormal });
+        vertices.push_back(Vertex{ b1, wallNormal });
+        indices.insert(indices.end(), {
+            base, static_cast<uint16_t>(base + 1), static_cast<uint16_t>(base + 2),
+            base, static_cast<uint16_t>(base + 2), static_cast<uint16_t>(base + 3),
+        });
+    }
+}
+
+/* Cylinder tessellation per LOD, coarsest first: only the RADIAL segment count varies, because a
+cylinder has nothing to subdivide along its axis. LOD 5 is 36 segments - what CYLINDER::GetGeometry
+emitted before the library existed - which keeps the same "a pinned level reproduces the previous
+tessellation" property the sphere ladder has.
+
+The whole ladder is 181 segments summed, ~33 KB. Against the sphere's 123 KB and the cuboid's 576
+bytes the entire library is still ~160 KB, one upload, once for the process. */
+constexpr uint32_t kCylinderLodSegments[kPrimitiveLodCount] = { 3, 4, 6, 8, 12, 36, 48, 64 };
+
 /* Build every LOD of every library shape into one vertex array and one index array, filling in the
 table. Platform-agnostic: the caller uploads the two arrays into whatever a backend calls a buffer.
 Indices are OBJECT-RELATIVE (they start at 0 for each entry) and resolved per draw through
@@ -301,27 +447,59 @@ inline void BuildPrimitiveLibraryMesh(std::vector<Vertex>& vertices, std::vector
     PrimitiveLibraryTable& table) {
     vertices.clear();
     indices.clear();
+
+    /* Measure one entry's canonical bounds from the vertices actually emitted, rather than assuming
+    the ideal shape's. A coarse level need not reach as far as the shape it approximates - a sphere
+    level only touches +/-1 on all three axes because every slice count in the ladder happens to be
+    a multiple of 4, which is a property of the table and not of the topology. */
+    auto MeasureEntry = [&](PrimitiveLibraryEntry& entry, size_t firstVertex) {
+        entry.indexCount = static_cast<uint32_t>(indices.size()) - entry.startIndexLocation;
+        float minX = FLT_MAX, minY = FLT_MAX, minZ = FLT_MAX;
+        float maxX = -FLT_MAX, maxY = -FLT_MAX, maxZ = -FLT_MAX;
+        float radiusSquared = 0.0f;
+        for (size_t v = firstVertex; v < vertices.size(); ++v) {
+            const XMFLOAT3& p = vertices[v].position;
+            minX = (std::min)(minX, p.x); maxX = (std::max)(maxX, p.x);
+            minY = (std::min)(minY, p.y); maxY = (std::max)(maxY, p.y);
+            minZ = (std::min)(minZ, p.z); maxZ = (std::max)(maxZ, p.z);
+            radiusSquared = (std::max)(radiusSquared, p.x * p.x + p.y * p.y + p.z * p.z);
+        }
+        entry.minX = minX; entry.minY = minY; entry.minZ = minZ;
+        entry.maxX = maxX; entry.maxY = maxY; entry.maxZ = maxZ;
+        entry.boundingRadius = sqrtf(radiusSquared);
+    };
+
     for (uint32_t lod = 0; lod < kPrimitiveLodCount; ++lod) {
         PrimitiveLibraryEntry& entry = table.At(kPrimitiveShapeSphere, lod);
         entry.baseVertexLocation = static_cast<int32_t>(vertices.size());
         entry.startIndexLocation = static_cast<uint32_t>(indices.size());
         const size_t firstVertex = vertices.size();
         AppendUnitSphereMesh(kSphereLodSlices[lod], kSphereLodStacks[lod], vertices, indices);
-        entry.indexCount = static_cast<uint32_t>(indices.size()) - entry.startIndexLocation;
+        MeasureEntry(entry, firstVertex);
+    }
 
-        // Measured rather than assumed to be the unit cube: a coarse level's vertices only reach
-        // +/-1 because every slice count here is a multiple of 4, and that is a property of the
-        // table above rather than of the topology.
-        float minX = FLT_MAX, minY = FLT_MAX, minZ = FLT_MAX;
-        float maxX = -FLT_MAX, maxY = -FLT_MAX, maxZ = -FLT_MAX;
-        for (size_t v = firstVertex; v < vertices.size(); ++v) {
-            const XMFLOAT3& p = vertices[v].position;
-            minX = (std::min)(minX, p.x); maxX = (std::max)(maxX, p.x);
-            minY = (std::min)(minY, p.y); maxY = (std::max)(maxY, p.y);
-            minZ = (std::min)(minZ, p.z); maxZ = (std::max)(maxZ, p.z);
+    /* ONE cube mesh, eight identical table rows. Uniform array width is what keeps the cull
+    shader's (shapeId * 8 + lod) indexing branch-free; a duplicate row costs 40 bytes and is far
+    cheaper than a per-shape LOD count the shader would have to read. */
+    {
+        PrimitiveLibraryEntry cube;
+        cube.baseVertexLocation = static_cast<int32_t>(vertices.size());
+        cube.startIndexLocation = static_cast<uint32_t>(indices.size());
+        const size_t firstVertex = vertices.size();
+        AppendUnitCubeMesh(vertices, indices);
+        MeasureEntry(cube, firstVertex);
+        for (uint32_t lod = 0; lod < kPrimitiveLodCount; ++lod) {
+            table.At(kPrimitiveShapeCuboid, lod) = cube;
         }
-        entry.minX = minX; entry.minY = minY; entry.minZ = minZ;
-        entry.maxX = maxX; entry.maxY = maxY; entry.maxZ = maxZ;
+    }
+
+    for (uint32_t lod = 0; lod < kPrimitiveLodCount; ++lod) {
+        PrimitiveLibraryEntry& entry = table.At(kPrimitiveShapeCylinder, lod);
+        entry.baseVertexLocation = static_cast<int32_t>(vertices.size());
+        entry.startIndexLocation = static_cast<uint32_t>(indices.size());
+        const size_t firstVertex = vertices.size();
+        AppendUnitCylinderMesh(kCylinderLodSegments[lod], vertices, indices);
+        MeasureEntry(entry, firstVertex);
     }
 }
 

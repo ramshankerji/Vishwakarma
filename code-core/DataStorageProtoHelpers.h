@@ -48,6 +48,23 @@ inline DirectX::PackedVector::XMHALF4 DefaultColor4() {
     return DirectX::PackedVector::XMHALF4(0.8f, 0.8f, 0.8f, 1.0f);
 }
 
+/* Four proto3 float fields back to a usable unit quaternion, or IDENTITY when they do not describe
+one. proto3 scalars default to 0, so a quaternion that was never written - or was truncated -
+arrives as (0,0,0,0). That is NOT identity: XMMatrixRotationQuaternion turns a zero quaternion into
+a matrix with a zero 3x3 block, which collapses every vertex of the object onto its origin. Silent,
+total, and it would look like the geometry generator failed.
+
+Shared by ReadPlacement below and by CUBOID's AUTHORED orientation, which is a separate rotation
+with the identical decoding trap. */
+inline DirectX::XMFLOAT4 ReadQuaternionOrIdentity(float qx, float qy, float qz, float qw) {
+    DirectX::XMFLOAT4 quaternion(qx, qy, qz, qw);
+    const float lengthSquared = qx * qx + qy * qy + qz * qz + qw * qw;
+    if (lengthSquared <= 1e-12f) return DirectX::XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f);
+    DirectX::XMStoreFloat4(&quaternion,
+        DirectX::XMQuaternionNormalize(DirectX::XMLoadFloat4(&quaternion)));
+    return quaternion;
+}
+
 // Rigid authored -> world placement, field 20 of every 3D geometry message. Callers skip this
 // entirely for an identity placement (Placement3D::IsIdentity), so files of never-moved objects
 // keep the byte layout the previous schema version produced.
@@ -62,19 +79,8 @@ inline void WritePlacement(vishwakarma::storage::Placement* message, const Place
 inline Placement3D ReadPlacement(const vishwakarma::storage::Placement& message) {
     Placement3D placement; // Identity until proven otherwise.
     if (message.has_origin()) placement.origin = ReadPoint3(message.origin());
-
-    /* proto3 scalars default to 0, so a placement message that was written without a quaternion -
-    or truncated - arrives as (0,0,0,0). That is NOT identity: XMMatrixRotationQuaternion turns a
-    zero quaternion into a matrix with a zero 3x3 block, which collapses every vertex of the object
-    onto the origin. Silent, total, and it would look like the geometry generator failed. Anything
-    without a usable length therefore stays identity. */
-    const DirectX::XMFLOAT4 quaternion(message.qx(), message.qy(), message.qz(), message.qw());
-    const float lengthSquared = quaternion.x * quaternion.x + quaternion.y * quaternion.y +
-        quaternion.z * quaternion.z + quaternion.w * quaternion.w;
-    if (lengthSquared > 1e-12f) {
-        DirectX::XMStoreFloat4(&placement.rotation,
-            DirectX::XMQuaternionNormalize(DirectX::XMLoadFloat4(&quaternion)));
-    }
+    placement.rotation =
+        ReadQuaternionOrIdentity(message.qx(), message.qy(), message.qz(), message.qw());
     return placement;
 }
 

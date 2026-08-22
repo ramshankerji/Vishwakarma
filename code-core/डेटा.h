@@ -74,8 +74,10 @@ non-uniform scale must cover every instance - so anything with an internal ratio
 stays bespoke rather than becoming an entry. */
 enum : int16_t {
     kPrimitiveShapeSphere = 0,
+    kPrimitiveShapeCuboid = 1,   // Unit cube, edges 1, centred at the origin.
+    kPrimitiveShapeCylinder = 2, // Unit solid rod: axis +Z, radius 1, length 1, CENTRED on z.
 };
-constexpr uint32_t kPrimitiveShapeCount = 1;
+constexpr uint32_t kPrimitiveShapeCount = 3;
 
 struct GeometryData
 {
@@ -110,7 +112,7 @@ struct GeometryData
 };
 
 /* Rigid placement of one 3D object: the transform from its AUTHORED coordinates - whatever its own
-point fields hold (SPHERE::center, CYLINDER::p1/p2, CUBOID::vertices, ...) - to WORLD coordinates.
+point fields hold (SPHERE::center, CYLINDER::p1/p2, CUBOID::center, ...) - to WORLD coordinates.
 Identity for a newly created object and for every object authored before this field existed.
 
 This is what lets an interactive move cost nothing (website/software/graphics.md, 10M plan Step 4).

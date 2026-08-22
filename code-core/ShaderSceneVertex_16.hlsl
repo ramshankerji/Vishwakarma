@@ -77,9 +77,33 @@ float3 InstanceTransformPoint(InstanceRecord r, float3 p) {
     return float3(dot(h, r.transformA), dot(h, r.transformB), dot(h, r.transformC));
 }
 
+/* Normals transform by inverse(transpose(M3x3)), NOT by M. Under UNIFORM scale the two differ only
+by a scalar that normalize() in the pixel shader cancels, which is why this was a plain `n * M` for
+as long as SPHERE was the only canonical-frame shape. A CYLINDER is scale(r, r, L) and a CUBOID is
+scale(sizeX, sizeY, sizeZ): the scalar no longer cancels, and shading bands stop matching the
+silhouette. Wrong lighting rather than a crash - it ships unnoticed if not done deliberately.
+
+It costs no storage and no extra loads. For M = S*R the rows are orthogonal with row i equal to
+s_i * R_i, so s_i^2 = dot(row_i, row_i) and inverse(transpose(M)) has row i = M_i / s_i^2. Scaling
+the NORMAL by the three reciprocals before the same three dot products is algebraically identical
+and keeps the transform in the (transformA, transformB, transformC) column form the record stores.
+
+THE ONE RULE THIS IMPOSES: composed transforms must stay scale -> rotate -> translate, never
+sheared. WorldMatrixForObject satisfies it for all three shapes, and Placement3D is rigid by
+design. A sheared instance (PARALLELEPIPED as a sheared unit cube) would need the full
+inverse-transpose and cannot use this shortcut.
+
+Row i of the row-vector world matrix is (transformA[i], transformB[i], transformC[i]) - see the
+transpose convention documented on InstanceRecord above. */
 float3 InstanceTransformNormal(InstanceRecord r, float3 n) {
-    // Uniform-scale assumption stands; inverse-transpose is a later revision.
-    return float3(dot(n, r.transformA.xyz), dot(n, r.transformB.xyz), dot(n, r.transformC.xyz));
+    float3 row0 = float3(r.transformA.x, r.transformB.x, r.transformC.x);
+    float3 row1 = float3(r.transformA.y, r.transformB.y, r.transformC.y);
+    float3 row2 = float3(r.transformA.z, r.transformB.z, r.transformC.z);
+    // max() guards a degenerate (zero-scale) transform against a division by zero; the pixel
+    // shader's normalize() would turn the resulting infinities into NaN across the whole object.
+    float3 scaleSquared = max(float3(dot(row0, row0), dot(row1, row1), dot(row2, row2)), 1e-12f);
+    float3 m = n / scaleSquared;
+    return float3(dot(m, r.transformA.xyz), dot(m, r.transformB.xyz), dot(m, r.transformC.xyz));
 }
 
 /* Deliberately NOT nointerpolation, even though the color is one value for the whole object now.

@@ -39,9 +39,11 @@ placement").
 It is two transforms composed, in row-vector order:
 
   local -> authored   whatever frame the type's GetGeometry emits vertices in. IDENTITY for every
-                      type that still bakes world coordinates into its vertices; for SPHERE, which
-                      emits a canonical UNIT sphere at the origin, it is scale(radius) then
-                      translate(center).
+                      type that still bakes world coordinates into its vertices. For the three
+                      canonical-frame types it is: SPHERE scale(radius) then translate(center);
+                      CUBOID scale(size) then rotate(orientation) then translate(center); CYLINDER
+                      an orthonormal basis about p2 - p1 with rows scaled (r, r, L) and the
+                      translation row at the MIDPOINT, because the canonical rod is centred.
   authored -> world   the object's rigid Placement3D, i.e. where it has been moved to since.
 
 WHY THIS IS A FUNCTION AND NOT INLINE IN GeometryForObject. There are TWO producers of an object's
@@ -85,8 +87,9 @@ struct PYRAMID :public META_DATA{
 struct CUBOID :public META_DATA {
     static constexpr VishwakarmaStorage::ObjectType storageObjectType = VishwakarmaStorage::ObjectType::Cuboid;
     static constexpr uint16_t storageSchemaVersion = VishwakarmaStorage::kGeometry3DMvpSchemaVersion;
-    //Mandatory Fields
-    std::vector<XMFLOAT3> vertices; // 8 corner vertices
+    XMFLOAT3 center = {};                     // Authored centre of the box.
+    XMFLOAT3 size = { 1.0f, 1.0f, 1.0f };     // FULL edge lengths along the box's own X/Y/Z.
+    XMFLOAT4 orientation = { 0.0f, 0.0f, 0.0f, 1.0f }; // Unit quaternion; identity = axis-aligned.
     XMHALF4 colors = {};   // Common color for all faces.
 
     //Optional Fields
@@ -396,71 +399,25 @@ inline void CUBOID::Randomize() {
     std::uniform_real_distribution<float> colorDist(0.0f, 1.0f);
     auto& rng = GetRNG();
 
-    float cx = posDist(rng);
-    float cy = posDist(rng);
-    float cz = posDist(rng);
-    float sx = sizeDist(rng) * 0.5f;
-    float sy = sizeDist(rng) * 0.5f;
-    float sz = sizeDist(rng) * 0.5f;
-
-    vertices = {
-        XMFLOAT3(cx - sx, cy - sy, cz - sz), // 0
-        XMFLOAT3(cx + sx, cy - sy, cz - sz), // 1
-        XMFLOAT3(cx + sx, cy + sy, cz - sz), // 2
-        XMFLOAT3(cx - sx, cy + sy, cz - sz), // 3
-        XMFLOAT3(cx - sx, cy - sy, cz + sz), // 4
-        XMFLOAT3(cx + sx, cy - sy, cz + sz), // 5
-        XMFLOAT3(cx + sx, cy + sy, cz + sz), // 6
-        XMFLOAT3(cx - sx, cy + sy, cz + sz)  // 7
-    };
+    center = { posDist(rng), posDist(rng), posDist(rng) };
+    size = { sizeDist(rng), sizeDist(rng), sizeDist(rng) };
+    orientation = { 0.0f, 0.0f, 0.0f, 1.0f }; // Axis-aligned; nothing authors a rotation yet.
 
     // Single common color for entire cuboid
     colors = XMHALF4(colorDist(rng), colorDist(rng), colorDist(rng), 1.0f);
 }
 
-// CUBOID
-/*Vertex bifurcation applied:- No shared vertices- Each face has independent vertices
-- Proper flat shading- No centroid-based approximation */
+/* CUBOID emits NO GEOMETRY AT ALL - it names a shape in the global primitive library and lets the
+world matrix carry `center`, `size` and `orientation` (website/software/graphics.md, "Shared
+geometry and the primitive libraries"). Every cuboid in the process shares ONE 12-triangle mesh.
+
+worldMatrix is left at identity here: WorldMatrixForObject composes it, and is the only place that
+does, because a MOVE needs the same matrix without regenerating anything. */
 inline GeometryData CUBOID::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
     geometry.color = ToFloat4(colors);
-    geometry.vertices.clear();
-    geometry.indices.clear();
-    geometry.vertices.reserve(24);
-    geometry.indices.reserve(36);
-
-    // Lambda to add flat shaded quad
-    auto AddFace = [&](int i0, int i1, int i2, int i3)
-        {
-            XMVECTOR v0 = XMLoadFloat3(&vertices[i0]);
-            XMVECTOR v1 = XMLoadFloat3(&vertices[i1]);
-            XMVECTOR v2 = XMLoadFloat3(&vertices[i2]);
-            XMVECTOR normal = XMVector3Normalize( XMVector3Cross(v1 - v0, v2 - v0));// Face normal (flat)
-            XMFLOAT3 normalFloat;
-            XMStoreFloat3(&normalFloat, normal);
-            XMUBYTE4 packedNormal = PackNormal(normalFloat);
-            uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
-
-            geometry.vertices.push_back(Vertex{ vertices[i0], packedNormal });
-            geometry.vertices.push_back(Vertex{ vertices[i1], packedNormal });
-            geometry.vertices.push_back(Vertex{ vertices[i2], packedNormal });
-            geometry.vertices.push_back(Vertex{ vertices[i3], packedNormal });
-
-            geometry.indices.insert(geometry.indices.end(), {
-                static_cast<uint16_t>(base + 0), static_cast<uint16_t>(base + 1),
-                static_cast<uint16_t>(base + 2), static_cast<uint16_t>(base + 0),
-                static_cast<uint16_t>(base + 2), static_cast<uint16_t>(base + 3)
-            });
-        };
-
-    // Faces (consistent outward winding)
-    AddFace(0, 3, 2, 1); // Front (-Z)
-    AddFace(4, 5, 6, 7); // Back  (+Z)
-    AddFace(4, 7, 3, 0); // Left  (-X)
-    AddFace(1, 2, 6, 5); // Right (+X)
-    AddFace(3, 7, 6, 2); // Top   (+Y)
-    AddFace(0, 1, 5, 4); // Bottom(-Y)
+    geometry.libraryShapeId = kPrimitiveShapeCuboid;
     return geometry;
 }
 
@@ -560,98 +517,32 @@ inline void CYLINDER::Randomize() {
     
 }
 
-// CYLINDER
-/* Vertex bifurcation applied:- No shared vertices- Each triangle/quad has independent vertices
-- Proper flat shading- No centroid-based fake normals */
+/* CYLINDER emits NO GEOMETRY AT ALL - it names a shape in the global primitive library and lets the
+world matrix carry `p1`, `p2` and `radius` (website/software/graphics.md, "Shared geometry and the
+primitive libraries"). The canonical mesh is a unit rod along +Z, radius 1, length 1, CENTRED on z.
+
+TWO DEFECTS DIE WITH THE OLD GENERATOR, and both were silent:
+
+- IT IGNORED ITS OWN AXIS. It computed `axis = normalize(p2 - p1)` and never used it, building both
+  rims flat in the XZ plane at p1.y / p2.y. A cylinder whose axis was not parallel to Y therefore
+  drew SHEARED - rims staying axis-aligned while their centres moved. PIPE always got this right;
+  the world matrix built by WorldMatrixForObject now uses the same orthonormal-basis construction.
+- ITS NORMALS POINTED INWARD. Every cap and wall normal came out of a cross product wound the wrong
+  way, so cylinders were lit as though from inside while spheres and cuboids were lit from outside.
+  Wrong lighting is not a crash, which is exactly why it survived. The library mesh is outward.
+
+Stored data is untouched: p1, p2 and radius stay this object's own authored fields, deliberately the
+OPPOSITE choice from cuboid - a cylinder's endpoints are engineering data, whereas a box's eight
+corners were only ever an encoding of something simpler. The midpoint the centred mesh needs is
+derived inside WorldMatrixForObject and nowhere else.
+
+worldMatrix is left at identity here: WorldMatrixForObject composes it, and is the only place that
+does, because a MOVE needs the same matrix without regenerating anything. */
 inline GeometryData CYLINDER::GetGeometry() {
     GeometryData geometry;
     geometry.id = memoryID;
     geometry.color = ToFloat4(colorIncline); // Incline dominates; colorBase / colorTop stay stored.
-    const int numSegments = 36;
-    geometry.vertices.clear();
-    geometry.indices.clear();
-    geometry.vertices.reserve(numSegments * (3 + 3 + 4));// Reserve enough space
-    geometry.indices.reserve(numSegments * (3 + 3 + 6));
-
-    // Axis direction (for correct cap orientation reference if needed)
-    XMVECTOR vP1 = XMLoadFloat3(&p1);
-    XMVECTOR vP2 = XMLoadFloat3(&p2);
-    XMVECTOR axis = XMVector3Normalize(vP2 - vP1);
-
-    // Lambda to add a flat-shaded triangle
-    auto AddTriangle = [&](const XMFLOAT3& a, const XMFLOAT3& b, const XMFLOAT3& c)
-        {
-            XMVECTOR v0 = XMLoadFloat3(&a);
-            XMVECTOR v1 = XMLoadFloat3(&b);
-            XMVECTOR v2 = XMLoadFloat3(&c);
-
-            XMVECTOR normal = XMVector3Normalize(
-                XMVector3Cross(v1 - v0, v2 - v0));
-
-            XMFLOAT3 normalFloat;
-            XMStoreFloat3(&normalFloat, normal);
-            XMUBYTE4 packedNormal = PackNormal(normalFloat);
-
-            uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
-
-            geometry.vertices.push_back(Vertex{ a, packedNormal });
-            geometry.vertices.push_back(Vertex{ b, packedNormal });
-            geometry.vertices.push_back(Vertex{ c, packedNormal });
-
-            geometry.indices.push_back(base + 0);
-            geometry.indices.push_back(base + 1);
-            geometry.indices.push_back(base + 2);
-        };
-
-    // Lambda to add a flat-shaded quad (two triangles)
-    auto AddQuad = [&](const XMFLOAT3& a,
-        const XMFLOAT3& b,
-        const XMFLOAT3& c,
-        const XMFLOAT3& d)
-        {
-            XMVECTOR v0 = XMLoadFloat3(&a);
-            XMVECTOR v1 = XMLoadFloat3(&b);
-            XMVECTOR v2 = XMLoadFloat3(&c);
-            XMVECTOR normal = XMVector3Normalize( XMVector3Cross(v1 - v0, v2 - v0));
-            XMFLOAT3 normalFloat;
-            XMStoreFloat3(&normalFloat, normal);
-            XMUBYTE4 packedNormal = PackNormal(normalFloat);
-            uint16_t base = static_cast<uint16_t>(geometry.vertices.size());
-
-            geometry.vertices.push_back(Vertex{ a, packedNormal });
-            geometry.vertices.push_back(Vertex{ b, packedNormal });
-            geometry.vertices.push_back(Vertex{ c, packedNormal });
-            geometry.vertices.push_back(Vertex{ d, packedNormal });
-
-            geometry.indices.insert(geometry.indices.end(), {
-                static_cast<uint16_t>(base + 0), static_cast<uint16_t>(base + 1),
-                static_cast<uint16_t>(base + 2), static_cast<uint16_t>(base + 0),
-                static_cast<uint16_t>(base + 2), static_cast<uint16_t>(base + 3)
-            });
-        };
-
-    // Generate geometry
-    for (int i = 0; i < numSegments; ++i) {
-        int next = (i + 1) % numSegments;
-
-        float a0 = 2.0f * XM_PI * i / numSegments;
-        float a1 = 2.0f * XM_PI * next / numSegments;
-
-        float c0 = cosf(a0);
-        float s0 = sinf(a0);
-        float c1 = cosf(a1);
-        float s1 = sinf(a1);
-
-        XMFLOAT3 b0 = { p1.x + radius * c0, p1.y, p1.z + radius * s0 };// Bottom rim points
-        XMFLOAT3 b1 = { p1.x + radius * c1, p1.y, p1.z + radius * s1 };
-        XMFLOAT3 t0 = { p2.x + radius * c0, p2.y, p2.z + radius * s0 };// Top rim points
-        XMFLOAT3 t1 = { p2.x + radius * c1, p2.y, p2.z + radius * s1 };
-
-        AddTriangle(p1, b1, b0);// Bottom cap (flat, downward facing via winding)
-        AddTriangle(p2, t0, t1);// Top cap (flat, upward facing via winding)
-        AddQuad(b0, b1, t1, t0);// Side wall (flat quad per segment)
-    }
-
+    geometry.libraryShapeId = kPrimitiveShapeCylinder;
     return geometry;
 }
 

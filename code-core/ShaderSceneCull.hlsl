@@ -74,12 +74,14 @@ struct VisibleCommand {
     uint StartInstanceLocation;
 };
 
-/* One (shape, LOD) mesh's location inside the primitive library buffer. Mirrors
-PrimitiveLibraryDrawRange in RenderScene3D.h - 12 bytes, indexed as (shapeId * 8 + lod). */
+/* One (shape, LOD) mesh's location inside the primitive library buffer, plus the canonical bounding
+radius the LOD selector needs. Mirrors PrimitiveLibraryDrawRange in RenderScene3D.h - 16 bytes,
+indexed as (shapeId * 8 + lod). */
 struct PrimitiveLod {
     uint indexCount;
     uint startIndexLocation;
     int  baseVertexLocation;
+    float boundingRadius;
 };
 
 /* The instance arena record, as the two scene vertex shaders declare it. Only the transform half is
@@ -144,18 +146,26 @@ below 2 px).
 Two dependent loads to reach the transform - redirect table, then arena - exactly as the scene
 vertex shader does, because the arena is addressed by instanceSlot and not by gpuInstanceIndex.
 
-The radius comes from the transform's SCALE. Row 0 of the row-vector world matrix is
-(transformA.x, transformB.x, transformC.x); its length is the scale along X, which for a canonical
-UNIT sphere is the object's world radius. That is exact under the uniform-scale assumption the
-InstanceRecord documents. A non-uniformly scaled shape (a cylinder as scale(r, r, L)) would need the
-LARGEST of the three row lengths times the entry's canonical bounding radius - worth doing when the
-first such shape lands, and wrong to guess at now. */
-uint SelectLodForInstance(uint gpuInstanceIndex) {
+THE RADIUS IS THE TRANSFORM'S LARGEST ROW LENGTH TIMES THE SHAPE'S CANONICAL BOUNDING RADIUS. Row i
+of the row-vector world matrix is (transformA[i], transformB[i], transformC[i]), so its length is
+the scale along local axis i. Taking the LARGEST is what makes this correct under non-uniform scale:
+a long thin cylinder is scale(r, r, L), and reading row 0 alone - which was exact while a unit
+sphere was the only shape, since its bounding radius is 1 and its scale uniform - would see only r
+and pick far too coarse a level for a rod seen end-on.
+
+`boundingRadius` is a property of the SHAPE, not of the level, so LOD 0's entry is read before a
+level has been chosen; every level of a shape measures to the same value in practice, and reading
+lod 0 avoids a circular dependency on the answer being computed. */
+uint SelectLodForInstance(uint gpuInstanceIndex, uint shapeIndex) {
     uint slot = InstanceSlotOf[gpuInstanceIndex];
     InstanceRecord instance = Instances[slot];
 
     float3 centre = float3(instance.transformA.w, instance.transformB.w, instance.transformC.w);
-    float radius = length(float3(instance.transformA.x, instance.transformB.x, instance.transformC.x));
+    float3 row0 = float3(instance.transformA.x, instance.transformB.x, instance.transformC.x);
+    float3 row1 = float3(instance.transformA.y, instance.transformB.y, instance.transformC.y);
+    float3 row2 = float3(instance.transformA.z, instance.transformB.z, instance.transformC.z);
+    float maxScale = max(length(row0), max(length(row1), length(row2)));
+    float radius = maxScale * LibraryLods[shapeIndex * 8u].boundingRadius;
     float distanceToEye = max(distance(float3(cameraX, cameraY, cameraZ), centre), 1e-4f);
     float diameterPixels = 2.0f * radius * focalPixels / distanceToEye;
 
@@ -206,8 +216,9 @@ void main(uint3 id : SV_DispatchThreadID) {
     LOD selection happen here without splitting the draw. */
     uint shapeMarker = cmd.StartInstanceLocation;
     if (shapeMarker != 0u && focalPixels > 0.0f) {
-        uint lod = SelectLodForInstance(cmd.gpuInstanceIndex);
-        PrimitiveLod entry = LibraryLods[(shapeMarker - 1u) * 8u + lod];
+        uint shapeIndex = shapeMarker - 1u;
+        uint lod = SelectLodForInstance(cmd.gpuInstanceIndex, shapeIndex);
+        PrimitiveLod entry = LibraryLods[shapeIndex * 8u + lod];
         out_.IndexCountPerInstance = entry.indexCount;
         out_.StartIndexLocation   = entry.startIndexLocation;
         out_.BaseVertexLocation   = entry.baseVertexLocation;

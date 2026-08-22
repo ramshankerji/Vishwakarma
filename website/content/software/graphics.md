@@ -319,13 +319,17 @@ An earlier roadmap promised *"Instanced rendering: `InstanceCount > 1` + per-ins
 
 It holds the shapes whose *only* freedom is size, so one canonical mesh plus a non-uniform scale covers every instance: sphere (uniform), cuboid (3-axis), cylinder outward-facing and inward-facing (radius + length), disc (radius), and one or two tori at *default* tube ratios. The two cylinder entries exist because a bore is the same mesh with inverted winding — a second entry rather than a render-state change, unless double-sided rendering becomes universal for sectioning.
 
-Every entry carries **8 LOD levels, always 8**, even where fewer are meaningful: a cuboid's eight slots all point at the same 12-triangle mesh. Uniform array width keeps the shader branch-free and duplicate table entries cost 12 bytes each. The table is `(shapeId, lod) → { indexCount, startIndexLocation, baseVertexLocation }` — ~12 shapes × 8 LODs × 12 bytes ≈ 1.2 KB, a root SRV.
+*As built:* **three entries — sphere 0, cuboid 1, cylinder 2** — 24 rows, 156.6 KB. The inward-facing cylinder is deferred with `PIPE`, its only consumer; disc and the tori have not been built.
+
+Every entry carries **8 LOD levels, always 8**, even where fewer are meaningful: a cuboid's eight slots all point at the same 12-triangle mesh. Uniform array width keeps the shader branch-free and duplicate table entries cost 40 bytes each. The table is `(shapeId, lod) → { indexCount, startIndexLocation, baseVertexLocation, boundingRadius }` — ~12 shapes × 8 LODs × 16 bytes ≈ 1.5 KB, a root SRV. (It was 12 bytes until the first non-uniformly scaled shape needed the bounding radius on the GPU; see *LOD*.)
 
 **Tab-owned template library — created on demand, no LOD.** Everything whose shape has a parametric ratio, plus non-parametric imported templates. Created on first use, lives until the tab closes, **no reference counting** in the first implementation — so a tab that creates many templates and then deletes their users holds that space until it closes. Acceptable initially; worth a telemetry counter to find out whether it matters.
 
 **The split falls on *ratios*, not on parametric versus non-parametric.** Scaling changes size, never shape ratios, so a shape with an internal ratio needs one mesh per ratio — a catalog, not a scale. Elbows and flanges are therefore ASME catalog entries in the tab library; pipes, bolts and nuts are composed from primitives.
 
 #### Pipes as composed primitives
+
+*(**not built** — `PIPE` stays bespoke geometry; see *Deferred with `PIPE`* below for the decision and what it costs.)*
 
 A pipe decomposes into an outer wall, an inner wall and two annular end caps. The walls are scale-instanced cylinders; the caps are catalog items. Bolts and nuts compose the same way. This works because each part is its own graphics object with its own transform, so the engineering thread derives four transforms from the pipe's own `p1`, `p2` and radii and each lands in an ordinary `InstanceRecord` — no part-transform table, no matrix multiply per vertex, no second template struct.
 
@@ -427,10 +431,10 @@ That is enough for the move path to be free, because a move never changes the ve
 - **Geometry can never be shared between two identical objects in this form.** Two bolts at different places produce different vertex bytes. *This no longer blocks instancing*, which is the single biggest VRAM lever for plant models: *Shared geometry and the primitive libraries* gets its canonical meshes from a **library built in code at startup**, and an eligible object emits a reference plus a transform rather than vertices at all — so no generator has to be rewritten to emit a canonical local frame. What the authored-space form still costs is the point below.
 - **Float32 precision is spent on the offset.** A Ø300 flange at world (4000, 2000, −300) stores absolute coordinates, burning most of the mantissa on position and leaving little for shape. Kilometer-scale sites with millimeter features are where this bites.
 
-Moving the generators to a canonical local frame — shape around the origin, position entirely in the placement — is the natural follow-on. The axis-defined types (cylinder, cone, pipe, tee, line member) are the awkward ones: their two endpoints are engineering data, so for those the endpoints should stay the stored truth and the placement should be *derived* from them rather than replacing them.
+Moving the generators to a canonical local frame — shape around the origin, position entirely in the placement — is the natural follow-on. **`SPHERE`, `CUBOID` and `CYLINDER` have made the move**; the rest have not. The axis-defined types (cylinder, cone, pipe, tee, line member) were expected to be the awkward ones because their two endpoints are engineering data — and the resolution, now that the cylinder has done it, is that the endpoints stay the stored truth and the transform is *derived* from them inside `WorldMatrixForObject` rather than replacing them. `CUBOID` is the deliberate opposite case: its eight corner vertices were only ever an encoding of something simpler, so the storage itself changed (see *Reshaping `CUBOID` to a box*).
 
 #### The canonical local frame, and its single composition point
-*(**`SPHERE` is migrated**; every other type still emits authored-space vertices)*
+*(**`SPHERE`, `CUBOID` and `CYLINDER` are migrated**; every other type still emits authored-space vertices)*
 
 `SPHERE::GetGeometry` emits a **unit sphere at the origin**. `center` and `radius` are unchanged as stored engineering data — they simply stop being baked into 684 vertices and become the object's transform instead. Nothing in the schema moved. On a unit sphere at the origin the outward normal *is* the position, so the per-vertex `normalize` the authored form needed is gone too.
 
@@ -626,13 +630,15 @@ To support hundreds of simultaneous tabs, we start with a small heap (say 4 MB p
 Each page carries a corresponding `ExecuteIndirect` argument buffer. When we defragment a page, we must simultaneously rebuild its argument buffer.
 
 ### Shared Geometry and the primitive libraries
-***Shipped for `SPHERE`*** *(global library, template-only pages, per-frame LOD in the compute pass). Every other shape is still bespoke.*
+***Shipped for `SPHERE`, `CUBOID` and `CYLINDER`*** *(global library, template-only pages, per-frame LOD in the compute pass, inverse-transpose normals). Every other shape is still bespoke — `PIPE` deliberately so.*
 
 #### Build sequence: sphere first, in two steps
 
 The gate this step waited on is open: it had to follow the vertex-format migration so the library buffer is built once, in the lean 16-byte layout, and both the 16-byte vertex and the `packedColor` registry shadow have shipped. The remaining prerequisite that was *not* on the original list is the canonical local frame — a library mesh is only shareable if an object's vertex bytes stop depending on its own parameters — and that is now done for `SPHERE` (see *The canonical local frame, and its single composition point*).
 
 **Sphere only, to begin with.** A sphere is uniformly scaled, which means it needs no inverse-transpose normal transform; that work belongs with the cylinder, which is where non-uniform scale first appears. Cuboid, cylinder (both windings), disc and the tori follow once the mechanism is proven.
+
+*As it landed:* **cuboid and the solid cylinder followed**, together, in the step after the sphere — with the inverse-transpose normal transform, since both are non-uniformly scaled. The cylinder's second, inward-facing winding did **not** follow, and neither did `PIPE`; see *Deferred with `PIPE`* below for why that pair travels together.
 
 The step splits in two, and the split is worth taking because it isolates a failure to one cause:
 
@@ -706,6 +712,50 @@ Coarsest-first ordering is what removes the subtraction. The input is bucketed b
 
 A debug key pinning a fixed LOD belongs with Step 2, matching the existing `k` / `m` / `v` habit, so popping can be A/B'd against Step 1.
 
+#### The cuboid and cylinder ladders
+
+A **cuboid** has nothing to tessellate away, so one 12-triangle mesh (24 vertices, 36 indices, bifurcated for flat per-face normals) serves all eight LOD slots. Uniform array width is what keeps the cull shader's `(shapeId * 8 + lod)` indexing branch-free, and a duplicate table row costs 40 bytes — far cheaper than a per-shape LOD count the shader would have to read.
+
+A **cylinder** needs no stack subdivision either; only the radial segment count varies:
+
+| LOD | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---|---|---|---|---|---|---|---|
+| segments | 3 | 4 | 6 | 8 | 12 | **36** | 48 | 64 |
+
+LOD 5 = 36 segments is what `CYLINDER::GetGeometry` emitted before the library took the mesh over, which keeps the same "a pinned level reproduces the previous tessellation" property the sphere ladder has. At 10 vertices and 12 indices per segment and 181 segments summed over the ladder, the cylinder entry is ~33 KB and the cuboid is 456 bytes; **the whole three-shape library measures 156.6 KB**, one upload, once for the process.
+
+The canonical cylinder is a solid rod along **+Z**, radius 1, length 1, **centred** on z (spanning −0.5..+0.5). Centring is not about the projection — which does not care where a mesh's local origin sits — but about two things downstream. `SelectLodForInstance` reads the object's position as the transform's translation row, which for a centred mesh *is* the geometric centre rather than one end; and the canonical bounding radius comes out `sqrt(r² + (L/2)²)` = 1.118 instead of the far-rim corner's `sqrt(2)` ≈ 1.414, so the projected-size estimate is less conservative. It also makes the registry's `worldCentre` shadow come out exactly equal to the translation.
+
+#### Winding: front faces point *into* the solid
+
+**This one cost a debugging session and it fails as a hole rather than as an error.** The scene, pick and highlight PSOs all back-cull — `CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT)` is `CULL_BACK` with `FrontCounterClockwise = FALSE` — and the camera matrices are left-handed (`XMMatrixLookAtLH` / `XMMatrixPerspectiveFovLH`). Under that pair a triangle is **front-facing when `cross(v1 − v0, v2 − v0)` — the ordinary right-hand rule — points AWAY from the viewer, i.e. into the solid.**
+
+So winding and the stored per-vertex normal point in *opposite* directions, deliberately: the normal is outward because lighting needs it outward, the winding is inward because the rasterizer's front-face test needs it inward. `AppendUnitSphereMesh` already obeyed this — measured, not assumed: all 1224 of its non-degenerate triangles at 36×18 wind cross-opposite-normal.
+
+The new cylinder was first written the intuitive way, outward-wound, and the symptom was **a cap-shaped hole in the near end of a solid rod** — the near cap and the far wall both culled, sky visible straight through. Nothing logged, nothing asserted; the far cap still drew, so the object still looked like a cylinder until you looked at the end of it. The check that settles it is arithmetic rather than visual: for every triangle, `dot(normalize(cross(v1−v0, v2−v0)), storedNormal)` must be ≈ −1.
+
+*Worth recording as a separate observation, not fixed here:* `CUBOID::GetGeometry` wound its six faces **outward** before the library took its mesh over, so cuboids had always been rasterised from their far faces and shaded by normals belonging to surfaces the viewer cannot see. The library mesh corrects it. The remaining bespoke generators (`PYRAMID`, `PARALLELEPIPED`, `CONE`, `FRUSTUM_*`, the tori) have not been audited against this rule.
+
+#### Reshaping `CUBOID` to a box
+
+Cuboid was called "nearly free" while the mesh was the only thing being considered. The *mesh* is free; the *transform* was not, because the type stored **eight free corner vertices** with nothing enforcing that they formed a box, and a unit cube maps onto eight arbitrary points only if those points are an affine image of a cube. Instancing was impossible until the storage said "box" rather than "eight points".
+
+So the storage changed, and stored `.yyy` files broke — no migration and no version gate, because the software is unreleased. `CUBOID` now holds:
+
+```cpp
+XMFLOAT3 center;       // authored centre
+XMFLOAT3 size;         // FULL edge lengths along the box's own X/Y/Z
+XMFLOAT4 orientation;  // unit quaternion; identity = axis-aligned
+```
+
+**Orientation lives on the type, not only in `Placement3D`.** Three degrees of freedom are genuinely needed — a single direction vector fixes only two and leaves *roll* free, which a box (unlike a cylinder) very much notices — and it has to be a *separate* rotation from the placement, because the placement means "moved since drawn": a box authored at 30° and a box the user rotated by 30° would otherwise be indistinguishable. A sphere never raised the question because a sphere has no orientation.
+
+The canonical→authored matrix is `scale(size) · rotate(orientation) · translate(center)`, with `Placement3D` composing authored→world on top exactly as before. That is still scale → rotate → translate with no shear, so the cheap normal shortcut below stays valid. `PARALLELEPIPED` is the same unit cube under a **sheared** transform and would need the full inverse-transpose — out of scope, and worth not painting into a corner.
+
+In the proto the new fields take **new numbers** and field 1 is `reserved`. That is not caution for its own sake: protobuf merges a repeated field into a singular one by taking the last element, and absent new fields default to zero, so *reusing* field 1 would make a pre-change cuboid decode **silently** as a zero-size box at its last corner vertex. Reserving it drops the stale data instead of aliasing it. (Field 20 stays the placement, by the convention that holds across every 3D message.)
+
+`CUBOID` also gets a **Properties Pane table for the first time** — it was a vertex-list type with no table at all. Centre is the single point group; the three sizes are scalars a rigid placement cannot touch; and the quaternion is presented as XYZ Euler angles in degrees, composed on read and solved back on write, which is the same shape as the existing world-coordinate handling for point fields rather than a new mechanism. Writing one angle rebuilds the whole quaternion from all three, for the same reason editing one world component of a point rewrites all three authored components.
+
 #### LOD
 
 LOD is selected **per frame, in the compute pass**. Camera position plus a focal length go into `CullParams`, which had a spare `cullPadding` — 12 DWORDs becomes 16. Object position comes from the instance record's `transformA/B/C.w`, so the shader binds the redirect table and arena, two more root SRVs with tab-lifetime fixed addresses — the same two-load pattern the vertex shaders already perform. The shader writes the chosen LOD's offsets into the output command; VBV/IBV are unchanged, since all 8 LODs live in the same library buffer.
@@ -717,7 +767,7 @@ diameterPx = 2 · radius · focalPixels / distance(camera, centre)
 lod        = clamp(floor(log2(max(diameterPx, 1))), 0, 7)
 ```
 
-`radius` is the transform's scale — the length of the world matrix's first row, which for a canonical *unit* sphere is exactly the object's world radius under the uniform-scale assumption the `InstanceRecord` documents. A non-uniformly scaled shape needs the largest of the three row lengths times the entry's canonical bounding radius; that belongs with the first such shape, not before it. Because the ladder buckets by powers of two, `floor(log2(x))` is `firstbithigh` — one integer instruction, no transcendental — and *coarsest-first LOD ordering is what removes the subtraction* a fine-first ladder would need.
+`radius` is **the largest of the transform's three row lengths times the entry's canonical bounding radius**. Row *i* of the row-vector world matrix is `(transformA[i], transformB[i], transformC[i])`, so its length is the scale along local axis *i*. Reading row 0 alone was exact while a unit sphere was the only shape — bounding radius 1, uniform scale — but a cylinder is `scale(r, r, L)`, and row 0 alone sees only `r`, picking far too coarse a level for a long rod seen end-on. `PrimitiveLibraryEntry` therefore carries a `boundingRadius`, **measured** from the entry's own vertices rather than assumed (1.0 for the unit sphere, 1.118 for the unit cylinder, 0.866 for the unit cube), and `PrimitiveLibraryDrawRange` grew 12 → 16 bytes to carry it to the shader. It is a property of the *shape*, not of the level, so the selector reads LOD 0's entry before a level has been chosen — which is also what avoids a circular dependency on the answer being computed. Because the ladder buckets by powers of two, `floor(log2(x))` is `firstbithigh` — one integer instruction, no transcendental — and *coarsest-first LOD ordering is what removes the subtraction* a fine-first ladder would need.
 
 An instanced template carries its shape id in `StartInstanceLocation` as **`shapeId + 1`**, so 0 still means "bespoke" and shape 0 stays distinguishable — no template format change and no second template struct. That field is otherwise dead weight, but it *is* a real draw argument and the legacy, pick and print paths execute these templates directly; it is inert only because nothing here uses `SV_InstanceID` or a per-instance vertex stream. The compacted output command therefore always writes 0 rather than passing the marker through. **Adding either of those two things would break this silently.**
 
@@ -728,14 +778,23 @@ The third was not predicted and is worth recording, because it is visible rather
 A debug key (`l`) pins instanced templates back to the CPU-chosen level, which is what makes LOD popping — a tuning question rather than a correctness one — A/B-able without a rebuild.
 
 #### Non-uniform scale and normals
+*(**shipped** with the cuboid and cylinder — it had to be, since both are non-uniformly scaled)*
 
 Instancing a cylinder needs `scale(r, r, L)`. Positions are fine — the vertex shader computes `p · M` and does not care what M contains. **Normals are the whole issue**, and it is wrong lighting rather than a crash, so it would ship unnoticed.
 
 Normals transform by `inverse(transpose(M₃ₓ₃))`, not by M. Under *uniform* scale the two differ only by a scalar that `normalize()` cancels — which is exactly why the shader is correct today and why the `InstanceRecord`'s uniform-scale assumption was safe to write down. Under non-uniform scale it does not cancel: scale a sphere to (1, 1, 10) and the shading bands stop matching the silhouette.
 
-The fix costs no storage. For `M = S·R`, row *i* of M is `sᵢ · Rᵢ`, so `sᵢ = length(rowᵢ)` and `inverse(transpose(M)) = S⁻¹·R`, whose row *i* is `Mᵢ / sᵢ²` — three lengths, three divides, then normalize, on a transform the shader already loads. It imposes one rule: **composed transforms must stay scale → rotate → translate, never sheared.** It touches `ShaderSceneVertex.hlsl` and `ShaderScenePickVertex.hlsl` (which duplicates the struct), and the highlight path inherits it by reusing the scene vertex shader.
+The fix costs no storage. For `M = S·R`, row *i* of M is `sᵢ · Rᵢ`, so `sᵢ = length(rowᵢ)` and `inverse(transpose(M)) = S⁻¹·R`, whose row *i* is `Mᵢ / sᵢ²` — three lengths, three divides, then normalize, on a transform the shader already loads. It imposes one rule: **composed transforms must stay scale → rotate → translate, never sheared.**
+
+*As implemented,* two details differ from that sketch and both are simplifications. There are no square roots: scaling the **normal** by the three reciprocal *squared* row lengths before the same three dot products the shader already did is algebraically identical, so `dot(rowᵢ, rowᵢ)` is used directly. And it touches `ShaderSceneVertex_16.hlsl` only, with the parked `_24` twin kept in step — the **pick** shaders forward no normal at all, so they never needed it, and the highlight path inherits the fix by reusing the scene vertex shader. A `max(…, 1e-12)` guards a degenerate zero-scale transform, which would otherwise turn into NaN across the whole object at the pixel shader's `normalize()`.
 
 The scale is *derived*, never stored — radius and length are the object's own engineering fields, composed by `GeometryForObject`. `Placement3D` stays rigid and nothing in the schema changes.
+
+#### Deferred with `PIPE`: the inward-facing bore
+
+`PIPE` **stays bespoke geometry** — no decomposition into outer wall, inner wall and annular end caps; `PIPE::GetGeometry` keeps emitting its own vertices. Worth stating plainly, because a pipe was the headline case for instancing in this document: this is a deliberate deferral of the biggest VRAM win, not an oversight. The annular end cap would stay a catalog item regardless, since no affine transform moves two concentric radii independently.
+
+The **inward-facing bore entry** is deferred with it, and only because its consumer went away: the bore's sole user would have been a pipe's inner wall, so building it now would be an entry with no producer. The *reasoning* for keeping inner and outer as separate library entries rather than one mesh with a flipped rasterizer state is untouched and should be reread when pipes come back: a bore is the same surface seen from inside, so it needs front faces pointing inward, and flipping that with rasterizer state would mean a second PSO and therefore a **second `ExecuteIndirect` per Viewport**. A second library entry with reversed winding costs one table row and keeps the single-call property.
 
 #### Arena reservation sizing
 
@@ -745,11 +804,11 @@ reserve = min(MV_MAX_INSTANCES_PER_TAB, allowedByHardware × 0.75)
 
 `allowedByHardware` comes from `MaxGPUVirtualAddressBitsPerResource` — as low as **31 bits (2 GB)** on the lowest tier, capping one tab's arena at ~33M records — with `MaxGPUVirtualAddressBitsPerProcess` bounding the sum across open tabs. Both are queried at startup beside the existing Heap Tier 2 and `TiledResourcesTier` checks. The **25% margin** is deliberate headroom for everything else competing for the same address space: geometry pages, template buffers, textures, swap chains, the upload ring, and the redirect and mask buffers. A first estimate, to be tuned once there is real data.
 
-#### Build order, and six places the current code fails quietly
+#### Build order, and seven places the current code fails quietly
 
 The library buffer is a VBV source, so its stride must match the PSO input layout. It is therefore built **only after the vertex format migration**, in the lean 16-byte layout, so it is never built twice. The sequence is: appearance payload and registry shadow → vertex 24 → 16 with the material table → canonical local frame → this step. Everything before the last item has shipped.
 
-Six things broke *silently* under this design. The first four were predicted, the last two were found only by reading the code — and **all six are fixed as of Step 1**. They are kept here because each one is a trap the *next* shape will walk into again, and because none of them would have failed loudly:
+Six things broke *silently* under this design. The first four were predicted, the last two were found only by reading the code — and **all six are fixed as of Step 1**. They are kept here because each one is a trap the *next* shape will walk into again, and because none of them would have failed loudly. **A seventh arrived with the next shape, exactly as predicted** — see *Winding: front faces point into the solid*, which the cuboid and cylinder both got backwards on the first attempt:
 
 - **`PageIsRenderable` rejects every template-only page.** It requires `vertexHead != 0 && indexTail != pageSize`, and a template-only page has neither — so the draw loop, pick pass and print path all skip instanced geometry with no error anywhere. The predicate must branch on page kind. Note it is **duplicated three times, not centralised**: `Selection3D-DirectX12.cpp` owns the named function, the scene loop repeats it inline, and the print collector repeats it a third time. Fixing one and not the others makes instanced geometry vanish from that path alone.
 - **`IsTransformOnlyEdit` misclassifies every instanced MODIFY.** It infers "transform-only" from an empty vertex/index payload — and an instanced object's payload is *always* empty. Moving a pipe and changing its schedule become indistinguishable: the first is correctly a redirect flip, the second silently keeps the old library entry, so the wall thickness never changes on screen. The `libraryShapeId` discriminator above is the explicit marker this asks for. This is the transform-only edit's own lesson reappearing from the other direction.
@@ -1122,11 +1181,14 @@ A **render-thread** counterpart now sits beside it (`GpuRenderStats`, `[gpu][cul
 - [x] **Canonical local frame for `SPHERE`** — unit sphere at the origin, `center` / `radius` carried as the object's transform, with the composition consolidated into `WorldMatrixForObject`. The prerequisite for sharing a mesh between two spheres, and a float32-precision win on its own. See *The canonical local frame, and its single composition point*.
 - [x] **Shared sphere geometry, Step 1** — `gpu.primitiveLibrary` (123 KB, eight LODs), template-only pages, fixed LOD 5, zero HLSL changes. Measured: six spheres added `+0 MB` of clone traffic against `+24 MB` for six cuboids, with the same number of page clones either way.
 - [x] **Compute LOD, Step 2** — per-frame level from projected pixel size, `CullParams` 12 → 16 DWORDs, three more root SRVs. Settles the `renderFlags`-routing question in *Planned: draw buckets*: the cull pass now binds the arena and redirect table anyway, so routing can read them instead of copying flag bits into the draw template — which is what preserves "an appearance change never touches geometry".
+- [x] **Cuboid and cylinder in the library** — library 156.6 KB / three shapes / 24 rows, so `shapeId != 0` and the `(shapeId * 8 + lod)` indexing finally run for real. Carried four things with it: `CUBOID`'s storage reshaped from eight free corner vertices to centre + size + orientation (*Reshaping `CUBOID` to a box*), with its first Properties Pane table; the inverse-transpose normal transform, since both shapes are non-uniformly scaled; a generalised LOD radius using a measured `boundingRadius`; and the `CYLINDER` axis defect below. **Measured:** three positions of a placed cuboid translated `+2 Z` twice deviate **0.087 px** from a straight screen line (`|cross| / (len1·len2)` = 0.00025), against ~0.7 for a wrong matrix.
+- [x] **`CYLINDER::GetGeometry` ignored its own axis** — it computed `axis = normalize(p2 - p1)` and never used it, building both rims flat in the XZ plane at `p1.y` / `p2.y`, so any cylinder whose axis was not parallel to Y drew **sheared**. The canonical rewrite fixes it as a byproduct: `WorldMatrixForObject` builds an orthonormal basis about the axis, the same construction `PIPE::GetGeometry` always used. Its normals also pointed inward, so cylinders were lit as though from inside while spheres and cuboids were lit from outside.
 
 ### Next
 
-- [ ] Cylinder, cuboid and disc in the library. The cylinder is what forces the inverse-transpose normal transform (*Non-uniform scale and normals*) and a 180° fallback for the degenerate from-to rotation; it would also fix the fact that `CYLINDER::GetGeometry` computes its own axis and then never uses it, building rims in the XZ plane so a non-Y-axis cylinder draws sheared.
-- [ ] Pipes as composed primitives, once more than one library shape exists.
+- [ ] Disc and the tori in the library. Cylinder and cuboid landed under *Now*; the 180° fallback that item worried about never had to be written, because building an orthonormal basis around the axis has no anti-parallel singularity to fall back from — the reference-vector swap *is* the whole degenerate case.
+- [ ] Pipes as composed primitives. Now unblocked — more than one library shape exists — but deliberately not taken with this step; see *Deferred with `PIPE`: the inward-facing bore*, which also explains why the bore entry waits for its only consumer.
+- [ ] Audit the remaining bespoke generators against the winding rule (`PYRAMID`, `PARALLELEPIPED`, `CONE`, `FRUSTUM_*`, the tori). `CUBOID`'s was outward — i.e. back-facing — until the library took its mesh over, and nothing about that failed loudly.
 
 ### Later
 

@@ -12,7 +12,8 @@
 #include "डेटा-सामान्य-3D.h" // SPHERE, CYLINDER, ... and META_DATA
 #include "डेटा-संरचना.h"     // LINE_MEMBER
 
-#include <cmath> // std::isfinite
+#include <algorithm> // std::clamp, used by the CUBOID Euler extraction
+#include <cmath>     // std::isfinite, std::atan2, std::asin
 
 using VishwakarmaStorage::ObjectType;
 
@@ -49,6 +50,75 @@ const PropertyFieldDescriptor kCylinderFields[] = {
         [](META_DATA* o, float v) { static_cast<CYLINDER*>(o)->p2.z = v; }, PropertyFieldKind::Float32, 5, false },
     { UITextID::PropRadius, [](const META_DATA* o) { return static_cast<const CYLINDER*>(o)->radius; },
         [](META_DATA* o, float v) { static_cast<CYLINDER*>(o)->radius = v; }, PropertyFieldKind::Float32, 6, true },
+};
+
+/* CUBOID's authored orientation is stored as a unit QUATERNION, which is not something a user types
+into a properties field, so the pane shows XYZ Euler angles in DEGREES and solves back on write.
+That is the same shape as the world-coordinate handling for point fields above - compose on read,
+solve on write - rather than a new mechanism.
+
+Writing one angle rebuilds the whole quaternion from all three, exactly as editing one world
+component of a point rewrites all three authored components: the three angles are not independent
+storage, they are a chart on one rotation. Reading is not a round-trip identity - a quaternion has
+many Euler representations and this returns one of them - but it is a stable one, so a value the
+user did not touch reads back as they left it.
+
+Extraction is the standard XYZ (roll about X, then pitch about Y, then yaw about Z) decomposition of
+the row-vector rotation matrix, with the gimbal-lock case (|m02| ~ 1, pitch at +/-90 degrees) folded
+onto roll, because at that pole roll and yaw are the same rotation and only their sum is defined. */
+void CuboidEulerDegrees(const CUBOID* box, float* out) {
+    DirectX::XMFLOAT4X4 m;
+    DirectX::XMStoreFloat4x4(&m,
+        DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&box->orientation)));
+    const float kToDegrees = 180.0f / M_PI;
+    const float m02 = std::clamp(m._13, -1.0f, 1.0f);
+    if (std::abs(m02) > 0.9999f) {
+        out[0] = std::atan2(-m._32, m._22) * kToDegrees;
+        out[1] = std::asin(m02) * kToDegrees;
+        out[2] = 0.0f;
+        return;
+    }
+    out[0] = std::atan2(-m._23, m._33) * kToDegrees;
+    out[1] = std::asin(m02) * kToDegrees;
+    out[2] = std::atan2(-m._12, m._11) * kToDegrees;
+}
+
+float CuboidEulerComponent(const META_DATA* o, int axis) {
+    float euler[3];
+    CuboidEulerDegrees(static_cast<const CUBOID*>(o), euler);
+    return euler[axis];
+}
+
+void SetCuboidEulerComponent(META_DATA* o, int axis, float degrees) {
+    CUBOID* box = static_cast<CUBOID*>(o);
+    float euler[3];
+    CuboidEulerDegrees(box, euler);
+    euler[axis] = degrees;
+    const float kToRadians = M_PI / 180.0f;
+    DirectX::XMStoreFloat4(&box->orientation, DirectX::XMQuaternionRotationRollPitchYaw(
+        euler[0] * kToRadians, euler[1] * kToRadians, euler[2] * kToRadians));
+}
+
+// CUBOID: Center X/Y/Z, Size X/Y/Z (full edge lengths), Rotation X/Y/Z (degrees).
+const PropertyFieldDescriptor kCuboidFields[] = {
+    { UITextID::PropCenterX, [](const META_DATA* o) { return static_cast<const CUBOID*>(o)->center.x; },
+        [](META_DATA* o, float v) { static_cast<CUBOID*>(o)->center.x = v; }, PropertyFieldKind::Float32, 0, false },
+    { UITextID::PropCenterY, [](const META_DATA* o) { return static_cast<const CUBOID*>(o)->center.y; },
+        [](META_DATA* o, float v) { static_cast<CUBOID*>(o)->center.y = v; }, PropertyFieldKind::Float32, 1, false },
+    { UITextID::PropCenterZ, [](const META_DATA* o) { return static_cast<const CUBOID*>(o)->center.z; },
+        [](META_DATA* o, float v) { static_cast<CUBOID*>(o)->center.z = v; }, PropertyFieldKind::Float32, 2, false },
+    { UITextID::PropSizeX, [](const META_DATA* o) { return static_cast<const CUBOID*>(o)->size.x; },
+        [](META_DATA* o, float v) { static_cast<CUBOID*>(o)->size.x = v; }, PropertyFieldKind::Float32, 3, true },
+    { UITextID::PropSizeY, [](const META_DATA* o) { return static_cast<const CUBOID*>(o)->size.y; },
+        [](META_DATA* o, float v) { static_cast<CUBOID*>(o)->size.y = v; }, PropertyFieldKind::Float32, 4, true },
+    { UITextID::PropSizeZ, [](const META_DATA* o) { return static_cast<const CUBOID*>(o)->size.z; },
+        [](META_DATA* o, float v) { static_cast<CUBOID*>(o)->size.z = v; }, PropertyFieldKind::Float32, 5, true },
+    { UITextID::PropRotationX, [](const META_DATA* o) { return CuboidEulerComponent(o, 0); },
+        [](META_DATA* o, float v) { SetCuboidEulerComponent(o, 0, v); }, PropertyFieldKind::Float32, 6, false },
+    { UITextID::PropRotationY, [](const META_DATA* o) { return CuboidEulerComponent(o, 1); },
+        [](META_DATA* o, float v) { SetCuboidEulerComponent(o, 1, v); }, PropertyFieldKind::Float32, 7, false },
+    { UITextID::PropRotationZ, [](const META_DATA* o) { return CuboidEulerComponent(o, 2); },
+        [](META_DATA* o, float v) { SetCuboidEulerComponent(o, 2, v); }, PropertyFieldKind::Float32, 8, false },
 };
 
 // CONE: Apex X/Y/Z, Base Center X/Y/Z, Radius.
@@ -212,8 +282,11 @@ const PropertyTypeDescriptor kPropertyTables[] = {
     { ObjectType::Pipe, kPipeFields, static_cast<uint8_t>(std::size(kPipeFields)), CrossPipe, { 0, 3 }, 2 },
     { ObjectType::FrustumOfCone, kFrustumOfConeFields, static_cast<uint8_t>(std::size(kFrustumOfConeFields)), CrossTwoPoints, { 0, 3 }, 2 },
     { ObjectType::LineMember, kLineMemberFields, static_cast<uint8_t>(std::size(kLineMemberFields)), CrossLineMember, { 0, 3 }, 2 },
-    // PYRAMID, CUBOID, PARALLELEPIPED, FRUSTUM_OF_PYRAMID are vertex-list types: no table in the
-    // MVP, so FindPropertyTable() returns nullptr and the pane shows Type + ID only.
+    /* the type stores its own orientation is to keep "drawn at 30 degrees" distinct from
+    "rotated by 30 degrees since". */
+    { ObjectType::Cuboid, kCuboidFields, static_cast<uint8_t>(std::size(kCuboidFields)), nullptr, { 0, 0 }, 1 },
+    // PYRAMID, PARALLELEPIPED, FRUSTUM_OF_PYRAMID are vertex-list types: no table in the MVP, so
+    // FindPropertyTable() returns nullptr and the pane shows Type + ID only.
 };
 
 const size_t kPropertyTableCount = std::size(kPropertyTables);

@@ -949,7 +949,8 @@ bool GeometryForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* obj
 
     /* Local -> world, composed in the one place that composes it. Every ADD, geometry MODIFY, file
     load and import inherits both halves here without knowing either exists: the type's local frame
-    (identity for authored-space types, scale+translate for SPHERE) and the object's placement.
+    (identity for authored-space types; a real transform for SPHERE, CUBOID and CYLINDER) and the
+    object's placement.
 
     The copy thread turns this matrix into the object's 64-byte instance record, so a placement
     reaches the GPU as a transform rather than as regenerated vertices - which is exactly what makes
@@ -969,14 +970,61 @@ DirectX::XMMATRIX WorldMatrixForObject(VishwakarmaStorage::ObjectType objectType
     DirectX::XMMATRIX world = DirectX::XMMatrixIdentity();
     switch (objectType) {
     case ObjectType::Sphere: {
-        /* The one canonical-frame type so far: GetGeometry emits a UNIT sphere at the origin, so
-        radius and centre live here instead of in 684 vertices. The 3x3 part is UNIFORM scale, which
-        normalize() in the pixel shaders cancels - a type scaled non-uniformly (a cylinder as
-        scale(r, r, L)) additionally needs the inverse-transpose normal transform described in
-        graphics.md, "Non-uniform scale and normals". */
+        /* GetGeometry emits a UNIT sphere at the origin, so radius and centre live here instead of
+        in 684 vertices. The 3x3 part is UNIFORM scale, which normalize() in the pixel shaders
+        cancels on its own; the cylinder below is the one that is not, and the shaders' normal
+        transform carries the inverse-transpose for both (graphics.md, "Non-uniform scale and
+        normals"). */
         const SPHERE* sphere = static_cast<const SPHERE*>(object);
         world = DirectX::XMMatrixScaling(sphere->radius, sphere->radius, sphere->radius) *
             DirectX::XMMatrixTranslation(sphere->center.x, sphere->center.y, sphere->center.z);
+        break;
+    }
+    case ObjectType::Cuboid: {
+        /* GetGeometry emits a UNIT cube at the origin, edges 1, so the canonical scale IS the box's
+        full size. Scale, then the AUTHORED orientation, then the centre - and note the order: this
+        stays scale -> rotate -> translate with no shear, which is the precondition the shaders'
+        cheap `row / lengthSquared(row)` normal transform depends on. A sheared box
+        (PARALLELEPIPED) would need the full inverse-transpose and is deliberately not this type. */
+        const CUBOID* box = static_cast<const CUBOID*>(object);
+        world = DirectX::XMMatrixScaling(box->size.x, box->size.y, box->size.z) *
+            DirectX::XMMatrixRotationQuaternion(DirectX::XMLoadFloat4(&box->orientation)) *
+            DirectX::XMMatrixTranslation(box->center.x, box->center.y, box->center.z);
+        break;
+    }
+    case ObjectType::Cylinder: {
+        /* GetGeometry emits a UNIT rod along +Z, radius 1, length 1, CENTRED on z. p1 and p2 stay
+        the stored truth - they are engineering data - and everything else is derived here.
+
+        NO FROM-TO QUATERNION. Building an orthonormal basis around the axis, exactly as
+        PIPE::GetGeometry does, sidesteps the anti-parallel singularity a from-to rotation has: the
+        reference-vector swap on the third line IS the whole degenerate case. The three basis
+        vectors ARE the world matrix's first three rows, scaled, in row-vector order.
+
+        The translation row is the MIDPOINT, not an endpoint, because the canonical mesh spans
+        z -0.5..+0.5. Centring is what makes the instance record's translation the object's true
+        geometric centre, which the compute pass's LOD selector reads as the object's position, and
+        what makes the canonical bounding radius sqrt(r^2 + (L/2)^2) rather than the looser far-rim
+        corner a base-at-origin mesh would give (graphics.md, "Shared geometry", 9.2). */
+        const CYLINDER* cylinder = static_cast<const CYLINDER*>(object);
+        const DirectX::XMVECTOR vP1 = DirectX::XMLoadFloat3(&cylinder->p1);
+        const DirectX::XMVECTOR vP2 = DirectX::XMLoadFloat3(&cylinder->p2);
+        const DirectX::XMVECTOR delta = DirectX::XMVectorSubtract(vP2, vP1);
+        const float length = DirectX::XMVectorGetX(DirectX::XMVector3Length(delta));
+        const DirectX::XMVECTOR axis = DirectX::XMVector3Normalize(delta);
+        DirectX::XMVECTOR up = DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+        if (fabsf(DirectX::XMVectorGetX(DirectX::XMVector3Dot(axis, up))) > 0.99f) {
+            up = DirectX::XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+        }
+        const DirectX::XMVECTOR tangent =
+            DirectX::XMVector3Normalize(DirectX::XMVector3Cross(up, axis));
+        const DirectX::XMVECTOR bitangent = DirectX::XMVector3Cross(axis, tangent);
+
+        world.r[0] = DirectX::XMVectorScale(tangent, cylinder->radius);
+        world.r[1] = DirectX::XMVectorScale(bitangent, cylinder->radius);
+        world.r[2] = DirectX::XMVectorScale(axis, length);
+        world.r[3] = DirectX::XMVectorSetW(
+            DirectX::XMVectorScale(DirectX::XMVectorAdd(vP1, vP2), 0.5f), 1.0f);
         break;
     }
     default:

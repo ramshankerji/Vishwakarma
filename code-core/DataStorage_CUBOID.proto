@@ -9,8 +9,28 @@ import "DataStorage_Common3D.proto";
 option optimize_for = LITE_RUNTIME;
 
 message Cuboid {
-  repeated Point3F vertices = 1;
+  /* The storage became centre + size + orientation instead
+  (website/software/graphics.md, "Shared geometry and the primitive libraries").
+
+  RESERVED rather than reused: protobuf merges a repeated field into a singular one by taking the
+  last element, so reusing 1 would make a pre-change file decode SILENTLY as a zero-size box at its
+  last corner. Reserving it drops the stale data instead of aliasing it. Files written before this
+  change are not migrated - the software is unreleased; delete stale .yyy files and remake them. */
+  reserved 1;
+
   Color4F color = 2;
+
+  Point3F center = 3;
+  Point3F size = 4;  // FULL edge lengths along the box's own X/Y/Z, not half-extents.
+
+  /* AUTHORED orientation, a unit quaternion; identity = axis-aligned. Distinct from `placement`
+  below on purpose: that one records where the box has been MOVED to since, and a box authored at
+  30 degrees must stay distinguishable from a box the user rotated by 30 degrees. Read through
+  ReadQuaternionOrIdentity - proto3 scalars default to 0, and (0,0,0,0) is not identity. */
+  float qx = 5;
+  float qy = 6;
+  float qz = 7;
+  float qw = 8;
 
   // Rigid authored -> world transform. Field 20 in every 3D message by convention;
   // absent means identity. See message Placement in DataStorage_Common3D.proto.

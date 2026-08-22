@@ -332,3 +332,9 @@ WordID,ShortWordName,English,Comments
 1433,PropInsideDiameter,Inside Diameter,Properties pane field label.
 1434,PropParameter1,Parameter 1 (mm),Properties pane field label. LINE_MEMBER parametric section dimension.
 1435,PropParameter2,Parameter 2 (mm),Properties pane field label. LINE_MEMBER parametric section dimension.
+1436,PropSizeX,Size X,Properties pane field label. CUBOID full edge length along its own X.
+1437,PropSizeY,Size Y,Properties pane field label. CUBOID full edge length along its own Y.
+1438,PropSizeZ,Size Z,Properties pane field label. CUBOID full edge length along its own Z.
+1439,PropRotationX,Rotation X (deg),Properties pane field label. CUBOID authored orientation as XYZ Euler angles.
+1440,PropRotationY,Rotation Y (deg),Properties pane field label. CUBOID authored orientation as XYZ Euler angles.
+1441,PropRotationZ,Rotation Z (deg),Properties pane field label. CUBOID authored orientation as XYZ Euler angles.
