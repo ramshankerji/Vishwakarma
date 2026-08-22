@@ -1027,6 +1027,21 @@ DirectX::XMMATRIX WorldMatrixForObject(VishwakarmaStorage::ObjectType objectType
             DirectX::XMVectorScale(DirectX::XMVectorAdd(vP1, vP2), 0.5f), 1.0f);
         break;
     }
+    case ObjectType::LineMember: {
+        /* THE FIRST TYPE WHOSE LOCAL FRAME DEPENDS ON ITS DATA RATHER THAN ON ITS TYPE. A member
+        with a solid rectangular or circular section is a scaled, oriented library primitive; every
+        other profile family still emits authored-space vertices and keeps an identity frame here.
+
+        That makes the "one type, one frame" reading of this switch no longer sufficient, which is
+        why the verdict is not spelled out again below: LineMemberCanonicalFrame is the single
+        function both this and LINE_MEMBER::GetGeometry ask, so a profile change cannot leave the
+        matrix builder and the generator describing different frames. */
+        DirectX::XMMATRIX frame;
+        if (LineMemberCanonicalFrame(*static_cast<const LINE_MEMBER*>(object), &frame) >= 0) {
+            world = frame;
+        }
+        break;
+    }
     default:
         break; // Still bakes world coordinates into its vertices; local frame IS authored space.
     }

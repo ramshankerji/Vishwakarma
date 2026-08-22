@@ -319,7 +319,7 @@ An earlier roadmap promised *"Instanced rendering: `InstanceCount > 1` + per-ins
 
 It holds the shapes whose *only* freedom is size, so one canonical mesh plus a non-uniform scale covers every instance: sphere (uniform), cuboid (3-axis), cylinder outward-facing and inward-facing (radius + length), disc (radius), and one or two tori at *default* tube ratios. The two cylinder entries exist because a bore is the same mesh with inverted winding — a second entry rather than a render-state change, unless double-sided rendering becomes universal for sectioning.
 
-*As built:* **three entries — sphere 0, cuboid 1, cylinder 2** — 24 rows, 156.6 KB. The inward-facing cylinder is deferred with `PIPE`, its only consumer; disc and the tori have not been built.
+*As built:* **three entries — sphere 0, cuboid 1, cylinder 2** — 24 rows, 156.6 KB. Those three already serve four object types: `LINE_MEMBER` reuses the cuboid and the cylinder for its solid rectangular and circular profiles (*Structural members that are library primitives*). The inward-facing cylinder is deferred with `PIPE`, its only consumer; disc and the tori have not been built.
 
 Every entry carries **8 LOD levels, always 8**, even where fewer are meaningful: a cuboid's eight slots all point at the same 12-triangle mesh. Uniform array width keeps the shader branch-free and duplicate table entries cost 40 bytes each. The table is `(shapeId, lod) → { indexCount, startIndexLocation, baseVertexLocation, boundingRadius }` — ~12 shapes × 8 LODs × 16 bytes ≈ 1.5 KB, a root SRV. (It was 12 bytes until the first non-uniformly scaled shape needed the bounding radius on the GPU; see *LOD*.)
 
@@ -630,7 +630,7 @@ To support hundreds of simultaneous tabs, we start with a small heap (say 4 MB p
 Each page carries a corresponding `ExecuteIndirect` argument buffer. When we defragment a page, we must simultaneously rebuild its argument buffer.
 
 ### Shared Geometry and the primitive libraries
-***Shipped for `SPHERE`, `CUBOID` and `CYLINDER`*** *(global library, template-only pages, per-frame LOD in the compute pass, inverse-transpose normals). Every other shape is still bespoke — `PIPE` deliberately so.*
+***Shipped for `SPHERE`, `CUBOID`, `CYLINDER`, and `LINE_MEMBER`'s five solid-section profile series*** *(global library, template-only pages, per-frame LOD in the compute pass, inverse-transpose normals). Every other shape is still bespoke — `PIPE` deliberately so.*
 
 #### Build sequence: sphere first, in two steps
 
@@ -755,6 +755,67 @@ The canonical→authored matrix is `scale(size) · rotate(orientation) · transl
 In the proto the new fields take **new numbers** and field 1 is `reserved`. That is not caution for its own sake: protobuf merges a repeated field into a singular one by taking the last element, and absent new fields default to zero, so *reusing* field 1 would make a pre-change cuboid decode **silently** as a zero-size box at its last corner vertex. Reserving it drops the stale data instead of aliasing it. (Field 20 stays the placement, by the convention that holds across every 3D message.)
 
 `CUBOID` also gets a **Properties Pane table for the first time** — it was a vertex-list type with no table at all. Centre is the single point group; the three sizes are scalars a rigid placement cannot touch; and the quaternion is presented as XYZ Euler angles in degrees, composed on read and solved back on write, which is the same shape as the existing world-coordinate handling for point fields rather than a new mechanism. Writing one angle rebuilds the whole quaternion from all three, for the same reason editing one world component of a point rewrites all three authored components.
+
+#### Structural members that are library primitives
+
+An RC beam or column is a rectangular section swept along a line, which is exactly a scaled and
+oriented unit cube — and a circular one is the unit cylinder. So every `LINE_MEMBER` whose profile is
+a **single solid rectangle or circle** emits a library reference instead of vertices, with no new
+library entry and no new renderer path:
+
+| Profile series | Library shape | Scale |
+|---|---|---|
+| `PARAMETRIC RECT` | cuboid | (width *b*, depth *h*, length) |
+| `PARAMETRIC CIRC` | cylinder | (*d*/2, *d*/2, length) |
+| `BAR SQUARE` | cuboid | (*a*, *a*, length) |
+| `BAR FLAT` | cuboid | (width *a*, thickness *b*, length) |
+| `BAR ROUND` | cylinder | (*a*/2, *a*/2, length) |
+
+Measured against the bespoke extruder they replaced: the eight corners of the transformed unit cube
+coincide **bit-exactly** with the 24 vertices `AppendExtrudedConvexPrism` emitted for the same
+member. The two circular cases additionally *gain* LOD — they were a fixed 24-gon and are now
+selected from 3 to 64 segments by projected size.
+
+**The two families are sized from different places, and conflating them would be silent.**
+`userParameter1/2` are declared *parametric-family* fields — RC sections carry their dimensions on
+the member, with 0 meaning "use the catalog row". A `BAR` is sized by its catalog row alone, so
+reading those fields for a bar would quietly resize every bar a user had ever typed a parameter
+into. The helper keeps the two rules apart, and a regression check sets 999/888 on a `BAR FLAT` and
+confirms it still draws at its catalog 100×8.
+
+**This is the first type whose local frame depends on its DATA rather than on its type.** Every
+other canonical-frame type answers "which frame" from the `ObjectType` alone; a member answers it
+from its **profile row** — canonical for `PARAMETRIC:RECT` and `PARAMETRIC:CIRC`, identity for the
+I-sections, channels, angles and the rest, which still bake world coordinates into their vertices.
+That breaks the "one type, one frame" reading of `WorldMatrixForObject`'s switch, and the failure it
+invites is the one that bit `SPHERE`: if the generator and the matrix builder ever disagreed about
+whether a member owns vertices, *moving* it would redraw it at the wrong size. Both therefore call
+one function, `LineMemberCanonicalFrame`, which returns the shape id and optionally the matrix — the
+generator asks for the verdict alone. That helper also owns the
+`userParameter > 0 ? userParameter : catalog default` fallback, which would otherwise be duplicated.
+
+**The section basis is not the cylinder's, and the two are not interchangeable.**
+`MemberSectionBasis` stands the section's local +y along world +Z — the STAAD BETA = 0 convention, so
+section depths are vertical by default — and falls back to +X for vertical members. `CYLINDER`'s own
+frame uses +Y. Both are "an orthonormal basis about the axis" and they differ by a **roll**, which a
+circular section does not notice and a rectangular one very much does; using the wrong one would tip
+every beam's section about its own axis with nothing to show for it but a subtly wrong model.
+
+*What stays bespoke, and why:* `PARAMETRIC OCT`, `PARAMETRIC HEX` and `BAR HEX` would each need
+their own prism entry. Every multi-piece family — I, channel, tee, angle, RHS, bulb, rail — emits two
+to five convex pieces from **one** `GeometryData`, and `libraryShapeId` is a single field, so they
+wait on *One engineering object, up to 256 graphics objects*. `CHS` waits on the bore deferred with
+`PIPE`.
+
+One deliberate asymmetry inside `BAR`: the generator treats anything that is not `ROUND` / `HEX` /
+`SQUARE` as `FLAT`, where the helper names `FLAT` explicitly. A series neither has heard of therefore
+draws bespoke-as-flat rather than instanced-as-flat — the same picture, and the safe direction for
+the two to disagree in.
+
+*Byproduct:* `AppendExtrudedConvexPrism` winds **outward**, so every member it built was rasterised
+from its far faces under the rule in *Winding: front faces point into the solid*. The instanced
+profiles inherit the correctly-wound library mesh and stop doing that; the families still using the
+extruder do not, which is what the audit item under *Next* is for.
 
 #### LOD
 
@@ -1182,13 +1243,15 @@ A **render-thread** counterpart now sits beside it (`GpuRenderStats`, `[gpu][cul
 - [x] **Shared sphere geometry, Step 1** — `gpu.primitiveLibrary` (123 KB, eight LODs), template-only pages, fixed LOD 5, zero HLSL changes. Measured: six spheres added `+0 MB` of clone traffic against `+24 MB` for six cuboids, with the same number of page clones either way.
 - [x] **Compute LOD, Step 2** — per-frame level from projected pixel size, `CullParams` 12 → 16 DWORDs, three more root SRVs. Settles the `renderFlags`-routing question in *Planned: draw buckets*: the cull pass now binds the arena and redirect table anyway, so routing can read them instead of copying flag bits into the draw template — which is what preserves "an appearance change never touches geometry".
 - [x] **Cuboid and cylinder in the library** — library 156.6 KB / three shapes / 24 rows, so `shapeId != 0` and the `(shapeId * 8 + lod)` indexing finally run for real. Carried four things with it: `CUBOID`'s storage reshaped from eight free corner vertices to centre + size + orientation (*Reshaping `CUBOID` to a box*), with its first Properties Pane table; the inverse-transpose normal transform, since both shapes are non-uniformly scaled; a generalised LOD radius using a measured `boundingRadius`; and the `CYLINDER` axis defect below. **Measured:** three positions of a placed cuboid translated `+2 Z` twice deviate **0.087 px** from a straight screen line (`|cross| / (len1·len2)` = 0.00025), against ~0.7 for a wrong matrix.
+- [x] **`LINE_MEMBER`'s five solid-section profile series instanced** — an RC beam or column IS a scaled, oriented library primitive, so `PARAMETRIC RECT`, `BAR SQUARE` and `BAR FLAT` reuse the cuboid while `PARAMETRIC CIRC` and `BAR ROUND` reuse the cylinder, with no new entry and no new renderer path. **Measured:** the transformed unit cube's eight corners coincide bit-exactly with the 24 vertices the bespoke extruder emitted for the same member; verified end to end by importing a real 1139-line STAAD model whose 44 `PRIS YD/ZD` records become 600x500-class RC sections. The two circular series also gain LOD they did not have (fixed 24-gon to 3..64 by projected size). See *Structural members that are library primitives* for the three traps it introduced: a frame that depends on the profile row rather than the type, a section basis that is NOT the cylinder's, and two families that take their dimensions from different places.
 - [x] **`CYLINDER::GetGeometry` ignored its own axis** — it computed `axis = normalize(p2 - p1)` and never used it, building both rims flat in the XZ plane at `p1.y` / `p2.y`, so any cylinder whose axis was not parallel to Y drew **sheared**. The canonical rewrite fixes it as a byproduct: `WorldMatrixForObject` builds an orthonormal basis about the axis, the same construction `PIPE::GetGeometry` always used. Its normals also pointed inward, so cylinders were lit as though from inside while spheres and cuboids were lit from outside.
 
 ### Next
 
 - [ ] Disc and the tori in the library. Cylinder and cuboid landed under *Now*; the 180° fallback that item worried about never had to be written, because building an orthonormal basis around the axis has no anti-parallel singularity to fall back from — the reference-vector swap *is* the whole degenerate case.
 - [ ] Pipes as composed primitives. Now unblocked — more than one library shape exists — but deliberately not taken with this step; see *Deferred with `PIPE`: the inward-facing bore*, which also explains why the bore entry waits for its only consumer.
-- [ ] Audit the remaining bespoke generators against the winding rule (`PYRAMID`, `PARALLELEPIPED`, `CONE`, `FRUSTUM_*`, the tori). `CUBOID`'s was outward — i.e. back-facing — until the library took its mesh over, and nothing about that failed loudly.
+- [ ] `LINE_MEMBER`'s remaining single-piece profiles — `PARAMETRIC OCT` / `HEX` and `BAR HEX` need one prism entry each; everything else single-piece is done.
+- [ ] Audit the remaining bespoke generators against the winding rule (`PYRAMID`, `PARALLELEPIPED`, `CONE`, `FRUSTUM_*`, the tori, and `AppendExtrudedConvexPrism`, which is **confirmed** outward-wound). `CUBOID`'s was outward — i.e. back-facing — until the library took its mesh over, and nothing about that failed loudly.
 
 ### Later
 

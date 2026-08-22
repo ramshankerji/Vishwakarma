@@ -43,7 +43,11 @@ It is two transforms composed, in row-vector order:
                       canonical-frame types it is: SPHERE scale(radius) then translate(center);
                       CUBOID scale(size) then rotate(orientation) then translate(center); CYLINDER
                       an orthonormal basis about p2 - p1 with rows scaled (r, r, L) and the
-                      translation row at the MIDPOINT, because the canonical rod is centred.
+                      translation row at the MIDPOINT, because the canonical rod is centred. A
+                      LINE_MEMBER is the first type whose frame depends on its DATA rather than its
+                      type - canonical only for a solid rectangular or circular profile, identity
+                      for the rest - so its verdict comes from LineMemberCanonicalFrame, the single
+                      function its generator asks too.
   authored -> world   the object's rigid Placement3D, i.e. where it has been moved to since.
 
 WHY THIS IS A FUNCTION AND NOT INLINE IN GeometryForObject. There are TWO producers of an object's

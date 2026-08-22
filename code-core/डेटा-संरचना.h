@@ -1,4 +1,4 @@
-// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
+﻿// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
 #pragma once
 
 #include <algorithm>
@@ -154,6 +154,113 @@ inline void AppendExtrudedConvexPrism(GeometryData& geometry,
     AddCap(p2, axis, false);
 }
 
+/* THE ONE PLACE that decides whether a member draws from the global primitive library, and what
+its canonical -> authored transform is. Returns the library shape id, or -1 for a profile that has
+no canonical form; `world` is written only on a non-negative return and may be null when the caller
+only wants the verdict.
+
+WHY ONE FUNCTION AND NOT TWO. Both LINE_MEMBER::GetGeometry and WorldMatrixForObject need this
+answer, and they run at different times: a geometry edit goes through the generator, a MOVE goes
+through the matrix builder with no geometry at all. If the two ever disagreed about whether a member
+is instanced, moving it would draw it at the wrong size or in the wrong place - exactly the defect
+that bit SPHERE when its local frame was composed in two places (website/software/graphics.md, "The
+canonical local frame, and its single composition point"). Asking the same function twice makes them
+agree by construction, and it keeps the `userParameter > 0 ? userParameter : catalog default`
+fallback in one place instead of two.
+
+WHAT IS ELIGIBLE, AND WHY IT IS A PROPERTY OF THE PROFILE ROW RATHER THAN OF THE TYPE. A solid
+rectangular section extruded along the axis IS a scaled, oriented unit cube - same 24 vertices and
+36 indices the bespoke path emitted - and a solid circular one is the unit cylinder, which also buys
+it real LOD in place of a fixed 24-gon. That covers five series across two families:
+
+    PARAMETRIC RECT   cuboid,   scale (width b, depth h, length)   RC beams and columns
+    PARAMETRIC CIRC   cylinder, scale (d/2, d/2, length)           RC circular columns
+    BAR SQUARE        cuboid,   scale (a, a, length)
+    BAR FLAT          cuboid,   scale (width a, thickness b, length)
+    BAR ROUND         cylinder, scale (a/2, a/2, length)
+
+Everything else is bespoke, for one of three reasons. OCT, HEX and BAR HEX would each need their own
+prism entry. The multi-piece families - I, channel, tee, angle, RHS, bulb, rail - emit two to five
+convex pieces from ONE GeometryData, and `libraryShapeId` is a single field, so they wait for one
+engineering object to be able to own several graphics objects. CHS waits on the inward-facing bore
+deferred with PIPE.
+
+THE SECTION BASIS IS NOT THE CYLINDER'S. MemberSectionBasis stands the section's +y along world +Z
+(the STAAD BETA = 0 convention) and falls back to +X for vertical members; CYLINDER's frame in
+WorldMatrixForObject uses +Y. The two differ by a ROLL about the axis, which a circle does not
+notice and a rectangle very much does, so this must go through MemberSectionBasis. */
+inline int16_t LineMemberCanonicalFrame(const LINE_MEMBER& member, XMMATRIX* world) {
+    const SteelProfileRecord* profile = FindSteelProfileById(member.profileId);
+    if (!profile) return -1; // Unset or unknown: the generator draws its fallback tube.
+
+    constexpr float s = 0.001f; // Catalog dimensions are millimeters; model space is SI meters.
+    int16_t shapeId = -1;
+    float scaleU = 0.0f, scaleV = 0.0f; // Section +x and +y extents, in the canonical mesh's units.
+    if (profile->family == SteelProfileFamily::Parametric) {
+        /* RC sections. These are the ONLY family whose dimensions come from the member's own
+        userParameter fields (0 = fall back to the catalog row) - see LINE_MEMBER's field comment. */
+        if (std::strcmp(profile->series, "RECT") == 0) {
+            // Canonical cube spans +/-0.5, so the scale is the FULL section dimension.
+            const float h = (member.userParameter1 > 0.0f ? member.userParameter1 : profile->h) * s;
+            const float b = (member.userParameter2 > 0.0f ? member.userParameter2 : profile->b) * s;
+            if (!(h > 0.0f && b > 0.0f)) return -1;
+            shapeId = kPrimitiveShapeCuboid;
+            scaleU = b; scaleV = h;
+        } else if (std::strcmp(profile->series, "CIRC") == 0) {
+            // Canonical cylinder has radius 1, so the scale is the RADIUS on both section axes.
+            const float d = (member.userParameter1 > 0.0f ? member.userParameter1 : profile->d) * s;
+            if (!(d > 0.0f)) return -1;
+            shapeId = kPrimitiveShapeCylinder;
+            scaleU = scaleV = d * 0.5f;
+        } else {
+            return -1; // OCT and HEX would each need their own prism entry.
+        }
+    } else if (profile->family == SteelProfileFamily::Bar) {
+        /* Solid bar stock, sized by the catalog row alone - the userParameter fields are declared
+        parametric-family only, and reading them here would silently resize every bar a user had
+        ever typed a parameter into. */
+        const float a = profile->a * s;
+        if (!(a > 0.0f)) return -1;
+        if (std::strcmp(profile->series, "ROUND") == 0) {
+            shapeId = kPrimitiveShapeCylinder;
+            scaleU = scaleV = a * 0.5f; // a = diameter.
+        } else if (std::strcmp(profile->series, "SQUARE") == 0) {
+            shapeId = kPrimitiveShapeCuboid;
+            scaleU = scaleV = a;        // a = side.
+        } else if (std::strcmp(profile->series, "FLAT") == 0) {
+            const float b = profile->b * s; // a = width (section +x), b = thickness (section +y).
+            if (!(b > 0.0f)) return -1;
+            shapeId = kPrimitiveShapeCuboid;
+            scaleU = a; scaleV = b;
+        } else {
+            /* HEX needs a hexagonal prism entry. Note the generator's BAR branch treats anything
+            that is not ROUND / HEX / SQUARE as FLAT, where this names FLAT explicitly: a series
+            neither has heard of therefore draws bespoke-as-flat instead of instanced-as-flat, which
+            is the same picture and the safe direction to disagree in. */
+            return -1;
+        }
+    } else {
+        return -1;
+    }
+    if (!world) return shapeId;
+
+    XMVECTOR p1 = XMLoadFloat3(&member.point1), p2 = XMLoadFloat3(&member.point2);
+    XMVECTOR delta = XMVectorSubtract(p2, p1);
+    const float length = XMVectorGetX(XMVector3Length(delta));
+    if (length < 1e-6f) return -1; // No axis; the generator draws nothing for this member either.
+    XMVECTOR axis = XMVector3Normalize(delta);
+    XMVECTOR u, v;
+    MemberSectionBasis(axis, u, v);
+
+    // Row-vector order, and the translation row is the MIDPOINT because both canonical meshes are
+    // centred on their own local z - the same construction CYLINDER uses.
+    world->r[0] = XMVectorScale(u, scaleU);
+    world->r[1] = XMVectorScale(v, scaleV);
+    world->r[2] = XMVectorScale(axis, length);
+    world->r[3] = XMVectorSetW(XMVectorScale(XMVectorAdd(p1, p2), 0.5f), 1.0f);
+    return shapeId;
+}
+
 // LINE_MEMBER — cross-section outline per catalog family, extruded point1 -> point2.
 // v1 fidelity: sharp corners. flange_slope is honored (tf at the (b-tw)/4 gauge point);
 // fillet radii r1/r2 and RHS corner radii are ignored; RAIL is an envelope approximation.
@@ -167,6 +274,16 @@ inline GeometryData LINE_MEMBER::GetGeometry() {
 
     XMVECTOR p1 = XMLoadFloat3(&point1), p2 = XMLoadFloat3(&point2);
     if (XMVectorGetX(XMVector3LengthSq(p2 - p1)) < 1e-12f) return geometry; // Zero length: no axis.
+
+    /* Solid rectangular and circular sections emit NO GEOMETRY AT ALL - they name a library shape
+    and let the world matrix carry the section dimensions and the axis. See
+    LineMemberCanonicalFrame, which is also what WorldMatrixForObject asks, so the two cannot
+    disagree about whether this member owns vertices. */
+    const int16_t libraryShape = LineMemberCanonicalFrame(*this, nullptr);
+    if (libraryShape >= 0) {
+        geometry.libraryShapeId = libraryShape;
+        return geometry;
+    }
 
     constexpr float s = 0.001f; // Catalog dimensions are millimeters; model space is SI meters.
     const SteelProfileRecord* profile = FindSteelProfileById(profileId);
