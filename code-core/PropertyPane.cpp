@@ -11,6 +11,7 @@
 #include "डेटा.h"
 #include "डेटा-सामान्य-3D.h" // SPHERE, CYLINDER, ... and META_DATA
 #include "डेटा-संरचना.h"     // LINE_MEMBER
+#include "RenderPage2D.h"    // Cad2DLineRecordCPU, Cad2DCircleRecordCPU, ... the 2D records
 
 #include <algorithm> // std::clamp, used by the CUBOID Euler extraction
 #include <cmath>     // std::isfinite, std::atan2, std::asin
@@ -24,32 +25,32 @@ namespace {
 
 // SPHERE: Center X/Y/Z, Radius.
 const PropertyFieldDescriptor kSphereFields[] = {
-    { UITextID::PropCenterX, [](const META_DATA* o) { return static_cast<const SPHERE*>(o)->center.x; },
-        [](META_DATA* o, float v) { static_cast<SPHERE*>(o)->center.x = v; }, PropertyFieldKind::Float32, 0, false },
-    { UITextID::PropCenterY, [](const META_DATA* o) { return static_cast<const SPHERE*>(o)->center.y; },
-        [](META_DATA* o, float v) { static_cast<SPHERE*>(o)->center.y = v; }, PropertyFieldKind::Float32, 1, false },
-    { UITextID::PropCenterZ, [](const META_DATA* o) { return static_cast<const SPHERE*>(o)->center.z; },
-        [](META_DATA* o, float v) { static_cast<SPHERE*>(o)->center.z = v; }, PropertyFieldKind::Float32, 2, false },
-    { UITextID::PropRadius, [](const META_DATA* o) { return static_cast<const SPHERE*>(o)->radius; },
-        [](META_DATA* o, float v) { static_cast<SPHERE*>(o)->radius = v; }, PropertyFieldKind::Float32, 3, true },
+    { UITextID::PropCenterX, [](const void* o) -> double { return static_cast<const SPHERE*>(o)->center.x; },
+        [](void* o, double v) { static_cast<SPHERE*>(o)->center.x = static_cast<float>(v); }, PropertyFieldKind::Real, 0, false },
+    { UITextID::PropCenterY, [](const void* o) -> double { return static_cast<const SPHERE*>(o)->center.y; },
+        [](void* o, double v) { static_cast<SPHERE*>(o)->center.y = static_cast<float>(v); }, PropertyFieldKind::Real, 1, false },
+    { UITextID::PropCenterZ, [](const void* o) -> double { return static_cast<const SPHERE*>(o)->center.z; },
+        [](void* o, double v) { static_cast<SPHERE*>(o)->center.z = static_cast<float>(v); }, PropertyFieldKind::Real, 2, false },
+    { UITextID::PropRadius, [](const void* o) -> double { return static_cast<const SPHERE*>(o)->radius; },
+        [](void* o, double v) { static_cast<SPHERE*>(o)->radius = static_cast<float>(v); }, PropertyFieldKind::Real, 3, true },
 };
 
 // CYLINDER: P1 X/Y/Z, P2 X/Y/Z, Radius.
 const PropertyFieldDescriptor kCylinderFields[] = {
-    { UITextID::PropPoint1X, [](const META_DATA* o) { return static_cast<const CYLINDER*>(o)->p1.x; },
-        [](META_DATA* o, float v) { static_cast<CYLINDER*>(o)->p1.x = v; }, PropertyFieldKind::Float32, 0, false },
-    { UITextID::PropPoint1Y, [](const META_DATA* o) { return static_cast<const CYLINDER*>(o)->p1.y; },
-        [](META_DATA* o, float v) { static_cast<CYLINDER*>(o)->p1.y = v; }, PropertyFieldKind::Float32, 1, false },
-    { UITextID::PropPoint1Z, [](const META_DATA* o) { return static_cast<const CYLINDER*>(o)->p1.z; },
-        [](META_DATA* o, float v) { static_cast<CYLINDER*>(o)->p1.z = v; }, PropertyFieldKind::Float32, 2, false },
-    { UITextID::PropPoint2X, [](const META_DATA* o) { return static_cast<const CYLINDER*>(o)->p2.x; },
-        [](META_DATA* o, float v) { static_cast<CYLINDER*>(o)->p2.x = v; }, PropertyFieldKind::Float32, 3, false },
-    { UITextID::PropPoint2Y, [](const META_DATA* o) { return static_cast<const CYLINDER*>(o)->p2.y; },
-        [](META_DATA* o, float v) { static_cast<CYLINDER*>(o)->p2.y = v; }, PropertyFieldKind::Float32, 4, false },
-    { UITextID::PropPoint2Z, [](const META_DATA* o) { return static_cast<const CYLINDER*>(o)->p2.z; },
-        [](META_DATA* o, float v) { static_cast<CYLINDER*>(o)->p2.z = v; }, PropertyFieldKind::Float32, 5, false },
-    { UITextID::PropRadius, [](const META_DATA* o) { return static_cast<const CYLINDER*>(o)->radius; },
-        [](META_DATA* o, float v) { static_cast<CYLINDER*>(o)->radius = v; }, PropertyFieldKind::Float32, 6, true },
+    { UITextID::PropPoint1X, [](const void* o) -> double { return static_cast<const CYLINDER*>(o)->p1.x; },
+        [](void* o, double v) { static_cast<CYLINDER*>(o)->p1.x = static_cast<float>(v); }, PropertyFieldKind::Real, 0, false },
+    { UITextID::PropPoint1Y, [](const void* o) -> double { return static_cast<const CYLINDER*>(o)->p1.y; },
+        [](void* o, double v) { static_cast<CYLINDER*>(o)->p1.y = static_cast<float>(v); }, PropertyFieldKind::Real, 1, false },
+    { UITextID::PropPoint1Z, [](const void* o) -> double { return static_cast<const CYLINDER*>(o)->p1.z; },
+        [](void* o, double v) { static_cast<CYLINDER*>(o)->p1.z = static_cast<float>(v); }, PropertyFieldKind::Real, 2, false },
+    { UITextID::PropPoint2X, [](const void* o) -> double { return static_cast<const CYLINDER*>(o)->p2.x; },
+        [](void* o, double v) { static_cast<CYLINDER*>(o)->p2.x = static_cast<float>(v); }, PropertyFieldKind::Real, 3, false },
+    { UITextID::PropPoint2Y, [](const void* o) -> double { return static_cast<const CYLINDER*>(o)->p2.y; },
+        [](void* o, double v) { static_cast<CYLINDER*>(o)->p2.y = static_cast<float>(v); }, PropertyFieldKind::Real, 4, false },
+    { UITextID::PropPoint2Z, [](const void* o) -> double { return static_cast<const CYLINDER*>(o)->p2.z; },
+        [](void* o, double v) { static_cast<CYLINDER*>(o)->p2.z = static_cast<float>(v); }, PropertyFieldKind::Real, 5, false },
+    { UITextID::PropRadius, [](const void* o) -> double { return static_cast<const CYLINDER*>(o)->radius; },
+        [](void* o, double v) { static_cast<CYLINDER*>(o)->radius = static_cast<float>(v); }, PropertyFieldKind::Real, 6, true },
 };
 
 /* CUBOID's authored orientation is stored as a unit QUATERNION, which is not something a user types
@@ -83,13 +84,13 @@ void CuboidEulerDegrees(const CUBOID* box, float* out) {
     out[2] = std::atan2(-m._12, m._11) * kToDegrees;
 }
 
-float CuboidEulerComponent(const META_DATA* o, int axis) {
+float CuboidEulerComponent(const void* o, int axis) {
     float euler[3];
     CuboidEulerDegrees(static_cast<const CUBOID*>(o), euler);
     return euler[axis];
 }
 
-void SetCuboidEulerComponent(META_DATA* o, int axis, float degrees) {
+void SetCuboidEulerComponent(void* o, int axis, float degrees) {
     CUBOID* box = static_cast<CUBOID*>(o);
     float euler[3];
     CuboidEulerDegrees(box, euler);
@@ -101,172 +102,241 @@ void SetCuboidEulerComponent(META_DATA* o, int axis, float degrees) {
 
 // CUBOID: Center X/Y/Z, Size X/Y/Z (full edge lengths), Rotation X/Y/Z (degrees).
 const PropertyFieldDescriptor kCuboidFields[] = {
-    { UITextID::PropCenterX, [](const META_DATA* o) { return static_cast<const CUBOID*>(o)->center.x; },
-        [](META_DATA* o, float v) { static_cast<CUBOID*>(o)->center.x = v; }, PropertyFieldKind::Float32, 0, false },
-    { UITextID::PropCenterY, [](const META_DATA* o) { return static_cast<const CUBOID*>(o)->center.y; },
-        [](META_DATA* o, float v) { static_cast<CUBOID*>(o)->center.y = v; }, PropertyFieldKind::Float32, 1, false },
-    { UITextID::PropCenterZ, [](const META_DATA* o) { return static_cast<const CUBOID*>(o)->center.z; },
-        [](META_DATA* o, float v) { static_cast<CUBOID*>(o)->center.z = v; }, PropertyFieldKind::Float32, 2, false },
-    { UITextID::PropSizeX, [](const META_DATA* o) { return static_cast<const CUBOID*>(o)->size.x; },
-        [](META_DATA* o, float v) { static_cast<CUBOID*>(o)->size.x = v; }, PropertyFieldKind::Float32, 3, true },
-    { UITextID::PropSizeY, [](const META_DATA* o) { return static_cast<const CUBOID*>(o)->size.y; },
-        [](META_DATA* o, float v) { static_cast<CUBOID*>(o)->size.y = v; }, PropertyFieldKind::Float32, 4, true },
-    { UITextID::PropSizeZ, [](const META_DATA* o) { return static_cast<const CUBOID*>(o)->size.z; },
-        [](META_DATA* o, float v) { static_cast<CUBOID*>(o)->size.z = v; }, PropertyFieldKind::Float32, 5, true },
-    { UITextID::PropRotationX, [](const META_DATA* o) { return CuboidEulerComponent(o, 0); },
-        [](META_DATA* o, float v) { SetCuboidEulerComponent(o, 0, v); }, PropertyFieldKind::Float32, 6, false },
-    { UITextID::PropRotationY, [](const META_DATA* o) { return CuboidEulerComponent(o, 1); },
-        [](META_DATA* o, float v) { SetCuboidEulerComponent(o, 1, v); }, PropertyFieldKind::Float32, 7, false },
-    { UITextID::PropRotationZ, [](const META_DATA* o) { return CuboidEulerComponent(o, 2); },
-        [](META_DATA* o, float v) { SetCuboidEulerComponent(o, 2, v); }, PropertyFieldKind::Float32, 8, false },
+    { UITextID::PropCenterX, [](const void* o) -> double { return static_cast<const CUBOID*>(o)->center.x; },
+        [](void* o, double v) { static_cast<CUBOID*>(o)->center.x = static_cast<float>(v); }, PropertyFieldKind::Real, 0, false },
+    { UITextID::PropCenterY, [](const void* o) -> double { return static_cast<const CUBOID*>(o)->center.y; },
+        [](void* o, double v) { static_cast<CUBOID*>(o)->center.y = static_cast<float>(v); }, PropertyFieldKind::Real, 1, false },
+    { UITextID::PropCenterZ, [](const void* o) -> double { return static_cast<const CUBOID*>(o)->center.z; },
+        [](void* o, double v) { static_cast<CUBOID*>(o)->center.z = static_cast<float>(v); }, PropertyFieldKind::Real, 2, false },
+    { UITextID::PropSizeX, [](const void* o) -> double { return static_cast<const CUBOID*>(o)->size.x; },
+        [](void* o, double v) { static_cast<CUBOID*>(o)->size.x = static_cast<float>(v); }, PropertyFieldKind::Real, 3, true },
+    { UITextID::PropSizeY, [](const void* o) -> double { return static_cast<const CUBOID*>(o)->size.y; },
+        [](void* o, double v) { static_cast<CUBOID*>(o)->size.y = static_cast<float>(v); }, PropertyFieldKind::Real, 4, true },
+    { UITextID::PropSizeZ, [](const void* o) -> double { return static_cast<const CUBOID*>(o)->size.z; },
+        [](void* o, double v) { static_cast<CUBOID*>(o)->size.z = static_cast<float>(v); }, PropertyFieldKind::Real, 5, true },
+    { UITextID::PropRotationX, [](const void* o) -> double { return CuboidEulerComponent(o, 0); },
+        [](void* o, double v) { SetCuboidEulerComponent(o, 0, static_cast<float>(v)); }, PropertyFieldKind::Real, 6, false },
+    { UITextID::PropRotationY, [](const void* o) -> double { return CuboidEulerComponent(o, 1); },
+        [](void* o, double v) { SetCuboidEulerComponent(o, 1, static_cast<float>(v)); }, PropertyFieldKind::Real, 7, false },
+    { UITextID::PropRotationZ, [](const void* o) -> double { return CuboidEulerComponent(o, 2); },
+        [](void* o, double v) { SetCuboidEulerComponent(o, 2, static_cast<float>(v)); }, PropertyFieldKind::Real, 8, false },
 };
 
 // CONE: Apex X/Y/Z, Base Center X/Y/Z, Radius.
 const PropertyFieldDescriptor kConeFields[] = {
-    { UITextID::PropApexX, [](const META_DATA* o) { return static_cast<const CONE*>(o)->apex.x; },
-        [](META_DATA* o, float v) { static_cast<CONE*>(o)->apex.x = v; }, PropertyFieldKind::Float32, 0, false },
-    { UITextID::PropApexY, [](const META_DATA* o) { return static_cast<const CONE*>(o)->apex.y; },
-        [](META_DATA* o, float v) { static_cast<CONE*>(o)->apex.y = v; }, PropertyFieldKind::Float32, 1, false },
-    { UITextID::PropApexZ, [](const META_DATA* o) { return static_cast<const CONE*>(o)->apex.z; },
-        [](META_DATA* o, float v) { static_cast<CONE*>(o)->apex.z = v; }, PropertyFieldKind::Float32, 2, false },
-    { UITextID::PropBaseCenterX, [](const META_DATA* o) { return static_cast<const CONE*>(o)->baseCenter.x; },
-        [](META_DATA* o, float v) { static_cast<CONE*>(o)->baseCenter.x = v; }, PropertyFieldKind::Float32, 3, false },
-    { UITextID::PropBaseCenterY, [](const META_DATA* o) { return static_cast<const CONE*>(o)->baseCenter.y; },
-        [](META_DATA* o, float v) { static_cast<CONE*>(o)->baseCenter.y = v; }, PropertyFieldKind::Float32, 4, false },
-    { UITextID::PropBaseCenterZ, [](const META_DATA* o) { return static_cast<const CONE*>(o)->baseCenter.z; },
-        [](META_DATA* o, float v) { static_cast<CONE*>(o)->baseCenter.z = v; }, PropertyFieldKind::Float32, 5, false },
-    { UITextID::PropRadius, [](const META_DATA* o) { return static_cast<const CONE*>(o)->radius; },
-        [](META_DATA* o, float v) { static_cast<CONE*>(o)->radius = v; }, PropertyFieldKind::Float32, 6, true },
+    { UITextID::PropApexX, [](const void* o) -> double { return static_cast<const CONE*>(o)->apex.x; },
+        [](void* o, double v) { static_cast<CONE*>(o)->apex.x = static_cast<float>(v); }, PropertyFieldKind::Real, 0, false },
+    { UITextID::PropApexY, [](const void* o) -> double { return static_cast<const CONE*>(o)->apex.y; },
+        [](void* o, double v) { static_cast<CONE*>(o)->apex.y = static_cast<float>(v); }, PropertyFieldKind::Real, 1, false },
+    { UITextID::PropApexZ, [](const void* o) -> double { return static_cast<const CONE*>(o)->apex.z; },
+        [](void* o, double v) { static_cast<CONE*>(o)->apex.z = static_cast<float>(v); }, PropertyFieldKind::Real, 2, false },
+    { UITextID::PropBaseCenterX, [](const void* o) -> double { return static_cast<const CONE*>(o)->baseCenter.x; },
+        [](void* o, double v) { static_cast<CONE*>(o)->baseCenter.x = static_cast<float>(v); }, PropertyFieldKind::Real, 3, false },
+    { UITextID::PropBaseCenterY, [](const void* o) -> double { return static_cast<const CONE*>(o)->baseCenter.y; },
+        [](void* o, double v) { static_cast<CONE*>(o)->baseCenter.y = static_cast<float>(v); }, PropertyFieldKind::Real, 4, false },
+    { UITextID::PropBaseCenterZ, [](const void* o) -> double { return static_cast<const CONE*>(o)->baseCenter.z; },
+        [](void* o, double v) { static_cast<CONE*>(o)->baseCenter.z = static_cast<float>(v); }, PropertyFieldKind::Real, 5, false },
+    { UITextID::PropRadius, [](const void* o) -> double { return static_cast<const CONE*>(o)->radius; },
+        [](void* o, double v) { static_cast<CONE*>(o)->radius = static_cast<float>(v); }, PropertyFieldKind::Real, 6, true },
 };
 
 // TORUS: Center X/Y/Z, Major Radius, Minor Radius.
 const PropertyFieldDescriptor kTorusFields[] = {
-    { UITextID::PropCenterX, [](const META_DATA* o) { return static_cast<const TORUS*>(o)->center.x; },
-        [](META_DATA* o, float v) { static_cast<TORUS*>(o)->center.x = v; }, PropertyFieldKind::Float32, 0, false },
-    { UITextID::PropCenterY, [](const META_DATA* o) { return static_cast<const TORUS*>(o)->center.y; },
-        [](META_DATA* o, float v) { static_cast<TORUS*>(o)->center.y = v; }, PropertyFieldKind::Float32, 1, false },
-    { UITextID::PropCenterZ, [](const META_DATA* o) { return static_cast<const TORUS*>(o)->center.z; },
-        [](META_DATA* o, float v) { static_cast<TORUS*>(o)->center.z = v; }, PropertyFieldKind::Float32, 2, false },
-    { UITextID::PropMajorRadius, [](const META_DATA* o) { return static_cast<const TORUS*>(o)->majorRadius; },
-        [](META_DATA* o, float v) { static_cast<TORUS*>(o)->majorRadius = v; }, PropertyFieldKind::Float32, 3, true },
-    { UITextID::PropMinorRadius, [](const META_DATA* o) { return static_cast<const TORUS*>(o)->minorRadius; },
-        [](META_DATA* o, float v) { static_cast<TORUS*>(o)->minorRadius = v; }, PropertyFieldKind::Float32, 4, true },
+    { UITextID::PropCenterX, [](const void* o) -> double { return static_cast<const TORUS*>(o)->center.x; },
+        [](void* o, double v) { static_cast<TORUS*>(o)->center.x = static_cast<float>(v); }, PropertyFieldKind::Real, 0, false },
+    { UITextID::PropCenterY, [](const void* o) -> double { return static_cast<const TORUS*>(o)->center.y; },
+        [](void* o, double v) { static_cast<TORUS*>(o)->center.y = static_cast<float>(v); }, PropertyFieldKind::Real, 1, false },
+    { UITextID::PropCenterZ, [](const void* o) -> double { return static_cast<const TORUS*>(o)->center.z; },
+        [](void* o, double v) { static_cast<TORUS*>(o)->center.z = static_cast<float>(v); }, PropertyFieldKind::Real, 2, false },
+    { UITextID::PropMajorRadius, [](const void* o) -> double { return static_cast<const TORUS*>(o)->majorRadius; },
+        [](void* o, double v) { static_cast<TORUS*>(o)->majorRadius = static_cast<float>(v); }, PropertyFieldKind::Real, 3, true },
+    { UITextID::PropMinorRadius, [](const void* o) -> double { return static_cast<const TORUS*>(o)->minorRadius; },
+        [](void* o, double v) { static_cast<TORUS*>(o)->minorRadius = static_cast<float>(v); }, PropertyFieldKind::Real, 4, true },
 };
 
 // ELLIPSOID: Center X/Y/Z, Radius X/Y/Z.
 const PropertyFieldDescriptor kEllipsoidFields[] = {
-    { UITextID::PropCenterX, [](const META_DATA* o) { return static_cast<const ELLIPSOID*>(o)->center.x; },
-        [](META_DATA* o, float v) { static_cast<ELLIPSOID*>(o)->center.x = v; }, PropertyFieldKind::Float32, 0, false },
-    { UITextID::PropCenterY, [](const META_DATA* o) { return static_cast<const ELLIPSOID*>(o)->center.y; },
-        [](META_DATA* o, float v) { static_cast<ELLIPSOID*>(o)->center.y = v; }, PropertyFieldKind::Float32, 1, false },
-    { UITextID::PropCenterZ, [](const META_DATA* o) { return static_cast<const ELLIPSOID*>(o)->center.z; },
-        [](META_DATA* o, float v) { static_cast<ELLIPSOID*>(o)->center.z = v; }, PropertyFieldKind::Float32, 2, false },
-    { UITextID::PropRadiusX, [](const META_DATA* o) { return static_cast<const ELLIPSOID*>(o)->radiusX; },
-        [](META_DATA* o, float v) { static_cast<ELLIPSOID*>(o)->radiusX = v; }, PropertyFieldKind::Float32, 3, true },
-    { UITextID::PropRadiusY, [](const META_DATA* o) { return static_cast<const ELLIPSOID*>(o)->radiusY; },
-        [](META_DATA* o, float v) { static_cast<ELLIPSOID*>(o)->radiusY = v; }, PropertyFieldKind::Float32, 4, true },
-    { UITextID::PropRadiusZ, [](const META_DATA* o) { return static_cast<const ELLIPSOID*>(o)->radiusZ; },
-        [](META_DATA* o, float v) { static_cast<ELLIPSOID*>(o)->radiusZ = v; }, PropertyFieldKind::Float32, 5, true },
+    { UITextID::PropCenterX, [](const void* o) -> double { return static_cast<const ELLIPSOID*>(o)->center.x; },
+        [](void* o, double v) { static_cast<ELLIPSOID*>(o)->center.x = static_cast<float>(v); }, PropertyFieldKind::Real, 0, false },
+    { UITextID::PropCenterY, [](const void* o) -> double { return static_cast<const ELLIPSOID*>(o)->center.y; },
+        [](void* o, double v) { static_cast<ELLIPSOID*>(o)->center.y = static_cast<float>(v); }, PropertyFieldKind::Real, 1, false },
+    { UITextID::PropCenterZ, [](const void* o) -> double { return static_cast<const ELLIPSOID*>(o)->center.z; },
+        [](void* o, double v) { static_cast<ELLIPSOID*>(o)->center.z = static_cast<float>(v); }, PropertyFieldKind::Real, 2, false },
+    { UITextID::PropRadiusX, [](const void* o) -> double { return static_cast<const ELLIPSOID*>(o)->radiusX; },
+        [](void* o, double v) { static_cast<ELLIPSOID*>(o)->radiusX = static_cast<float>(v); }, PropertyFieldKind::Real, 3, true },
+    { UITextID::PropRadiusY, [](const void* o) -> double { return static_cast<const ELLIPSOID*>(o)->radiusY; },
+        [](void* o, double v) { static_cast<ELLIPSOID*>(o)->radiusY = static_cast<float>(v); }, PropertyFieldKind::Real, 4, true },
+    { UITextID::PropRadiusZ, [](const void* o) -> double { return static_cast<const ELLIPSOID*>(o)->radiusZ; },
+        [](void* o, double v) { static_cast<ELLIPSOID*>(o)->radiusZ = static_cast<float>(v); }, PropertyFieldKind::Real, 5, true },
 };
 
 // PIPE: Center1 X/Y/Z, Center2 X/Y/Z, Outside Diameter, Inside Diameter.
 const PropertyFieldDescriptor kPipeFields[] = {
-    { UITextID::PropPoint1X, [](const META_DATA* o) { return static_cast<const PIPE*>(o)->center1.x; },
-        [](META_DATA* o, float v) { static_cast<PIPE*>(o)->center1.x = v; }, PropertyFieldKind::Float32, 0, false },
-    { UITextID::PropPoint1Y, [](const META_DATA* o) { return static_cast<const PIPE*>(o)->center1.y; },
-        [](META_DATA* o, float v) { static_cast<PIPE*>(o)->center1.y = v; }, PropertyFieldKind::Float32, 1, false },
-    { UITextID::PropPoint1Z, [](const META_DATA* o) { return static_cast<const PIPE*>(o)->center1.z; },
-        [](META_DATA* o, float v) { static_cast<PIPE*>(o)->center1.z = v; }, PropertyFieldKind::Float32, 2, false },
-    { UITextID::PropPoint2X, [](const META_DATA* o) { return static_cast<const PIPE*>(o)->center2.x; },
-        [](META_DATA* o, float v) { static_cast<PIPE*>(o)->center2.x = v; }, PropertyFieldKind::Float32, 3, false },
-    { UITextID::PropPoint2Y, [](const META_DATA* o) { return static_cast<const PIPE*>(o)->center2.y; },
-        [](META_DATA* o, float v) { static_cast<PIPE*>(o)->center2.y = v; }, PropertyFieldKind::Float32, 4, false },
-    { UITextID::PropPoint2Z, [](const META_DATA* o) { return static_cast<const PIPE*>(o)->center2.z; },
-        [](META_DATA* o, float v) { static_cast<PIPE*>(o)->center2.z = v; }, PropertyFieldKind::Float32, 5, false },
-    { UITextID::PropOutsideDiameter, [](const META_DATA* o) { return static_cast<const PIPE*>(o)->outsideDiameter; },
-        [](META_DATA* o, float v) { static_cast<PIPE*>(o)->outsideDiameter = v; }, PropertyFieldKind::Float32, 6, true },
-    { UITextID::PropInsideDiameter, [](const META_DATA* o) { return static_cast<const PIPE*>(o)->insideDiameter; },
-        [](META_DATA* o, float v) { static_cast<PIPE*>(o)->insideDiameter = v; }, PropertyFieldKind::Float32, 7, true },
+    { UITextID::PropPoint1X, [](const void* o) -> double { return static_cast<const PIPE*>(o)->center1.x; },
+        [](void* o, double v) { static_cast<PIPE*>(o)->center1.x = static_cast<float>(v); }, PropertyFieldKind::Real, 0, false },
+    { UITextID::PropPoint1Y, [](const void* o) -> double { return static_cast<const PIPE*>(o)->center1.y; },
+        [](void* o, double v) { static_cast<PIPE*>(o)->center1.y = static_cast<float>(v); }, PropertyFieldKind::Real, 1, false },
+    { UITextID::PropPoint1Z, [](const void* o) -> double { return static_cast<const PIPE*>(o)->center1.z; },
+        [](void* o, double v) { static_cast<PIPE*>(o)->center1.z = static_cast<float>(v); }, PropertyFieldKind::Real, 2, false },
+    { UITextID::PropPoint2X, [](const void* o) -> double { return static_cast<const PIPE*>(o)->center2.x; },
+        [](void* o, double v) { static_cast<PIPE*>(o)->center2.x = static_cast<float>(v); }, PropertyFieldKind::Real, 3, false },
+    { UITextID::PropPoint2Y, [](const void* o) -> double { return static_cast<const PIPE*>(o)->center2.y; },
+        [](void* o, double v) { static_cast<PIPE*>(o)->center2.y = static_cast<float>(v); }, PropertyFieldKind::Real, 4, false },
+    { UITextID::PropPoint2Z, [](const void* o) -> double { return static_cast<const PIPE*>(o)->center2.z; },
+        [](void* o, double v) { static_cast<PIPE*>(o)->center2.z = static_cast<float>(v); }, PropertyFieldKind::Real, 5, false },
+    { UITextID::PropOutsideDiameter, [](const void* o) -> double { return static_cast<const PIPE*>(o)->outsideDiameter; },
+        [](void* o, double v) { static_cast<PIPE*>(o)->outsideDiameter = static_cast<float>(v); }, PropertyFieldKind::Real, 6, true },
+    { UITextID::PropInsideDiameter, [](const void* o) -> double { return static_cast<const PIPE*>(o)->insideDiameter; },
+        [](void* o, double v) { static_cast<PIPE*>(o)->insideDiameter = static_cast<float>(v); }, PropertyFieldKind::Real, 7, true },
 };
 
 // FRUSTUM_OF_CONE: Bottom Center X/Y/Z, Top Center X/Y/Z, Bottom Radius, Top Radius.
 const PropertyFieldDescriptor kFrustumOfConeFields[] = {
-    { UITextID::PropBottomCenterX, [](const META_DATA* o) { return static_cast<const FRUSTUM_OF_CONE*>(o)->bottomCenter.x; },
-        [](META_DATA* o, float v) { static_cast<FRUSTUM_OF_CONE*>(o)->bottomCenter.x = v; }, PropertyFieldKind::Float32, 0, false },
-    { UITextID::PropBottomCenterY, [](const META_DATA* o) { return static_cast<const FRUSTUM_OF_CONE*>(o)->bottomCenter.y; },
-        [](META_DATA* o, float v) { static_cast<FRUSTUM_OF_CONE*>(o)->bottomCenter.y = v; }, PropertyFieldKind::Float32, 1, false },
-    { UITextID::PropBottomCenterZ, [](const META_DATA* o) { return static_cast<const FRUSTUM_OF_CONE*>(o)->bottomCenter.z; },
-        [](META_DATA* o, float v) { static_cast<FRUSTUM_OF_CONE*>(o)->bottomCenter.z = v; }, PropertyFieldKind::Float32, 2, false },
-    { UITextID::PropTopCenterX, [](const META_DATA* o) { return static_cast<const FRUSTUM_OF_CONE*>(o)->topCenter.x; },
-        [](META_DATA* o, float v) { static_cast<FRUSTUM_OF_CONE*>(o)->topCenter.x = v; }, PropertyFieldKind::Float32, 3, false },
-    { UITextID::PropTopCenterY, [](const META_DATA* o) { return static_cast<const FRUSTUM_OF_CONE*>(o)->topCenter.y; },
-        [](META_DATA* o, float v) { static_cast<FRUSTUM_OF_CONE*>(o)->topCenter.y = v; }, PropertyFieldKind::Float32, 4, false },
-    { UITextID::PropTopCenterZ, [](const META_DATA* o) { return static_cast<const FRUSTUM_OF_CONE*>(o)->topCenter.z; },
-        [](META_DATA* o, float v) { static_cast<FRUSTUM_OF_CONE*>(o)->topCenter.z = v; }, PropertyFieldKind::Float32, 5, false },
-    { UITextID::PropBottomRadius, [](const META_DATA* o) { return static_cast<const FRUSTUM_OF_CONE*>(o)->bottomRadius; },
-        [](META_DATA* o, float v) { static_cast<FRUSTUM_OF_CONE*>(o)->bottomRadius = v; }, PropertyFieldKind::Float32, 6, true },
-    { UITextID::PropTopRadius, [](const META_DATA* o) { return static_cast<const FRUSTUM_OF_CONE*>(o)->topRadius; },
-        [](META_DATA* o, float v) { static_cast<FRUSTUM_OF_CONE*>(o)->topRadius = v; }, PropertyFieldKind::Float32, 7, true },
+    { UITextID::PropBottomCenterX, [](const void* o) -> double { return static_cast<const FRUSTUM_OF_CONE*>(o)->bottomCenter.x; },
+        [](void* o, double v) { static_cast<FRUSTUM_OF_CONE*>(o)->bottomCenter.x = static_cast<float>(v); }, PropertyFieldKind::Real, 0, false },
+    { UITextID::PropBottomCenterY, [](const void* o) -> double { return static_cast<const FRUSTUM_OF_CONE*>(o)->bottomCenter.y; },
+        [](void* o, double v) { static_cast<FRUSTUM_OF_CONE*>(o)->bottomCenter.y = static_cast<float>(v); }, PropertyFieldKind::Real, 1, false },
+    { UITextID::PropBottomCenterZ, [](const void* o) -> double { return static_cast<const FRUSTUM_OF_CONE*>(o)->bottomCenter.z; },
+        [](void* o, double v) { static_cast<FRUSTUM_OF_CONE*>(o)->bottomCenter.z = static_cast<float>(v); }, PropertyFieldKind::Real, 2, false },
+    { UITextID::PropTopCenterX, [](const void* o) -> double { return static_cast<const FRUSTUM_OF_CONE*>(o)->topCenter.x; },
+        [](void* o, double v) { static_cast<FRUSTUM_OF_CONE*>(o)->topCenter.x = static_cast<float>(v); }, PropertyFieldKind::Real, 3, false },
+    { UITextID::PropTopCenterY, [](const void* o) -> double { return static_cast<const FRUSTUM_OF_CONE*>(o)->topCenter.y; },
+        [](void* o, double v) { static_cast<FRUSTUM_OF_CONE*>(o)->topCenter.y = static_cast<float>(v); }, PropertyFieldKind::Real, 4, false },
+    { UITextID::PropTopCenterZ, [](const void* o) -> double { return static_cast<const FRUSTUM_OF_CONE*>(o)->topCenter.z; },
+        [](void* o, double v) { static_cast<FRUSTUM_OF_CONE*>(o)->topCenter.z = static_cast<float>(v); }, PropertyFieldKind::Real, 5, false },
+    { UITextID::PropBottomRadius, [](const void* o) -> double { return static_cast<const FRUSTUM_OF_CONE*>(o)->bottomRadius; },
+        [](void* o, double v) { static_cast<FRUSTUM_OF_CONE*>(o)->bottomRadius = static_cast<float>(v); }, PropertyFieldKind::Real, 6, true },
+    { UITextID::PropTopRadius, [](const void* o) -> double { return static_cast<const FRUSTUM_OF_CONE*>(o)->topRadius; },
+        [](void* o, double v) { static_cast<FRUSTUM_OF_CONE*>(o)->topRadius = static_cast<float>(v); }, PropertyFieldKind::Real, 7, true },
 };
 
 // LINE_MEMBER: P1 X/Y/Z, P2 X/Y/Z (meters), Parameter 1/2 (parametric section dims,
 // millimeters; 0 = the catalog row's defaults, so zero stays editable-legal).
 const PropertyFieldDescriptor kLineMemberFields[] = {
-    { UITextID::PropPoint1X, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->point1.x; },
-        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->point1.x = v; }, PropertyFieldKind::Float32, 0, false },
-    { UITextID::PropPoint1Y, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->point1.y; },
-        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->point1.y = v; }, PropertyFieldKind::Float32, 1, false },
-    { UITextID::PropPoint1Z, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->point1.z; },
-        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->point1.z = v; }, PropertyFieldKind::Float32, 2, false },
-    { UITextID::PropPoint2X, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->point2.x; },
-        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->point2.x = v; }, PropertyFieldKind::Float32, 3, false },
-    { UITextID::PropPoint2Y, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->point2.y; },
-        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->point2.y = v; }, PropertyFieldKind::Float32, 4, false },
-    { UITextID::PropPoint2Z, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->point2.z; },
-        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->point2.z = v; }, PropertyFieldKind::Float32, 5, false },
-    { UITextID::PropParameter1, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->userParameter1; },
-        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->userParameter1 = v; }, PropertyFieldKind::Float32, 6, false },
-    { UITextID::PropParameter2, [](const META_DATA* o) { return static_cast<const LINE_MEMBER*>(o)->userParameter2; },
-        [](META_DATA* o, float v) { static_cast<LINE_MEMBER*>(o)->userParameter2 = v; }, PropertyFieldKind::Float32, 7, false },
+    { UITextID::PropPoint1X, [](const void* o) -> double { return static_cast<const LINE_MEMBER*>(o)->point1.x; },
+        [](void* o, double v) { static_cast<LINE_MEMBER*>(o)->point1.x = static_cast<float>(v); }, PropertyFieldKind::Real, 0, false },
+    { UITextID::PropPoint1Y, [](const void* o) -> double { return static_cast<const LINE_MEMBER*>(o)->point1.y; },
+        [](void* o, double v) { static_cast<LINE_MEMBER*>(o)->point1.y = static_cast<float>(v); }, PropertyFieldKind::Real, 1, false },
+    { UITextID::PropPoint1Z, [](const void* o) -> double { return static_cast<const LINE_MEMBER*>(o)->point1.z; },
+        [](void* o, double v) { static_cast<LINE_MEMBER*>(o)->point1.z = static_cast<float>(v); }, PropertyFieldKind::Real, 2, false },
+    { UITextID::PropPoint2X, [](const void* o) -> double { return static_cast<const LINE_MEMBER*>(o)->point2.x; },
+        [](void* o, double v) { static_cast<LINE_MEMBER*>(o)->point2.x = static_cast<float>(v); }, PropertyFieldKind::Real, 3, false },
+    { UITextID::PropPoint2Y, [](const void* o) -> double { return static_cast<const LINE_MEMBER*>(o)->point2.y; },
+        [](void* o, double v) { static_cast<LINE_MEMBER*>(o)->point2.y = static_cast<float>(v); }, PropertyFieldKind::Real, 4, false },
+    { UITextID::PropPoint2Z, [](const void* o) -> double { return static_cast<const LINE_MEMBER*>(o)->point2.z; },
+        [](void* o, double v) { static_cast<LINE_MEMBER*>(o)->point2.z = static_cast<float>(v); }, PropertyFieldKind::Real, 5, false },
+    { UITextID::PropParameter1, [](const void* o) -> double { return static_cast<const LINE_MEMBER*>(o)->userParameter1; },
+        [](void* o, double v) { static_cast<LINE_MEMBER*>(o)->userParameter1 = static_cast<float>(v); }, PropertyFieldKind::Real, 6, false },
+    { UITextID::PropParameter2, [](const void* o) -> double { return static_cast<const LINE_MEMBER*>(o)->userParameter2; },
+        [](void* o, double v) { static_cast<LINE_MEMBER*>(o)->userParameter2 = static_cast<float>(v); }, PropertyFieldKind::Real, 7, false },
 };
 
 // Copies the pre-edit field values and applies the edited value at editIndex, so cross-field rules
 // evaluate the hypothetical post-edit state.
-void CopyWithEdit(float* dst, const float* src, uint8_t count, uint8_t editIndex, float newValue) {
+void CopyWithEdit(double* dst, const double* src, uint8_t count, uint8_t editIndex, double newValue) {
     for (uint8_t i = 0; i < count; ++i) dst[i] = src[i];
     if (editIndex < count) dst[editIndex] = newValue;
 }
 
-bool PointsDistinct(const float* v, int a, int b) {
+bool PointsDistinct(const double* v, int a, int b) {
     return !(v[a] == v[b] && v[a + 1] == v[b + 1] && v[a + 2] == v[b + 2]);
 }
 
 // CYLINDER / FRUSTUM_OF_CONE: the two axis end points must not coincide after the edit.
-bool CrossTwoPoints(const float* values, uint8_t count, uint8_t editIndex, float newValue) {
-    float f[8]; CopyWithEdit(f, values, count, editIndex, newValue);
+bool CrossTwoPoints(const double* values, uint8_t count, uint8_t editIndex, double newValue) {
+    double f[8]; CopyWithEdit(f, values, count, editIndex, newValue);
     return PointsDistinct(f, 0, 3);
 }
 
 // TORUS: minor radius (field 4) must stay below the major radius (field 3).
-bool CrossTorus(const float* values, uint8_t count, uint8_t editIndex, float newValue) {
-    float f[8]; CopyWithEdit(f, values, count, editIndex, newValue);
+bool CrossTorus(const double* values, uint8_t count, uint8_t editIndex, double newValue) {
+    double f[8]; CopyWithEdit(f, values, count, editIndex, newValue);
     return f[4] < f[3];
 }
 
 // PIPE: inside diameter (field 7) < outside diameter (field 6) AND the two centers must not coincide.
-bool CrossPipe(const float* values, uint8_t count, uint8_t editIndex, float newValue) {
-    float f[8]; CopyWithEdit(f, values, count, editIndex, newValue);
+bool CrossPipe(const double* values, uint8_t count, uint8_t editIndex, double newValue) {
+    double f[8]; CopyWithEdit(f, values, count, editIndex, newValue);
     if (!(f[7] < f[6])) return false;
     return PointsDistinct(f, 0, 3);
 }
 
 // LINE_MEMBER: the axis end points must not coincide; parameters (fields 6, 7) must not go
 // negative (0 is legal — it means "use the catalog row's default dimensions").
-bool CrossLineMember(const float* values, uint8_t count, uint8_t editIndex, float newValue) {
-    float f[8]; CopyWithEdit(f, values, count, editIndex, newValue);
-    if (f[6] < 0.0f || f[7] < 0.0f) return false;
+bool CrossLineMember(const double* values, uint8_t count, uint8_t editIndex, double newValue) {
+    double f[8]; CopyWithEdit(f, values, count, editIndex, newValue);
+    if (f[6] < 0.0 || f[7] < 0.0) return false;
     return PointsDistinct(f, 0, 3);
 }
+
+/* ---- Page2D records ------------------------------------------------------------------------
+Read-only for now: every `set` is nullptr, so ApplyPropertyValueFromDisplay refuses the write and
+the pane renders these as static rows. The 2D commit path (mutate the record, re-enqueue through
+EnqueueCad2D* - which the copy thread ingests as an upsert) is deliberately not wired yet.
+
+No point groups: 2D coordinates are already page coordinates, so there is nothing to convert. The
+pointGroup machinery is X/Y/Z triples anyway, which a 2D X/Y pair does not fit. */
+
+// LINE2D: two end points.
+const PropertyFieldDescriptor kLine2DFields[] = {
+    { UITextID::PropPoint1X, [](const void* o) -> double { return static_cast<const Cad2DLineRecordCPU*>(o)->x1; },
+        nullptr, PropertyFieldKind::Real, 0, false },
+    { UITextID::PropPoint1Y, [](const void* o) -> double { return static_cast<const Cad2DLineRecordCPU*>(o)->y1; },
+        nullptr, PropertyFieldKind::Real, 1, false },
+    { UITextID::PropPoint2X, [](const void* o) -> double { return static_cast<const Cad2DLineRecordCPU*>(o)->x2; },
+        nullptr, PropertyFieldKind::Real, 2, false },
+    { UITextID::PropPoint2Y, [](const void* o) -> double { return static_cast<const Cad2DLineRecordCPU*>(o)->y2; },
+        nullptr, PropertyFieldKind::Real, 3, false },
+};
+
+// CIRCLE2D: center + radius.
+const PropertyFieldDescriptor kCircle2DFields[] = {
+    { UITextID::PropCenterX, [](const void* o) -> double { return static_cast<const Cad2DCircleRecordCPU*>(o)->centerX; },
+        nullptr, PropertyFieldKind::Real, 0, false },
+    { UITextID::PropCenterY, [](const void* o) -> double { return static_cast<const Cad2DCircleRecordCPU*>(o)->centerY; },
+        nullptr, PropertyFieldKind::Real, 1, false },
+    { UITextID::PropRadius, [](const void* o) -> double { return static_cast<const Cad2DCircleRecordCPU*>(o)->radius; },
+        nullptr, PropertyFieldKind::Real, 2, true },
+};
+
+// ELLIPSE2D: center, the two radii, and the CCW rotation of the radius axes (shown in degrees,
+// stored in radians - the one derived field here, and the reason it is read-only twice over).
+const PropertyFieldDescriptor kEllipse2DFields[] = {
+    { UITextID::PropCenterX, [](const void* o) -> double { return static_cast<const Cad2DEllipseRecordCPU*>(o)->centerX; },
+        nullptr, PropertyFieldKind::Real, 0, false },
+    { UITextID::PropCenterY, [](const void* o) -> double { return static_cast<const Cad2DEllipseRecordCPU*>(o)->centerY; },
+        nullptr, PropertyFieldKind::Real, 1, false },
+    { UITextID::PropRadiusX, [](const void* o) -> double { return static_cast<const Cad2DEllipseRecordCPU*>(o)->radiusX; },
+        nullptr, PropertyFieldKind::Real, 2, true },
+    { UITextID::PropRadiusY, [](const void* o) -> double { return static_cast<const Cad2DEllipseRecordCPU*>(o)->radiusY; },
+        nullptr, PropertyFieldKind::Real, 3, true },
+    { UITextID::PropRotationZ, [](const void* o) -> double {
+            return static_cast<const Cad2DEllipseRecordCPU*>(o)->rotationRadians * 180.0 / M_PI; },
+        nullptr, PropertyFieldKind::Real, 4, false },
+};
+
+// ARC2D: the ellipse fields plus the two sweep end points, which are stored in page coordinates.
+const PropertyFieldDescriptor kArc2DFields[] = {
+    { UITextID::PropCenterX, [](const void* o) -> double { return static_cast<const Cad2DArcRecordCPU*>(o)->centerX; },
+        nullptr, PropertyFieldKind::Real, 0, false },
+    { UITextID::PropCenterY, [](const void* o) -> double { return static_cast<const Cad2DArcRecordCPU*>(o)->centerY; },
+        nullptr, PropertyFieldKind::Real, 1, false },
+    { UITextID::PropRadiusX, [](const void* o) -> double { return static_cast<const Cad2DArcRecordCPU*>(o)->radiusX; },
+        nullptr, PropertyFieldKind::Real, 2, true },
+    { UITextID::PropRadiusY, [](const void* o) -> double { return static_cast<const Cad2DArcRecordCPU*>(o)->radiusY; },
+        nullptr, PropertyFieldKind::Real, 3, true },
+    { UITextID::PropRotationZ, [](const void* o) -> double {
+            return static_cast<const Cad2DArcRecordCPU*>(o)->rotationRadians * 180.0 / M_PI; },
+        nullptr, PropertyFieldKind::Real, 4, false },
+    { UITextID::PropStartX, [](const void* o) -> double { return static_cast<const Cad2DArcRecordCPU*>(o)->startX; },
+        nullptr, PropertyFieldKind::Real, 5, false },
+    { UITextID::PropStartY, [](const void* o) -> double { return static_cast<const Cad2DArcRecordCPU*>(o)->startY; },
+        nullptr, PropertyFieldKind::Real, 6, false },
+    { UITextID::PropEndX, [](const void* o) -> double { return static_cast<const Cad2DArcRecordCPU*>(o)->endX; },
+        nullptr, PropertyFieldKind::Real, 7, false },
+    { UITextID::PropEndY, [](const void* o) -> double { return static_cast<const Cad2DArcRecordCPU*>(o)->endY; },
+        nullptr, PropertyFieldKind::Real, 8, false },
+};
 
 } // namespace
 
@@ -287,6 +357,14 @@ const PropertyTypeDescriptor kPropertyTables[] = {
     { ObjectType::Cuboid, kCuboidFields, static_cast<uint8_t>(std::size(kCuboidFields)), nullptr, { 0, 0 }, 1 },
     // PYRAMID, PARALLELEPIPED, FRUSTUM_OF_PYRAMID are vertex-list types: no table in the MVP, so
     // FindPropertyTable() returns nullptr and the pane shows Type + ID only.
+
+    // Page2D. Read-only, no point groups. POLYLINE2D / POLYGON2D / TEXT2D are left out for the same
+    // reason as the vertex-list solids above: a variable-length point list (or a string) does not
+    // fit a fixed field table, so they fall through to Type + ID.
+    { ObjectType::Line2D, kLine2DFields, static_cast<uint8_t>(std::size(kLine2DFields)), nullptr, { 0, 0 }, 0 },
+    { ObjectType::Circle2D, kCircle2DFields, static_cast<uint8_t>(std::size(kCircle2DFields)), nullptr, { 0, 0 }, 0 },
+    { ObjectType::Ellipse2D, kEllipse2DFields, static_cast<uint8_t>(std::size(kEllipse2DFields)), nullptr, { 0, 0 }, 0 },
+    { ObjectType::Arc2D, kArc2DFields, static_cast<uint8_t>(std::size(kArc2DFields)), nullptr, { 0, 0 }, 0 },
 };
 
 const size_t kPropertyTableCount = std::size(kPropertyTables);
@@ -298,11 +376,11 @@ const PropertyTypeDescriptor* FindPropertyTable(ObjectType objectType) {
     return nullptr;
 }
 
-bool ValidatePropertyEdit(const PropertyTypeDescriptor& table, const float* values, uint8_t count,
-    uint8_t editIndex, float newValue) {
+bool ValidatePropertyEdit(const PropertyTypeDescriptor& table, const double* values, uint8_t count,
+    uint8_t editIndex, double newValue) {
     if (editIndex >= table.fieldCount) return false;
     if (!std::isfinite(newValue)) return false;
-    if (table.fields[editIndex].mustBePositive && newValue <= 0.0f) return false;
+    if (table.fields[editIndex].mustBePositive && newValue <= 0.0) return false;
     if (table.validateCrossField && !table.validateCrossField(values, count, editIndex, newValue)) {
         return false;
     }
@@ -322,10 +400,15 @@ uint8_t PointGroupOfField(const PropertyTypeDescriptor& table, uint8_t fieldInde
 
 } // namespace
 
-void ReadPropertyValuesForDisplay(const PropertyTypeDescriptor& table, const META_DATA* object,
-    float* out) {
+void ReadPropertyValuesRaw(const PropertyTypeDescriptor& table, const void* object, double* out) {
     if (!object || !out) return;
     for (uint8_t i = 0; i < table.fieldCount; ++i) out[i] = table.fields[i].get(object);
+}
+
+void ReadPropertyValuesForDisplay(const PropertyTypeDescriptor& table, const META_DATA* object,
+    double* out) {
+    if (!object || !out) return;
+    ReadPropertyValuesRaw(table, object, out);
 
     // const_cast: PlacementForObject is the one switch over the 15 types and hands back a mutable
     // pointer because the move producer writes through it; this path only reads.
@@ -337,15 +420,19 @@ void ReadPropertyValuesForDisplay(const PropertyTypeDescriptor& table, const MET
         const uint8_t b = table.pointGroupFirstField[g];
         if (static_cast<uint8_t>(b + 3) > table.fieldCount) continue;
         DirectX::XMFLOAT3 world;
-        DirectX::XMStoreFloat3(&world, placement->TransformPoint(
-            DirectX::XMVectorSet(out[b], out[b + 1], out[b + 2], 1.0f)));
+        DirectX::XMStoreFloat3(&world, placement->TransformPoint(DirectX::XMVectorSet(
+            static_cast<float>(out[b]), static_cast<float>(out[b + 1]),
+            static_cast<float>(out[b + 2]), 1.0f)));
         out[b] = world.x; out[b + 1] = world.y; out[b + 2] = world.z;
     }
 }
 
 void ApplyPropertyValueFromDisplay(const PropertyTypeDescriptor& table, META_DATA* object,
-    uint8_t fieldIndex, float newValue) {
+    uint8_t fieldIndex, double newValue) {
     if (!object || fieldIndex >= table.fieldCount) return;
+    // A read-only table (every Page2D one today) declares no setter. Refuse rather than crash, so
+    // "read-only" is enforced at the lowest level and not only by the pane refusing to focus.
+    if (!table.fields[fieldIndex].set) return;
 
     Placement3D* placement = PlacementForObject(table.objectType, object);
     const uint8_t group = PointGroupOfField(table, fieldIndex);
@@ -359,10 +446,11 @@ void ApplyPropertyValueFromDisplay(const PropertyTypeDescriptor& table, META_DAT
     // Take the point to world space, replace the one component the user edited, come back.
     DirectX::XMFLOAT3 world;
     DirectX::XMStoreFloat3(&world, placement->TransformPoint(DirectX::XMVectorSet(
-        table.fields[b].get(object), table.fields[b + 1].get(object),
-        table.fields[b + 2].get(object), 1.0f)));
+        static_cast<float>(table.fields[b].get(object)),
+        static_cast<float>(table.fields[b + 1].get(object)),
+        static_cast<float>(table.fields[b + 2].get(object)), 1.0f)));
     float component[3] = { world.x, world.y, world.z };
-    component[fieldIndex - b] = newValue;
+    component[fieldIndex - b] = static_cast<float>(newValue);
 
     DirectX::XMFLOAT3 authored;
     DirectX::XMStoreFloat3(&authored, placement->InverseTransformPoint(

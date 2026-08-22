@@ -2,7 +2,7 @@
 title: "Snapping (2D and 3D)"
 weight: 100110
 ---
-This page is the Design Document for snapping in the 2D CAD page and the 3D modelling scene. To be referred by AI for coding as well as humans. It is a plan; sections marked as decisions are locked, defaults are changeable until first implementation. Nothing here is implemented yet.
+This page is the Design Document for snapping in the 2D CAD page and the 3D modelling scene. To be referred by AI for coding as well as humans. It is a plan; sections marked as decisions are locked, defaults are changeable until first implementation. **Stage 1 of §15 — the 2D ambient grid — is implemented** (`Snap.h` / `Snap.cpp` plus the 2D chokepoint wrapper of §3); everything else here is still a plan.
 
 Snapping is the mechanism that converts an imprecise cursor pixel into an **exact** engineering coordinate. It is the difference between a drawing that looks right and a model that *is* right. Selection (`selection.md`) answers "which object is under the cursor"; snapping answers "which exact point did the user mean". They share machinery but are different questions and must not be conflated.
 
@@ -323,7 +323,7 @@ The snap set is a **32-bit mask, one bit per snap kind** — cheap to store, che
 Each stage is independently verifiable and independently useful.
 
 ```text
-1. Ambient grid, 2D only     -> draw a line at any zoom; both ends land on round mm.
+1. Ambient grid, 2D only     -> DONE. draw a line at any zoom; both ends land on round mm.
                                 Zoom in 10x; the step subdivides through the 1-2-5 sequence.
 2. Hover marker + label      -> marker tracks the cursor and visibly jumps to the snapped point.
 3. 2D End/Mid/Center/        -> each kind demonstrably wins near its own feature; priority

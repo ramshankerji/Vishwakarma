@@ -879,17 +879,16 @@ static void ModifyObjectProperty(DATASETTAB* myTab, uint64_t objectId, uint8_t f
     // races or bugs; on rejection we simply drop the commit.
     // Both the validation snapshot and the incoming value are in the same space the pane showed -
     // WORLD for point components. Every rule is placement-invariant, so the verdict is unchanged.
-    float values[16] = {};
+    double values[16] = {};
     const uint8_t count = table->fieldCount;
     ReadPropertyValuesForDisplay(*table, object, values);
-    const float newValue = static_cast<float>(value);
-    if (!ValidatePropertyEdit(*table, values, count, fieldIndex, newValue)) return;
+    if (!ValidatePropertyEdit(*table, values, count, fieldIndex, value)) return;
 
     {
         // Hold storageObjectsMutex only for the store, so the render thread (which takes it every
         // frame) is not stalled by geometry generation.
         std::lock_guard<std::mutex> lock(*myTab->storageObjectsMutex);
-        ApplyPropertyValueFromDisplay(*table, object, fieldIndex, newValue);
+        ApplyPropertyValueFromDisplay(*table, object, fieldIndex, value);
         object->dataVersion++;
     }
 

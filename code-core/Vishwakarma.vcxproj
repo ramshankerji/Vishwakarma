@@ -213,6 +213,7 @@ python "$(ProjectDir)..\code-miscellaneous\steel_profile_embedder.py" "$(Project
     <ClCompile Include="RenderCompositor-DirectX12.cpp" />
     <ClCompile Include="RenderScene3D-DirectX12.cpp" />
     <ClCompile Include="Selection3D-DirectX12.cpp" />
+    <ClCompile Include="Snap.cpp" />
     <ClCompile Include="RenderPage2D.cpp" />
     <ClCompile Include="RenderPage2D-DirectX12.cpp" />
     <ClCompile Include="preCompiledHeadersWindows.cpp" />
@@ -261,6 +262,7 @@ python "$(ProjectDir)..\code-miscellaneous\steel_profile_embedder.py" "$(Project
     <ClInclude Include="RenderScene3D-DirectX12.h" />
     <ClInclude Include="RenderScene3D.h" />
     <ClInclude Include="Selection3D-DirectX12.h" />
+    <ClInclude Include="Snap.h" />
     <ClInclude Include="RenderPage2D.h" />
     <ClInclude Include="RenderPage2D-DirectX12.h" />
     <ClInclude Include="MemoryManagerGPU-Vulkan1.1.h" />

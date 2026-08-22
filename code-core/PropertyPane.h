@@ -15,15 +15,26 @@
 #include "CommonNamedNumbers.h"                // VishwakarmaStorage::ObjectType
 #include "UserInterfaceTranslationCompiled.h" // UITextID
 
-struct META_DATA; // Accessors take the base pointer; concrete down-casts live in PropertyPane.cpp.
+struct META_DATA; // 3D objects. Concrete down-casts live in PropertyPane.cpp.
 
-enum class PropertyFieldKind : uint8_t { Float32 /*, Float64, Int, Text, Derived... future*/ };
+/* Accessors take `void*`, not `META_DATA*`, because the pane now serves BOTH worlds and the two
+have no common base: a 3D object is a META_DATA subclass, while a Page2D object is a plain
+Cad2DLineRecordCPU / Cad2DCircleRecordCPU / ... living in TabCad2DStorage's vectors. There is no
+LINE2D struct and there should not be one - the record IS the storage. Each accessor casts to the
+one type its table names, exactly as it already down-cast from META_DATA.
+
+They traffic in `double`, not `float`, because Page2D ComputerUnits are millimetres: a drawing
+1.2 km across is 1.2e6 mm, where float32 spacing is 0.125 mm. Displaying a snapped coordinate
+through a float32 would perturb the exact value the ambient grid just produced (snapping.md), and
+an edit would write that perturbation back. 3D setters narrow to float on store, which is honest -
+that IS the stored width there. */
+enum class PropertyFieldKind : uint8_t { Real /*, Int, Text, Derived... future*/ };
 
 struct PropertyFieldDescriptor {
     UITextID  labelStringID;         // e.g. UITextID::PropRadius, UITextID::PropCenterX
-    float (*get)(const META_DATA*);  // typed accessor; reads the raw stored field
-    void  (*set)(META_DATA*, float); // called by the engineering thread only
-    PropertyFieldKind kind;          // MVP: Float32 only
+    double (*get)(const void*);      // typed accessor; reads the raw stored field
+    void   (*set)(void*, double);    // engineering thread only. nullptr = READ-ONLY field.
+    PropertyFieldKind kind;          // MVP: Real only
     uint8_t   fieldIndex;            // Stable per-type index, used in the edit protocol.
     bool      mustBePositive;        // MVP validation hint (radii, diameters).
 };
@@ -40,7 +51,7 @@ struct PropertyTypeDescriptor {
     // Optional cross-field rule (nullptr if none) over the post-edit field-value array, e.g.
     // PIPE inside < outside diameter, CYLINDER p1 != p2. The same function serves the UI-thread
     // pre-check (snapshot values) and the engineering-thread commit (live values).
-    bool (*validateCrossField)(const float* values, uint8_t count, uint8_t editIndex, float newValue);
+    bool (*validateCrossField)(const double* values, uint8_t count, uint8_t editIndex, double newValue);
 
     /* Which fields form POINTS. Fields [pointGroupFirstField[g], +3) are the X/Y/Z of one point in
     the object's AUTHORED space, so they - and only they - are converted to and from world space by
@@ -55,8 +66,8 @@ struct PropertyTypeDescriptor {
     uint8_t pointGroupCount;
 };
 
-extern const PropertyTypeDescriptor kPropertyTables[]; // Sphere, Cylinder, Cone, Torus,
-                                                       // Ellipsoid, Pipe, FrustumOfCone ...
+extern const PropertyTypeDescriptor kPropertyTables[]; // Sphere, Cylinder, Cone, Torus, Ellipsoid,
+                                                       // Pipe, FrustumOfCone ... then the 2D ones.
 extern const size_t kPropertyTableCount;
 
 // Returns the table for a type, or nullptr for vertex-list types (Type + ID only in the MVP).
@@ -69,8 +80,8 @@ const PropertyTypeDescriptor* FindPropertyTable(VishwakarmaStorage::ObjectType o
 // It sees the same WORLD values the user does. Every rule today is placement-invariant - the two
 // point rules only ask whether two points coincide, which a rigid transform preserves, and the rest
 // compare scalars a placement never touches - so world and authored space agree on every verdict.
-bool ValidatePropertyEdit(const PropertyTypeDescriptor& table, const float* values, uint8_t count,
-    uint8_t editIndex, float newValue);
+bool ValidatePropertyEdit(const PropertyTypeDescriptor& table, const double* values, uint8_t count,
+    uint8_t editIndex, double newValue);
 
 /* The pane shows and accepts WORLD coordinates, while the object goes on storing AUTHORED ones
 (website/software/graphics.md, 10M plan Step 4). Without this pair, moving an object would leave its
@@ -84,6 +95,13 @@ component it rebuilds that point in world space, inverse-transforms it, and writ
 authored components - because under a rotation every authored component depends on all three world
 ones, so storing only the edited axis would silently skew the object. */
 void ReadPropertyValuesForDisplay(const PropertyTypeDescriptor& table, const META_DATA* object,
-    float* out);
+    double* out);
 void ApplyPropertyValueFromDisplay(const PropertyTypeDescriptor& table, META_DATA* object,
-    uint8_t fieldIndex, float newValue);
+    uint8_t fieldIndex, double newValue);
+
+/* The un-transformed read: every field straight through its accessor, no placement applied. This is
+what a Page2D record wants - a 2D record has no placement to undo, because a hit on an asset member
+selects the WHOLE instance (Cad2DHandleSelectionClick), so the single-object path only ever sees a
+plain page object whose stored coordinates are already page coordinates. It is also the first half
+of ReadPropertyValuesForDisplay, which then converts the 3D point groups. */
+void ReadPropertyValuesRaw(const PropertyTypeDescriptor& table, const void* object, double* out);

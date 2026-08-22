@@ -338,3 +338,7 @@ WordID,ShortWordName,English,Comments
 1439,PropRotationX,Rotation X (deg),Properties pane field label. CUBOID authored orientation as XYZ Euler angles.
 1440,PropRotationY,Rotation Y (deg),Properties pane field label. CUBOID authored orientation as XYZ Euler angles.
 1441,PropRotationZ,Rotation Z (deg),Properties pane field label. CUBOID authored orientation as XYZ Euler angles.
+1442,PropStartX,Start X,Properties pane field label. ARC2D sweep start point, page coordinates.
+1443,PropStartY,Start Y,Properties pane field label. ARC2D sweep start point, page coordinates.
+1444,PropEndX,End X,Properties pane field label. ARC2D sweep end point, page coordinates.
+1445,PropEndY,End Y,Properties pane field label. ARC2D sweep end point, page coordinates.

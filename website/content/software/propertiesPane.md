@@ -126,13 +126,13 @@ MODIFY command to the GPU copy thread.
 New header `PropertyPane.h` (API-agnostic, like `DataTreeView.h`):
 
 ```cpp
-enum class PropertyFieldKind : uint8_t { Float32 /*, Float64, Int, Text, Derived... future*/ };
+enum class PropertyFieldKind : uint8_t { Real /*, Int, Text, Derived... future*/ };
 
 struct PropertyFieldDescriptor {
     UITextID  labelStringID;         // e.g. UITextID::Radius, UITextID::CenterX
-    float (*get)(const META_DATA*);  // typed accessors — see the layout note below
-    void  (*set)(META_DATA*, float); // called by the engineering thread only
-    PropertyFieldKind kind;          // MVP: Float32 only
+    double (*get)(const void*);      // typed accessors — see the layout note below
+    void   (*set)(void*, double);    // engineering thread only. nullptr = READ-ONLY field.
+    PropertyFieldKind kind;          // MVP: Real only
     uint8_t   fieldIndex;            // Stable per-type index, used in the edit protocol.
     bool      mustBePositive;        // MVP validation hint (radii, diameters).
 };
@@ -173,6 +173,30 @@ extern const PropertyTypeDescriptor kPropertyTables[]; // Sphere, Cylinder, Cone
 - Reading a field for display: `fields[i].get(object)`. Writing (engineering thread only):
   `fields[i].set(object, value)`.
 
+**Amendment (2026-08-22) — the pane now serves Page2D too, and the accessors widened for it.**
+The paragraph above already noted that the `Cad2D*RecordCPU` types do not derive from `META_DATA`,
+which is exactly why the accessors are now typed `const void*` / `void*` rather than `META_DATA*`:
+one table array, one `FindPropertyTable`, one validator, serving both worlds. Two consequences:
+
+- **They traffic in `double`, not `float`.** Page2D ComputerUnits are millimetres, so a drawing
+  1.2 km across is 1.2e6 mm where float32 spacing is 0.125 mm. Measured in the running app at a
+  0.005 mm ambient grid step, the pane reads `-5075.295` where a float32 would have shown
+  `-5075.294921875` — and an edit would have committed that perturbation back into the record.
+  The 3D setters narrow to `float` on store, which is honest: that IS the stored width there.
+  The commit transport was always a `double` (`p3 = double value bits`), so only the descriptor
+  and display layers changed.
+- **Page2D tables are read-only for now**: every `set` is `nullptr`,
+  `ApplyPropertyValueFromDisplay` refuses a write, and the pane renders those rows as static
+  label/value pairs rather than text fields. Wiring the write is a small follow-on — mutate the
+  record and re-enqueue through `EnqueueCad2D*`, which the copy thread ingests as an upsert,
+  exactly as `ApplyTransform2DToSelection` already does.
+
+Covered types are `LINE2D`, `CIRCLE2D`, `ELLIPSE2D` and `ARC2D`. `POLYLINE2D`, `POLYGON2D` and
+`TEXT2D` fall through to Type + ID for the same reason as the vertex-list solids: a variable-length
+point list (or a string) does not fit a fixed field table. 2D tables declare **no point groups** —
+a 2D record has no placement to undo, because a hit on an asset member selects the whole instance,
+so the single-object path only ever sees a plain page object already in page coordinates.
+
 ### 3. Rendering the pane (render thread, in `RenderUIOverlay`)
 
 Order of work inside the existing function, after the data-tree block:
@@ -180,8 +204,14 @@ Order of work inside the existing function, after the data-tree block:
 1. Draw the 8mm icon bar background + Settings button (hover/pressed tints like
    `PushInteractiveRect`).
 2. If `window.rightPaneOpen`, draw the 64mm pane background.
-3. Snapshot the selection: copy `tab.selection.selectedObjectIds` under `selectedMutex`
-   (the render thread already does this pattern for the highlight pass).
+3. Snapshot the selection **of whichever world the view is showing**. The two keep entirely
+   separate sets and nothing joins them: 3D in `tab.selection.selectedObjectIds` under
+   `selectedMutex`, Page2D in `tab.cad2d->selectedObjectIds` under `selection2DMutex`. Reading the
+   3D set while a Page2D view was active is what made a selected 2D line report
+   "0 objects selected" (fixed 2026-08-22). `Cad2DReadPaneSelection` does the 2D half and returns
+   false when the view is not a Page2D at all, which is the signal to fall back to the 3D path;
+   it returns true with `count == 0` for a genuinely empty 2D selection, which is a different
+   thing and must not silently fall through.
 4. If exactly one object is selected, find its `StoredGeometryObject3D` in
    `tab.storageObjects3D` under `*tab.storageObjectsMutex` and, still under that lock, copy out:
    `objectType`, `memoryID`, and the ≤ N floats named by the type's descriptor table into a

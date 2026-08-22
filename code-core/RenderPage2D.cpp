@@ -8,7 +8,9 @@
 
 #include "CommonNamedNumbers.h"
 #include "GPUPlatformSelector.h"
+#include "PropertyPane.h"
 #include "RenderPage2D.h"
+#include "Snap.h"
 
 #include "विश्वकर्मा.h"
 #include "ID.h"
@@ -103,6 +105,28 @@ bool Page2DCoordinateFromInput(DATASETTAB& tab, const ACTION_DETAILS& input,
 
     outXCU = centerX + offsetX / zoom;
     outYCU = centerY + offsetY / zoom;
+    return true;
+}
+
+/* The snapped form of the mapping above, and the one every creation / transform tool takes its point
+   from, so that a click lands on an exact value instead of on sixteen digits of float noise. Stage 1
+   of snapping.md resolves the ambient grid only.
+
+   Selection deliberately keeps calling the raw mapping (snapping.md locked decision 14):
+   Cad2DHandleSelectionClick hit-tests with a small tolerance measured from the cursor, and a point
+   already pulled onto a grid intersection would select the wrong object. */
+static bool Page2DSnappedPointFromInput(DATASETTAB& tab, const ACTION_DETAILS& input,
+    double& outXCU, double& outYCU) {
+    if (!Page2DCoordinateFromInput(tab, input, outXCU, outYCU)) return false;
+
+    const Cad2DViewState& view = Cad2DInputView(tab);
+    const double zoom = (std::max)(
+        (double)view.zoomPixelsPerCU.load(std::memory_order_acquire),
+        (double)kCad2DZoomMinPixelsPerCU);
+    const double step = Page2DAmbientStepCU(zoom);
+
+    outXCU = SnapToStep(outXCU, step);
+    outYCU = SnapToStep(outYCU, step);
     return true;
 }
 
@@ -975,6 +999,7 @@ void Cad2DHandleSelectionClick(DATASETTAB& tab, double xCU, double yCU) {
     EnqueueCad2DSelectionRefresh(tab.tabID, container);
 }
 
+
 // --- Selection transforms (Commands::EDIT_COPY/OFFSET/MIRROR/ROTATE/MOVE) -----------------------
 
 constexpr double kPi2D = 3.14159265358979323846;
@@ -1366,6 +1391,48 @@ void HandleAssetInsertClick(DATASETTAB& tab, double xCU, double yCU) {
 }
 } // namespace
 
+bool Cad2DReadPaneSelection(DATASETTAB& tab, Cad2DPaneSelection& out) {
+    out = Cad2DPaneSelection{};
+    if (!tab.cad2d || !Cad2DIsActivePage2D(tab)) return false; // Not a 2D view: caller uses 3D.
+    TabCad2DStorage& s = *tab.cad2d;
+
+    uint64_t singleId = 0;
+    {
+        std::lock_guard<std::mutex> lock(s.selection2DMutex);
+        out.count = s.selectedObjectIds.size();
+        if (out.count == 1) singleId = *s.selectedObjectIds.begin();
+    }
+    if (singleId == 0) return true; // Empty or multiple: the pane draws its count line.
+    out.objectId = singleId;
+
+    // Object ids are unique across the process, so no container filter is needed to identify the
+    // record - and a selection can only hold ids from the active container anyway.
+    std::lock_guard<std::mutex> lock(s.cpuRecordsMutex);
+    auto take = [&](const auto& records, VishwakarmaStorage::ObjectType type) {
+        if (out.objectType != VishwakarmaStorage::ObjectType::Unknown) return; // Already found.
+        for (const auto& r : records) {
+            if (r.isDeleted || r.objectId != singleId) continue;
+            out.objectType = type;
+            // nullptr for POLYLINE2D / POLYGON2D / TEXT2D: variable-arity types have no field
+            // table, so the pane shows Type + ID only, as it does for the vertex-list solids.
+            out.table = FindPropertyTable(type);
+            if (out.table) {
+                out.valueCount = out.table->fieldCount;
+                ReadPropertyValuesRaw(*out.table, &r, out.values);
+            }
+            return;
+        }
+    };
+    take(s.lineRecords, VishwakarmaStorage::ObjectType::Line2D);
+    take(s.polylineRecords, VishwakarmaStorage::ObjectType::Polyline2D);
+    take(s.polygonRecords, VishwakarmaStorage::ObjectType::Polygon2D);
+    take(s.circleRecords, VishwakarmaStorage::ObjectType::Circle2D);
+    take(s.ellipseRecords, VishwakarmaStorage::ObjectType::Ellipse2D);
+    take(s.arcRecords, VishwakarmaStorage::ObjectType::Arc2D);
+    take(s.textRecords, VishwakarmaStorage::ObjectType::Text2D);
+    return true;
+}
+
 bool Cad2DInstantiateAsset(DATASETTAB& tab, uint64_t containerMemoryId, uint64_t definitionObjectId,
     double xCU, double yCU, double scaleX, double scaleY, double rotationDegrees) {
     if (!tab.cad2d || containerMemoryId == 0 || definitionObjectId == 0) return false;
@@ -1651,55 +1718,55 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
         tab.mouseLeftDown = true;
         if (tab.cad2d->lineCreationMode.load(std::memory_order_acquire)) {
             double xCU = 0.0, yCU = 0.0;
-            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+            if (Page2DSnappedPointFromInput(tab, input, xCU, yCU)) {
                 HandleLineCreationClick(tab, xCU, yCU);
             }
         }
         else if (tab.cad2d->polylineCreationMode.load(std::memory_order_acquire)) {
             double xCU = 0.0, yCU = 0.0;
-            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+            if (Page2DSnappedPointFromInput(tab, input, xCU, yCU)) {
                 HandlePolylineCreationClick(tab, xCU, yCU);
             }
         }
         else if (tab.cad2d->polygonCreationMode.load(std::memory_order_acquire)) {
             double xCU = 0.0, yCU = 0.0;
-            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+            if (Page2DSnappedPointFromInput(tab, input, xCU, yCU)) {
                 HandlePolygonCreationClick(tab, xCU, yCU);
             }
         }
         else if (tab.cad2d->circleCreationMode.load(std::memory_order_acquire)) {
             double xCU = 0.0, yCU = 0.0;
-            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+            if (Page2DSnappedPointFromInput(tab, input, xCU, yCU)) {
                 HandleCircleCreationClick(tab, xCU, yCU);
             }
         }
         else if (tab.cad2d->ellipseCreationMode.load(std::memory_order_acquire)) {
             double xCU = 0.0, yCU = 0.0;
-            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+            if (Page2DSnappedPointFromInput(tab, input, xCU, yCU)) {
                 HandleEllipseCreationClick(tab, xCU, yCU);
             }
         }
         else if (tab.cad2d->arcCreationMode.load(std::memory_order_acquire)) {
             double xCU = 0.0, yCU = 0.0;
-            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+            if (Page2DSnappedPointFromInput(tab, input, xCU, yCU)) {
                 HandleArcCreationClick(tab, xCU, yCU);
             }
         }
         else if (tab.cad2d->textCreationMode.load(std::memory_order_acquire)) {
             double xCU = 0.0, yCU = 0.0;
-            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+            if (Page2DSnappedPointFromInput(tab, input, xCU, yCU)) {
                 HandleTextCreationClick(tab, xCU, yCU);
             }
         }
         else if (tab.cad2d->assetInsertMode.load(std::memory_order_acquire)) {
             double xCU = 0.0, yCU = 0.0;
-            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+            if (Page2DSnappedPointFromInput(tab, input, xCU, yCU)) {
                 HandleAssetInsertClick(tab, xCU, yCU);
             }
         }
         else if (tab.cad2d->transform2DKind.load(std::memory_order_acquire) != 0) {
             double xCU = 0.0, yCU = 0.0;
-            if (Page2DCoordinateFromInput(tab, input, xCU, yCU)) {
+            if (Page2DSnappedPointFromInput(tab, input, xCU, yCU)) {
                 HandleTransform2DClick(tab, xCU, yCU);
             }
         }

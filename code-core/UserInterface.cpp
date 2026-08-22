@@ -2069,31 +2069,49 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
             uint64_t selId = 0;
             size_t selectionCount = 0;
             const PropertyTypeDescriptor* table = nullptr;
-            float fieldValues[16] = {};
+            double fieldValues[16] = {};
             uint8_t fieldValueCount = 0;
+            // Page2D fields are shown but not edited yet: there is no 2D branch in
+            // ModifyObjectProperty, and their tables declare no setters.
+            bool fieldsEditable = true;
 
             if (activeTabIndex >= 0 && activeTabIndex < MV_MAX_TABS) {
                 DATASETTAB& tab = allTabs[activeTabIndex];
-                uint64_t singleSelectedId = 0;
-                {
-                    std::lock_guard<std::mutex> lock(tab.selection.selectedMutex);
-                    selectionCount = tab.selection.selectedObjectIds.size();
-                    if (selectionCount == 1) singleSelectedId = tab.selection.selectedObjectIds[0];
-                }
-                if (selectionCount == 1 && tab.storageObjectsMutex) {
-                    std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
-                    for (const StoredGeometryObject3D& stored : tab.storageObjects3D) {
-                        if (stored.memoryId == singleSelectedId && stored.object) {
-                            selType = stored.objectType;
-                            selId = stored.object->memoryID;
-                            table = FindPropertyTable(selType);
-                            if (table) {
-                                fieldValueCount = table->fieldCount;
-                                // World space, so a moved object reads out where it is displayed
-                                // rather than where it was authored (10M plan Step 4).
-                                ReadPropertyValuesForDisplay(*table, stored.object, fieldValues);
+                /* Which selection is authoritative follows the VIEW, because the two worlds keep
+                entirely separate sets: 3D in tab.selection, Page2D in tab.cad2d->selectedObjectIds.
+                Reading the 3D set while a Page2D view was active is what made a selected 2D line
+                report "0 objects selected". */
+                Cad2DPaneSelection page2D;
+                if (Cad2DReadPaneSelection(tab, page2D)) {
+                    selectionCount = page2D.count;
+                    selType = page2D.objectType;
+                    selId = page2D.objectId;
+                    table = page2D.table;
+                    fieldValueCount = page2D.valueCount;
+                    for (uint8_t i = 0; i < fieldValueCount; ++i) fieldValues[i] = page2D.values[i];
+                    fieldsEditable = false;
+                } else {
+                    uint64_t singleSelectedId = 0;
+                    {
+                        std::lock_guard<std::mutex> lock(tab.selection.selectedMutex);
+                        selectionCount = tab.selection.selectedObjectIds.size();
+                        if (selectionCount == 1) singleSelectedId = tab.selection.selectedObjectIds[0];
+                    }
+                    if (selectionCount == 1 && tab.storageObjectsMutex) {
+                        std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
+                        for (const StoredGeometryObject3D& stored : tab.storageObjects3D) {
+                            if (stored.memoryId == singleSelectedId && stored.object) {
+                                selType = stored.objectType;
+                                selId = stored.object->memoryID;
+                                table = FindPropertyTable(selType);
+                                if (table) {
+                                    fieldValueCount = table->fieldCount;
+                                    // World space, so a moved object reads out where it is displayed
+                                    // rather than where it was authored (10M plan Step 4).
+                                    ReadPropertyValuesForDisplay(*table, stored.object, fieldValues);
+                                }
+                                break;
                             }
-                            break;
                         }
                     }
                 }
@@ -2158,6 +2176,11 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
                     { auto r = std::to_chars(liveText, liveText + sizeof(liveText) - 1, fieldValues[i]);
                       *r.ptr = '\0'; }
 
+                    if (!fieldsEditable) { // Read-only: a plain label/value row, not a text field.
+                        drawStaticRow(LocalizedUIString(fd.labelStringID), liveText);
+                        continue;
+                    }
+
                     if (input.leftButtonPressedThisFrame && fieldHovered) {
                         fieldClicked = true;
                         if (!focused) { // Focus + seed from the currently displayed value (caret at end).
@@ -2185,8 +2208,7 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
                         if (n == 0) return false;
                         auto res = fast_float::from_chars(ascii, ascii + n, outValue);
                         if (res.ec != std::errc() || res.ptr != ascii + n) return false;
-                        return ValidatePropertyEdit(*table, fieldValues, fieldValueCount, i,
-                            static_cast<float>(outValue));
+                        return ValidatePropertyEdit(*table, fieldValues, fieldValueCount, i, outValue);
                     };
 
                     if (focused) {

@@ -8,9 +8,11 @@
 #include <string>
 #include <vector>
 
+#include "CommonNamedNumbers.h"   // VishwakarmaStorage::ObjectType
 #include "UserInputProcessing.h"
 
 struct DATASETTAB;
+struct PropertyTypeDescriptor;
 
 // Page2D zoom bounds in pixels per ComputerUnit, shared by every place that clamps or
 // defaults the view zoom (input mapping, wheel zoom, zoom max/window, render constants,
@@ -338,6 +340,23 @@ void PopAllCad2DCopyCommands(std::vector<CommandToCopyThread2D>& outCommands);
 
 uint64_t Cad2DFindTargetPage2DMemoryId(DATASETTAB& tab);
 bool Cad2DIsActivePage2D(DATASETTAB& tab);
+
+/* One frame's worth of Page2D selection, for the properties pane. The pane runs on a render thread
+and must not hold a pointer into the record vectors, so the field values are COPIED OUT while
+cpuRecordsMutex is held.
+
+Cad2DReadPaneSelection returns false when the input view is not a Page2D at all - that is the
+caller's signal to fall back to the 3D selection. It returns true with count == 0 for an empty 2D
+selection, which is a different thing entirely and must not silently show 3D's selection instead. */
+struct Cad2DPaneSelection {
+    size_t   count = 0;                 // Objects selected in the active Page2D.
+    uint64_t objectId = 0;              // Valid only when count == 1.
+    VishwakarmaStorage::ObjectType objectType = VishwakarmaStorage::ObjectType::Unknown;
+    const PropertyTypeDescriptor* table = nullptr;  // nullptr for the variable-arity types.
+    double   values[16] = {};
+    uint8_t  valueCount = 0;
+};
+bool Cad2DReadPaneSelection(DATASETTAB& tab, Cad2DPaneSelection& out);
 void Cad2DCancelCreation(DATASETTAB& tab);
 void Cad2DBeginLineCreation(DATASETTAB& tab);
 void Cad2DBeginPolylineCreation(DATASETTAB& tab);
