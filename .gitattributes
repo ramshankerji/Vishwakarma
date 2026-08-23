@@ -1,0 +1,16 @@
+# EOL policy lives here, not in each contributor's core.autocrlf.
+# Everything text: LF in the repository, LF in the working tree.
+* text=auto eol=lf
+
+# cmd.exe mis-parses LF-only batch files (labels / multi-line goto).
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# code-core/Vishwakarma.rc is UTF-16LE. Never let Git touch its bytes.
+# (The other two .rc files are plain ASCII and normalize fine.)
+code-core/Vishwakarma.rc -text
+
+# Binary assets.
+*.ttf binary
+*.png binary
+*.ico binary

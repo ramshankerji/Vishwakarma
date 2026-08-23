@@ -1,7 +1,7 @@
 # Repository Specific Instructions
 Windows (Linux/Mac in future) Desktop C++ DirectX12 (Vulkan/Metal in future) application.  
 Source-available licensed software for CAD / CAM / Engineering application.  
-Encode all source file as UTF-8 byte.  
+Encode all source file as UTF-8 byte. Line endings are LF, enforced by `.gitattributes` - see section 6.  
 All codes in code-core are our own source file. All codes in code-external are external library dependencies.  
 VishwakarmaExternal project is Static Library Building for all our external dependencies. It needs to be compiled ONLY when external dependencies change. Not when only our project files changes.  
 Our website / documentation in .\website is hugo based, written like a book. Deployed at https://mv.ramshanker.in  
@@ -61,5 +61,20 @@ Do not edit or reformat third-party, generated, or build-output code, unless exp
 Excluded paths:
 - code-external/**
 - build/**
+
+## 6. Text Encoding and Line Endings
+**UTF-8 bytes, LF line endings. Both are enforced by `.gitattributes` — do not work around them.**
+- The working tree is **LF everywhere**. Never write CRLF into a tracked file, and never "fix"
+  a file's line endings as an incidental change.
+- Multi-line regex in scripted edits matches on `\n`. A `\r\n` separator now matches *nothing*,
+  silently — no error, no substitution, and the run still looks successful. Re-grep to confirm.
+- Three deliberate exceptions, do not "tidy" them away:
+  - `*.bat` / `*.cmd` stay CRLF — cmd.exe mis-parses LF-only labels and multi-line `goto`.
+  - `code-core/Vishwakarma.rc` is UTF-16LE and pinned `-text`. Marking it, or `*.rc` as a class,
+    as `text` corrupts it. The other two `.rc` files are ASCII and normalize normally.
+  - `*.ttf`, `*.png`, `*.ico` are binary.
+- Devanagari filenames and content are unaffected by any of this: EOL conversion substitutes only
+  the bytes `0D`/`0A`, and no byte of a multi-byte UTF-8 sequence is ever below `0x80`.
+- `python3` is a non-functional Microsoft Store stub on this machine. Use `python` or `py`.
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
