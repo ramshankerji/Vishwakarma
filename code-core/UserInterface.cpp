@@ -1689,7 +1689,7 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
                     if (!object.object) continue;
                     DataTreeView::Node node;
                     node.objectId = object.object->memoryID;
-                    node.parentObjectId = object.object->memoryIDParent;
+                    node.parentObjectId = object.object->memoryIDContainer;
                     node.label = BuildTreeNodeLabel(object.objectType, object.object, object.memoryId);
                     node.canBecomeActiveBranch =
                         object.objectType == VishwakarmaStorage::ObjectType::Scene3D ||
@@ -1701,7 +1701,7 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
                     if (!object.object) continue;
                     DataTreeView::Node node;
                     node.objectId = object.object->memoryID;
-                    node.parentObjectId = object.object->memoryIDParent;
+                    node.parentObjectId = object.object->memoryIDContainer;
                     node.label = BuildTreeNodeLabel(object.objectType, object.object, object.memoryId);
                     treeNodes.push_back(std::move(node));
                 }

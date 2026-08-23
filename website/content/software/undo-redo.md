@@ -151,7 +151,7 @@ Two records, mirroring `transaction_log` and `object_change_log` from
 // One entry per changed object within a transaction.
 struct OBJECT_CHANGE_RECORD {
     uint64_t objectId = 0;          // memoryID. Process-scoped, which is all a RAM-only log needs.
-    uint64_t containerMemoryId = 0; // 2D: owning Page2D (0 for asset masters). 3D: memoryIDParent.
+    uint64_t containerMemoryId = 0; // 2D: owning Page2D (0 for asset masters). 3D: memoryIDContainer.
                                     // The apply path and the copy-thread commands need it (§5).
     uint8_t  operationType = 0;     // storage.md §14.8: 1=insert 2=update 4=soft_delete.
                                     // 3=move and 8=restore are reserved and unused in this
@@ -471,7 +471,7 @@ load/connect (§7); and the outbox transport itself.
 
 **Object identity across redo.** Redo of a create must reuse the *original* `memoryID`, not
 allocate a fresh one from `MemoryID::next()`. Any other object that referenced it — an
-Asset2DInsert's members via `parentObjectId`, a 3D child's `memoryIDParent` — would otherwise
+Asset2DInsert's members via `parentObjectId`, a 3D child's `memoryIDContainer` — would otherwise
 point at a corpse. Since the object is never freed from the arena, reusing its id is natural: the
 undo path flips a flag rather than destroying and recreating.
 

@@ -11,7 +11,7 @@
 #include "डेटा.h"
 #include "डेटा-सामान्य-3D.h" // SPHERE, CYLINDER, ... and META_DATA
 #include "डेटा-संरचना.h"     // LINE_MEMBER
-#include "RenderPage2D.h"    // Cad2DLineRecordCPU, Cad2DCircleRecordCPU, ... the 2D records
+#include "डेटा-सामान्य-2D.h" // Cad2DLineRecordCPU, Cad2DCircleRecordCPU, ... the 2D records
 
 #include <algorithm> // std::clamp, used by the CUBOID Euler extraction
 #include <cmath>     // std::isfinite, std::atan2, std::asin

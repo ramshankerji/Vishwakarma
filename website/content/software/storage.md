@@ -24,7 +24,7 @@ The system must support:
 1. Fundamental storage principles  
 RAM layout is not disk layout, Runtime memory layout and persistent disk layout are separate. The existing code already follows this direction:
 
-META_DATA separates temporary memoryID / memoryIDParent from saved persistedId / persistedParentId. GeometryData.id uses the runtime memoryID, which is correct for rendering/selection, not durable engineering identity. Objects are allocated through the custom memory arena using a memoryGroupNo per tab. Optional64 is explicitly a compact RAM optimization: optional values are packed only when present, fixed and dynamic optionals are separated, and dynamic values use arena-managed byte references. This is excellent for runtime memory density, but it must not be persisted raw.  
+META_DATA separates temporary memoryID / memoryIDContainer from saved persistedId / persistedParentId. GeometryData.id uses the runtime memoryID, which is correct for rendering/selection, not durable engineering identity. Objects are allocated through the custom memory arena using a memoryGroupNo per tab. Optional64 is explicitly a compact RAM optimization: optional values are packed only when present, fixed and dynamic optionals are separated, and dynamic values use arena-managed byte references. This is excellent for runtime memory density, but it must not be persisted raw.  
   
 * RAM object layout       = C++ classes + Optional64 + custom arena
 * Persistent object data  = Protobuf BLOB inside SQLite

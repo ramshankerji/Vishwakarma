@@ -17,6 +17,7 @@
 #include "CommonNamedNumbers.h"
 #include "ID.h"
 #include "MemoryManagerCPU.h"
+#include "OptionalProperties.h" // Optional64 + MV_DECLARE_OPTIONAL_PROPERTIES, for derived types.
 //#include "MemoryManagerGPU.h" // This file must not depend on GPU manager.
 #include <d3dx12.h>
 #include <dxgi1_6.h>
@@ -34,6 +35,16 @@ using namespace DirectX::PackedVector;
 STRICT WARNING: DO NOT ADD ANY MORE FIELDS TO THIS BASE STRUCT. DO NOT ALTER the sequence.
 The sequence of fields in this struct has been specifically planned considering "compact struct packing" approach.
 For our Data-Structure design approach, read commentary on MemoryManagerCPU.h
+
+One field HAS been added since that warning was written: memoryIDGenerator, 2026-08-23, settling
+parenthood across 2D and 3D (mv.ramshanker.in/software/id section 7.2). In the same pass
+memoryIDParent was RENAMED to memoryIDContainer - it always meant the container, and sitting next
+to a second parent-ish id it had to say so. Anything written before that date, git history and
+older design notes included, uses the old name. It took the struct from 56
+to 64 bytes - a uint64_t cannot fit the 7 padding bytes that follow isDeleted, whatever the field
+order. Those 7 bytes are STILL free and are the only room left: a small field (a flag word, a
+uint32_t) costs nothing, a second pointer-sized one costs 8 bytes on every object in the model.
+sizeof is asserted below so a casual addition fails the build rather than the memory budget.
 */
 // Forward declaration of the global memory manager.
 
@@ -205,7 +216,24 @@ inline uint32_t PackColorRGBA8(const XMFLOAT4& color) {
 
 struct META_DATA {
     uint64_t memoryID = 0;// This is temporary CPU ID inside currently running software process.
-    uint64_t memoryIDParent = 0; // This is temporary CPU ID. "0" simply means it has not been initialized.
+    /* THE CONTAINER this object lives in - the Scene3D, Page2D or FOLDER that holds it. Temporary
+    CPU ID. "0" simply means it has not been initialized. This meaning is uniform across 2D and 3D
+    (mv.ramshanker.in/software/id section 7.2): if you want to know WHERE an object is shown, this
+    is the field. Do not overload it with ownership - that is the next one. */
+    uint64_t memoryIDContainer = 0;
+    /* THE GENERATOR that produced this object - the asset instance or template it was stamped out
+    of. 0 for anything a user drew directly, which is most objects. Containment and generation are
+    genuinely different questions: a member of a placed asset is DRAWN ON the page (memoryIDContainer)
+    but BELONGS TO the insert (memoryIDGenerator), and deleting the insert takes the member with it
+    while deleting the page does something else entirely.
+
+    PERSISTENCE: there is no persistedGeneratorId, deliberately. The file stores ONE parent id -
+    the generator if there is one, else the container - and the loader rebuilds the split by asking
+    what TYPE the stored parent turned out to be. Page2D parent means it was the container; an
+    Asset2DInsert or Asset2DDefinition parent means it was the generator, and the container is then
+    the generator's own. That is what the 2D save/load path already does; see resolveLineParentId
+    and resolve2DGeometryParent in DataStorage.cpp. */
+    uint64_t memoryIDGenerator = 0;
     uint64_t persistedId = 0;      // This is the unique ID within the saved file.
     uint64_t persistedParentId = 0;// This is the unique ID within the saved file.
 
@@ -259,6 +287,11 @@ private:
     static void* operator new(uint64_t size, void* ptr) = delete;
     static void operator delete(void* memory, void* ptr) = delete;
 };
+
+/* Every object in the model carries this, so a byte here is a byte times ten million. Making the
+size an assertion rather than a comment is what turns "DO NOT ADD ANY MORE FIELDS" into something
+the build enforces. If you meant to grow it, change the number here and say why above. */
+static_assert(sizeof(META_DATA) == 64, "META_DATA grew - see the field-budget note above it.");
 
 // Following are some special data types designed to be dynamically allocated by our RAM Manager.
 

@@ -237,10 +237,10 @@ python "$(ProjectDir)..\code-miscellaneous\steel_profile_embedder.py" "$(Project
     <ClInclude Include="DataStorageProtoHelpers.h" />
     <ClInclude Include="..\code-core\ID.h" />
     <ClInclude Include="..\code-core\MemoryManagerCPU.h" />
+    <ClInclude Include="..\code-core\OptionalProperties.h" />
     <ClInclude Include="..\code-core\Input_UI_Network_File.h" />
     <ClInclude Include="..\code-core\MemoryManagerGPU.h" />
     <ClInclude Include="..\code-core\VirtualMemory.h" />
-    <ClInclude Include="..\code-core\VishwakarmaID64bit.h" />
     <ClInclude Include="..\code-core\डेटा-उपकरण.h" />
     <ClInclude Include="..\code-core\डेटा-गतिशील-मशीन.h" />
     <ClInclude Include="..\code-core\डेटा-पाइप.h" />

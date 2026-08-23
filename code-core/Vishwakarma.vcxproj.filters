@@ -187,6 +187,9 @@
     <ClCompile Include="UserInterface.cpp">
       <Filter>code-core</Filter>
     </ClCompile>
+    <ClCompile Include="Snap.cpp">
+      <Filter>code-core</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="AccountManager.h">
@@ -229,9 +232,6 @@
       <Filter>code-core</Filter>
     </ClInclude>
     <ClInclude Include="..\code-core\VirtualMemory.h">
-      <Filter>code-core</Filter>
-    </ClInclude>
-    <ClInclude Include="..\code-core\VishwakarmaID64bit.h">
       <Filter>code-core</Filter>
     </ClInclude>
     <ClInclude Include="..\code-core\डेटा.h">
@@ -342,6 +342,8 @@
     <ClInclude Include="RenderCompositor.h">
       <Filter>code-core</Filter>
     </ClInclude>
+    <ClInclude Include="..\code-core\OptionalProperties.h" />
+    <ClInclude Include="Snap.h" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="VertexShader.hlsl" />
@@ -363,6 +365,9 @@
     <FxCompile Include="Shader2D_CurvePixel.hlsl" />
     <FxCompile Include="Shader2D_TextVertex.hlsl" />
     <FxCompile Include="Shader2D_TextPixel.hlsl" />
+    <FxCompile Include="ShaderSceneCull.hlsl" />
+    <FxCompile Include="ShaderSkyGradientVertex.hlsl" />
+    <FxCompile Include="ShaderSkyGradientPixel.hlsl" />
   </ItemGroup>
   <ItemGroup>
     <None Include="DataStorage_ARC2D.proto">

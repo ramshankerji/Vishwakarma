@@ -331,7 +331,7 @@ Flow:
      object, geo);` — this helper already exists in `DataStorage.cpp` doing exactly this
      switch over all 11 types; declare it in a header and reuse it, do not write a second copy;
    - push `{CommandToCopyThreadType::MODIFY, std::move(geo), object->memoryID, myTab->tabID,
-     object->memoryIDParent}` under `toCopyThreadMutex` alone, then
+     object->memoryIDContainer}` under `toCopyThreadMutex` alone, then
      `toCopyThreadCV.notify_one()`.
 4. Copy thread: **already handles MODIFY** (in-place when it fits, grow/ADD path otherwise).
    Nothing to build here.

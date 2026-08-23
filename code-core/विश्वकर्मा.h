@@ -66,6 +66,12 @@ struct NETWORK_INTERFACE {
 // referenced by nothing but its own declaration. The live concepts are InternalSubTab (what content
 // is shown) and Viewport (how it is shown - camera, rectangle, input ownership).
 
+/* INVARIANT: storageObjects3D stays sorted by memoryId. It is append-only, appended by the tab's
+single engineering thread, and MemoryID::next() hands out increasing ids - so append order is id
+order for free. Resolving a memoryID to its object binary searches on that (mv.ramshanker.in/
+software/id section 3.4), and breaking the order corrupts lookups silently rather than crashing.
+The two single-object append sites carry a _DEBUG check; the bulk one, FlushGeneratedGeometryBatch,
+does not yet. Do not sort, compact or erase from this vector. */
 struct StoredGeometryObject3D {
     VishwakarmaStorage::ObjectType objectType = VishwakarmaStorage::ObjectType::Unknown;
     uint64_t memoryId = 0;

@@ -233,7 +233,7 @@ static void InitializeLogicalMeta(META_DATA* object, VishwakarmaStorage::ObjectT
     if (!object) return;
     object->dataType = static_cast<uint16_t>(VishwakarmaStorage::ToNumber(objectType));
     object->schemaVersion = VishwakarmaStorage::kLogicalElementSchemaVersion;
-    object->memoryIDParent = parentMemoryId;
+    object->memoryIDContainer = parentMemoryId;
 }
 
 static uint32_t CountLogicalObjectsOfType(DATASETTAB* targetTab, VishwakarmaStorage::ObjectType objectType) {
@@ -774,8 +774,8 @@ static void RegisterGeneratedGeometryElement(DATASETTAB* targetTab, VishwakarmaS
     META_DATA* object, GeometryData&& geometry, GeneratedGeometryBatch* batch = nullptr) {
     if (!targetTab || !object) return;
 
-    if (object->memoryIDParent == 0) {
-        object->memoryIDParent = EnsureActiveScene3D(targetTab);
+    if (object->memoryIDContainer == 0) {
+        object->memoryIDContainer = EnsureActiveScene3D(targetTab);
     }
     object->dataType = static_cast<uint16_t>(VishwakarmaStorage::ToNumber(objectType));
     // Derived from the type, not hardcoded: this used to stamp kGeometry3DMvpSchemaVersion on every
@@ -799,7 +799,7 @@ static void RegisterGeneratedGeometryElement(DATASETTAB* targetTab, VishwakarmaS
 
     if (batch) { // Deferred: the caller hands everything over via FlushGeneratedGeometryBatch.
         batch->copyCommands.push_back({ CommandToCopyThreadType::ADD, std::move(geometry),
-            object->memoryID, targetTab->tabID, object->memoryIDParent });
+            object->memoryID, targetTab->tabID, object->memoryIDContainer });
         batch->storedObjects.push_back({ objectType, object->memoryID, object });
         batch->memoryIds.push_back(object->memoryID);
         return;
@@ -810,12 +810,23 @@ static void RegisterGeneratedGeometryElement(DATASETTAB* targetTab, VishwakarmaS
         // Moved, not copied: geometry is an rvalue reference we own and nothing reads it after
         // this, so copying it deep-copied both vertex and index vectors per object.
         commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD, std::move(geometry),
-            object->memoryID, targetTab->tabID, object->memoryIDParent });
+            object->memoryID, targetTab->tabID, object->memoryIDContainer });
     }
 
     if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
     {
         std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
+#ifdef _DEBUG
+        // The sorted-by-memoryId invariant the id resolver binary searches on (विश्वकर्मा.h).
+        // Breaking it returns the wrong object rather than failing, so it has to be said out loud.
+        if (!targetTab->storageObjects3D.empty() &&
+            targetTab->storageObjects3D.back().memoryId >= object->memoryID) {
+            std::cout << "[3d][warn] storageObjects3D out of memoryId order: appending "
+                      << object->memoryID << " after "
+                      << targetTab->storageObjects3D.back().memoryId
+                      << " - binary-search lookups are now invalid." << std::endl;
+        }
+#endif
         targetTab->storageObjects3D.push_back({ objectType, object->memoryID, object });
     }
 
@@ -898,7 +909,7 @@ static void ModifyObjectProperty(DATASETTAB* myTab, uint64_t objectId, uint8_t f
     {
         std::lock_guard<std::mutex> lock(toCopyThreadMutex);
         commandToCopyThreadQueue.push({ CommandToCopyThreadType::MODIFY, std::move(geo), object->memoryID,
-            myTab->tabID, object->memoryIDParent });
+            myTab->tabID, object->memoryIDContainer });
     }
     toCopyThreadCV.notify_one();
 }
@@ -1188,7 +1199,7 @@ static void ApplySceneVisibilityAction(DATASETTAB* myTab, SceneVisibilityAction 
     for (const StoredGeometryObject3D& stored : myTab->storageObjects3D) {
         if (!stored.object) continue;
         // The whole container SET the sub-tab draws, so a composed container hides too.
-        if (!SubTabDrawsContainer(*myTab, viewSlot, stored.object->memoryIDParent)) continue;
+        if (!SubTabDrawsContainer(*myTab, viewSlot, stored.object->memoryIDContainer)) continue;
         const bool isSelected =
             std::find(selected.begin(), selected.end(), stored.memoryId) != selected.end();
         if (action == SceneVisibilityAction::HideSelected && !isSelected) continue;
@@ -1198,7 +1209,7 @@ static void ApplySceneVisibilityAction(DATASETTAB* myTab, SceneVisibilityAction 
         command.type = CommandToCopyThreadType::SET_VISIBILITY;
         command.id = stored.memoryId;
         command.tabID = myTab->tabID;
-        command.containerMemoryId = stored.object->memoryIDParent;
+        command.containerMemoryId = stored.object->memoryIDContainer;
         command.visibilityBits = 1ull << bit;
         command.visibilityVisible = action == SceneVisibilityAction::ShowAll;
         commands.push_back(std::move(command));
@@ -1255,7 +1266,7 @@ static size_t TranslateSelectedSceneObjects(DATASETTAB* myTab, const XMFLOAT3& d
     for (const StoredGeometryObject3D& stored : myTab->storageObjects3D) {
         if (!stored.object) continue;
         // The whole container SET the sub-tab draws, so a composed container moves too.
-        if (!SubTabDrawsContainer(*myTab, viewSlot, stored.object->memoryIDParent)) continue;
+        if (!SubTabDrawsContainer(*myTab, viewSlot, stored.object->memoryIDContainer)) continue;
         if (std::find(selected.begin(), selected.end(), stored.memoryId) == selected.end()) continue;
 
         Placement3D* placement = PlacementForObject(stored.objectType, stored.object);
@@ -1285,7 +1296,7 @@ static size_t TranslateSelectedSceneObjects(DATASETTAB* myTab, const XMFLOAT3& d
         command.geometry = std::move(transformOnly);
         command.id = stored.memoryId;
         command.tabID = myTab->tabID;
-        command.containerMemoryId = stored.object->memoryIDParent;
+        command.containerMemoryId = stored.object->memoryIDContainer;
         commands.push_back(std::move(command));
     }
     if (commands.empty()) return 0;
@@ -2348,7 +2359,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                     ++movePass;
                     if (container != 0) {
                         for (const StoredGeometryObject3D& stored : myTab->storageObjects3D) {
-                            if (!stored.object || stored.object->memoryIDParent != container) continue;
+                            if (!stored.object || stored.object->memoryIDContainer != container) continue;
                             GeometryData transformOnly; // No vertices, no indices: THE encoding.
                             transformOnly.id = stored.memoryId;
                             DirectX::XMStoreFloat4x4(&transformOnly.worldMatrix,
@@ -2392,7 +2403,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                     int objectIndex = 0;
                     if (container != 0) {
                         for (const StoredGeometryObject3D& stored : myTab->storageObjects3D) {
-                            if (!stored.object || stored.object->memoryIDParent != container) continue;
+                            if (!stored.object || stored.object->memoryIDContainer != container) continue;
                             if ((objectIndex++ % 2) != phase) continue;
                             GeometryData geo;
                             if (!GeometryForObject(stored.objectType, stored.object, geo)) continue;

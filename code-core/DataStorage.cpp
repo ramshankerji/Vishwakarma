@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <iostream>
 #include <limits>
 #include <mutex>
 #include <random>
@@ -1067,11 +1068,21 @@ void AppendObjectToTab(DATASETTAB& tab, ObjectType objectType, META_DATA* object
         // Moved, not copied: nothing reads geometry after this, and on the file-load / import path
         // the copy meant deep-copying every object's vertex and index vectors twice over.
         commandToCopyThreadQueue.push({ CommandToCopyThreadType::ADD, std::move(geometry),
-            object->memoryID, tab.tabID, object->memoryIDParent });
+            object->memoryID, tab.tabID, object->memoryIDContainer });
     }
 
     {
         std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
+#ifdef _DEBUG
+        // The sorted-by-memoryId invariant the id resolver binary searches on (विश्वकर्मा.h).
+        // Breaking it returns the wrong object rather than failing, so it has to be said out loud.
+        if (!tab.storageObjects3D.empty() &&
+            tab.storageObjects3D.back().memoryId >= object->memoryID) {
+            std::cout << "[3d][warn] storageObjects3D out of memoryId order: appending "
+                      << object->memoryID << " after " << tab.storageObjects3D.back().memoryId
+                      << " - binary-search lookups are now invalid." << std::endl;
+        }
+#endif
         tab.storageObjects3D.push_back({ objectType, object->memoryID, object });
     }
 
@@ -1681,8 +1692,22 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
 
     auto resolveParentId = [&](META_DATA* object) {
         if (!object) return uint64_t{ 0 };
-        if (object->memoryIDParent != 0) {
-            auto parentIt = memoryIdToPersistedId.find(object->memoryIDParent);
+#ifdef _DEBUG
+        /* The 2D half stores ONE parent id - generator if there is one, else container - and
+        rebuilds the split at load from the stored parent's type (resolveLineParentId below,
+        resolve2DGeometryParent in the loader). The 3D half does not do that collapse, because no
+        3D type can generate anything yet: templates do not exist. The first one that does makes
+        this lambda wrong and the link would vanish on save, which is the kind of defect that
+        surfaces as a corrupted file rather than a crash. So it says so out loud instead. */
+        if (object->memoryIDGenerator != 0) {
+            std::cout << "[3d][warn] object " << object->memoryID << " carries memoryIDGenerator "
+                      << object->memoryIDGenerator << " but the 3D save path does not persist it - "
+                      << "add the generator-else-container collapse here and the matching type "
+                      << "test in the loader." << std::endl;
+        }
+#endif
+        if (object->memoryIDContainer != 0) {
+            auto parentIt = memoryIdToPersistedId.find(object->memoryIDContainer);
             if (parentIt != memoryIdToPersistedId.end()) {
                 object->persistedParentId = parentIt->second;
                 return parentIt->second;
@@ -2398,7 +2423,7 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         if (parentId != 0) {
             auto parentIt = persistedIdToMemoryId.find(parentId);
             if (parentIt != persistedIdToMemoryId.end()) {
-                object->memoryIDParent = parentIt->second;
+                object->memoryIDContainer = parentIt->second;
             }
         }
         object->schemaVersion = schemaVersion != 0

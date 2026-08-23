@@ -315,6 +315,25 @@ public:
     void Reallocate(std::byte* old_loc, uint32_t new_size);
     void DefragmentRAMChunks(uint32_t chunkIndex);
 
+    /* Which tab's memory group holds this address. Derived FROM the address instead of being
+    stored anywhere, so it can never go stale and costs no bytes on the object. Any INTERIOR
+    pointer answers for the whole allocation - a member of an arena object reports the object's
+    group - which is what lets Optional64 find its own group without carrying one.
+    Returns 0, the default group, for anything not allocated out of a 4 MB chunk: stack objects,
+    CRT-heap objects, and large-pool blocks (whose header records no group). That matches
+    META_DATA's own fallback of creating on tab 0 when no group was specified. */
+    uint32_t MemoryGroupOf(const void* anyPointer) const;
+
+    /* Position-independent addressing of a small-pool allocation, as {chunkIndex, offset} rather
+    than a pointer. ByteArrayData stores this pair so that a dynamic optional property survives
+    DefragmentRAMChunks moving the bytes: compaction rewrites the pair, where it would have to
+    hunt down every copy of a raw pointer. ChunkIndexOf returns kInvalidChunkIndex for an address
+    outside the chunk pool, which is how a caller detects a large-pool block. */
+    static constexpr uint32_t kInvalidChunkIndex = 0xFFFFFFFFu;
+    uint32_t ChunkIndexOf(const void* anyPointer) const;
+    uint32_t OffsetInChunkOf(const void* anyPointer) const;
+    std::byte* AddressOf(uint32_t chunkIndex, uint32_t offsetInChunk) const;
+
 private:
     void* baseAddress = nullptr;
     // Pointers defining the boundaries of the segregated pools
@@ -601,6 +620,35 @@ inline void राम::freeInLargePool(std::byte* ptr) {
 }
 
 inline void राम::Reallocate(std::byte* old_loc, uint32_t new_size) { /* ... */ }
+
+/* The four address<->chunk helpers. All are pure arithmetic on the pool base pointer plus one
+read of the chunk's own metadata, so none of them takes globalMemoryAllocationMutex: the pool
+boundaries are fixed at construction and a chunk's memoryGroupNo is written only while the chunk
+is being (re)commissioned, which cannot race with a live allocation inside it. */
+inline uint32_t राम::ChunkIndexOf(const void* anyPointer) const {
+    const std::byte* pointer = static_cast<const std::byte*>(anyPointer);
+    if (pointer < chunkPoolStart || pointer >= largeBlockPoolStart) return kInvalidChunkIndex;
+    return static_cast<uint32_t>((pointer - chunkPoolStart) / SMALL_ALLOCATOR_CHUNK_SIZE);
+}
+
+inline uint32_t राम::OffsetInChunkOf(const void* anyPointer) const {
+    const std::byte* pointer = static_cast<const std::byte*>(anyPointer);
+    if (pointer < chunkPoolStart || pointer >= largeBlockPoolStart) return 0;
+    return static_cast<uint32_t>((pointer - chunkPoolStart) % SMALL_ALLOCATOR_CHUNK_SIZE);
+}
+
+inline std::byte* राम::AddressOf(uint32_t chunkIndex, uint32_t offsetInChunk) const {
+    if (chunkIndex == kInvalidChunkIndex) return nullptr;
+    return chunkPoolStart + uint64_t(chunkIndex) * SMALL_ALLOCATOR_CHUNK_SIZE + offsetInChunk;
+}
+
+inline uint32_t राम::MemoryGroupOf(const void* anyPointer) const {
+    const uint32_t chunkIndex = ChunkIndexOf(anyPointer);
+    if (chunkIndex == kInvalidChunkIndex) return 0; // Not ours, or a large-pool block.
+    const CPU_RAM_4MB* chunk = reinterpret_cast<const CPU_RAM_4MB*>(
+        chunkPoolStart + uint64_t(chunkIndex) * SMALL_ALLOCATOR_CHUNK_SIZE);
+    return chunk->memoryGroupNo;
+}
 
 inline void राम::DefragmentRAMChunks(uint32_t chunkIndex) {
     // Compress RAMChunks to free up CPU RAM. Update id2MemoryMap for all the IDs which have moved.
