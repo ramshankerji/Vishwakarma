@@ -2453,6 +2453,15 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 `cloneMB` stay perfectly flat, and the selected objects must visibly rise. Repeated
                 presses accumulate, which is what proves the delta composes onto the existing
                 placement rather than replacing it. */
+                /* Temporary Debug Key: "b" appends lines to the active Page2D on a deterministic
+                grid, to measure and then to beat the Page2D rebuild (id.md §11, step 2a). Shift+B
+                is the sheet - ten presses make the million-line drawing - and plain "b" is the
+                measured event, the five appended lines §8 step 2 states its criterion in. Watch
+                the [cad2d][perf] line the copy thread prints: today `cmds=5` sits next to
+                `expanded=1000000`, and that ratio is the whole point of the step. */
+                if (input.x == 66 || input.x == 98) { // 'B' & 'b'
+                    Cad2DGenerateBulkLines(*myTab, (input.x == 66) ? 100000u : 5u);
+                }
                 if (input.x == 86 || input.x == 118) { // 'V' & 'v'
                     // Report the COUNT, not the intent: with an empty selection this is a no-op,
                     // and a message that claims otherwise makes a missed selection look like a

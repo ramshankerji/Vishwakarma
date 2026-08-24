@@ -52,16 +52,14 @@ DATASETTAB* ActiveTabForPrint() {
 // the underlying buffers alive even if the copy thread republishes/retires the snapshot
 // while our print command list is still executing on our private queue.
 struct Print2DPage {
-    ComPtr<ID3D12Resource> lineBuffer;
-    ComPtr<ID3D12Resource> lineIndirectBuffer;
-    uint32_t lineCount = 0;
-    ComPtr<ID3D12Resource> curveBuffer;
-    ComPtr<ID3D12Resource> curveIndirectBuffer;
-    uint32_t curveCount = 0;
-    ComPtr<ID3D12Resource> textVertexBuffer;
-    ComPtr<ID3D12Resource> textIndexBuffer;
-    uint32_t textVertexCount = 0;
-    uint32_t textIndexCount = 0;
+    // One container, one record class, exactly as Cad2DPageGPU is since id.md §11.2 step 2c. The
+    // count is read ONCE here, out of the live page's atomic, so the whole print sees one
+    // consistent size even if the copy thread appends to that page meanwhile.
+    Cad2DPageKind kind = Cad2DPageKind::Line;
+    ComPtr<ID3D12Resource> buffer;
+    ComPtr<ID3D12Resource> indexBuffer;
+    ComPtr<ID3D12Resource> indirectBuffer;
+    uint32_t count = 0;
 };
 
 // Same idea for the 3D geometry pages of one Scene3D container.
@@ -82,19 +80,18 @@ std::vector<Print2DPage> Collect2DPages(TabCad2DStorage& storage, uint64_t conta
     Cad2DPageSnapshot* snapshot = storage.activeSnapshot.load(std::memory_order_acquire);
     if (!snapshot) return result;
 
-    for (Cad2DPageGPU* page : snapshot->pages) {
-        if (!page || page->containerMemoryId != containerMemoryId) continue;
+    auto containerPages = snapshot->pagesByContainer.find(containerMemoryId);
+    if (containerPages == snapshot->pagesByContainer.end()) return result;
+
+    for (Cad2DPageGPU* page : containerPages->second) {
+        if (!page) continue;
         Print2DPage copy;
-        copy.lineBuffer = page->lineBuffer;
-        copy.lineIndirectBuffer = page->lineIndirectBuffer;
-        copy.lineCount = page->lineCount;
-        copy.curveBuffer = page->curveBuffer;
-        copy.curveIndirectBuffer = page->curveIndirectBuffer;
-        copy.curveCount = page->curveCount;
-        copy.textVertexBuffer = page->textVertexBuffer;
-        copy.textIndexBuffer = page->textIndexBuffer;
-        copy.textVertexCount = page->textVertexCount;
-        copy.textIndexCount = page->textIndexCount;
+        copy.kind = page->kind;
+        copy.buffer = page->buffer;
+        copy.indexBuffer = page->indexBuffer;
+        copy.indirectBuffer = page->indirectBuffer;
+        copy.count = page->count.load(std::memory_order_acquire);
+        if (copy.count == 0) continue;
         result.push_back(std::move(copy));
     }
     return result;
@@ -170,10 +167,10 @@ void Record2DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab, uint64_t con
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
         for (const Print2DPage& page : pages) {
-            if (page.lineCount == 0 || !page.lineBuffer || !page.lineIndirectBuffer) continue;
-            cmd->SetGraphicsRootShaderResourceView(1, page.lineBuffer->GetGPUVirtualAddress());
+            if (page.kind != Cad2DPageKind::Line || !page.buffer || !page.indirectBuffer) continue;
+            cmd->SetGraphicsRootShaderResourceView(1, page.buffer->GetGPUVirtualAddress());
             cmd->ExecuteIndirect(storage.dx.lineCommandSignature.Get(), 1,
-                page.lineIndirectBuffer.Get(), 0, nullptr, 0);
+                page.indirectBuffer.Get(), 0, nullptr, 0);
         }
     }
 
@@ -184,10 +181,10 @@ void Record2DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab, uint64_t con
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
         for (const Print2DPage& page : pages) {
-            if (page.curveCount == 0 || !page.curveBuffer || !page.curveIndirectBuffer) continue;
-            cmd->SetGraphicsRootShaderResourceView(1, page.curveBuffer->GetGPUVirtualAddress());
+            if (page.kind != Cad2DPageKind::Curve || !page.buffer || !page.indirectBuffer) continue;
+            cmd->SetGraphicsRootShaderResourceView(1, page.buffer->GetGPUVirtualAddress());
             cmd->ExecuteIndirect(storage.dx.curveCommandSignature.Get(), 1,
-                page.curveIndirectBuffer.Get(), 0, nullptr, 0);
+                page.indirectBuffer.Get(), 0, nullptr, 0);
         }
     }
 
@@ -207,22 +204,24 @@ void Record2DDraws(ID3D12GraphicsCommandList* cmd, DATASETTAB& tab, uint64_t con
     cmd->SetGraphicsRootDescriptorTable(2, gpu.uiResources.samplerHeap->GetGPUDescriptorHandleForHeapStart());
 
     for (const Print2DPage& page : pages) {
-        if (page.textIndexCount == 0 || !page.textVertexBuffer || !page.textIndexBuffer) continue;
+        if (page.kind != Cad2DPageKind::Text || !page.buffer || !page.indexBuffer) continue;
+        const uint32_t indexCount = page.count / 4 * 6; // 4 vertices : 6 indices per glyph quad.
+        if (indexCount == 0) continue;
 
         D3D12_VERTEX_BUFFER_VIEW vbv{};
-        vbv.BufferLocation = page.textVertexBuffer->GetGPUVirtualAddress();
-        vbv.SizeInBytes = page.textVertexCount * sizeof(Cad2DTextVertex);
+        vbv.BufferLocation = page.buffer->GetGPUVirtualAddress();
+        vbv.SizeInBytes = page.count * sizeof(Cad2DTextVertex);
         vbv.StrideInBytes = sizeof(Cad2DTextVertex);
 
         D3D12_INDEX_BUFFER_VIEW ibv{};
-        ibv.BufferLocation = page.textIndexBuffer->GetGPUVirtualAddress();
-        ibv.SizeInBytes = page.textIndexCount * sizeof(uint32_t);
+        ibv.BufferLocation = page.indexBuffer->GetGPUVirtualAddress();
+        ibv.SizeInBytes = indexCount * sizeof(uint32_t);
         ibv.Format = DXGI_FORMAT_R32_UINT;
 
         cmd->IASetVertexBuffers(0, 1, &vbv);
         cmd->IASetIndexBuffer(&ibv);
         cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        cmd->DrawIndexedInstanced(page.textIndexCount, 1, 0, 0, 0);
+        cmd->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
     }
 }
 

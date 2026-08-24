@@ -4,10 +4,13 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <iostream>
 #include <map>
+#include <set>
 #include <unordered_map>
 #include <utility>
 
@@ -30,14 +33,15 @@ extern std::atomic<uint16_t*> publishedTabIndexes;
 extern std::atomic<uint16_t> publishedTabCount;
 
 namespace {
-struct Cad2DContainerRecords {
-    std::vector<Cad2DLineRecordCPU> lines;
-    std::vector<Cad2DPolylineRecordCPU> polylines;
-    std::vector<Cad2DPolygonRecordCPU> polygons;
-    std::vector<Cad2DCircleRecordCPU> circles;
-    std::vector<Cad2DEllipseRecordCPU> ellipses;
-    std::vector<Cad2DArcRecordCPU> arcs;
-    std::vector<Cad2DTextRecordCPU> texts;
+/* One container's page content, already in GPU form (id.md §11.4, step 2b). The expansion writes
+straight into these while holding cpuRecordsMutex, which is what deletes stages 3-4 of §11.1: the
+CPU records are read in place and never copied. This replaced a Cad2DContainerRecords that held
+seven vectors of full CPU records - two deep copies of the whole tab per batch. */
+struct Cad2DContainerGpu {
+    std::vector<Cad2DLineGPURecord> lines;
+    std::vector<Cad2DCurveGPURecord> curves;
+    std::vector<Cad2DTextVertex> textVertices;
+    std::vector<uint32_t> textIndices;
 };
 
 constexpr uint32_t kMinPolygonLineSegmentCount = 3;
@@ -337,23 +341,25 @@ void AppendTextRecordGeometry(const Cad2DTextRecordCPU& text,
     }
 }
 
-void PublishCad2DPages(TabCad2DStorage& storage, std::vector<std::unique_ptr<Cad2DPageGPU>> pages) {
-    const uint64_t retireFence = gpu.renderFenceValue.load(std::memory_order_acquire);
-
-    for (auto& page : storage.activePages) {
-        storage.retiredPages.push_back({ std::move(page), retireFence });
-    }
-    storage.activePages = std::move(pages);
-
+/* Publish activePages as a new immutable snapshot. Unlike the function this replaced it retires
+NOTHING: pages are retired by whoever replaces them (a container rebuild), so a batch that only
+appended into existing pages retires nothing and, if it opened no new page, does not even come
+here - the append is published by the page's own count (id.md §11.2, step 2c). */
+void PublishCad2DSnapshot(TabCad2DStorage& storage) {
     Cad2DPageSnapshot* newSnapshot = new Cad2DPageSnapshot();
     newSnapshot->pages.reserve(storage.activePages.size());
     for (const auto& page : storage.activePages) {
         newSnapshot->pages.push_back(page.get());
+        // Pages never mix containers, so each lands in exactly one bucket.
+        newSnapshot->pagesByContainer[page->containerMemoryId].push_back(page.get());
     }
 
     Cad2DPageSnapshot* oldSnapshot =
         storage.activeSnapshot.exchange(newSnapshot, std::memory_order_acq_rel);
-    if (oldSnapshot) storage.retiredSnapshots.push_back({ oldSnapshot, retireFence });
+    if (oldSnapshot) {
+        storage.retiredSnapshots.push_back(
+            { oldSnapshot, gpu.renderFenceValue.load(std::memory_order_acquire) });
+    }
 }
 }
 
@@ -547,8 +553,17 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage) {
     storage.ellipseRecords.clear();
     storage.arcRecords.clear();
     storage.textRecords.clear();
+    /* The two asset vectors used to survive this - a leftover from before the index existed, and
+    harmless only while nothing looked a record up by id. It is not harmless now: tab slots are
+    recycled and this storage is not destroyed with the tab, so a cleared index beside a populated
+    vector would make the next load of an existing asset id APPEND a duplicate rather than update
+    in place. They also had no business outliving the drawing they belong to. */
+    storage.assetDefinitionRecords.clear();
+    storage.assetInsertRecords.clear();
+    storage.recordIndex.clear(); // Positions into the vectors just emptied.
     storage.demoLineCounter.store(0, std::memory_order_release);
     storage.demoTextQueued.store(false, std::memory_order_release);
+    storage.bulkLineCounter.store(0, std::memory_order_release);
     storage.lineCreationMode.store(false, std::memory_order_release);
     storage.lineCreationHasPreviousPoint.store(false, std::memory_order_release);
     storage.polylineCreationMode.store(false, std::memory_order_release);
@@ -645,21 +660,27 @@ void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow
     memcpy(winRes.pCad2DViewConstantDataBegin, &constants, sizeof(constants));
     const D3D12_GPU_VIRTUAL_ADDRESS viewCBV = winRes.cad2dViewConstantBuffer->GetGPUVirtualAddress();
 
+    /* Only this container's pages, through the snapshot's directory rather than a scan over every
+    page in the tab (id.md §11.2). The three passes below filter by KIND, which preserves the draw
+    order the single-page build had: all lines, then all curves, then all text. */
     Cad2DPageSnapshot* snapshot = storage.activeSnapshot.load(std::memory_order_acquire);
     if (!snapshot) return;
+    auto containerPages = snapshot->pagesByContainer.find(activeContainerMemoryId);
+    if (containerPages == snapshot->pagesByContainer.end()) return;
+    const std::vector<Cad2DPageGPU*>& pages = containerPages->second;
 
     commandList->SetGraphicsRootSignature(storage.dx.lineRootSignature.Get());
     commandList->SetPipelineState(storage.dx.linePSO.Get());
     commandList->SetGraphicsRootConstantBufferView(0, viewCBV);
     commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    for (Cad2DPageGPU* page : snapshot->pages) {
-        if (!page || page->containerMemoryId != activeContainerMemoryId) continue;
-        if (page->lineCount > 0 && page->lineBuffer && page->lineIndirectBuffer) {
-            commandList->SetGraphicsRootShaderResourceView(1, page->lineBuffer->GetGPUVirtualAddress());
-            commandList->ExecuteIndirect(storage.dx.lineCommandSignature.Get(), 1,
-                page->lineIndirectBuffer.Get(), 0, nullptr, 0);
-        }
+    for (Cad2DPageGPU* page : pages) {
+        if (!page || page->kind != Cad2DPageKind::Line) continue;
+        if (page->count.load(std::memory_order_acquire) == 0) continue;
+        if (!page->buffer || !page->indirectBuffer) continue;
+        commandList->SetGraphicsRootShaderResourceView(1, page->buffer->GetGPUVirtualAddress());
+        commandList->ExecuteIndirect(storage.dx.lineCommandSignature.Get(), 1,
+            page->indirectBuffer.Get(), 0, nullptr, 0);
     }
 
     if (storage.dx.curveRootSignature && storage.dx.curvePSO && storage.dx.curveCommandSignature) {
@@ -668,13 +689,13 @@ void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow
         commandList->SetGraphicsRootConstantBufferView(0, viewCBV);
         commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-        for (Cad2DPageGPU* page : snapshot->pages) {
-            if (!page || page->containerMemoryId != activeContainerMemoryId) continue;
-            if (page->curveCount > 0 && page->curveBuffer && page->curveIndirectBuffer) {
-                commandList->SetGraphicsRootShaderResourceView(1, page->curveBuffer->GetGPUVirtualAddress());
-                commandList->ExecuteIndirect(storage.dx.curveCommandSignature.Get(), 1,
-                    page->curveIndirectBuffer.Get(), 0, nullptr, 0);
-            }
+        for (Cad2DPageGPU* page : pages) {
+            if (!page || page->kind != Cad2DPageKind::Curve) continue;
+            if (page->count.load(std::memory_order_acquire) == 0) continue;
+            if (!page->buffer || !page->indirectBuffer) continue;
+            commandList->SetGraphicsRootShaderResourceView(1, page->buffer->GetGPUVirtualAddress());
+            commandList->ExecuteIndirect(storage.dx.curveCommandSignature.Get(), 1,
+                page->indirectBuffer.Get(), 0, nullptr, 0);
         }
     }
 
@@ -696,24 +717,28 @@ void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow
     commandList->SetGraphicsRootDescriptorTable(1, monitorSrvHeap->GetGPUDescriptorHandleForHeapStart());
     commandList->SetGraphicsRootDescriptorTable(2, uiResources.samplerHeap->GetGPUDescriptorHandleForHeapStart());
 
-    for (Cad2DPageGPU* page : snapshot->pages) {
-        if (!page || page->containerMemoryId != activeContainerMemoryId) continue;
-        if (page->textIndexCount == 0 || !page->textVertexBuffer || !page->textIndexBuffer) continue;
+    for (Cad2DPageGPU* page : pages) {
+        if (!page || page->kind != Cad2DPageKind::Text) continue;
+        if (!page->buffer || !page->indexBuffer) continue;
+        // ONE load, both numbers: see the comment on Cad2DPageGPU::count.
+        const uint32_t vertexCount = page->count.load(std::memory_order_acquire);
+        const uint32_t indexCount = vertexCount / 4 * 6;
+        if (indexCount == 0) continue;
 
         D3D12_VERTEX_BUFFER_VIEW vbv{};
-        vbv.BufferLocation = page->textVertexBuffer->GetGPUVirtualAddress();
-        vbv.SizeInBytes = page->textVertexCount * sizeof(Cad2DTextVertex);
+        vbv.BufferLocation = page->buffer->GetGPUVirtualAddress();
+        vbv.SizeInBytes = vertexCount * sizeof(Cad2DTextVertex);
         vbv.StrideInBytes = sizeof(Cad2DTextVertex);
 
         D3D12_INDEX_BUFFER_VIEW ibv{};
-        ibv.BufferLocation = page->textIndexBuffer->GetGPUVirtualAddress();
-        ibv.SizeInBytes = page->textIndexCount * sizeof(uint32_t);
+        ibv.BufferLocation = page->indexBuffer->GetGPUVirtualAddress();
+        ibv.SizeInBytes = indexCount * sizeof(uint32_t);
         ibv.Format = DXGI_FORMAT_R32_UINT;
 
         commandList->IASetVertexBuffers(0, 1, &vbv);
         commandList->IASetIndexBuffer(&ibv);
         commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        commandList->DrawIndexedInstanced(page->textIndexCount, 1, 0, 0, 0);
+        commandList->DrawIndexedInstanced(indexCount, 1, 0, 0, 0);
     }
 }
 
@@ -795,9 +820,27 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
     ComPtr<ID3D12GraphicsCommandList>& commandList) {
     if (batch.empty()) return;
 
-    std::unordered_map<uint64_t, std::vector<CommandToCopyThread2D>> byTab;
+    /* Step 2a instrumentation (id.md §11.4). Every counter measures one of the seven O(N) stages
+    §11.1 lists, so a later sub-step is checked by watching its own number fall rather than by
+    re-reasoning about the code. Locals first, atomics once at the end: the per-batch line is what
+    a human reads, the cumulative totals are what the heartbeat reads.
+
+    2b took `indexed` to one hash lookup per command and `copied` to zero. 2c takes `expanded`,
+    `staged` and `pages` to the batch's own objects whenever a batch only APPENDS - a batch that
+    modifies an object or changes the selection still rebuilds that container, and its numbers
+    still show it. They all stay: a number that must remain small is the cheapest regression
+    guard there is. */
+    const auto batchStart = std::chrono::steady_clock::now();
+    uint64_t statRecordsIndexed = 0, statRecordsExpanded = 0;
+    uint64_t statBytesStaged = 0, statPagesBuilt = 0, statPagesRetired = 0;
+    constexpr uint64_t statRecordsCopied = 0; // Nothing on this path deep-copies a record any more.
+
+    // Pointers, not copies, exactly as ProcessScene3DCopyBatch does it: CommandToCopyThread2D is
+    // 736 bytes and holds every record type as a simultaneous member (id.md §10), so grouping by
+    // value copied ~73 MB for a 100k import before a single record was read.
+    std::unordered_map<uint64_t, std::vector<const CommandToCopyThread2D*>> byTab;
     for (const CommandToCopyThread2D& command : batch) {
-        byTab[command.tabID].push_back(command);
+        byTab[command.tabID].push_back(&command);
     }
 
     for (auto& [tabID, commands] : byTab) {
@@ -806,147 +849,270 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
         if (!tab.cad2d) continue;
         TabCad2DStorage& storage = *tab.cad2d;
 
-        std::vector<Cad2DLineRecordCPU> lines;
-        std::vector<Cad2DPolylineRecordCPU> polylines;
-        std::vector<Cad2DPolygonRecordCPU> polygons;
-        std::vector<Cad2DCircleRecordCPU> circles;
-        std::vector<Cad2DEllipseRecordCPU> ellipses;
-        std::vector<Cad2DArcRecordCPU> arcs;
-        std::vector<Cad2DTextRecordCPU> texts;
-        {
-            std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
-            // objectId -> record index per type: a batch of K commands costs O(records + K)
-            // instead of one linear scan of the whole record vector per command (imports
-            // enqueue tens of thousands of elements at once).
-            auto buildIndex = [](const auto& records) {
-                std::unordered_map<uint64_t, size_t> index;
-                index.reserve(records.size());
-                for (size_t i = 0; i < records.size(); ++i) index.emplace(records[i].objectId, i);
-                return index;
-            };
-            auto lineIndex = buildIndex(storage.lineRecords);
-            auto polylineIndex = buildIndex(storage.polylineRecords);
-            auto polygonIndex = buildIndex(storage.polygonRecords);
-            auto circleIndex = buildIndex(storage.circleRecords);
-            auto ellipseIndex = buildIndex(storage.ellipseRecords);
-            auto arcIndex = buildIndex(storage.arcRecords);
-            auto textIndex = buildIndex(storage.textRecords);
-            std::unordered_set<uint64_t> knownIds(tab.allIDsInThisTab.begin(),
-                tab.allIDsInThisTab.end());
-
-            // Insert-or-update; an update keeps the already-assigned persistedId /
-            // persistedParentId when the incoming record carries none.
-            auto upsert = [&](auto& records, auto& index, const auto& incoming) {
-                auto found = index.find(incoming.objectId);
-                if (found == index.end()) {
-                    index.emplace(incoming.objectId, records.size());
-                    records.push_back(incoming);
-                    if (knownIds.insert(incoming.objectId).second) {
-                        tab.allIDsInThisTab.push_back(incoming.objectId);
-                    }
-                    return;
-                }
-                auto updated = incoming;
-                auto& existing = records[found->second];
-                if (updated.persistedId == 0) updated.persistedId = existing.persistedId;
-                if (updated.persistedParentId == 0) updated.persistedParentId = existing.persistedParentId;
-                existing = std::move(updated);
-            };
-
-            for (const CommandToCopyThread2D& command : commands) {
-                if (command.containerMemoryId == 0) continue;
-                switch (command.type) {
-                case CommandToCopyThread2DType::AddLine:
-#ifdef _DEBUG
-                    // Corruption checkpoint: was the record still sane when it crossed the queue?
-                    if (std::abs(command.line.x1) > 1.0e8 || std::abs(command.line.y1) > 1.0e8 ||
-                        std::abs(command.line.x2) > 1.0e8 || std::abs(command.line.y2) > 1.0e8) {
-                        std::cout << "[cad2d][dbg] OUTLIER AT INGEST line objectId="
-                                  << command.line.objectId << " container="
-                                  << command.line.containerMemoryId << " (" << command.line.x1
-                                  << ", " << command.line.y1 << ") -> (" << command.line.x2
-                                  << ", " << command.line.y2 << ")" << std::endl;
-                    }
-#endif
-                    upsert(storage.lineRecords, lineIndex, command.line); break;
-                case CommandToCopyThread2DType::AddPolyline:
-                    upsert(storage.polylineRecords, polylineIndex, command.polyline); break;
-                case CommandToCopyThread2DType::AddPolygon:
-                    upsert(storage.polygonRecords, polygonIndex, command.polygon); break;
-                case CommandToCopyThread2DType::AddCircle:
-                    upsert(storage.circleRecords, circleIndex, command.circle); break;
-                case CommandToCopyThread2DType::AddEllipse:
-                    upsert(storage.ellipseRecords, ellipseIndex, command.ellipse); break;
-                case CommandToCopyThread2DType::AddArc:
-                    upsert(storage.arcRecords, arcIndex, command.arc); break;
-                case CommandToCopyThread2DType::AddText:
-                    upsert(storage.textRecords, textIndex, command.text); break;
-#ifdef _DEBUG
-                case CommandToCopyThread2DType::ReportIngestStats:
-                    ReportCad2DIngestStatsLocked(storage, command.containerMemoryId); break;
-#endif
-                default:
-                    break; // SelectionRefresh: no geometry; its presence alone forces the rebuild below.
-                }
-            }
-            lines = storage.lineRecords;
-            polylines = storage.polylineRecords;
-            polygons = storage.polygonRecords;
-            circles = storage.circleRecords;
-            ellipses = storage.ellipseRecords;
-            arcs = storage.arcRecords;
-            texts = storage.textRecords;
-        }
-
+        /* Selection first, and its mutex is RELEASED before cpuRecordsMutex is taken. The
+        engineering thread acquires them in that same order (Cad2DCreateAssetFromSelection), so
+        holding both here is the one place the two orders could invert. */
         std::unordered_set<uint64_t> selected2D; // Objects to stamp with kCad2DSelectedFlag.
         {
             std::lock_guard<std::mutex> lock(storage.selection2DMutex);
             selected2D = storage.selectedObjectIds;
         }
 
-        std::map<uint64_t, Cad2DContainerRecords> containers;
-        for (const Cad2DLineRecordCPU& line : lines) {
-            if (line.containerMemoryId != 0) containers[line.containerMemoryId].lines.push_back(line);
-        }
-        for (const Cad2DPolylineRecordCPU& polyline : polylines) {
-            if (polyline.containerMemoryId != 0) containers[polyline.containerMemoryId].polylines.push_back(polyline);
-        }
-        for (const Cad2DPolygonRecordCPU& polygon : polygons) {
-            if (polygon.containerMemoryId != 0) containers[polygon.containerMemoryId].polygons.push_back(polygon);
-        }
-        for (const Cad2DCircleRecordCPU& circle : circles) {
-            if (circle.containerMemoryId != 0) containers[circle.containerMemoryId].circles.push_back(circle);
-        }
-        for (const Cad2DEllipseRecordCPU& ellipse : ellipses) {
-            if (ellipse.containerMemoryId != 0) containers[ellipse.containerMemoryId].ellipses.push_back(ellipse);
-        }
-        for (const Cad2DArcRecordCPU& arc : arcs) {
-            if (arc.containerMemoryId != 0) containers[arc.containerMemoryId].arcs.push_back(arc);
-        }
-        for (const Cad2DTextRecordCPU& text : texts) {
-            if (text.containerMemoryId != 0) containers[text.containerMemoryId].texts.push_back(text);
+        /* Two kinds of work come out of the locked section (id.md §11.4, step 2c):
+
+             appendWork  - the GPU records of objects this batch CREATED, to be appended to the
+                           tail pages of their container. O(batch).
+             rebuildWork - every record of a container that cannot be appended to, because
+                           something in the batch modified an existing object or refreshed the
+                           selection. O(container), and step 2d is what removes it.
+
+        A container in rebuildWork is never also in appendWork: the rebuild already covers its
+        new objects. */
+        std::map<uint64_t, Cad2DContainerGpu> appendWork;
+        std::map<uint64_t, Cad2DContainerGpu> rebuildWork;
+        {
+            std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
+
+            std::set<uint64_t> rebuildContainers;
+            std::map<uint64_t, std::vector<uint64_t>> newByContainer;
+
+            /* Insert-or-update through the tab's PERSISTENT index (step 2b): one hash lookup per
+            command, where this used to rebuild an index of every record in the tab on every
+            batch. Returns true when the record is NEW - which is exactly the test for whether
+            this command can be appended rather than force a rebuild. An update keeps the
+            already-assigned persistedId / persistedParentId when the incoming record carries
+            none. */
+            auto upsert = [&](auto& records, const auto& incoming) -> bool {
+                ++statRecordsIndexed;
+                auto found = storage.recordIndex.find(incoming.objectId);
+                if (found == storage.recordIndex.end()) {
+                    records.push_back(incoming);
+                    Cad2DIndexAppendedRecord(storage, records);
+                    // First sighting by definition - the index is what the old per-batch knownIds
+                    // set was rebuilt from tab.allIDsInThisTab to answer.
+                    tab.allIDsInThisTab.push_back(incoming.objectId);
+                    return true;
+                }
+                if (found->second.type != Cad2DKindOf(incoming) ||
+                    found->second.index >= records.size()) {
+                    // Cannot happen while ids are unique and the vectors are append-only, but the
+                    // consequence if it ever did is an out-of-range write into the wrong vector.
+#ifdef _DEBUG
+                    std::cout << "[cad2d][warn] recordIndex inconsistent for objectId="
+                              << incoming.objectId << "; command dropped." << std::endl;
+#endif
+                    return false;
+                }
+                auto updated = incoming;
+                auto& existing = records[found->second.index];
+                if (updated.persistedId == 0) updated.persistedId = existing.persistedId;
+                if (updated.persistedParentId == 0) updated.persistedParentId = existing.persistedParentId;
+                existing = std::move(updated);
+                return false;
+            };
+            auto classify = [&](uint64_t container, uint64_t objectId, bool isNew) {
+                if (isNew) newByContainer[container].push_back(objectId);
+                else rebuildContainers.insert(container);
+            };
+
+            for (const CommandToCopyThread2D* command : commands) {
+                const uint64_t container = command->containerMemoryId;
+                if (container == 0) continue;
+                switch (command->type) {
+                case CommandToCopyThread2DType::AddLine:
+#ifdef _DEBUG
+                    // Corruption checkpoint: was the record still sane when it crossed the queue?
+                    if (std::abs(command->line.x1) > 1.0e8 || std::abs(command->line.y1) > 1.0e8 ||
+                        std::abs(command->line.x2) > 1.0e8 || std::abs(command->line.y2) > 1.0e8) {
+                        std::cout << "[cad2d][dbg] OUTLIER AT INGEST line objectId="
+                                  << command->line.objectId << " container=" << container
+                                  << " (" << command->line.x1 << ", " << command->line.y1
+                                  << ") -> (" << command->line.x2 << ", " << command->line.y2
+                                  << ")" << std::endl;
+                    }
+#endif
+                    classify(container, command->line.objectId,
+                        upsert(storage.lineRecords, command->line));
+                    break;
+                case CommandToCopyThread2DType::AddPolyline:
+                    classify(container, command->polyline.objectId,
+                        upsert(storage.polylineRecords, command->polyline));
+                    break;
+                case CommandToCopyThread2DType::AddPolygon:
+                    classify(container, command->polygon.objectId,
+                        upsert(storage.polygonRecords, command->polygon));
+                    break;
+                case CommandToCopyThread2DType::AddCircle:
+                    classify(container, command->circle.objectId,
+                        upsert(storage.circleRecords, command->circle));
+                    break;
+                case CommandToCopyThread2DType::AddEllipse:
+                    classify(container, command->ellipse.objectId,
+                        upsert(storage.ellipseRecords, command->ellipse));
+                    break;
+                case CommandToCopyThread2DType::AddArc:
+                    classify(container, command->arc.objectId,
+                        upsert(storage.arcRecords, command->arc));
+                    break;
+                case CommandToCopyThread2DType::AddText:
+                    classify(container, command->text.objectId,
+                        upsert(storage.textRecords, command->text));
+                    break;
+                case CommandToCopyThread2DType::SelectionRefresh:
+                    // Carries no geometry: it exists to re-stamp kCad2DSelectedFlag, which today
+                    // means rebuilding the container. Step 2d turns it into a 4-byte store.
+                    rebuildContainers.insert(container);
+                    break;
+#ifdef _DEBUG
+                case CommandToCopyThread2DType::ReportIngestStats:
+                    ReportCad2DIngestStatsLocked(storage, container);
+                    break;
+#endif
+                default:
+                    break;
+                }
+            }
+
+            // ---- expansion: CPU records -> GPU records, read in place under this lock ----
+            auto stampLines = [&](std::vector<Cad2DLineGPURecord>& gpuLines, size_t firstIndex,
+                uint64_t objectId) {
+                    if (selected2D.find(objectId) == selected2D.end()) return;
+                    for (size_t i = firstIndex; i < gpuLines.size(); ++i) {
+                        gpuLines[i].flags |= kCad2DSelectedFlag;
+                    }
+                };
+            auto stampCurve = [&](std::vector<Cad2DCurveGPURecord>& gpuCurves, uint64_t objectId) {
+                if (selected2D.find(objectId) != selected2D.end() && !gpuCurves.empty()) {
+                    gpuCurves.back().flags |= kCad2DSelectedFlag;
+                }
+                };
+            auto addLine = [&](const Cad2DLineRecordCPU& r, Cad2DContainerGpu& out) {
+                const size_t before = out.lines.size();
+                out.lines.push_back(ToGpuLineRecord(r));
+                stampLines(out.lines, before, r.objectId);
+                };
+            auto addPolyline = [&](const Cad2DPolylineRecordCPU& r, Cad2DContainerGpu& out) {
+                const size_t before = out.lines.size();
+                AppendPolylineLineRecords(r, out.lines);
+                stampLines(out.lines, before, r.objectId);
+                };
+            auto addPolygon = [&](const Cad2DPolygonRecordCPU& r, Cad2DContainerGpu& out) {
+                const size_t before = out.lines.size();
+                AppendPolygonLineRecords(r, out.lines);
+                stampLines(out.lines, before, r.objectId);
+                };
+            auto addCircle = [&](const Cad2DCircleRecordCPU& r, Cad2DContainerGpu& out) {
+                if (r.radius <= 0.0) return;
+                out.curves.push_back(ToGpuCircleRecord(r));
+                stampCurve(out.curves, r.objectId);
+                };
+            auto addEllipse = [&](const Cad2DEllipseRecordCPU& r, Cad2DContainerGpu& out) {
+                if (r.radiusX <= 0.0 || r.radiusY <= 0.0) return;
+                out.curves.push_back(ToGpuEllipseRecord(r));
+                stampCurve(out.curves, r.objectId);
+                };
+            auto addArc = [&](const Cad2DArcRecordCPU& r, Cad2DContainerGpu& out) {
+                if (r.radiusX <= 0.0 || r.radiusY <= 0.0) return;
+                out.curves.push_back(ToGpuArcRecord(r));
+                stampCurve(out.curves, r.objectId);
+                };
+            auto addText = [&](const Cad2DTextRecordCPU& r, Cad2DContainerGpu& out) {
+                AppendTextRecordGeometry(r, out.textVertices, out.textIndices);
+                };
+
+            /* Whole-container expansion. The per-type order is what a page's record order comes
+            from - lines, then polylines, then polygons into the line array; circles, then
+            ellipses, then arcs into the curve array. Do not reorder these loops. */
+            for (uint64_t container : rebuildContainers) {
+                Cad2DContainerGpu& out = rebuildWork[container];
+                for (const Cad2DLineRecordCPU& r : storage.lineRecords) {
+                    if (r.containerMemoryId == container) addLine(r, out);
+                }
+                for (const Cad2DPolylineRecordCPU& r : storage.polylineRecords) {
+                    if (r.containerMemoryId == container) addPolyline(r, out);
+                }
+                for (const Cad2DPolygonRecordCPU& r : storage.polygonRecords) {
+                    if (r.containerMemoryId == container) addPolygon(r, out);
+                }
+                for (const Cad2DCircleRecordCPU& r : storage.circleRecords) {
+                    if (r.containerMemoryId == container) addCircle(r, out);
+                }
+                for (const Cad2DEllipseRecordCPU& r : storage.ellipseRecords) {
+                    if (r.containerMemoryId == container) addEllipse(r, out);
+                }
+                for (const Cad2DArcRecordCPU& r : storage.arcRecords) {
+                    if (r.containerMemoryId == container) addArc(r, out);
+                }
+                for (const Cad2DTextRecordCPU& r : storage.textRecords) {
+                    if (r.containerMemoryId == container) addText(r, out);
+                }
+            }
+
+            /* Append expansion: only the objects this batch created, in COMMAND order. That
+            differs from the per-type order a rebuild produces, which is the draw-order change
+            §11.6 accepts - invisible for opaque strokes, visible only where coloured 2D geometry
+            overlaps. */
+            for (const auto& [container, objectIds] : newByContainer) {
+                if (rebuildContainers.count(container) != 0) continue; // The rebuild covers them.
+                Cad2DContainerGpu& out = appendWork[container];
+                for (uint64_t objectId : objectIds) {
+                    auto found = storage.recordIndex.find(objectId);
+                    if (found == storage.recordIndex.end()) continue;
+                    const uint32_t at = found->second.index;
+                    switch (found->second.type) {
+                    case VishwakarmaStorage::ObjectType::Line2D:
+                        if (at < storage.lineRecords.size()) addLine(storage.lineRecords[at], out);
+                        break;
+                    case VishwakarmaStorage::ObjectType::Polyline2D:
+                        if (at < storage.polylineRecords.size()) addPolyline(storage.polylineRecords[at], out);
+                        break;
+                    case VishwakarmaStorage::ObjectType::Polygon2D:
+                        if (at < storage.polygonRecords.size()) addPolygon(storage.polygonRecords[at], out);
+                        break;
+                    case VishwakarmaStorage::ObjectType::Circle2D:
+                        if (at < storage.circleRecords.size()) addCircle(storage.circleRecords[at], out);
+                        break;
+                    case VishwakarmaStorage::ObjectType::Ellipse2D:
+                        if (at < storage.ellipseRecords.size()) addEllipse(storage.ellipseRecords[at], out);
+                        break;
+                    case VishwakarmaStorage::ObjectType::Arc2D:
+                        if (at < storage.arcRecords.size()) addArc(storage.arcRecords[at], out);
+                        break;
+                    case VishwakarmaStorage::ObjectType::Text2D:
+                        if (at < storage.textRecords.size()) addText(storage.textRecords[at], out);
+                        break;
+                    default:
+                        break;
+                    }
+                }
+            }
         }
 
-        /* Staging for this tab's rebuild (graphics.md, 10M plan Step 0). The allocator and list are
-        the copy thread's, handed in rather than created per batch, and every byte goes through the
-        one global ring instead of a committed UPLOAD resource per vector.
+        for (const auto& [container, content] : rebuildWork) {
+            statRecordsExpanded += content.lines.size() + content.curves.size() + content.textVertices.size();
+        }
+        for (const auto& [container, content] : appendWork) {
+            statRecordsExpanded += content.lines.size() + content.curves.size() + content.textVertices.size();
+        }
+        if (appendWork.empty() && rebuildWork.empty()) continue; // Diagnostics-only batch.
 
-        Unlike the Scene3D path, this one cannot pre-chunk: a 2D batch rebuilds EVERY container's
-        page wholesale, so the total is not known until the records have been expanded. Submission
-        is therefore driven by the ring itself - AcquireStaging flushes when it cannot satisfy a
-        request, which is the same "one submit per ring-full" rule reached from the other side.
-
-        Flushing mid-rebuild is safe because every destination here is a freshly created page that
-        no render thread can reach: nothing becomes visible until PublishCad2DPages at the end. */
+        /* Staging for this tab (graphics.md, 10M plan Step 0). The allocator and list are the copy
+        thread's, handed in rather than created per batch, and every byte goes through the one
+        global ring instead of a committed UPLOAD resource per vector. */
         ThrowIfFailed(commandAllocator->Reset());
         ThrowIfFailed(commandList->Reset(commandAllocator.Get(), nullptr));
 
         std::vector<ComPtr<ID3D12Resource>> oversizeStaging;
-        std::vector<std::unique_ptr<Cad2DPageGPU>> pages;
+        bool snapshotDirty = false;
+        /* Fill state for the pages this batch touches. A page's own `count` stays at the value
+        the render threads are drawing until every copy is fence-waited, so the running fill has
+        to live somewhere else until then. */
+        std::unordered_map<Cad2DPageGPU*, uint32_t> pendingCount;
+        std::unordered_set<Cad2DPageGPU*> freshPages; // Created here: no published frame can read them.
 
-        // Close, execute, signal, tag the ring, and wait. `reopen` distinguishes a mid-rebuild
-        // flush from the final submit, which must leave the list closed for the Scene3D batch that
-        // runs next. The CPU wait is the back-pressure, not a stall to optimise away.
+        // Close, execute, signal, tag the ring, and wait. `reopen` distinguishes a mid-batch flush
+        // from the final submit, which must leave the list closed for the Scene3D batch that runs
+        // next. The CPU wait is the back-pressure, not a stall to optimise away.
         auto SubmitRecording = [&](bool reopen) {
             ThrowIfFailed(commandList->Close());
             ID3D12CommandList* lists[] = { commandList.Get() };
@@ -998,129 +1164,216 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
                 gCopyStats.oversizeStaging.fetch_add(1, std::memory_order_relaxed);
             };
 
-        /* Create the destination page buffer, stage the records and record the copy. Order matters:
-        AcquireStaging may flush, which closes and re-opens the command list, so the CopyBufferRegion
-        must be recorded AFTER it. CreateDefaultBuffer is untouched by a flush - it records nothing. */
-        auto UploadVector = [&](ComPtr<ID3D12Resource>& defaultBuffer, const auto& data) {
-            if (data.empty()) return; // Also what makes data[0] below safe.
-            const uint64_t sizeBytes = data.size() * sizeof(data[0]);
-            defaultBuffer = CreateDefaultBuffer(sizeBytes);
-
-            uint8_t* mapped = nullptr;
-            ID3D12Resource* stagingResource = nullptr;
-            uint64_t stagingOffset = 0;
-            AcquireStaging(sizeBytes, mapped, stagingResource, stagingOffset);
-            memcpy(mapped, data.data(), sizeBytes);
-            commandList->CopyBufferRegion(defaultBuffer.Get(), 0, stagingResource, stagingOffset,
-                sizeBytes);
+        // Stage bytes and record the copy. Order matters: AcquireStaging may flush, which closes
+        // and re-opens the command list, so the CopyBufferRegion must be recorded AFTER it.
+        auto StageInto = [&](ID3D12Resource* destination, uint64_t destinationOffset,
+            const void* source, uint64_t bytes) {
+                if (bytes == 0) return;
+                statBytesStaged += bytes;
+                uint8_t* mapped = nullptr;
+                ID3D12Resource* stagingResource = nullptr;
+                uint64_t stagingOffset = 0;
+                AcquireStaging(bytes, mapped, stagingResource, stagingOffset);
+                memcpy(mapped, source, bytes);
+                commandList->CopyBufferRegion(destination, destinationOffset, stagingResource,
+                    stagingOffset, bytes);
             };
 
-        for (const auto& [containerMemoryId, records] : containers) {
-            auto page = std::make_unique<Cad2DPageGPU>();
-            page->containerMemoryId = containerMemoryId;
-
-            std::vector<Cad2DLineGPURecord> gpuLines;
-            size_t polylineSegmentCount = 0;
-            for (const Cad2DPolylineRecordCPU& polyline : records.polylines) {
-                if (polyline.points.size() >= 2) polylineSegmentCount += polyline.points.size() - 1;
-            }
-            size_t polygonSegmentCount = 0;
-            for (const Cad2DPolygonRecordCPU& polygon : records.polygons) {
-                if (polygon.radius > 0.0) {
-                    polygonSegmentCount += ClampedPolygonLineSegmentCount(polygon.lineSegmentCount);
-                }
-            }
-            gpuLines.reserve(records.lines.size() + polylineSegmentCount + polygonSegmentCount);
-            // Stamp kCad2DSelectedFlag on the GPU records belonging to selected objects (all the
-            // segments an object expands into), so the 2D vertex shaders draw them in deep blue.
-            auto stampSelected = [&](size_t firstIndex, uint64_t objectId) {
-                if (selected2D.find(objectId) == selected2D.end()) return;
-                for (size_t i = firstIndex; i < gpuLines.size(); ++i) gpuLines[i].flags |= kCad2DSelectedFlag;
+        auto FillOf = [&](Cad2DPageGPU* page) -> uint32_t {
+            auto found = pendingCount.find(page);
+            return found != pendingCount.end() ? found->second
+                                               : page->count.load(std::memory_order_relaxed);
             };
-            for (const Cad2DLineRecordCPU& line : records.lines) {
-                const size_t before = gpuLines.size();
-                gpuLines.push_back(ToGpuLineRecord(line));
-                stampSelected(before, line.objectId);
+        /* The last page of this container and kind, if it still has room. Only the last one can:
+        pages are filled in order and a new one is opened only when its predecessor is full. */
+        auto TailPage = [&](uint64_t container, Cad2DPageKind kind) -> Cad2DPageGPU* {
+            for (auto it = storage.activePages.rbegin(); it != storage.activePages.rend(); ++it) {
+                Cad2DPageGPU* page = it->get();
+                if (!page || page->containerMemoryId != container || page->kind != kind) continue;
+                return FillOf(page) < page->capacity ? page : nullptr;
             }
-            for (const Cad2DPolylineRecordCPU& polyline : records.polylines) {
-                const size_t before = gpuLines.size();
-                AppendPolylineLineRecords(polyline, gpuLines);
-                stampSelected(before, polyline.objectId);
+            return nullptr;
+            };
+        auto CreatePage = [&](uint64_t container, Cad2DPageKind kind, uint32_t capacity) {
+            auto owned = std::make_unique<Cad2DPageGPU>();
+            Cad2DPageGPU* page = owned.get();
+            page->containerMemoryId = container;
+            page->kind = kind;
+            page->capacity = capacity;
+            const uint64_t stride = kind == Cad2DPageKind::Line ? sizeof(Cad2DLineGPURecord)
+                : kind == Cad2DPageKind::Curve ? sizeof(Cad2DCurveGPURecord) : sizeof(Cad2DTextVertex);
+            page->buffer = CreateDefaultBuffer(static_cast<uint64_t>(capacity) * stride);
+            if (kind == Cad2DPageKind::Text) {
+                page->indexCapacity = capacity / 4 * 6;
+                page->indexBuffer =
+                    CreateDefaultBuffer(static_cast<uint64_t>(page->indexCapacity) * sizeof(uint32_t));
+            } else {
+                page->indirectBuffer = CreateDefaultBuffer(sizeof(D3D12_DRAW_ARGUMENTS));
             }
-            for (const Cad2DPolygonRecordCPU& polygon : records.polygons) {
-                const size_t before = gpuLines.size();
-                AppendPolygonLineRecords(polygon, gpuLines);
-                stampSelected(before, polygon.objectId);
-            }
-            UploadVector(page->lineBuffer, gpuLines);
-            page->lineCount = static_cast<uint32_t>(gpuLines.size());
+            storage.activePages.push_back(std::move(owned));
+            freshPages.insert(page);
+            ++statPagesBuilt;
+            snapshotDirty = true; // A new page has to reach the render threads through a snapshot.
+            return page;
+            };
 
-            if (!gpuLines.empty()) {
-                std::vector<D3D12_DRAW_ARGUMENTS> drawArgs(1);
-                drawArgs[0].VertexCountPerInstance = 6;
-                drawArgs[0].InstanceCount = page->lineCount;
-                drawArgs[0].StartVertexLocation = 0;
-                drawArgs[0].StartInstanceLocation = 0;
-                UploadVector(page->lineIndirectBuffer, drawArgs);
-            }
-
-            std::vector<Cad2DCurveGPURecord> gpuCurves;
-            gpuCurves.reserve(records.circles.size() + records.ellipses.size() + records.arcs.size());
-            auto stampCurveSelected = [&](uint64_t objectId) {
-                if (selected2D.find(objectId) != selected2D.end() && !gpuCurves.empty()) {
-                    gpuCurves.back().flags |= kCad2DSelectedFlag;
+        /* Append fixed-stride records to the container's tail page of this kind, opening new pages
+        as it fills them. An object that does not fit a standard page gets one sized to hold it -
+        a 40,000-segment polyline has to land somewhere. */
+        auto AppendRecords = [&](uint64_t container, Cad2DPageKind kind, const void* data,
+            size_t count, uint32_t stride, uint32_t standardCapacity) {
+                size_t done = 0;
+                while (done < count) {
+                    Cad2DPageGPU* page = TailPage(container, kind);
+                    if (!page) {
+                        const size_t remaining = count - done;
+                        page = CreatePage(container, kind, static_cast<uint32_t>(
+                            remaining > standardCapacity ? remaining : standardCapacity));
+                    }
+                    const uint32_t at = FillOf(page);
+                    const size_t take = (std::min)(static_cast<size_t>(page->capacity - at), count - done);
+                    StageInto(page->buffer.Get(), static_cast<uint64_t>(at) * stride,
+                        static_cast<const uint8_t*>(data) + done * stride, take * stride);
+                    pendingCount[page] = at + static_cast<uint32_t>(take);
+                    done += take;
                 }
             };
-            for (const Cad2DCircleRecordCPU& circle : records.circles) {
-                if (circle.radius > 0.0) {
-                    gpuCurves.push_back(ToGpuCircleRecord(circle));
-                    stampCurveSelected(circle.objectId);
-                }
-            }
-            for (const Cad2DEllipseRecordCPU& ellipse : records.ellipses) {
-                if (ellipse.radiusX > 0.0 && ellipse.radiusY > 0.0) {
-                    gpuCurves.push_back(ToGpuEllipseRecord(ellipse));
-                    stampCurveSelected(ellipse.objectId);
-                }
-            }
-            for (const Cad2DArcRecordCPU& arc : records.arcs) {
-                if (arc.radiusX > 0.0 && arc.radiusY > 0.0) {
-                    gpuCurves.push_back(ToGpuArcRecord(arc));
-                    stampCurveSelected(arc.objectId);
-                }
-            }
-            UploadVector(page->curveBuffer, gpuCurves);
-            page->curveCount = static_cast<uint32_t>(gpuCurves.size());
 
-            if (!gpuCurves.empty()) {
-                std::vector<D3D12_DRAW_ARGUMENTS> drawArgs(1);
-                drawArgs[0].VertexCountPerInstance = 6;
-                drawArgs[0].InstanceCount = page->curveCount;
-                drawArgs[0].StartVertexLocation = 0;
-                drawArgs[0].StartInstanceLocation = 0;
-                UploadVector(page->curveIndirectBuffer, drawArgs);
-            }
+        auto AppendText = [&](uint64_t container, const std::vector<Cad2DTextVertex>& vertices,
+            const std::vector<uint32_t>& indices) {
+                /* Glyph quads are 4 vertices to 6 indices, emitted in lockstep, so a split on a
+                quad boundary is safe. The indices are relative to `vertices`, so a quad landing at
+                page vertex base `at` shifts every index by (at - 4 * done). */
+                const size_t quads = vertices.size() / 4;
+                size_t done = 0;
+                std::vector<uint32_t> shifted;
+                while (done < quads) {
+                    Cad2DPageGPU* page = TailPage(container, Cad2DPageKind::Text);
+                    if (!page) {
+                        const size_t remainingVertices = (quads - done) * 4;
+                        page = CreatePage(container, Cad2DPageKind::Text, static_cast<uint32_t>(
+                            remainingVertices > kCad2DTextPageVertexCapacity
+                                ? remainingVertices : kCad2DTextPageVertexCapacity));
+                    }
+                    const uint32_t at = FillOf(page);
+                    const size_t take =
+                        (std::min)(static_cast<size_t>((page->capacity - at) / 4), quads - done);
+                    StageInto(page->buffer.Get(), static_cast<uint64_t>(at) * sizeof(Cad2DTextVertex),
+                        &vertices[done * 4], take * 4 * sizeof(Cad2DTextVertex));
 
-            std::vector<Cad2DTextVertex> textVertices;
-            std::vector<uint32_t> textIndices;
-            for (const Cad2DTextRecordCPU& text : records.texts) {
-                AppendTextRecordGeometry(text, textVertices, textIndices);
-            }
-            UploadVector(page->textVertexBuffer, textVertices);
-            UploadVector(page->textIndexBuffer, textIndices);
-            page->textVertexCount = static_cast<uint32_t>(textVertices.size());
-            page->textIndexCount = static_cast<uint32_t>(textIndices.size());
+                    shifted.resize(take * 6);
+                    for (size_t i = 0; i < take * 6; ++i) {
+                        shifted[i] = indices[done * 6 + i] - static_cast<uint32_t>(done * 4) + at;
+                    }
+                    StageInto(page->indexBuffer.Get(),
+                        static_cast<uint64_t>(at / 4 * 6) * sizeof(uint32_t),
+                        shifted.data(), take * 6 * sizeof(uint32_t));
 
-            pages.push_back(std::move(page));
+                    pendingCount[page] = at + static_cast<uint32_t>(take * 4);
+                    done += take;
+                }
+            };
+
+        auto RetireContainerPages = [&](uint64_t container) {
+            const uint64_t retireFence = gpu.renderFenceValue.load(std::memory_order_acquire);
+            for (size_t i = storage.activePages.size(); i-- > 0; ) {
+                if (!storage.activePages[i] ||
+                    storage.activePages[i]->containerMemoryId != container) {
+                    continue;
+                }
+                ++statPagesRetired;
+                storage.retiredPages.push_back({ std::move(storage.activePages[i]), retireFence });
+                storage.activePages.erase(storage.activePages.begin() + i);
+            }
+            snapshotDirty = true;
+            };
+
+        auto AppendContent = [&](uint64_t container, const Cad2DContainerGpu& content) {
+            AppendRecords(container, Cad2DPageKind::Line, content.lines.data(), content.lines.size(),
+                sizeof(Cad2DLineGPURecord), kCad2DLinePageCapacity);
+            AppendRecords(container, Cad2DPageKind::Curve, content.curves.data(), content.curves.size(),
+                sizeof(Cad2DCurveGPURecord), kCad2DCurvePageCapacity);
+            AppendText(container, content.textVertices, content.textIndices);
+            };
+
+        /* A rebuild is just "retire this container's pages, then append everything" - which is why
+        there is one filling path and not two. */
+        for (const auto& [container, content] : rebuildWork) {
+            RetireContainerPages(container);
+            AppendContent(container, content);
+        }
+        for (const auto& [container, content] : appendWork) {
+            AppendContent(container, content);
         }
 
-        // Final submit for this tab. Leaves the list CLOSED, which is what the Scene3D batch
-        // running next expects, and what GpuCopyThread's exception handler assumes.
-        SubmitRecording(false);
+        // A fresh page is in no published snapshot, so its argument buffer can be written once,
+        // here, with the count it ends the batch on. No patch, no second submit.
+        for (Cad2DPageGPU* page : freshPages) {
+            if (page->kind == Cad2DPageKind::Text) continue; // Text draws from the count directly.
+            D3D12_DRAW_ARGUMENTS drawArgs{};
+            drawArgs.VertexCountPerInstance = 6;
+            drawArgs.InstanceCount = FillOf(page);
+            StageInto(page->indirectBuffer.Get(), 0, &drawArgs, sizeof(drawArgs));
+        }
+
+        /* Pages that were already PUBLISHED and grew. Their new records went into the tail no
+        frame reads; what makes them drawn is InstanceCount, and that must not move until the
+        record copy has completed - hence a second submit after the first one's fence wait. Text
+        pages never appear here: they carry no argument buffer, and the atomic store below is what
+        publishes them. */
+        std::vector<Cad2DPageGPU*> pagesToPatch;
+        for (const auto& [page, newCount] : pendingCount) {
+            if (freshPages.count(page) == 0 && page->kind != Cad2DPageKind::Text) {
+                pagesToPatch.push_back(page);
+            }
+        }
+
+        if (pagesToPatch.empty()) {
+            SubmitRecording(false);
+        } else {
+            SubmitRecording(true); // Waits: every appended record is in VRAM before the count moves.
+            for (Cad2DPageGPU* page : pagesToPatch) {
+                const uint32_t newCount = pendingCount[page];
+                StageInto(page->indirectBuffer.Get(), offsetof(D3D12_DRAW_ARGUMENTS, InstanceCount),
+                    &newCount, sizeof(uint32_t));
+            }
+            SubmitRecording(false);
+        }
         gCopyStats.ringHighWater.store(gpu.uploadRing.highWaterBytes, std::memory_order_relaxed);
 
-        PublishCad2DPages(storage, std::move(pages));
+        // Every copy is fence-waited, so the counts may now become visible to the render threads.
+        for (const auto& [page, newCount] : pendingCount) {
+            page->count.store(newCount, std::memory_order_release);
+        }
+        if (snapshotDirty) PublishCad2DSnapshot(storage);
     }
+
+    const uint64_t batchMicros = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - batchStart).count());
+    gCopyStats.cad2dBatches.fetch_add(1, std::memory_order_relaxed);
+    gCopyStats.cad2dCommands.fetch_add(batch.size(), std::memory_order_relaxed);
+    gCopyStats.cad2dRecordsIndexed.fetch_add(statRecordsIndexed, std::memory_order_relaxed);
+    gCopyStats.cad2dRecordsCopied.fetch_add(statRecordsCopied, std::memory_order_relaxed);
+    gCopyStats.cad2dRecordsExpanded.fetch_add(statRecordsExpanded, std::memory_order_relaxed);
+    gCopyStats.cad2dBytesStaged.fetch_add(statBytesStaged, std::memory_order_relaxed);
+    gCopyStats.cad2dPagesBuilt.fetch_add(statPagesBuilt, std::memory_order_relaxed);
+    gCopyStats.cad2dPagesRetired.fetch_add(statPagesRetired, std::memory_order_relaxed);
+    gCopyStats.cad2dBatchMicros.fetch_add(batchMicros, std::memory_order_relaxed);
+    gCopyStats.cad2dLastBatchMicros.store(batchMicros, std::memory_order_relaxed);
+
+#ifdef _DEBUG
+    /* One line per batch, and it is the whole measurement: `cmds` against the three record
+    counters is the ratio §11.1 is about. Debug-only because it prints on every 2D edit, and
+    Debug is what the benchmark runs in anyway. */
+    std::cout << "[cad2d][perf] cmds=" << batch.size()
+              << " indexed=" << statRecordsIndexed
+              << " copied=" << statRecordsCopied
+              << " expanded=" << statRecordsExpanded
+              << " staged=" << statBytesStaged << " B" // Bytes, not KB: step 2c's criterion is 160.
+              << " pages=+" << statPagesBuilt << "/-" << statPagesRetired
+              << " in " << (batchMicros / 1000.0) << " ms" << std::endl;
+#endif
 }
 
 void PruneCad2DRetiredResources(TabCad2DStorage& storage, uint64_t safeRetireFence) {

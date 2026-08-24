@@ -517,6 +517,8 @@ The order matters more than the individual steps, because two of them make the o
      what makes step 3's pointer indirection irrelevant (§5). Doing it AFTER step 3 means
      slowing the rebuild down and then fixing it.
      -> verify: appending 5 lines to a 1M-line sheet touches O(pages), not O(records).
+     PLANNED IN DETAIL IN §11 - the page model, the eight decisions taken, and sub-steps
+     2a-2f each with its own verify criterion and status marker.
 
 3. Migrate the 2D object model.
      std::vector<StoredGeometryObject2D> mirroring the 3D directory; payloads in the arena.
@@ -591,3 +593,323 @@ Recorded here because they surfaced during this analysis, not because they are p
   bulk-inserts and carries no sortedness check — though the header comment claims both sites do.
   It is correct today (one thread, ids issued in order) but it is the import path, so it is the
   one most likely to acquire a second producer later.
+- **RE-saving a `.yyy` was quadratic in the rows the file already held** (found 2026-08-24 while
+  verifying §11.4 step 2b'; **fixed the same day** — one added index, recorded here because the
+  reasoning is not visible from the schema). `EnsureSchema` declares
+  `FOREIGN KEY(parent_id) REFERENCES object_store(object_id)` under `PRAGMA foreign_keys = ON`,
+  and the only index covering `parent_id` is **partial** (`… WHERE lifecycle_state = 0`). SQLite
+  cannot use a partial index to enforce a foreign key, and FK enforcement also disables its
+  truncate optimisation — so the `DELETE FROM object_store;` that `SaveTabToYyy` runs before
+  re-inserting every row scans the whole table **once per deleted row**. Measured: the first save
+  of a 300k-record drawing into a NEW file finished in under a minute; saving it over an existing
+  100k-row file had not finished after 15 minutes at 100% of one core — the second save of any
+  large drawing hung the application. The fix is one line, now in `EnsureSchema`: a **full** index,
+  `CREATE INDEX IF NOT EXISTS idx_object_parent ON object_store(parent_id);`. `EnsureSchema` runs
+  on save, so existing files pick it up. Disabling FK enforcement around the wholesale
+  delete-and-reinsert was the alternative, rejected because the Asset2D rows deliberately rely on
+  the per-statement ordering check (see the comment in `BuildRowsFromTab`).
+
+## 11. Step 2 in detail — the Page2D paging plan
+
+Decided 2026-08-24. Each sub-step in §11.4 carries its own status marker, the same way §8 steps 0
+and 1 do. Written at this length so a later session can resume without re-deriving any of it.
+
+### 11.1 What the rebuild costs today
+
+`ProcessCad2DCopyBatch` (`RenderPage2D-DirectX12.cpp`) rebuilds **every container of the tab from
+scratch on every drained batch**. The GPU side already owns the vocabulary — `Cad2DPageGPU`,
+`Cad2DPageSnapshot`, retirement queues, atomic publish — but one `Cad2DPageGPU` is one whole Page2D
+container, so there is no paging at all. One appended line into an N-object tab pays **seven O(N)
+stages**:
+
+| # | Stage |
+|---|---|
+| 1 | 7 × `buildIndex` — a fresh `objectId -> index` hash map over every record |
+| 2 | `knownIds` — a fresh `unordered_set` over `tab.allIDsInThisTab` |
+| 3 | 7 × full **deep copy** of the record vectors (`lines = storage.lineRecords`) |
+| 4 | 7 × **second deep copy** while bucketing into `containers` |
+| 5 | full re-expansion of every object into GPU records |
+| 6 | full re-upload through the ring, plus 6 fresh committed buffers per container |
+| 7 | `PublishCad2DPages` retires **every** page of **every** container |
+
+Stages 1–3 hold `cpuRecordsMutex`, so the engineering thread blocks behind them. And a **selection
+click pays the identical price**: `Cad2DHandleSelectionClick` enqueues `SelectionRefresh`, whose
+only job is to force the whole rebuild so the selection flags re-stamp.
+
+### 11.2 The page model
+
+**A page is (container, class, 1 MB).** The three classes are the three GPU record streams: line
+records (32 B), curve records (64 B), and text glyph quads (24 B vertices plus indices).
+
+**The load-bearing simplification is that no object emits more than one class.** Lines, polylines
+and polygons all expand to line records; circles, ellipses and arcs to curve records; text to glyph
+quads. So an object lives in exactly one page, the registry is
+`objectId -> {page*, firstRecord, count}` — a direct mirror of `InstanceRegistry` — and there are no
+multi-page objects to reconcile.
+
+**2D barely needs clones, and that is the non-obvious part.** 3D clones a geometry page on every
+change because its objects are variable-size and its argument buffer holds one command per object. A
+2D page holds fixed-stride records and **one** indirect command whose `InstanceCount` is the record
+count. That changes what invariant 2 permits:
+
+| Operation | Mechanism | Cost |
+|---|---|---|
+| **Append** | write records into the unpublished tail `[count, count+k)`, fence, then patch `InstanceCount` — one aligned 4-byte store, old and new both valid | O(k). No clone, no new snapshot |
+| **Modify** | append the new record, then set `kCad2DHiddenFlag` on the old — `flags` is a 4-byte aligned field the vertex shader already reads | O(1) |
+| **Delete** | the hide store alone | O(1) |
+| **Select / deselect** | `kCad2DSelectedFlag` store on the affected records only | 4 bytes |
+| **New page / compaction** | RCU clone and publish, exactly as 3D | O(1 page) |
+
+This is **not a second mechanism competing with 3D's.** It is 3D's own reasoning landing differently
+because the record layout is different — `InstanceSlotOf` and `VisibilityMask` are already "mutated
+in place, one aligned 4-byte store" (§ the per-tab store table in `graphics.md`). Text is the one
+exception: glyph quads carry no flags word, so modify and delete on a text rebuild its text page,
+which is small.
+
+### 11.3 Decisions taken, recorded so they are not re-litigated
+
+1. **Append-into-tail plus 4-byte stores**, not a clone per change. Appends and selection become
+   O(k) instead of O(records). Strict symmetry with `ProcessScene3DCopyBatch` was the alternative
+   and was rejected: it would clone a page per drawn line and per selection click.
+2. **1 MB pages** — 32,768 line records or 16,384 curve records. Compaction clones stay cheap, a
+   small Page2D wastes little, and a 1M-line sheet is ~32 pages, far below any draw-call concern.
+   4 MB (mirroring `GeometryPage`) and 256 KB→4 MB chained doubling were both considered.
+3. **Selection moves to flag stores in this step.** Without it the most frequent interactive 2D
+   operation still costs a full rebuild and the step's benefit is invisible in normal use.
+4. **The `objectId -> page` registry stays private to the copy thread.** It maps to GPU location,
+   which §2.5 says `InstanceRegistry` is — and explicitly is *not* a substitute for the CPU object
+   directory. §3's `ResolveObject` is not built here, and the 2D record vectors' unverified
+   sortedness (§3.4) is not relied on.
+5. **The quadratic `.yyy` loader (§10) is fixed with the same index**, as its own commit so it can
+   be reverted independently of the ingest change.
+6. **Delete gets plumbing but no command.** Hole accounting and the hidden flag are what modify and
+   compaction need; a user-facing 2D delete belongs with `undo-redo.md`, not here. The rebuild's
+   failure to filter `isDeleted` — real today, harmless only because nothing ever sets it — is
+   fixed in this step.
+7. **Inactive containers keep their GPU pages resident**, as today. Eviction is noted, not built.
+8. **The design and the measured numbers land in `2Drendering.md`**, and §8 step 2 gets a status
+   paragraph here the way steps 0 and 1 did.
+
+### 11.4 Sequencing
+
+```text
+2a. Instrument, change nothing.   ** DONE **
+      2D counters on gCopyStats (commands, recordsIndexed, recordsCopied, recordsExpanded,
+      bytesStaged, pagesBuilt, batchMicros) and a "generate N lines" debug key following the
+      existing ReportIngestStats pattern and Cad2DAutoGenerateDemoContent's math.
+      -> verify: the BEFORE numbers for +5 lines on a 1M-line sheet exist on paper. §9
+         requires exactly this before step 3 can be committed to.
+      VERIFIED. The numbers are §11.7. Each counter is named for the stage it measures, so a
+      later sub-step is checked by watching its own number fall. Two things the shape of the
+      work changed: the counters split into recordsIndexed / recordsCopied / recordsExpanded
+      (one per O(N) family, since 2b and 2c retire different ones), and pagesCloned was NOT
+      added - today every rebuild replaces every page, so it would have been a second name for
+      pagesBuilt. It arrives with 2c, where a clone becomes a distinct event.
+
+2b. Delete the CPU-side O(N) per batch.   ** DONE **
+      A persistent objectId -> {type, index} map on TabCad2DStorage replaces the seven
+      buildIndex rebuilds and knownIds; the rebuild stops copying record vectors and
+      consumes only the batch's own records. Stages 1-4 of §11.1 all go.
+      -> verify: ingesting K commands into an N-record tab is O(K) hash operations.
+      VERIFIED literally: `indexed` now equals `cmds` (5 for the +5 event, 1 for a single
+      command) at any sheet size, and `copied` is 0. Numbers in §11.8.
+      Three things worth not re-deriving:
+      (a) THE EXPANSION MOVED UNDER cpuRecordsMutex. Stage 3 existed to get the records out
+          of the lock before the expensive part; expanding in place is what deletes it, and
+          it also CUTS lock hold time, because what the lock now covers is one pass of float
+          conversions rather than two full deep copies plus two index builds.
+      (b) The selection snapshot is taken BEFORE cpuRecordsMutex and its mutex released
+          first. Cad2DCreateAssetFromSelection takes them in that order on the engineering
+          thread, so holding both here is the one place the orders could invert.
+      (c) There are THREE appenders to the seven record vectors, not two - the asset-master
+          lambdas in Cad2DCreateAssetFromSelection and Cad2DCreateAssetDefinition push
+          directly and deliberately do not enqueue. All three now call
+          Cad2DIndexAppendedRecord; missing one means the next upsert of that id appends a
+          duplicate record instead of finding the original.
+      Also folded in, because it is the same defect one level up: the per-tab command
+      grouping stores POINTERS now. It used to copy every 736-byte command (§10), which was
+      ~73 MB for a 100k import before a single record was read.
+      COST, stated because it is real: the index is ~50 MB of hash map at a million records.
+      It replaces ~100 MB of per-batch transient allocation, so the churn is gone, but the
+      resident figure is new. Step 3 revisits it when the records leave std::vector.
+      NOT exercised at runtime, deliberately: the loader and asset-master call sites are
+      compile-verified and reasoned only. The loader gets its real test in 2b', where it
+      starts READING the index rather than only maintaining it.
+
+2b'. Same map into the loader.   ** DONE **   (separate commit, decision 5)
+      AppendLine2DToTab and its eight siblings drop their per-record find_if over the
+      record vector plus std::find over allIDsInThisTab.
+      -> verify: .yyy load time is linear across 10k / 50k / 100k records.
+      VERIFIED at 100k and 300k, but ONLY after separating the loader's own cost from the
+      time it spends blocked - see §11.8. Wall-clock for the append phase is 6.0x for 3x the
+      records, which looks like a failure and is not: 85% of it is the loader waiting on
+      cpuRecordsMutex while the copy thread rebuilds the very tab being loaded. The loader
+      enqueues every record it appends, so that rebuild is unavoidable until 2c. Its OWN
+      work is 13.5 -> 14.8 microseconds per record across a 3x size change.
+      Three things worth not re-deriving:
+      (a) The nine functions collapsed into one UpsertCad2DRecord template plus nine
+          six-line wrappers - 10,700 characters became 5,800. They were identical apart from
+          the vector, the schema constant and the enqueue call.
+      (b) The two ASSET vectors joined recordIndex here. They are never ingested by the copy
+          thread, which is why 2b left them out, but the loader resolves every incoming
+          record by id - and assetInsertRecords is allowed to hold a million rows.
+      (c) The id now joins allIDsInThisTab INSIDE cpuRecordsMutex. It used to be pushed
+          outside the lock while the copy thread pushed to the same vector under it, which
+          is a real race during a load, not a tidy-up.
+      Also fixed, because the index made it harmful: CleanupCad2DTabResources cleared the
+      seven geometry vectors but not the two asset ones. Tab slots are recycled and the
+      storage is not destroyed with the tab, so a cleared index beside a populated vector
+      would have made the next load of an existing asset id append a duplicate.
+
+2c. The paged GPU store.   ** DONE **
+      Cad2DPageGPU gains {kind, capacity, atomic count}; the append-into-tail path;
+      Cad2DPageSnapshot gains pagesByContainer as GeometryPageSnapshot already has.
+      PrinterController::Collect2DPages and the ApplicationTab Stats view both assume
+      few-pages-per-container today and must be updated with it.
+      -> verify: +5 lines on a 1M-line sheet stages 160 bytes, clones 0 pages, publishes
+         at most 1 snapshot, and the frame is pixel-identical to the pre-change build.
+      VERIFIED on the numbers: 164 bytes (the 5 records plus the 4-byte InstanceCount
+      patch), pages +0/-0, no snapshot, 1.29 ms. §11.8 has the table.
+      FOUR THINGS CAME OUT DIFFERENTLY FROM THE PLAN, all deliberate:
+      (a) NO REGISTRY AND NO PLACEMENT VECTORS were built. The plan assumed the copy
+          thread needs objectId -> GPU location to decide append-vs-rebuild, but 2b's
+          recordIndex already answers it: a command whose upsert INSERTED is a new object
+          and can be appended; anything else forces its container to rebuild. Both
+          structures are what 2d needs to hide an old record, so they arrive with it,
+          not before (CLAUDE.md §2).
+      (b) A rebuild is "retire this container's pages, then append everything", so there
+          is ONE filling path, not a fast one and a slow one. The fallback also narrowed
+          from the whole TAB to the affected CONTAINERS.
+      (c) Only a page opened by THIS batch needs its argument buffer written; a page that
+          was already published needs its InstanceCount patched, and that patch has to
+          land after the record copy has been fence-waited - hence a second submit, and
+          only when such a page exists. Text pages have no argument buffer at all: their
+          index count is DERIVED as count / 4 * 6 from the same atomic, so one load gives
+          a reader both numbers and there is no window where an index view outruns the
+          vertices it can see.
+      (d) Draw order within a page is now insertion order for appends and per-type order
+          for rebuilds, so the SAME drawing can order differently depending on how it was
+          produced. §11.6 accepted the change; this is the shape it actually took.
+      NOT exercised: the printing path (compiles, updated for per-kind pages, never run),
+      and the pixel-identity check was a visual one - the 31-page grid renders seamlessly
+      with no discontinuity at page boundaries, which is what a placement bug would show,
+      but it is not a pixel diff against a pre-change capture.
+      ONE UNREPRODUCED CRASH, recorded so it is not lost: Vishwakarma.exe died once at
+      1M lines about 30 s after a selection-click rebuild, exception 0x0000087d raised
+      from KERNELBASE (a RaiseException, not an access violation), Report Id
+      6a2e9748-ffbb-485b-835e-3fdff0b7d613. The identical sequence - 1M lines, selection
+      click, minimise, 60 s - did not reproduce it. Watch for it.
+
+2d. Modify / hide / selection as <=8-byte stores.   ** NOT STARTED **
+      kCad2DHiddenFlag plus a shader early-out in Shader2D_LineVertex/CurveVertex; modify
+      becomes append-plus-hide; SelectionRefresh stops forcing a rebuild; the rebuild
+      starts honouring isDeleted (decision 6).
+      -> verify: selecting one object in a 1M-line sheet uploads 4 bytes.
+
+2e. Compaction.   ** NOT STARTED **
+      holeCount past ~25% of a page makes its next touch RCU-clone it packed, re-expanding
+      only that page's own objects from the CPU records.
+      -> verify: 10k modifies of one object leave the page count stable and holes bounded.
+
+2f. Numbers and documentation.   ** NOT STARTED **
+      Re-run 2a's benchmark. Design and measured before/after into 2Drendering.md; §8
+      step 2 marked DONE here with what it actually cost and what was left undone.
+```
+
+### 11.5 Deliberately out of scope
+
+Stated as decisions rather than left as omissions: the O(N) CPU hit-test, snapping-candidate and
+zoom-to-extents scans (that is a spatial index, a different problem); the 736-byte
+`CommandToCopyThread2D` with its six dead members per command (§10 — step 3 forces that change
+anyway); a user-facing 2D delete (decision 6); per-page frustum reject on draw, which pages make
+cheap but which `2Drendering.md` MVP item 8 defers.
+
+### 11.6 One known behaviour change
+
+Draw order moves from "all lines, then all polylines, then all polygons" to insertion order.
+Invisible for opaque strokes on white, real if coloured 2D geometry overlaps. Accepted; the fallback
+if it ever matters is to keep per-class ordering *within* a page rather than across the container.
+
+### 11.7 The measured baseline — 2026-08-24
+
+Debug x64, one Page2D holding **1,000,111 line records**, built by the step 2a debug key: `B`
+appends 100,000 lines, `b` appends 5. Lines land on a 10 CU grid, 1000 cells per row — so the
+million-line sheet spans X[0 .. 9999] Y[0 .. 10009] CU, which the zoom-extents diagnostic confirmed
+exactly. Auto Random off. Every figure below is one `[cad2d][perf]` line from the copy thread.
+
+| Event | cmds | indexed | copied | expanded | staged | pages | time |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 100k lines into an empty sheet | 100,000 | 222 | 200,140 | 100,157 | 3,129 KB | 1 | 1,233 ms |
+| 100k lines into a 900k sheet | 100,000 | 1,800,222 | 2,000,140 | 1,000,157 | 31,254 KB | 1 | 4,272 ms |
+| **+5 lines into the 1M sheet** | **5** | **2,000,222** | **2,000,150** | **1,000,162** | **31,254 KB** | **1** | **3,386 ms** |
+| One selection click on that sheet | 1 | 2,000,232 | 2,000,150 | 1,000,162 | 31,254 KB | 1 | 3,437 ms |
+
+**Five appended lines cost 3.4 seconds, four million record touches and 30.5 MB re-uploaded** —
+about 200,000 records handled per line added, and the 5 lines themselves are 160 bytes. That is the
+number §8 step 2 exists to remove.
+
+Four things the measurement settled that reasoning about the code had only asserted:
+
+- **The selection click costs the same as the append** — 3,437 ms against 3,386 ms, on a batch
+  carrying no geometry at all. §11.1 predicted it; it is now measured, and it is the operation a
+  user performs most. This is the whole argument for decision 3.
+- **`indexed` and `copied` both land at ~2× the record count**, confirming that stages 1-2 and 3-4
+  really are two full passes each rather than one.
+- **`pages=1` throughout.** One `Cad2DPageGPU` per container is the entirety of today's paging, at
+  every sheet size.
+- **The cost is in the rebuild, not in drawing.** The frame rate held at 34-60 FPS with a million
+  lines on screen, while a five-line edit took 3.4 seconds. Paging is a *write*-path problem.
+
+Two notes for whoever runs this again. The whole 100k burst arrives as **one** batch, which is the
+single-lock enqueue doing its job — line-by-line enqueuing would let the copy thread drain partial
+bursts and rebuild the growing sheet dozens of times per press. And at Zoom Max a million lines
+render as a solid black square, so step 2c's frame comparison has to be taken at a zoom where
+individual strokes resolve, not at the extents fit.
+
+### 11.8 Progress against that baseline
+
+The same event — five lines appended to a ~1M-line sheet — measured again after each sub-step.
+Everything else about the run is as §11.7 describes.
+
+| After | cmds | indexed | copied | expanded | staged | pages | time |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| baseline (§11.7) | 5 | 2,000,222 | 2,000,150 | 1,000,162 | 32,004,096 B | 1 built | 3,386 ms |
+| **2b** | 5 | **5** | **0** | 1,000,352 | 32,010,240 B | 1 built | **921 ms** |
+| **2c** | 5 | 5 | 0 | **5** | **164 B** | **+0 / −0** | **1.29 ms** |
+
+**2b removed four million record touches and 2.5 seconds of the 3.4.** `indexed` stopped depending
+on the drawing's size at all — it is the command count, which is that sub-step's criterion met
+literally rather than approximately.
+
+**2c removed everything that was left.** Five appended lines now expand five records, stage 164
+bytes — 160 of records, plus the 4-byte `InstanceCount` patch that publishes them — and touch no
+page and no snapshot. Against the baseline that is **2,600× faster and 195,000× less staged**, and
+against 2b it is the difference between rebuilding a drawing and adding to it.
+
+Two supporting readings from the same run: a 100,000-line burst appends in 441 ms
+(`expanded=100000 staged=3200020 B pages=+1/-0` — one new page, the rest into the tails of
+existing ones), and the once-per-second demo line costs `staged=36 B` and ~1.1 ms at a million
+records, where it cost ~880 ms after 2b and ~2,100 ms before it.
+
+**What 2c did NOT make cheap is a selection click**, which still forces its container to rebuild —
+at 1M lines that is 31 pages retired and 31 rebuilt. It is the last O(N) operation on the 2D write
+path and it is the whole of step 2d.
+
+**Loading a `.yyy`, after 2b'.** Same build, two files, measured through `LoadYyyIntoTab`:
+
+| Records loaded | Append phase | of which blocked | Loader's own work | Per record |
+|---:|---:|---:|---:|---:|
+| 100,093 | 4,973 ms | 3,623 ms | 1,349 ms | 13.5 µs |
+| 300,106 | 30,051 ms | 25,615 ms | 4,435 ms | 14.8 µs |
+| **3× the records** | **6.04×** | **7.07×** | **3.29×** | **1.10×** |
+
+**Read the last two columns, not the first.** Wall-clock for the append phase is 6× for 3× the
+records, which looks like the step failed. It did not: **85% of that time is the loader blocked on
+`cpuRecordsMutex`**, because it enqueues every record it appends and the copy thread is therefore
+rebuilding the very tab being loaded — batches visibly climbing from 7 ms to 428 ms as the tab
+fills. That is stage 5-7 again. The loader's own work is 3.29× for 3× the records, i.e. flat per
+record, which is the criterion.
+
+Separating the two took a counter (`gLoaderLockWaitMicros`); without it the honest conclusion from
+wall-clock alone would have been "still superlinear, cause unknown". It stays for 2c, which should
+drive the blocked column down and leave the own-work column where it is.

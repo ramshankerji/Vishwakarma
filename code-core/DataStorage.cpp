@@ -148,6 +148,16 @@ bool EnsureSchema(sqlite3* db, std::string* errorMessage) {
         "  data BLOB NOT NULL,"
         "  FOREIGN KEY(parent_id) REFERENCES object_store(object_id)"
         ");"
+        /* FULL index on the foreign key's child column, and it must stay full. SQLite will not
+        use a PARTIAL index to enforce a foreign key, and with foreign_keys = ON it also gives up
+        its truncate optimisation - so without this, the DELETE FROM object_store that every save
+        runs before re-inserting scans the whole table ONCE PER DELETED ROW. Measured before it
+        existed: a 300k-record drawing saved into a new file in under a minute, and the same
+        drawing saved over an existing 100k-row file had not finished after 15 minutes. The
+        partial index below cannot serve this purpose however much it looks like it can (id.md
+        §10). Added by EnsureSchema, which runs on save, so existing files pick it up. */
+        "CREATE INDEX IF NOT EXISTS idx_object_parent "
+        "ON object_store(parent_id);"
         "CREATE INDEX IF NOT EXISTS idx_object_parent_live "
         "ON object_store(parent_id, object_id) WHERE lifecycle_state = 0;"
         "CREATE INDEX IF NOT EXISTS idx_object_type_live "
@@ -1113,32 +1123,51 @@ void AppendLogicalObjectToTab(DATASETTAB& tab, ObjectType objectType, META_DATA*
     tab.allIDsInThisTab.push_back(object->memoryID);
 }
 
+/* Insert-or-update one 2D record by objectId, through the tab's persistent index (id.md §11.4,
+step 2b'). Each of the nine Append*2DToTab functions below used to run a std::find_if over the
+whole record vector PLUS a std::find over allIDsInThisTab, once per record - two linear scans per
+row, which is what made loading an N-record drawing O(N^2). Both are one hash lookup now.
+
+A type mismatch on the found entry means two record types share an objectId, which only a corrupt
+file can produce. Appending is exactly what the old find_if did with that case - it searched one
+vector, so it never saw the other type's record - so the pathological path behaves as it always did.
+
+The id also joins allIDsInThisTab HERE, inside cpuRecordsMutex. It used to be pushed outside the
+lock while the copy thread pushed to that same vector under it, which is a genuine race during a
+load: the loader enqueues every record it appends. */
+/* Time the load path spent BLOCKED on cpuRecordsMutex, not doing its own work. The loader enqueues
+every record it appends, so the copy thread is rebuilding the very tab being loaded while the load
+runs - and each of those rebuilds holds the mutex for hundreds of milliseconds at 300k records.
+Wall-clock time for the append phase therefore measures the whole-page rebuild (step 2c's problem),
+and only wall-clock MINUS this leaves 2b's own cost visible. Reset per load; the nine
+Append*2DToTab functions have no caller but the loader, so nothing else contributes. */
+static std::atomic<uint64_t> gLoaderLockWaitMicros{ 0 };
+
+template <class Record>
+static void UpsertCad2DRecord(DATASETTAB& tab, std::vector<Record>& records, const Record& incoming) {
+    const auto waitStart = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
+    gLoaderLockWaitMicros.fetch_add(static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - waitStart).count()), std::memory_order_relaxed);
+    auto found = tab.cad2d->recordIndex.find(incoming.objectId);
+    if (found != tab.cad2d->recordIndex.end() && found->second.type == Cad2DKindOf(incoming) &&
+        found->second.index < records.size()) {
+        records[found->second.index] = incoming;
+        return;
+    }
+    records.push_back(incoming);
+    Cad2DIndexAppendedRecord(*tab.cad2d, records);
+    tab.allIDsInThisTab.push_back(incoming.objectId);
+}
+
 void AppendLine2DToTab(DATASETTAB& tab, Cad2DLineRecordCPU line) {
     if (!tab.cad2d) tab.cad2d = std::make_unique<TabCad2DStorage>();
     if (line.objectId == 0) line.objectId = MemoryID::next();
     if (line.schemaVersion == 0) {
         line.schemaVersion = VishwakarmaStorage::kGeometry2DLineSchemaVersion;
     }
-
-    {
-        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
-        auto existing = std::find_if(tab.cad2d->lineRecords.begin(), tab.cad2d->lineRecords.end(),
-            [&](const Cad2DLineRecordCPU& existingLine) {
-                return existingLine.objectId == line.objectId;
-            });
-        if (existing == tab.cad2d->lineRecords.end()) {
-            tab.cad2d->lineRecords.push_back(line);
-        }
-        else {
-            *existing = line;
-        }
-    }
-
-    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), line.objectId) ==
-        tab.allIDsInThisTab.end()) {
-        tab.allIDsInThisTab.push_back(line.objectId);
-    }
-
+    UpsertCad2DRecord(tab, tab.cad2d->lineRecords, line);
     EnqueueCad2DLine(tab.tabID, line.containerMemoryId, line);
 }
 
@@ -1148,26 +1177,7 @@ void AppendPolyline2DToTab(DATASETTAB& tab, Cad2DPolylineRecordCPU polyline) {
     if (polyline.schemaVersion == 0) {
         polyline.schemaVersion = VishwakarmaStorage::kGeometry2DPolylineSchemaVersion;
     }
-
-    {
-        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
-        auto existing = std::find_if(tab.cad2d->polylineRecords.begin(), tab.cad2d->polylineRecords.end(),
-            [&](const Cad2DPolylineRecordCPU& existingPolyline) {
-                return existingPolyline.objectId == polyline.objectId;
-            });
-        if (existing == tab.cad2d->polylineRecords.end()) {
-            tab.cad2d->polylineRecords.push_back(polyline);
-        }
-        else {
-            *existing = polyline;
-        }
-    }
-
-    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), polyline.objectId) ==
-        tab.allIDsInThisTab.end()) {
-        tab.allIDsInThisTab.push_back(polyline.objectId);
-    }
-
+    UpsertCad2DRecord(tab, tab.cad2d->polylineRecords, polyline);
     EnqueueCad2DPolyline(tab.tabID, polyline.containerMemoryId, polyline);
 }
 
@@ -1178,26 +1188,7 @@ void AppendPolygon2DToTab(DATASETTAB& tab, Cad2DPolygonRecordCPU polygon) {
     if (polygon.schemaVersion == 0) {
         polygon.schemaVersion = VishwakarmaStorage::kGeometry2DPolygonSchemaVersion;
     }
-
-    {
-        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
-        auto existing = std::find_if(tab.cad2d->polygonRecords.begin(), tab.cad2d->polygonRecords.end(),
-            [&](const Cad2DPolygonRecordCPU& existingPolygon) {
-                return existingPolygon.objectId == polygon.objectId;
-            });
-        if (existing == tab.cad2d->polygonRecords.end()) {
-            tab.cad2d->polygonRecords.push_back(polygon);
-        }
-        else {
-            *existing = polygon;
-        }
-    }
-
-    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), polygon.objectId) ==
-        tab.allIDsInThisTab.end()) {
-        tab.allIDsInThisTab.push_back(polygon.objectId);
-    }
-
+    UpsertCad2DRecord(tab, tab.cad2d->polygonRecords, polygon);
     EnqueueCad2DPolygon(tab.tabID, polygon.containerMemoryId, polygon);
 }
 
@@ -1207,26 +1198,7 @@ void AppendCircle2DToTab(DATASETTAB& tab, Cad2DCircleRecordCPU circle) {
     if (circle.schemaVersion == 0) {
         circle.schemaVersion = VishwakarmaStorage::kGeometry2DCircleSchemaVersion;
     }
-
-    {
-        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
-        auto existing = std::find_if(tab.cad2d->circleRecords.begin(), tab.cad2d->circleRecords.end(),
-            [&](const Cad2DCircleRecordCPU& existingCircle) {
-                return existingCircle.objectId == circle.objectId;
-            });
-        if (existing == tab.cad2d->circleRecords.end()) {
-            tab.cad2d->circleRecords.push_back(circle);
-        }
-        else {
-            *existing = circle;
-        }
-    }
-
-    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), circle.objectId) ==
-        tab.allIDsInThisTab.end()) {
-        tab.allIDsInThisTab.push_back(circle.objectId);
-    }
-
+    UpsertCad2DRecord(tab, tab.cad2d->circleRecords, circle);
     EnqueueCad2DCircle(tab.tabID, circle.containerMemoryId, circle);
 }
 
@@ -1236,26 +1208,7 @@ void AppendEllipse2DToTab(DATASETTAB& tab, Cad2DEllipseRecordCPU ellipse) {
     if (ellipse.schemaVersion == 0) {
         ellipse.schemaVersion = VishwakarmaStorage::kGeometry2DEllipseSchemaVersion;
     }
-
-    {
-        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
-        auto existing = std::find_if(tab.cad2d->ellipseRecords.begin(), tab.cad2d->ellipseRecords.end(),
-            [&](const Cad2DEllipseRecordCPU& existingEllipse) {
-                return existingEllipse.objectId == ellipse.objectId;
-            });
-        if (existing == tab.cad2d->ellipseRecords.end()) {
-            tab.cad2d->ellipseRecords.push_back(ellipse);
-        }
-        else {
-            *existing = ellipse;
-        }
-    }
-
-    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), ellipse.objectId) ==
-        tab.allIDsInThisTab.end()) {
-        tab.allIDsInThisTab.push_back(ellipse.objectId);
-    }
-
+    UpsertCad2DRecord(tab, tab.cad2d->ellipseRecords, ellipse);
     EnqueueCad2DEllipse(tab.tabID, ellipse.containerMemoryId, ellipse);
 }
 
@@ -1265,26 +1218,7 @@ void AppendArc2DToTab(DATASETTAB& tab, Cad2DArcRecordCPU arc) {
     if (arc.schemaVersion == 0) {
         arc.schemaVersion = VishwakarmaStorage::kGeometry2DArcSchemaVersion;
     }
-
-    {
-        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
-        auto existing = std::find_if(tab.cad2d->arcRecords.begin(), tab.cad2d->arcRecords.end(),
-            [&](const Cad2DArcRecordCPU& existingArc) {
-                return existingArc.objectId == arc.objectId;
-            });
-        if (existing == tab.cad2d->arcRecords.end()) {
-            tab.cad2d->arcRecords.push_back(arc);
-        }
-        else {
-            *existing = arc;
-        }
-    }
-
-    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), arc.objectId) ==
-        tab.allIDsInThisTab.end()) {
-        tab.allIDsInThisTab.push_back(arc.objectId);
-    }
-
+    UpsertCad2DRecord(tab, tab.cad2d->arcRecords, arc);
     EnqueueCad2DArc(tab.tabID, arc.containerMemoryId, arc);
 }
 
@@ -1294,26 +1228,7 @@ void AppendText2DToTab(DATASETTAB& tab, Cad2DTextRecordCPU text) {
     if (text.schemaVersion == 0) {
         text.schemaVersion = VishwakarmaStorage::kGeometry2DTextSchemaVersion;
     }
-
-    {
-        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
-        auto existing = std::find_if(tab.cad2d->textRecords.begin(), tab.cad2d->textRecords.end(),
-            [&](const Cad2DTextRecordCPU& existingText) {
-                return existingText.objectId == text.objectId;
-            });
-        if (existing == tab.cad2d->textRecords.end()) {
-            tab.cad2d->textRecords.push_back(text);
-        }
-        else {
-            *existing = text;
-        }
-    }
-
-    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), text.objectId) ==
-        tab.allIDsInThisTab.end()) {
-        tab.allIDsInThisTab.push_back(text.objectId);
-    }
-
+    UpsertCad2DRecord(tab, tab.cad2d->textRecords, text);
     EnqueueCad2DText(tab.tabID, text.containerMemoryId, std::move(text));
 }
 
@@ -1324,26 +1239,7 @@ void AppendAsset2DDefinitionToTab(DATASETTAB& tab, Cad2DAssetDefinitionRecordCPU
     if (definition.schemaVersion == 0) {
         definition.schemaVersion = VishwakarmaStorage::kAsset2DDefinitionSchemaVersion;
     }
-
-    {
-        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
-        auto existing = std::find_if(tab.cad2d->assetDefinitionRecords.begin(),
-            tab.cad2d->assetDefinitionRecords.end(),
-            [&](const Cad2DAssetDefinitionRecordCPU& existingDefinition) {
-                return existingDefinition.objectId == definition.objectId;
-            });
-        if (existing == tab.cad2d->assetDefinitionRecords.end()) {
-            tab.cad2d->assetDefinitionRecords.push_back(definition);
-        }
-        else {
-            *existing = definition;
-        }
-    }
-
-    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), definition.objectId) ==
-        tab.allIDsInThisTab.end()) {
-        tab.allIDsInThisTab.push_back(definition.objectId);
-    }
+    UpsertCad2DRecord(tab, tab.cad2d->assetDefinitionRecords, definition);
 }
 
 void AppendAsset2DInsertToTab(DATASETTAB& tab, Cad2DAssetInsertRecordCPU insert) {
@@ -1352,26 +1248,7 @@ void AppendAsset2DInsertToTab(DATASETTAB& tab, Cad2DAssetInsertRecordCPU insert)
     if (insert.schemaVersion == 0) {
         insert.schemaVersion = VishwakarmaStorage::kAsset2DInsertSchemaVersion;
     }
-
-    {
-        std::lock_guard<std::mutex> lock(tab.cad2d->cpuRecordsMutex);
-        auto existing = std::find_if(tab.cad2d->assetInsertRecords.begin(),
-            tab.cad2d->assetInsertRecords.end(),
-            [&](const Cad2DAssetInsertRecordCPU& existingInsert) {
-                return existingInsert.objectId == insert.objectId;
-            });
-        if (existing == tab.cad2d->assetInsertRecords.end()) {
-            tab.cad2d->assetInsertRecords.push_back(insert);
-        }
-        else {
-            *existing = insert;
-        }
-    }
-
-    if (std::find(tab.allIDsInThisTab.begin(), tab.allIDsInThisTab.end(), insert.objectId) ==
-        tab.allIDsInThisTab.end()) {
-        tab.allIDsInThisTab.push_back(insert.objectId);
-    }
+    UpsertCad2DRecord(tab, tab.cad2d->assetInsertRecords, insert);
 }
 
 struct ObjectStoreRow {
@@ -2121,6 +1998,9 @@ bool DataStorage::SaveTabToYyy(DATASETTAB& tab, const std::wstring& filePath,
 
 bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
     std::string* errorMessage) {
+    // Timed because step 2b' has to be checked, not asserted: the second phase below is where the
+    // nine Append*2DToTab calls happen, and it is the half that used to be O(N^2) (id.md §11.4).
+    const auto loadStart = std::chrono::steady_clock::now();
     SQLiteDatabase database;
     int rc = sqlite3_open16(filePath.c_str(), &database.db);
     if (rc != SQLITE_OK || !database.db) {
@@ -2463,6 +2343,8 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
             record.containerMemoryId = parentMemoryId;
         }
     };
+    const auto appendStart = std::chrono::steady_clock::now();
+    gLoaderLockWaitMicros.store(0, std::memory_order_relaxed);
     for (Cad2DLineRecordCPU& line : pendingLines) {
         resolve2DGeometryParent(line);
         AppendLine2DToTab(tab, line);
@@ -2492,5 +2374,16 @@ bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
         AppendText2DToTab(tab, std::move(text));
     }
 
+    const auto loadEnd = std::chrono::steady_clock::now();
+    const size_t records2D = pendingLines.size() + pendingPolylines.size() + pendingPolygons.size() +
+        pendingCircles.size() + pendingEllipses.size() + pendingArcs.size() + pendingTexts.size();
+    const double appendMs =
+        std::chrono::duration_cast<std::chrono::microseconds>(loadEnd - appendStart).count() / 1000.0;
+    const double blockedMs = gLoaderLockWaitMicros.load(std::memory_order_relaxed) / 1000.0;
+    std::cout << "[yyy][perf] loaded " << records2D << " 2D records: append phase " << appendMs
+        << " ms (blocked on the copy thread " << blockedMs << " ms, own work "
+        << (appendMs - blockedMs) << " ms), whole load "
+        << std::chrono::duration_cast<std::chrono::microseconds>(loadEnd - loadStart).count() / 1000.0
+        << " ms" << std::endl;
     return true;
 }

@@ -285,6 +285,28 @@ struct GpuCopyStats {
     std::atomic<uint64_t> transformOnlyEdits{ 0 }; // Moves that cloned zero geometry pages (Step 4).
     std::atomic<uint64_t> maskWrites{ 0 };      // VisibilityMask entries written (Step 5).
     std::atomic<uint64_t> hiddenInstances{ 0 }; // Objects hidden in at least one SubTab right now.
+
+    /* Page2D copy path (id.md §11, step 2a). ProcessCad2DCopyBatch rebuilds every container of the
+    tab from scratch on every batch, so each counter below is O(records) today and each one is
+    retired by a NAMED later sub-step. They are the BEFORE baseline the paging work has to beat,
+    and they stay afterwards as the regression guard. The number that matters is a RATIO:
+    `cad2dCommands` against the three record counters. Five commands moving a million records is
+    the defect, stated in one line. */
+    std::atomic<uint64_t> cad2dBatches{ 0 };        // ProcessCad2DCopyBatch invocations.
+    std::atomic<uint64_t> cad2dCommands{ 0 };       // 2D commands in those batches.
+    // These two were the per-batch index rebuild and the two full deep copies. Step 2b retired
+    // both: `indexed` is now one hash lookup per COMMAND and `copied` is structurally zero. They
+    // stay because "this number must not grow with the drawing" is the cheapest regression guard.
+    std::atomic<uint64_t> cad2dRecordsIndexed{ 0 }; // Hash lookups into TabCad2DStorage::recordIndex.
+    std::atomic<uint64_t> cad2dRecordsCopied{ 0 };  // Records deep-copied. Must stay 0.
+    std::atomic<uint64_t> cad2dRecordsExpanded{ 0 };// GPU records produced by the expansion (2c).
+    std::atomic<uint64_t> cad2dBytesStaged{ 0 };    // Bytes staged for 2D page buffers (2c).
+    std::atomic<uint64_t> cad2dPagesBuilt{ 0 };     // Pages created and uploaded (2c).
+    // Pages a container rebuild threw away. It is the count that says whether edits are landing
+    // on the append path (built small, retired 0) or still forcing rebuilds (2c/2d).
+    std::atomic<uint64_t> cad2dPagesRetired{ 0 };
+    std::atomic<uint64_t> cad2dBatchMicros{ 0 };    // Cumulative wall time inside the function.
+    std::atomic<uint64_t> cad2dLastBatchMicros{ 0 };// The last batch alone - what you read for "+5 lines".
 };
 extern GpuCopyStats gCopyStats;
 
