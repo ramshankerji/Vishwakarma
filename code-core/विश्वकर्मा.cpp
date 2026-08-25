@@ -2310,12 +2310,23 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 break;
 
             case ACTION_TYPE::CHAR:
+				if (input.x == 67 || input.x == 99) { cam.Initialize(); } // 'c' & "C". Reset camera.
+#ifdef _DEBUG
+                /* EVERY KEY BELOW IS A TEMPORARY DEBUG / STRESS KEY, and the whole block is
+                Debug-only for one reason: these are unmodified single letters that a Release
+                user reaches by simply typing into the viewport. "B" appends 100,000 lines to
+                their drawing, "e" modifies every line on it, "m" moves every object in the
+                Scene3D and "n" re-meshes it - each of which PERSISTS. Gate the block as a
+                block: guarding only some of them leaves the rest looking like an oversight
+                rather than a decision (id.md §11.4, sub-step 2f). The camera reset above
+                stays out of the guard - it is a user convenience, not a stress key.
+                Page2D text entry never reaches here: Cad2DHandleInput consumes CHAR while a
+                text object is being typed, and `continue`s before this switch. */
 				//Temporary Debug Key: Toggle Auto Camera Rotation with "r" key.
                 if (input.x == 82 || input.x == 114) // 'r' & "R"
                 {
                     myTab->autoCameraRotation = !myTab->autoCameraRotation; 
                 }
-				if (input.x == 67 || input.x == 99) { cam.Initialize(); } // 'c' & "C". Reset camera.
                 // Temporary Debug Key: bulk-generate geometry with "g", to exercise the copy
                 // thread's import path at scale (graphics.md, 10M plan). Shift+G goes 10x bigger.
                 // Everything lands in ONE queue push burst, so it drives the drain cap, the upload
@@ -2481,6 +2492,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                     std::cout << "[gpu][stress] placement move: " << moved
                               << " object(s) translated by +2 Z" << std::endl;
                 }
+#endif // _DEBUG - end of the temporary debug / stress key block.
                 break;
 
             case ACTION_TYPE::CAPTURECHANGED:

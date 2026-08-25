@@ -240,7 +240,7 @@ step     = niceRound125(rawStep)
 snapped  = round(coordinate / step) * step
 ```
 
-**Watch the units.** Page2D ComputerUnits are millimetres (`2Drendering.md`, MVP decision 3); 3D geometry is SI metres (`LINE_MEMBER` comment). The same `niceRound125` helper is shared but the two worlds land on different absolute steps, and a nominal "1 unit" grid means 1 mm in one and 1 m in the other. Any shared constant expressed in "units" is a bug waiting to happen.
+**Watch the units.** Page2D ComputerUnits are millimetres (`2Drendering.md`, MVP decision 2); 3D geometry is SI metres (`LINE_MEMBER` comment). The same `niceRound125` helper is shared but the two worlds land on different absolute steps, and a nominal "1 unit" grid means 1 mm in one and 1 m in the other. Any shared constant expressed in "units" is a bug waiting to happen.
 
 At high zoom the step goes below 1 mm; that is correct and intended ("nearest integer **or fraction**"). A configurable floor prevents absurd sub-micron steps.
 

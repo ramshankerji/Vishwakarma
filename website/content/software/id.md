@@ -512,19 +512,34 @@ The order matters more than the individual steps, because two of them make the o
      (b) the 3D save path does not yet perform the collapse, because no 3D type can generate
      anything until templates exist - a _DEBUG diagnostic fires if one ever sets the field.
 
-2. Page the Page2D world.
+2. Page the Page2D world.   ** DONE **
      RCU-cloned pages as in graphics.md. This is what removes the 1M-record rebuild, and it is
      what makes step 3's pointer indirection irrelevant (§5). Doing it AFTER step 3 means
      slowing the rebuild down and then fixing it.
      -> verify: appending 5 lines to a 1M-line sheet touches O(pages), not O(records).
-     PLANNED IN DETAIL IN §11 - the page model, the eight decisions taken, and sub-steps
-     2a-2f each with its own verify criterion and status marker. 2a THROUGH 2e ARE DONE and
-     every criterion is met: +5 lines cost 164 bytes and 1.29 ms against a baseline of
-     30.5 MB and 3,386 ms; a selection click - the operation a 2D user performs most - costs
-     FOUR bytes; a thousand objects modified cost 36 KB and 10 ms; and the superseded
-     records those edits leave behind are packed out once a page is a quarter holes, so the
-     page count does not grow. Only 2f remains, which is documentation: the design and the
-     numbers still owe an appearance in 2Drendering.md.
+     VERIFIED, and every sub-step criterion with it. +5 lines cost 164 bytes and 1.29 ms
+     against a baseline of 30.5 MB and 3,386 ms; a selection click - the operation a 2D user
+     performs most - costs FOUR bytes; a thousand objects modified cost 36 KB and 10 ms; and
+     the superseded records those edits leave behind are packed out once a page is a quarter
+     holes, so the page count does not grow. §11 is the plan and the history, sub-steps 2a
+     through 2f each with its own marker; 2Drendering.md now carries the renderer-side
+     narrative and the numbers.
+     WHAT IT ACTUALLY COST, against what §11 assumed going in. The RCU clone the plan is
+     named after never appeared: a 2D page holds fixed-stride records under ONE indirect
+     command, so appends write the unpublished tail and patch InstanceCount, edits are
+     <=8-byte flag stores, and the only copy in the whole step is compaction's GPU-to-GPU
+     pack. The word "clone" does not occur in the 2D code. The registry the plan wanted
+     before the paged store turned out to be unnecessary until 2d, and the CPU-side O(N)
+     that 2b removed was the larger half of the win. What it DID cost is memory that is new
+     and resident: recordIndex ~50 MB at a million objects, gpuLocation another ~50 MB, and
+     the per-page placement lists ~16 MB. Step 3 revisits all three when the records leave
+     std::vector.
+     WHAT WAS LEFT UNDONE, deliberately: per-page frustum reject on draw; eviction of
+     inactive containers' pages; any spatial index, so the CPU hit-test, snapping-candidate
+     and zoom-to-extents scans stay O(N); a user-facing 2D delete, though its plumbing is
+     now complete; and CommandToCopyThread2D's six dead members per command, which step 3
+     forces anyway. Left UNEXERCISED rather than decided: the printing path, compaction of
+     a CURVE page, and a pixel diff bracketing a compaction event.
 
 3. Migrate the 2D object model.
      std::vector<StoredGeometryObject2D> mirroring the 3D directory; payloads in the arena.
@@ -532,8 +547,6 @@ The order matters more than the individual steps, because two of them make the o
      value — which is the natural moment to make it a variant (§10).
      -> verify: DXF import of a large file is no slower, and the Stats view now sees the memory.
 ```
-
-Steps 0 and 1 are worth doing on their own merits whatever happens to 2 and 3.
 
 ## 9. Risks
 
@@ -575,21 +588,9 @@ Recorded here because they surfaced during this analysis, not because they are p
   have no counterpart at all. Neither generation is a superset of the other, so merging them is a
   per-field decision belonging with step 3, not a refactor. Each dead type now names its live
   replacement in a comment.
-- **Four dead mechanisms**, not three (§2.5, §3.1): `राम::id2MemoryMap`, `MemoryIDMap`,
-  `ReferenceID`, and — found while implementing step 0 — **`VishwakarmaID64bit.h`**, which is
-  listed in `Vishwakarma.vcxproj` but `#include`d by nothing. The fourth is the worst of them,
-  because it is not merely unused: it encodes the **superseded** ID scheme. Its
-  `CATALOGUE_ID_START = 0` contradicts point 1 of the July 2026 update above, and it knows
-  nothing of the bit-62 external-file flag. Anyone wiring it up would silently get the pre-July
-  rules. Wire one or delete the rest; a declared-but-unpopulated index invites someone to trust
-  it, and a declared-but-wrong one is worse.
-- **The `.yyy` load path is quadratic in the 2D record count.** `AppendLine2DToTab` and its eight
-  siblings each run a `std::find_if` over the whole record vector **plus** a `std::find` over
-  `allIDsInThisTab`, once per record — so loading an N-record drawing is O(N²). The copy-thread
-  ingest does not have this problem: it builds seven `objectId -> index` maps per batch and pays
-  O(records + K). The loader calls the `Append*` functions one record at a time and misses that
-  entirely. This is the one place today where the absent object directory (§3) costs measurable
-  time, and it is the strongest near-term argument for building the resolver.
+- **Three dead mechanisms** (§2.5, §3.1): `राम::id2MemoryMap`, `MemoryIDMap` and `ReferenceID`
+  are each declared for the id-to-object job and none of them is referenced anywhere. Wire one or
+  delete the rest; a declared-but-unpopulated index invites someone to trust it.
 - **§2.5's "linear scan in 12 places" over-counts what a resolver would replace.** Ten of the
   twelve are genuine full traversals — persistedId assignment, save, zoom-to-fit,
   hide/move-selected, tree build — that want every object and are already optimal. Only two are
@@ -599,21 +600,6 @@ Recorded here because they surfaced during this analysis, not because they are p
   bulk-inserts and carries no sortedness check — though the header comment claims both sites do.
   It is correct today (one thread, ids issued in order) but it is the import path, so it is the
   one most likely to acquire a second producer later.
-- **RE-saving a `.yyy` was quadratic in the rows the file already held** (found 2026-08-24 while
-  verifying §11.4 step 2b'; **fixed the same day** — one added index, recorded here because the
-  reasoning is not visible from the schema). `EnsureSchema` declares
-  `FOREIGN KEY(parent_id) REFERENCES object_store(object_id)` under `PRAGMA foreign_keys = ON`,
-  and the only index covering `parent_id` is **partial** (`… WHERE lifecycle_state = 0`). SQLite
-  cannot use a partial index to enforce a foreign key, and FK enforcement also disables its
-  truncate optimisation — so the `DELETE FROM object_store;` that `SaveTabToYyy` runs before
-  re-inserting every row scans the whole table **once per deleted row**. Measured: the first save
-  of a 300k-record drawing into a NEW file finished in under a minute; saving it over an existing
-  100k-row file had not finished after 15 minutes at 100% of one core — the second save of any
-  large drawing hung the application. The fix is one line, now in `EnsureSchema`: a **full** index,
-  `CREATE INDEX IF NOT EXISTS idx_object_parent ON object_store(parent_id);`. `EnsureSchema` runs
-  on save, so existing files pick it up. Disabling FK enforcement around the wholesale
-  delete-and-reinsert was the alternative, rejected because the Asset2D rows deliberately rely on
-  the per-statement ordering check (see the comment in `BuildRowsFromTab`).
 
 ## 11. Step 2 in detail — the Page2D paging plan
 
@@ -707,7 +693,7 @@ same container — and the selection flags on them — untouched.
    which §2.5 says `InstanceRegistry` is — and explicitly is *not* a substitute for the CPU object
    directory. §3's `ResolveObject` is not built here, and the 2D record vectors' unverified
    sortedness (§3.4) is not relied on.
-5. **The quadratic `.yyy` loader (§10) is fixed with the same index**, as its own commit so it can
+5. **The quadratic `.yyy` loader is fixed with the same index**, as its own commit so it can
    be reverted independently of the ingest change.
 6. **Delete gets plumbing but no command.** Hole accounting and the hidden flag are what modify and
    compaction need; a user-facing 2D delete belongs with `undo-redo.md`, not here. The rebuild's
@@ -961,12 +947,42 @@ same container — and the selection flags on them — untouched.
       before/after pair. Also unexercised: compaction of a CURVE page (only line pages were
       ever driven past the threshold), and printing, which is untouched but still never run.
 
-2f. Numbers and documentation.   ** NOT STARTED - START HERE **
+2f. Numbers and documentation.   ** DONE **
       Re-run 2a's benchmark. Design and measured before/after into 2Drendering.md; §8
       step 2 marked DONE here with what it actually cost and what was left undone.
-      Most of the numbers already exist in §11.7 and §11.8; what 2f owes is the narrative in
-      2Drendering.md, which has had nothing from this whole step, and a decision on whether
-      the `B`/`b`/`E`/`e` debug keys and the [cad2d][perf] line stay in the shipped build.
+      DONE. 2Drendering.md gained "Page2D memory paging - as built": the page model, the
+      five-operation cost table, compaction, both measured tables, the draw-order change
+      and the out-of-scope list. §8 step 2 above now carries the cost-and-omissions
+      paragraphs. Three further corrections went in with it, because a reader following
+      that page would otherwise have been misled by it: its MVP item naming
+      MemoryManagerGPU2D.* as the source of record - four files that have never existed -
+      now names the RenderPage2D.* four; its MVP item forbidding 2D persistence is gone,
+      overtaken by the .yyy path; and ITS OWN sections 2, 7, 8, 10 and 12 are marked
+      Outdated / Not Implemented in place, unedited. Its section 11 (selection) was
+      REWRITTEN rather than marked, since selection is built and that page described the
+      opposite design - a GPU pick pass and an ID render target, neither of which exists.
+      NOT DONE, and it is the one criterion not met: the benchmark was NOT re-run. Every
+      figure in 2Drendering.md is the 2026-08-24/25 reading carried over from §11.7 and
+      §11.8 unchanged. Nothing has touched the 2D write path since those were taken, so
+      they should still hold - but "should still hold" is not a measurement, and a
+      confirmation run of `B` x10 then `b` is what would close it.
+      THE DEBUG-KEY DECISION: GATE THE BLOCK, and it is done. The [cad2d][perf] line was
+      already `#ifdef _DEBUG` and needed nothing. The `B`/`b`/`E`/`e` keys were NOT gated -
+      they shipped in Release, where `B` appends 100,000 lines to the user's drawing and
+      `e` modifies every line on it, both of which PERSIST. Gating only those four would
+      have left the surrounding 3D stress keys (`g`, `m`, `n`, `k`, `l`, `v`) equally
+      reachable and the guard looking like an oversight, so the WHOLE `ACTION_TYPE::CHAR`
+      debug block is now inside one `#ifdef _DEBUG`.
+      Two things deliberately kept out of it. The `c` camera reset stays ungated: it is a
+      user convenience, not a stress key, and it is the only way to re-centre the camera
+      from the keyboard. And Page2D TEXT ENTRY was never at risk - Cad2DHandleInput
+      consumes CHAR while a text object is being typed and `continue`s before this switch
+      is reached, so a Release build still types into 2D text.
+      Verified: Debug x64 builds clean at zero warnings. Release could NOT be built on this
+      machine (the prebuilt release protobuf tree does not exist here). Two static helpers,
+      FlushGeneratedGeometryBatch and TranslateSelectedSceneObjects, now have no caller in
+      a Release build; C4505 is a level-4 warning and code-core compiles at Level3, so it
+      should not surface - but that is reasoning, not a build.
 ```
 
 ### 11.5 Deliberately out of scope
@@ -975,7 +991,7 @@ Stated as decisions rather than left as omissions: the O(N) CPU hit-test, snappi
 zoom-to-extents scans (that is a spatial index, a different problem); the 736-byte
 `CommandToCopyThread2D` with its six dead members per command (§10 — step 3 forces that change
 anyway); a user-facing 2D delete (decision 6); per-page frustum reject on draw, which pages make
-cheap but which `2Drendering.md` MVP item 8 defers.
+cheap but which `2Drendering.md` MVP item 7 defers.
 
 ### 11.6 One known behaviour change
 

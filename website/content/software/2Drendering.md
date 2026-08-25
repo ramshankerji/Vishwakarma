@@ -12,20 +12,176 @@ Our current D3D12 engine already has useful foundations: high-performance adapte
 
 These decisions are mandatory for the first Page2D implementation pass. The broader sections below remain the long-term renderer design; this MVP section overrides them wherever the first pass intentionally differs.
 
-1. **No 2D persistence in the first pass.** Page2D line and text content may be generated in memory only. Similar to the current 3D test path that keeps adding one shape every second, the engineering thread should auto-generate a create-line action about once per second, consume it, and upload the resulting 2D primitive records to GPU memory.
-2. **Render directly into the existing scene RTT.** Do not create a dedicated CAD render target in the first pass. A dedicated Page2D render target and multi-view/multi-window composition can come later.
-3. **ComputerUnit definition.** For Page2D, `1.0` ComputerUnit always means `1 mm`. CPU-side Page2D coordinates should be stored as `float64`/`double` for long-term CAD precision. GPU records may use page-local/rebased `float32` values for rendering.
-4. **Coordinate origin.** Page2D uses a lower-left origin. This matches the intended future print-layout child coordinate system.
-5. **Canvas.** The first Page2D viewport is an infinite CAD canvas, not a paper sheet preview. Use a dulled white background with black default geometry/text.
-6. **Active container visibility.** When a Page2D internal sub-tab is active, Scene3D is not rendered in that viewport. Scene3D engineering/copy-thread work may continue in the background and keep uploading to VRAM, but inactive container pages should not draw.
-7. **Object identity.** Continue using the existing global `memoryID` generator. Do not introduce a separate Page2D object ID generator.
-8. **No optimization-first work.** GPU culling, tile binning, compute-generated indirect counts, and advanced batching are deferred. The first implementation should prioritize a correct visible result.
-9. **Lineweight is day-0 CAD behavior.** MVP line rendering must support CAD lineweight. Prefer analytic thick-line rendering: one line segment is one instance, the vertex shader expands `SV_VertexID` 0..5 into two triangles, and the pixel shader computes anti-aliased coverage. Geometry cost should remain proportional to the number of line segments, not to the number of pixels touched by the line.
-10. **Text.** First-pass text uses font value `0`, meaning Noto Sans. ASCII is sufficient for MVP. Text records must keep the future font system in mind and include string, text height in ComputerUnits, rotation, color, justification, `xOffset`, and `yOffset`.
-11. **Text zoom behavior.** CAD text height is in ComputerUnits and therefore zooms with the drawing. At large zoom-out, text may become too small to read or effectively disappear.
-12. **Shader files.** New 2D shader files should be prefixed with `Shader2D_` and added to the existing Visual Studio `FxCompile` build pattern.
-13. **Input.** Page2D navigation uses mouse wheel zoom and middle-button drag pan.
-14. **Source ownership.** Keep all 2D GPU rendering implementation code in `MemoryManagerGPU2D.h`, `MemoryManagerGPU2D.cpp`, `MemoryManagerGPU2D-DirectX12.h`, and `MemoryManagerGPU2D-DirectX12.cpp`.
+1. **Render directly into the existing scene RTT.** Do not create a dedicated CAD render target in the first pass. A dedicated Page2D render target and multi-view/multi-window composition can come later.
+2. **ComputerUnit definition.** For Page2D, `1.0` ComputerUnit always means `1 mm`. CPU-side Page2D coordinates should be stored as `float64`/`double` for long-term CAD precision. GPU records may use page-local/rebased `float32` values for rendering.
+3. **Coordinate origin.** Page2D uses a lower-left origin. This matches the intended future print-layout child coordinate system.
+4. **Canvas.** The first Page2D viewport is an infinite CAD canvas, not a paper sheet preview. Use a dulled white background with black default geometry/text.
+5. **Active container visibility.** When a Page2D internal sub-tab is active, Scene3D is not rendered in that viewport. Scene3D engineering/copy-thread work may continue in the background and keep uploading to VRAM, but inactive container pages should not draw.
+6. **Object identity.** Continue using the existing global `memoryID` generator. Do not introduce a separate Page2D object ID generator.
+7. **No optimization-first work.** GPU culling, tile binning, compute-generated indirect counts, and advanced batching are deferred. The first implementation should prioritize a correct visible result.
+8. **Lineweight is day-0 CAD behavior.** MVP line rendering must support CAD lineweight. Prefer analytic thick-line rendering: one line segment is one instance, the vertex shader expands `SV_VertexID` 0..5 into two triangles, and the pixel shader computes anti-aliased coverage. Geometry cost should remain proportional to the number of line segments, not to the number of pixels touched by the line.
+9. **Text.** First-pass text uses font value `0`, meaning Noto Sans. ASCII is sufficient for MVP. Text records must keep the future font system in mind and include string, text height in ComputerUnits, rotation, color, justification, `xOffset`, and `yOffset`.
+10. **Text zoom behavior.** CAD text height is in ComputerUnits and therefore zooms with the drawing. At large zoom-out, text may become too small to read or effectively disappear.
+11. **Shader files.** New 2D shader files should be prefixed with `Shader2D_` and added to the existing Visual Studio `FxCompile` build pattern.
+12. **Input.** Page2D navigation uses mouse wheel zoom and middle-button drag pan.
+13. **Source ownership.** Keep all 2D rendering implementation code in `RenderPage2D.h`, `RenderPage2D.cpp`, `RenderPage2D-DirectX12.h`, and `RenderPage2D-DirectX12.cpp`.
+
+## Page2D memory paging — as built
+
+Shipped 2026-08-25, as step 2 of the object-model sequencing in `id.md` §8.
+That page carries the sub-step-by-sub-step history — six sub-steps, each with its own verify
+criterion, and the decisions that were reversed along the way. This section is the renderer-side
+account: what the mechanism is, what each operation costs, and the measured before and after.
+
+MVP decision 7 deferred optimisation, and correctly. This is the work that came due when the
+deferral ran out.
+
+### The problem it removed
+
+Before paging, one `Cad2DPageGPU` was one whole Page2D container, so there was no paging at all —
+just a buffer per container that had to be correct in full. Every drained copy-thread batch
+therefore rebuilt **every container of the tab from scratch**. Appending one line to an N-object
+sheet paid seven O(N) stages: seven `objectId -> index` hash maps rebuilt, a fresh id set, two full
+deep copies of the record vectors, a full re-expansion into GPU records, a full re-upload, and the
+retirement of every page of every container. The first three stages held `cpuRecordsMutex`, so the
+engineering thread blocked behind them.
+
+And a **selection click paid exactly the same price**, on a batch carrying no geometry at all: the
+only way to re-stamp the selection flags was to rebuild the drawing that carried them.
+
+Measured on a 1,000,111-line sheet, Debug x64: appending five lines cost **3,386 ms, four million
+record touches and 30.5 MB re-uploaded**. The five lines themselves are 160 bytes. A selection click
+on the same sheet cost 3,437 ms. Frame rate, meanwhile, held at 34-60 FPS with the million lines on
+screen — **paging is a write-path problem, not a draw-path one**, which is worth stating plainly
+because section 7 below assumes the opposite.
+
+### The page model
+
+**A page is (container, class, 1 MB).** The three classes are the three GPU record streams: line
+records at 32 B, curve records at 64 B, and text glyph quads at 24 B vertices plus indices. So a
+line page holds 32,768 records, a curve page 16,384, and a million-line sheet is about 32 pages.
+1 MB was chosen so that compaction copies stay cheap and a small Page2D wastes little; 4 MB
+(mirroring the 3D `GeometryPage`) and chained doubling were both considered.
+
+**The load-bearing simplification is that no object emits more than one class.** Lines, polylines
+and polygons all expand to line records; circles, ellipses and arcs to curve records; text to glyph
+quads. An object therefore lives in exactly one page, its GPU location is one run
+`{page, firstRecord, count}`, and there are no multi-page objects to reconcile. The filler enforces
+the other half of that: **an object never straddles a page** — the tail page takes as many
+consecutive objects as fit and the remainder opens a new one — because modify and delete have to
+reach every record of an object from that single entry.
+
+**2D barely needs page clones, and that is the non-obvious part.** The 3D side clones a geometry
+page on every change because its objects are variable-size and its argument buffer holds one command
+per object. A 2D page holds fixed-stride records and **one** indirect command whose `InstanceCount`
+is the record count. That changes what is safe to mutate in place:
+
+| Operation | Mechanism | Cost |
+|---|---|---|
+| **Append** | write records into the unpublished tail `[count, capacity)`, which no drawing frame reads; fence; then patch `InstanceCount` — one aligned 4-byte store whose old and new values are both valid | O(k). No clone, no new snapshot |
+| **Modify** | append the new records, then set `kCad2DHiddenFlag` on the old run — `flags` is a 4-byte aligned field the vertex shader already reads | O(1) |
+| **Delete** | the hide store alone | O(1) |
+| **Select / deselect** | `kCad2DSelectedFlag` store, one staged word per object | 4 bytes |
+| **Compaction** | GPU-to-GPU copy of the survivors into a fresh page | O(1 page) |
+
+`kCad2DHiddenFlag` is what makes a modify O(1): the vertex shader collapses a hidden record's quad
+to zero area, so the old geometry leaves the drawing without anything being moved or rebuilt. The
+hide is issued **after** the new records' fence wait, beside the `InstanceCount` patch, not before
+it. Both orderings are correct; this one is kinder to the eye. Hiding first blanks the old records
+while the new ones are still uncounted, so a modify flashes a one-frame **hole**; hiding after
+leaves the object drawn where it was until the patch lands, so it reads as a one-frame lag.
+
+**Text is the one exception, throughout.** Glyph quads carry no flags word, so a text object is
+never hidden and never registered, and a text modify re-lays-out its container's **text pages only**
+— leaving the line and curve pages of the same container, and the selection flags on them,
+untouched.
+
+### Compaction
+
+Append-plus-hide leaves the superseded records resident. They still occupy their slot **and** cost a
+vertex-shader invocation apiece, because `InstanceCount` cannot skip them — the shader can only make
+them draw nothing. So each page counts its holes, and once a quarter of its **capacity** is holes,
+its next touch packs it: a fresh page, the survivors copied in, the stale page retired.
+
+Three properties are worth knowing:
+
+- **Packing stages zero bytes.** The survivors are already in VRAM, correct down to their selection
+  flags, so packing is a `CopyBufferRegion` per contiguous run of survivors — nothing is re-expanded
+  from the CPU records, nothing goes through the upload ring, and no lock is taken. That is why the
+  measurements below report `packed=` separately from `staged=`.
+- **The packed page goes back in the stale one's slot**, not at the end of the list. Otherwise every
+  object on a page would jump the draw order because some *other* object on it was edited.
+- **A page with no survivors is retired outright**, with no replacement. That is the only path that
+  gives memory back.
+
+The threshold is measured against capacity rather than fill, so a nearly-empty page is left alone:
+90 holes among 100 records waste 2.8 KB and are not worth a 1 MB page copy, while 8,192 holes in a
+line page are worth exactly that. Compaction runs **first** in a batch, before that batch's hides
+and appends, so the same batch's appends can land in the room it just freed — which is the mechanism
+that keeps a repeatedly-edited object inside one page. Holes made by a batch are packed by the next
+one: the threshold is a bound, not a promise of immediacy.
+
+### Measured, before and after
+
+Debug x64, one Page2D holding **1,000,111 line records** on a 10 CU grid. The event is the same
+throughout — five lines appended — and each row is one `[cad2d][perf]` line from the copy thread.
+
+| After | cmds | indexed | copied | expanded | staged | pages | time |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| baseline, no paging | 5 | 2,000,222 | 2,000,150 | 1,000,162 | 32,004,096 B | 1 built | 3,386 ms |
+| persistent record index | 5 | **5** | **0** | 1,000,352 | 32,010,240 B | 1 built | 921 ms |
+| **paged GPU store** | 5 | 5 | 0 | **5** | **164 B** | **+0 / -0** | **1.29 ms** |
+
+The record index removed four million record touches and 2.5 seconds of the 3.4: `indexed` stopped
+depending on the drawing's size at all and became the command count. Paging removed what was left.
+Five appended lines now expand five records and stage 164 bytes — 160 of records plus the 4-byte
+`InstanceCount` patch that publishes them — and touch no page and no snapshot. Against the baseline
+that is **2,600x faster and 195,000x less staged**.
+
+Interactive editing, measured on sheets of 2,000,000 and 100,000 lines respectively:
+
+| Event | cmds | expanded | staged | pages | flags | time |
+|---|---:|---:|---:|---:|---:|---:|
+| Selection click, 2M sheet | 1 | 0 | **4 B** | +0 / -0 | 1 | **0.51 ms** |
+| Click selecting nothing | 1 | 0 | 0 B | +0 / -0 | 0 | 0.075 ms |
+| 1,000 objects modified | 1,000 | 1,000 | 36,004 B | +0 / -0 | 1,000 | 8-25 ms |
+| 100,032 objects modified | 100,032 | 100,032 | 3,601,096 B | +3 / -0 | 100,032 | 1,310 ms |
+| 100,000 lines appended | 100,000 | 100,000 | 3,200,052 B | +3 / -0 | 0 | 468 ms |
+
+`staged=36004` is the whole of what a thousand edits costs: 32,000 bytes of new line records, 4,000
+of hide flag words, and the 4-byte patch that publishes them. The compaction closes the loop — nine
+rounds of 1,000 modifies put 9,000 holes in a 32,768-record page, and the next batch read
+`pages=+1/-1 packed=1/1760 holes=0`: one page built, one retired, 1,760 records moved by GPU copy,
+holes back to zero, in 10.5 ms. Moving *every* line at once instead leaves three full pages holding
+nothing alive, and those are handed back outright: `pages=+0/-3 packed=3/0`.
+
+Loading a `.yyy` was fixed in the same step and for the same reason — the loader was resolving each
+incoming record by scanning the record vector. Through the index its own work is flat per record:
+13.5 microseconds at 100,093 records, 14.8 at 300,106.
+
+### One known behaviour change
+
+Draw order within a container moved from "all lines, then all polylines, then all polygons" to
+**insertion order**, and a modified object is appended like a new one, so **editing an object moves
+it to the front of the overlap order**. Invisible for opaque strokes on white; real if coloured 2D
+geometry overlaps, where dragging an object can change what it hides. Accepted. The fallback, if it
+ever matters, is to keep per-class ordering *within* a page rather than across the container.
+
+### What this step did not do
+
+Named as decisions rather than left as omissions: no per-page frustum reject on draw (MVP decision 7
+— pages make it cheap, but it stays deferred); no eviction of inactive containers' pages, which stay
+resident; no spatial index, so the CPU hit-test, snapping-candidate and zoom-to-extents scans are
+all still O(N); no user-facing 2D delete, though the hidden-flag and hole plumbing a delete needs is
+now complete; and `CommandToCopyThread2D` still carries all seven record types as simultaneous
+members, six of them dead per command.
+
+Unexercised rather than decided: the printing path, which was updated for per-kind pages and
+compiles but has not been run against a paged drawing; compaction of a **curve** page, since only
+line pages were ever driven past the threshold; and a pixel diff bracketing a single compaction
+event. There is also one unreproduced crash on record — seen twice, both times after the window had
+been **minimised** for about a minute with a large 2D drawing loaded — whose leading hypothesis is
+that a monitor which stops presenting stops advancing its fence, so nothing deferred is ever freed.
 
 ## 1. Overall architecture
 
@@ -60,6 +216,13 @@ GPU:
 Our current render thread already renders to intermediate render textures and then copies to the swap-chain backbuffer. That pattern is good for adding a dedicated CAD render target before final composition. 
 
 ## 2. Core idea: store CAD primitives, not triangles
+
+> **Outdated.** The principle held — the GPU stores CAD primitives, not triangles — but the record
+> layout below is not what was built. The shipped ABI is three fixed-stride, self-contained streams
+> (`Cad2DLineGPURecord` 32 B, `Cad2DCurveGPURecord` 64 B, `Cad2DTextVertex` 24 B) with colour and
+> lineweight inline, a `flags` word, and no attribute indirection, no `layerId`, no `zOrder` and no
+> payload-buffer table. See `RenderPage2D.h`. Left unedited pending a rewrite.
+
 Use compact GPU records.
 
 ```cpp
@@ -239,6 +402,13 @@ Options:
 For our project, I would start with **stencil/mask clipping**. It is not CPU software rendering, and it avoids building a full polygon triangulator immediately.
 
 ## 7. Culling and indirect drawing
+
+> **Outdated / Not Implemented.** `ExecuteIndirect` ships, but not in this shape: one indirect
+> command per page whose `InstanceCount` is patched in place, not a compute-generated visible list.
+> There is no compute pass anywhere in the 2D path, so no culling, no binning, no counters and no
+> pipeline buckets beyond the three page kinds. The paging that did ship is described in
+> "Page2D memory paging — as built" above. Left unedited pending a rewrite.
+
 This is where our existing 3D engine gives a strong hint. We already use page snapshots and `ExecuteIndirect` over published GPU pages.  Extend that idea:
 
 ```text
@@ -279,6 +449,12 @@ Text
 Then render each bucket with `ExecuteIndirect`. This avoids one draw call per CAD entity.
 
 ## 8. Root signature and resources
+
+> **Outdated / Not Implemented.** The shipped binding is much smaller: `b0` view constants plus a
+> single root SRV holding the current page's record buffer, per draw. Text additionally binds the
+> monitor's UI SRV heap and the sampler heap. None of the `u0..u2` UAVs exist, and not one of the
+> compute PSOs listed below has been written. Left unedited pending a rewrite.
+
 A possible CAD 2D root signature:
 
 ```text
@@ -328,6 +504,13 @@ Text: reuse MSDF approach from UI/text pipeline.
 Our UI already has MSDF-style atlas infrastructure, so CAD text can share that design rather than needing a separate text renderer. 
 
 ## 10. Precision problem: very important for CAD
+
+> **Not Implemented — TODO.** Only the CPU half of this is done: Page2D coordinates are `double`
+> end to end on the CPU. The GPU records hold **absolute** `float32` model coordinates and
+> `Cad2DViewConstants::viewCenterCU` is `float` too, so the page-local rebasing chosen at the end of
+> this section does not exist. This is a live limitation, not a theoretical one — it is what bounds
+> how far a large-coordinate DXF can be zoomed into before strokes visibly quantise.
+
 CAD coordinates can be huge. Float32 alone will eventually fail when zooming into large coordinate drawings. Avoid this:
 
 ```hlsl
@@ -357,22 +540,64 @@ Useful for exact CAD databases, but more shader work.
 
 Our Choice: **page-local float coordinates + per-page origin** first. It aligns well with Our existing page architecture.
 
-## 11. Selection and hit testing
-Do not solve selection by CPU geometry tests only. Add a GPU picking path. Two options:
-```text
-ID buffer:
-  render objectId into R32_UINT texture.
-  read one pixel or small rectangle around cursor.
+## 11. Selection and hit testing — as built
 
-Compute picking:
-  dispatch around mouse pick box.
-  test primitive distance analytically.
-  output nearest objectId.
-```
+Selection ships, and it did **not** take the GPU picking path this section originally proposed. What
+is in service is a CPU hit test that produces an id, plus a 4-byte GPU store that draws the
+highlight. The reason the GPU-picking argument lost is not that CPU picking turned out to be fast —
+it is that the highlight never needed a pass of its own, so the only thing a pick shader would have
+bought is the hit test itself.
 
-For CAD, compute picking is more accurate for thin geometry and lineweights. Use ID buffer for quick hover, compute picking for final selection.
+**Picking — CPU, analytic, per record type.** `Cad2DHandleSelectionClick` (`RenderPage2D.cpp`)
+converts the click to ComputerUnits, takes a **6-pixel tolerance divided by the current zoom** so the
+pick radius is constant on screen at any zoom, and walks the active container's records under
+`cpuRecordsMutex` computing a true distance per type — point-to-segment for lines, polyline spans
+and polygon edges, point-to-circle for circles, point-to-ellipse for ellipses and arcs. Nearest
+inside tolerance wins. Thin geometry and lineweight are handled by the tolerance being a
+screen-space constant, which is the property this section wanted compute picking for.
+
+**Asset instances select as a unit.** If the hit record's `parentObjectId` names an
+`Asset2DInsert`, the click expands to every record sharing that parent, across all seven geometry
+types. A placed asset therefore behaves as one object to the user without being one object in
+storage.
+
+**Highlight — one 4-byte store per object, and no overlay pass.** The hit ids go into
+`TabCad2DStorage::selectedObjectIds`; a `SelectionRefresh` command wakes the copy thread, which
+diffs that set against its own copy-thread-private `stampedSelection` and writes
+`kCad2DSelectedFlag` into the `flags` word of each affected object's GPU records. The line and curve
+vertex shaders read the bit and override the stroke colour. So there is no selection overlay pass,
+no second draw and no ID render target: the highlight is a property of records that are already
+being drawn.
+
+The flag word is staged **once per object**, not once per record — every record of an object carries
+the same flags — so selecting a 16-segment polygon stages 4 bytes, not 64. Because the copy thread
+diffs rather than rebuilds, a click that moves the selection from one container to another correctly
+un-highlights the container it left. Measured on a 2,000,000-line sheet, a selection click reads
+`staged=4 B pages=+0/-0 flags=1 in 0.51 ms`; a click that selects nothing short-circuits before the
+command list is opened at all, at 0.075 ms.
+
+**What is still O(N), deliberately.** The hit test itself scans the active container's records. That
+is a spatial-index problem rather than a paging one and is out of scope by decision (`id.md` §11.5),
+along with the equivalent scans behind snapping candidates and zoom-to-extents. The properties pane
+is no longer among them: `Cad2DReadPaneSelection` runs once per frame per monitor and now resolves
+the selected id through `TabCad2DStorage::recordIndex` in a single lookup instead of scanning up to
+seven vectors.
+
+**Not implemented, and no longer obviously wanted:** the `R32_UINT` ID target and the pick compute
+shader this section proposed. The case that would still earn them is hover-highlight at interactive
+rates over a very dense drawing, where the CPU scan above is the thing in the way.
 
 ## 12. Suggested implementation stages
+
+> **Outdated.** Status against the tree, so the staging below is not read as a plan that still
+> holds: Stage 1 done (names differ — `DX12Resources2DPerTab`, and the view constant buffer is per
+> *window*, not per tab). Stage 2 done, and gone well past what it asked for — see the paging
+> section above. Stage 3 **not** done: no joins, no caps, no linetypes anywhere. Stage 4 done for
+> the analytic half; no compute flattening. Stages 5, 6 and 7 not started — `HATCH` and `NURBS`
+> exist as ribbon command ids and UI strings with nothing behind them. Stage 8 partial: ambient
+> grid snapping ships, selection ships by a different mechanism (§11), and there is no ID target
+> and no pick compute. Left unedited pending a rewrite.
+
 ### Stage 1 — 2D CAD render target and camera
 Create:
 ```cpp
