@@ -33,6 +33,16 @@ extern std::atomic<uint16_t*> publishedTabIndexes;
 extern std::atomic<uint16_t> publishedTabCount;
 
 namespace {
+/* One object's run inside a Cad2DContainerGpu array - `first` and `count` index `lines` or
+`curves`. The spans TILE their array in order with no gaps, because every record pushed comes from
+an add* lambda that closes a span over exactly what it pushed. The page filler relies on that: it
+stages a run of consecutive spans as ONE copy, then hands each span its own placement (step 2d). */
+struct Cad2DObjectSpan {
+    uint64_t objectId = 0;
+    uint32_t first = 0;
+    uint32_t count = 0;
+};
+
 /* One container's page content, already in GPU form (id.md §11.4, step 2b). The expansion writes
 straight into these while holding cpuRecordsMutex, which is what deletes stages 3-4 of §11.1: the
 CPU records are read in place and never copied. This replaced a Cad2DContainerRecords that held
@@ -42,6 +52,8 @@ struct Cad2DContainerGpu {
     std::vector<Cad2DCurveGPURecord> curves;
     std::vector<Cad2DTextVertex> textVertices;
     std::vector<uint32_t> textIndices;
+    std::vector<Cad2DObjectSpan> lineSpans;
+    std::vector<Cad2DObjectSpan> curveSpans;
 };
 
 constexpr uint32_t kMinPolygonLineSegmentCount = 3;
@@ -535,6 +547,10 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage) {
     storage.retiredSnapshots.clear();
     storage.retiredPages.clear();
     storage.activePages.clear();
+    // Both name pages that no longer exist. Tab slots are recycled, so leaving either populated
+    // would have the next drawing's first modify hide a run of somebody else's page.
+    storage.gpuLocation.clear();
+    storage.stampedSelection.clear();
 
     storage.dx.lineCommandSignature.Reset();
     storage.dx.linePSO.Reset();
@@ -832,7 +848,8 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
     guard there is. */
     const auto batchStart = std::chrono::steady_clock::now();
     uint64_t statRecordsIndexed = 0, statRecordsExpanded = 0;
-    uint64_t statBytesStaged = 0, statPagesBuilt = 0, statPagesRetired = 0;
+    uint64_t statBytesStaged = 0, statPagesBuilt = 0, statPagesRetired = 0, statFlagStores = 0;
+    uint64_t statPagesCompacted = 0, statCompactedRecords = 0, statHoleRecords = 0;
     constexpr uint64_t statRecordsCopied = 0; // Nothing on this path deep-copies a record any more.
 
     // Pointers, not copies, exactly as ProcessScene3DCopyBatch does it: CommandToCopyThread2D is
@@ -858,23 +875,44 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
             selected2D = storage.selectedObjectIds;
         }
 
-        /* Two kinds of work come out of the locked section (id.md §11.4, step 2c):
+        /* The selection delta, against what the GPU records currently carry (step 2d). Computed
+        from the SET rather than from the SelectionRefresh command, because the selection can change
+        between the click and this batch and a diff cannot get that wrong - including the objects
+        that LEFT the selection, which a per-container rebuild could not see once a click moved the
+        selection across containers. Applied after the appends, at the bottom of this loop. */
+        std::vector<std::pair<uint64_t, uint32_t>> selectionDelta; // objectId -> new flags word.
+        for (uint64_t objectId : selected2D) {
+            if (storage.stampedSelection.count(objectId) == 0) {
+                selectionDelta.emplace_back(objectId, kCad2DSelectedFlag);
+            }
+        }
+        for (uint64_t objectId : storage.stampedSelection) {
+            if (selected2D.count(objectId) == 0) selectionDelta.emplace_back(objectId, 0u);
+        }
 
-             appendWork  - the GPU records of objects this batch CREATED, to be appended to the
-                           tail pages of their container. O(batch).
-             rebuildWork - every record of a container that cannot be appended to, because
-                           something in the batch modified an existing object or refreshed the
-                           selection. O(container), and step 2d is what removes it.
+        /* Three kinds of work come out of the locked section (id.md §11.4, steps 2c to 2e):
 
-        A container in rebuildWork is never also in appendWork: the rebuild already covers its
-        new objects. */
+             appendWork    - the GPU records of objects this batch created OR modified, to be
+                             appended to the tail pages of their container. O(batch).
+             hideWork      - the objects whose OLD records the append supersedes, to be taken out
+                             of the drawing by a kCad2DHiddenFlag store each. O(batch).
+             textRebuild   - the containers holding a modified TEXT object. Glyph quads carry no
+                             flags word, so there is nothing to hide a superseded one with and the
+                             text has to be laid out again. O(the container's TEXT).
+
+        The third used to be a whole-container rebuild, every record of every type; 2e narrowed it
+        to the pages that actually cannot do better, which is the last O(container) operation off
+        the interactive path. A container can be in all three at once - a batch that edits a line
+        and a caption in the same drawing - and they do not collide, because they touch pages of
+        different KINDS. */
         std::map<uint64_t, Cad2DContainerGpu> appendWork;
-        std::map<uint64_t, Cad2DContainerGpu> rebuildWork;
+        std::map<uint64_t, Cad2DContainerGpu> textRebuildWork;
+        std::vector<uint64_t> hideWork;
         {
             std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
 
-            std::set<uint64_t> rebuildContainers;
-            std::map<uint64_t, std::vector<uint64_t>> newByContainer;
+            std::set<uint64_t> textRebuildContainers;
+            std::map<uint64_t, std::vector<uint64_t>> appendByContainer;
 
             /* Insert-or-update through the tab's PERSISTENT index (step 2b): one hash lookup per
             command, where this used to rebuild an index of every record in the tab on every
@@ -910,9 +948,30 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
                 existing = std::move(updated);
                 return false;
             };
-            auto classify = [&](uint64_t container, uint64_t objectId, bool isNew) {
-                if (isNew) newByContainer[container].push_back(objectId);
-                else rebuildContainers.insert(container);
+            /* Where an incoming command becomes cheap or expensive (id.md §11.4, step 2d). A new
+            object is appended. A MODIFIED one is appended too, and its old records are hidden -
+            append-plus-hide, which is O(the object) instead of O(the container). Only a modified
+            TEXT is different, because its glyph quads have no flags word to hide it with: its
+            container's text pages are laid out again from the CPU records.
+
+            Hiding an unregistered object is a no-op rather than a fallback, and legitimately so:
+            an object whose expansion emits nothing (a polyline still on its first point, a
+            zero-radius circle, a deleted record) has no drawn records to supersede. */
+            std::unordered_set<uint64_t> modifiedThisBatch;
+            auto classify = [&](uint64_t container, uint64_t objectId, bool isNew, bool isText) {
+                if (!isNew) {
+                    if (isText) { textRebuildContainers.insert(container); return; }
+                    /* A second modify of the same object in one batch adds nothing: the expansion
+                    below re-reads the record, which `upsert` has already brought to its final
+                    state. Dragging an object across the screen is exactly this - a stream of
+                    modifies for one id, drained together - and without the check each one would
+                    append its own run and hide the one before it. The set costs a hash insert per
+                    MODIFY and nothing at all per insert, which is what keeps it off the bulk
+                    import path (the same reason step 2d deleted its per-append set). */
+                    if (!modifiedThisBatch.insert(objectId).second) return;
+                    hideWork.push_back(objectId);
+                }
+                appendByContainer[container].push_back(objectId);
             };
 
             for (const CommandToCopyThread2D* command : commands) {
@@ -932,36 +991,36 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
                     }
 #endif
                     classify(container, command->line.objectId,
-                        upsert(storage.lineRecords, command->line));
+                        upsert(storage.lineRecords, command->line), false);
                     break;
                 case CommandToCopyThread2DType::AddPolyline:
                     classify(container, command->polyline.objectId,
-                        upsert(storage.polylineRecords, command->polyline));
+                        upsert(storage.polylineRecords, command->polyline), false);
                     break;
                 case CommandToCopyThread2DType::AddPolygon:
                     classify(container, command->polygon.objectId,
-                        upsert(storage.polygonRecords, command->polygon));
+                        upsert(storage.polygonRecords, command->polygon), false);
                     break;
                 case CommandToCopyThread2DType::AddCircle:
                     classify(container, command->circle.objectId,
-                        upsert(storage.circleRecords, command->circle));
+                        upsert(storage.circleRecords, command->circle), false);
                     break;
                 case CommandToCopyThread2DType::AddEllipse:
                     classify(container, command->ellipse.objectId,
-                        upsert(storage.ellipseRecords, command->ellipse));
+                        upsert(storage.ellipseRecords, command->ellipse), false);
                     break;
                 case CommandToCopyThread2DType::AddArc:
                     classify(container, command->arc.objectId,
-                        upsert(storage.arcRecords, command->arc));
+                        upsert(storage.arcRecords, command->arc), false);
                     break;
                 case CommandToCopyThread2DType::AddText:
                     classify(container, command->text.objectId,
-                        upsert(storage.textRecords, command->text));
+                        upsert(storage.textRecords, command->text), true);
                     break;
                 case CommandToCopyThread2DType::SelectionRefresh:
-                    // Carries no geometry: it exists to re-stamp kCad2DSelectedFlag, which today
-                    // means rebuilding the container. Step 2d turns it into a 4-byte store.
-                    rebuildContainers.insert(container);
+                    // Nothing to do: selectionDelta above already carries the whole of it, and it
+                    // carries the objects that left the selection too - which a per-container
+                    // rebuild could not, when the click moved the selection ACROSS containers.
                     break;
 #ifdef _DEBUG
                 case CommandToCopyThread2DType::ReportIngestStats:
@@ -986,74 +1045,92 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
                     gpuCurves.back().flags |= kCad2DSelectedFlag;
                 }
                 };
+            /* Close the object's span over whatever it just pushed. An object that emitted
+            nothing gets no span - and therefore no placement and no registry entry, which is what
+            makes "unregistered" mean "has no drawn records" rather than "lost track of". */
+            auto closeLineSpan = [&](Cad2DContainerGpu& out, uint64_t objectId, size_t before) {
+                if (out.lines.size() > before) {
+                    out.lineSpans.push_back({ objectId, static_cast<uint32_t>(before),
+                        static_cast<uint32_t>(out.lines.size() - before) });
+                }
+                };
+            auto closeCurveSpan = [&](Cad2DContainerGpu& out, uint64_t objectId, size_t before) {
+                if (out.curves.size() > before) {
+                    out.curveSpans.push_back({ objectId, static_cast<uint32_t>(before),
+                        static_cast<uint32_t>(out.curves.size() - before) });
+                }
+                };
+            /* isDeleted is honoured HERE rather than at each of the fourteen loops below, which is
+            what decision 6 asks for: a soft-deleted record expands to nothing, so it leaves the
+            drawing on the same append-plus-hide path an edit uses. Until this, the rebuild drew
+            deleted records and was saved only by nothing ever setting the flag. */
             auto addLine = [&](const Cad2DLineRecordCPU& r, Cad2DContainerGpu& out) {
+                if (r.isDeleted) return;
                 const size_t before = out.lines.size();
                 out.lines.push_back(ToGpuLineRecord(r));
                 stampLines(out.lines, before, r.objectId);
+                closeLineSpan(out, r.objectId, before);
                 };
             auto addPolyline = [&](const Cad2DPolylineRecordCPU& r, Cad2DContainerGpu& out) {
+                if (r.isDeleted) return;
                 const size_t before = out.lines.size();
                 AppendPolylineLineRecords(r, out.lines);
                 stampLines(out.lines, before, r.objectId);
+                closeLineSpan(out, r.objectId, before);
                 };
             auto addPolygon = [&](const Cad2DPolygonRecordCPU& r, Cad2DContainerGpu& out) {
+                if (r.isDeleted) return;
                 const size_t before = out.lines.size();
                 AppendPolygonLineRecords(r, out.lines);
                 stampLines(out.lines, before, r.objectId);
+                closeLineSpan(out, r.objectId, before);
                 };
             auto addCircle = [&](const Cad2DCircleRecordCPU& r, Cad2DContainerGpu& out) {
-                if (r.radius <= 0.0) return;
+                if (r.isDeleted || r.radius <= 0.0) return;
+                const size_t before = out.curves.size();
                 out.curves.push_back(ToGpuCircleRecord(r));
                 stampCurve(out.curves, r.objectId);
+                closeCurveSpan(out, r.objectId, before);
                 };
             auto addEllipse = [&](const Cad2DEllipseRecordCPU& r, Cad2DContainerGpu& out) {
-                if (r.radiusX <= 0.0 || r.radiusY <= 0.0) return;
+                if (r.isDeleted || r.radiusX <= 0.0 || r.radiusY <= 0.0) return;
+                const size_t before = out.curves.size();
                 out.curves.push_back(ToGpuEllipseRecord(r));
                 stampCurve(out.curves, r.objectId);
+                closeCurveSpan(out, r.objectId, before);
                 };
             auto addArc = [&](const Cad2DArcRecordCPU& r, Cad2DContainerGpu& out) {
-                if (r.radiusX <= 0.0 || r.radiusY <= 0.0) return;
+                if (r.isDeleted || r.radiusX <= 0.0 || r.radiusY <= 0.0) return;
+                const size_t before = out.curves.size();
                 out.curves.push_back(ToGpuArcRecord(r));
                 stampCurve(out.curves, r.objectId);
+                closeCurveSpan(out, r.objectId, before);
                 };
             auto addText = [&](const Cad2DTextRecordCPU& r, Cad2DContainerGpu& out) {
+                if (r.isDeleted) return;
                 AppendTextRecordGeometry(r, out.textVertices, out.textIndices);
                 };
 
-            /* Whole-container expansion. The per-type order is what a page's record order comes
-            from - lines, then polylines, then polygons into the line array; circles, then
-            ellipses, then arcs into the curve array. Do not reorder these loops. */
-            for (uint64_t container : rebuildContainers) {
-                Cad2DContainerGpu& out = rebuildWork[container];
-                for (const Cad2DLineRecordCPU& r : storage.lineRecords) {
-                    if (r.containerMemoryId == container) addLine(r, out);
-                }
-                for (const Cad2DPolylineRecordCPU& r : storage.polylineRecords) {
-                    if (r.containerMemoryId == container) addPolyline(r, out);
-                }
-                for (const Cad2DPolygonRecordCPU& r : storage.polygonRecords) {
-                    if (r.containerMemoryId == container) addPolygon(r, out);
-                }
-                for (const Cad2DCircleRecordCPU& r : storage.circleRecords) {
-                    if (r.containerMemoryId == container) addCircle(r, out);
-                }
-                for (const Cad2DEllipseRecordCPU& r : storage.ellipseRecords) {
-                    if (r.containerMemoryId == container) addEllipse(r, out);
-                }
-                for (const Cad2DArcRecordCPU& r : storage.arcRecords) {
-                    if (r.containerMemoryId == container) addArc(r, out);
-                }
+            /* Text re-layout for a container holding a modified text object. Every text of the
+            container, because they share pages and the modified one's glyph count can change -
+            but ONLY its text, which is what makes this bounded: the line and curve pages of the
+            same container are untouched, and their objects keep both their placements and their
+            selection flags. */
+            for (uint64_t container : textRebuildContainers) {
+                Cad2DContainerGpu& out = textRebuildWork[container];
                 for (const Cad2DTextRecordCPU& r : storage.textRecords) {
                     if (r.containerMemoryId == container) addText(r, out);
                 }
             }
 
-            /* Append expansion: only the objects this batch created, in COMMAND order. That
-            differs from the per-type order a rebuild produces, which is the draw-order change
-            §11.6 accepts - invisible for opaque strokes, visible only where coloured 2D geometry
-            overlaps. */
-            for (const auto& [container, objectIds] : newByContainer) {
-                if (rebuildContainers.count(container) != 0) continue; // The rebuild covers them.
+            /* Append expansion: only the objects this batch created or modified, in COMMAND order.
+            That is the draw-order change §11.6 accepts - invisible for opaque strokes, visible only
+            where coloured 2D geometry overlaps. A modified object moves to the end of its
+            container's order for the same reason, since its new records are appended like any
+            other. Text is absent from here whenever its container is re-laid-out above; a text
+            object created in the same batch is covered by that pass, which reads every text record
+            of the container including the one just inserted. */
+            for (const auto& [container, objectIds] : appendByContainer) {
                 Cad2DContainerGpu& out = appendWork[container];
                 for (uint64_t objectId : objectIds) {
                     auto found = storage.recordIndex.find(objectId);
@@ -1079,6 +1156,8 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
                         if (at < storage.arcRecords.size()) addArc(storage.arcRecords[at], out);
                         break;
                     case VishwakarmaStorage::ObjectType::Text2D:
+                        // The re-layout above already emitted every text of this container.
+                        if (textRebuildContainers.count(container) != 0) break;
                         if (at < storage.textRecords.size()) addText(storage.textRecords[at], out);
                         break;
                     default:
@@ -1088,13 +1167,17 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
             }
         }
 
-        for (const auto& [container, content] : rebuildWork) {
-            statRecordsExpanded += content.lines.size() + content.curves.size() + content.textVertices.size();
+        for (const auto& [container, content] : textRebuildWork) {
+            statRecordsExpanded += content.textVertices.size();
         }
         for (const auto& [container, content] : appendWork) {
             statRecordsExpanded += content.lines.size() + content.curves.size() + content.textVertices.size();
         }
-        if (appendWork.empty() && rebuildWork.empty()) continue; // Diagnostics-only batch.
+        // Diagnostics-only batch. A pure selection change reaches the staging below through
+        // selectionDelta alone, with no work in any of the three containers of records.
+        if (appendWork.empty() && textRebuildWork.empty() && hideWork.empty() && selectionDelta.empty()) {
+            continue;
+        }
 
         /* Staging for this tab (graphics.md, 10M plan Step 0). The allocator and list are the copy
         thread's, handed in rather than created per batch, and every byte goes through the one
@@ -1217,25 +1300,84 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
             return page;
             };
 
+        /* A run that no live object owns any more: it leaves the drawing as a kCad2DHiddenFlag
+        store, in the second submit, and stays a hole on its page until the compaction packs it out
+        (id.md §11.4, 2d and 2e). The two callers are a modify superseding an object's old records
+        and, below, a second command for the same object inside one batch. */
+        std::vector<Cad2DGpuLocation> hideStores;
+        auto Supersede = [&](const Cad2DGpuLocation& location) {
+            if (!location.page || location.count == 0) return;
+            hideStores.push_back(location);
+            location.page->holeRecords += location.count;
+            };
+
+        /* Where an object's records ended up, for the next modify to find (step 2d). The page
+        keeps its own copy of the list so retiring it can undo exactly these entries.
+
+        This runs once per appended OBJECT, which puts it on the bulk import path - so it stays two
+        stores and nothing else. An earlier version also fed a set of "objects registered by this
+        batch", so the selection pass at the bottom could skip re-stamping them; that set cost a
+        100k-line burst 650-930 ms against 468, far more than the stores it saved. Those stores are
+        idempotent - same value, same address - so the set is gone. */
+        auto RegisterPlacement = [&](Cad2DPageGPU* page, const Cad2DObjectSpan& span, uint32_t at) {
+            page->placements.push_back({ span.objectId, at, span.count });
+            /* `insert` rather than `operator[]`, for the same price, because its "already there"
+            answer is the one thing that cannot be recovered afterwards. A registered object being
+            appended AGAIN means this batch carried two commands for it - the second click of a
+            polyline, say, drained together with the first - and the run written a moment ago is
+            already superseded. The hide pre-pass cannot catch it: at the time it ran, the object
+            was either unregistered (a fresh insert) or already erased by its own hide. Without
+            this the earlier run stays drawn, and the drawing shows the object twice. */
+            const auto placed = storage.gpuLocation.insert(
+                { span.objectId, Cad2DGpuLocation{ page, at, span.count } });
+            if (!placed.second) {
+                Supersede(placed.first->second);
+                placed.first->second = Cad2DGpuLocation{ page, at, span.count };
+            }
+            };
+
         /* Append fixed-stride records to the container's tail page of this kind, opening new pages
         as it fills them. An object that does not fit a standard page gets one sized to hold it -
-        a 40,000-segment polyline has to land somewhere. */
+        a 40,000-segment polyline has to land somewhere.
+
+        Placement, not bulk, is what makes this span-shaped: an object must land WHOLE on one page,
+        because the registry names a single run and a modify hides that run in one go. So the tail
+        page takes as many CONSECUTIVE whole objects as fit and the rest opens a new page - and
+        because the spans tile their array in order, that run of objects is still one contiguous
+        copy. A 100k-line burst stages in as few copies as it did before 2d; the extra work is the
+        placement per object, not a staging call per object. */
         auto AppendRecords = [&](uint64_t container, Cad2DPageKind kind, const void* data,
-            size_t count, uint32_t stride, uint32_t standardCapacity) {
-                size_t done = 0;
-                while (done < count) {
+            const std::vector<Cad2DObjectSpan>& spans, uint32_t stride, uint32_t standardCapacity) {
+                size_t first = 0;
+                while (first < spans.size()) {
                     Cad2DPageGPU* page = TailPage(container, kind);
-                    if (!page) {
-                        const size_t remaining = count - done;
-                        page = CreatePage(container, kind, static_cast<uint32_t>(
-                            remaining > standardCapacity ? remaining : standardCapacity));
+                    uint32_t at = page ? FillOf(page) : 0;
+                    // Whole objects that fit the room left on this page, in order.
+                    size_t last = first;
+                    uint32_t taken = 0;
+                    while (page && last < spans.size() && spans[last].count <= page->capacity - at - taken) {
+                        taken += spans[last].count;
+                        ++last;
                     }
-                    const uint32_t at = FillOf(page);
-                    const size_t take = (std::min)(static_cast<size_t>(page->capacity - at), count - done);
+                    if (last == first) {
+                        // The page is full, or has no room for the next object even when empty.
+                        page = CreatePage(container, kind, (std::max)(spans[first].count, standardCapacity));
+                        at = 0;
+                        while (last < spans.size() && spans[last].count <= page->capacity - taken) {
+                            taken += spans[last].count;
+                            ++last;
+                        }
+                    }
                     StageInto(page->buffer.Get(), static_cast<uint64_t>(at) * stride,
-                        static_cast<const uint8_t*>(data) + done * stride, take * stride);
-                    pendingCount[page] = at + static_cast<uint32_t>(take);
-                    done += take;
+                        static_cast<const uint8_t*>(data) + static_cast<size_t>(spans[first].first) * stride,
+                        static_cast<uint64_t>(taken) * stride);
+                    uint32_t cursor = at;
+                    for (size_t i = first; i < last; ++i) {
+                        RegisterPlacement(page, spans[i], cursor);
+                        cursor += spans[i].count;
+                    }
+                    pendingCount[page] = at + taken;
+                    first = last;
                 }
             };
 
@@ -1274,37 +1416,207 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
                 }
             };
 
-        auto RetireContainerPages = [&](uint64_t container) {
-            const uint64_t retireFence = gpu.renderFenceValue.load(std::memory_order_acquire);
-            for (size_t i = storage.activePages.size(); i-- > 0; ) {
-                if (!storage.activePages[i] ||
-                    storage.activePages[i]->containerMemoryId != container) {
-                    continue;
+        /* Move one active page to the retirement queue, dropping the registry entries that still
+        name it. Only those: an object whose records moved elsewhere - a modify's new run, or the
+        packed copy the compaction just made - already points at the new page, and erasing by
+        objectId alone would lose that. Leaves activePages[index] EMPTY; the caller decides whether
+        to erase the slot or put a replacement in it. */
+        const uint64_t retireFence = gpu.renderFenceValue.load(std::memory_order_acquire);
+        auto RetirePageAt = [&](size_t index) {
+            Cad2DPageGPU* page = storage.activePages[index].get();
+            for (const Cad2DPagePlacement& placement : page->placements) {
+                auto found = storage.gpuLocation.find(placement.objectId);
+                if (found != storage.gpuLocation.end() && found->second.page == page) {
+                    storage.gpuLocation.erase(found);
                 }
-                ++statPagesRetired;
-                storage.retiredPages.push_back({ std::move(storage.activePages[i]), retireFence });
-                storage.activePages.erase(storage.activePages.begin() + i);
             }
+            ++statPagesRetired;
+            storage.retiredPages.push_back({ std::move(storage.activePages[index]), retireFence });
             snapshotDirty = true;
             };
 
+        // Every page of one container and KIND. Text re-layout is the only caller: a modified text
+        // cannot be hidden in place, so its container's glyph pages are thrown away and rebuilt -
+        // while the same container's line and curve pages, and their selection flags, stand.
+        auto RetireContainerPagesOfKind = [&](uint64_t container, Cad2DPageKind kind) {
+            for (size_t i = storage.activePages.size(); i-- > 0; ) {
+                if (!storage.activePages[i] || storage.activePages[i]->containerMemoryId != container ||
+                    storage.activePages[i]->kind != kind) {
+                    continue;
+                }
+                RetirePageAt(i);
+                storage.activePages.erase(storage.activePages.begin() + i);
+            }
+            };
+
         auto AppendContent = [&](uint64_t container, const Cad2DContainerGpu& content) {
-            AppendRecords(container, Cad2DPageKind::Line, content.lines.data(), content.lines.size(),
+            AppendRecords(container, Cad2DPageKind::Line, content.lines.data(), content.lineSpans,
                 sizeof(Cad2DLineGPURecord), kCad2DLinePageCapacity);
-            AppendRecords(container, Cad2DPageKind::Curve, content.curves.data(), content.curves.size(),
+            AppendRecords(container, Cad2DPageKind::Curve, content.curves.data(), content.curveSpans,
                 sizeof(Cad2DCurveGPURecord), kCad2DCurvePageCapacity);
             AppendText(container, content.textVertices, content.textIndices);
             };
 
-        /* A rebuild is just "retire this container's pages, then append everything" - which is why
-        there is one filling path and not two. */
-        for (const auto& [container, content] : rebuildWork) {
-            RetireContainerPages(container);
-            AppendContent(container, content);
+        /* The whole of step 2d in one lambda: overwrite the 4-byte `flags` word of every record an
+        object owns. `flags` sits at byte 28 of the 32-byte line record and byte 48 of the 64-byte
+        curve record, both 4-byte aligned, so CopyBufferRegion reaches it directly - the same
+        published-page mutation 2c already does on InstanceCount, at a different offset.
+
+        ONE staging allocation however many records the object has: every record of an object
+        carries the same flags, so the copies all read the same 4 bytes. Selecting a line stages
+        4 bytes and issues 1 copy; selecting a 16-segment polygon stages 4 bytes and issues 16. */
+        auto StoreFlagWord = [&](const Cad2DGpuLocation& location, uint32_t flags) {
+            if (!location.page || location.count == 0) return;
+            if (location.page->kind == Cad2DPageKind::Text) return; // Glyph quads have no flags.
+            const uint32_t stride = location.page->kind == Cad2DPageKind::Line
+                ? sizeof(Cad2DLineGPURecord) : sizeof(Cad2DCurveGPURecord);
+            const uint32_t flagOffset = location.page->kind == Cad2DPageKind::Line
+                ? offsetof(Cad2DLineGPURecord, flags) : offsetof(Cad2DCurveGPURecord, flags);
+
+            uint8_t* mapped = nullptr;
+            ID3D12Resource* stagingResource = nullptr;
+            uint64_t stagingOffset = 0;
+            // AcquireStaging can flush, which closes and reopens the list - so it must come
+            // BEFORE the copies are recorded, exactly as StageInto orders it.
+            AcquireStaging(sizeof(uint32_t), mapped, stagingResource, stagingOffset);
+            memcpy(mapped, &flags, sizeof(flags));
+            statBytesStaged += sizeof(flags);
+            for (uint32_t i = 0; i < location.count; ++i) {
+                commandList->CopyBufferRegion(location.page->buffer.Get(),
+                    static_cast<uint64_t>(location.firstRecord + i) * stride + flagOffset,
+                    stagingResource, stagingOffset, sizeof(uint32_t));
+                ++statFlagStores;
+            }
+            };
+
+        /* PACK ONE PAGE (id.md §11.4, step 2e). Append-plus-hide is what makes an edit O(1), and
+        this is what stops that being a leak: the superseded runs stay in the page, holding their
+        slot AND a vertex-shader invocation each, until enough of them accumulate to be worth a
+        copy.
+
+        The copy is GPU to GPU. Nothing is re-expanded from the CPU records and nothing goes
+        through the upload ring - the surviving records already exist in VRAM, exactly as they
+        should be, selection flags and all. That also means it needs no lock: cpuRecordsMutex was
+        released long before this point. */
+        auto CompactPage = [&](size_t index) {
+            Cad2DPageGPU* stale = storage.activePages[index].get();
+            const uint32_t stride = stale->kind == Cad2DPageKind::Line
+                ? sizeof(Cad2DLineGPURecord) : sizeof(Cad2DCurveGPURecord);
+
+            /* A placement survives when the registry still names exactly IT. Comparing firstRecord
+            as well as the page is not belt-and-braces: a duplicate append leaves two placements
+            for one object on this page, and only the later one is live. */
+            std::vector<Cad2DPagePlacement> survivors;
+            for (const Cad2DPagePlacement& placement : stale->placements) {
+                auto found = storage.gpuLocation.find(placement.objectId);
+                if (found != storage.gpuLocation.end() && found->second.page == stale &&
+                    found->second.firstRecord == placement.firstRecord) {
+                    survivors.push_back(placement);
+                }
+            }
+            ++statPagesCompacted;
+
+            if (survivors.empty()) {
+                // The only case that gives memory back rather than draw work: a whole megabyte,
+                // and no replacement page to put in its place.
+                RetirePageAt(index);
+                storage.activePages.erase(storage.activePages.begin() + index);
+                return;
+            }
+
+            Cad2DPageGPU* packed = CreatePage(stale->containerMemoryId, stale->kind, stale->capacity);
+            uint32_t cursor = 0;
+            for (size_t first = 0; first < survivors.size(); ) {
+                /* One copy per contiguous RUN, not per object. The placements tile the page in
+                order, so survivors with no hole between them are adjacent in the source too - and
+                a page that is 25% holes in a few clumps costs a handful of copies, not thousands. */
+                const uint32_t sourceStart = survivors[first].firstRecord;
+                uint32_t run = 0;
+                size_t last = first;
+                while (last < survivors.size() && survivors[last].firstRecord == sourceStart + run) {
+                    run += survivors[last].count;
+                    ++last;
+                }
+                commandList->CopyBufferRegion(packed->buffer.Get(),
+                    static_cast<uint64_t>(cursor) * stride, stale->buffer.Get(),
+                    static_cast<uint64_t>(sourceStart) * stride, static_cast<uint64_t>(run) * stride);
+                statCompactedRecords += run;
+                for (size_t i = first; i < last; ++i) {
+                    packed->placements.push_back({ survivors[i].objectId, cursor, survivors[i].count });
+                    // Directly, NOT through RegisterPlacement: this moves an entry rather than
+                    // superseding one, so the collision path there would be exactly wrong.
+                    storage.gpuLocation[survivors[i].objectId] =
+                        Cad2DGpuLocation{ packed, cursor, survivors[i].count };
+                    cursor += survivors[i].count;
+                }
+                first = last;
+            }
+            pendingCount[packed] = cursor;
+
+            /* Put the packed page back where the stale one was. CreatePage appends, and leaving it
+            there would move every object on the page to the end of the container's draw order -
+            §11.6 accepts an EDITED object moving, not its neighbours moving because something else
+            was edited. It also keeps "only the last page of a kind has room" true. */
+            std::unique_ptr<Cad2DPageGPU> owned = std::move(storage.activePages.back());
+            storage.activePages.pop_back();
+            RetirePageAt(index); // Survivors point at `packed` now, so this erases only the holes.
+            storage.activePages[index] = std::move(owned);
+            };
+
+        /* Run it before anything this batch does, while every page's count is settled and no
+        record of this batch has been staged into a tail yet - so the appends below land in the
+        room the packing just freed, which is what keeps a repeatedly-edited object inside ONE
+        page. Holes made by THIS batch are packed by the next one; the threshold is a bound, not
+        a promise of immediacy. O(pages), and a page is a megabyte, so this walk is ~62 iterations
+        on a two-million-line sheet. */
+        for (size_t i = storage.activePages.size(); i-- > 0; ) {
+            const Cad2DPageGPU* page = storage.activePages[i].get();
+            if (!page || page->holeRecords == 0) continue;
+            /* Capacity, not fill - so a page that is mostly holes but nearly empty is left alone.
+            A separate "no survivors at all, reclaim it whatever its size" trigger looks like it
+            should be here and was tried: it never fires. A page can only lose ALL its objects
+            once it stopped taking appends, which means it is FULL, which means holeRecords has
+            reached capacity and this test already caught it. */
+            if (page->holeRecords * kCad2DCompactionHoleShare >= page->capacity) CompactPage(i);
+        }
+
+        /* Resolve the hides BEFORE the appends, because a modify re-registers the object at its
+        new run and looking it up afterwards would name the records just written.
+
+        The STORE itself is deferred to the second submit, next to the InstanceCount patch. Both
+        orderings are correct, but this one is kinder to the eye: until the patch lands the object
+        is still drawn where it was, so a modify reads as a one-frame lag rather than a one-frame
+        hole. Recording the hide in the first submit would blank the old records while the new ones
+        were still uncounted. */
+        for (uint64_t objectId : hideWork) {
+            auto found = storage.gpuLocation.find(objectId);
+            if (found == storage.gpuLocation.end()) continue; // No drawn records to supersede.
+            Supersede(found->second);
+            storage.gpuLocation.erase(found);
+        }
+
+        /* Text re-layout: throw away the container's glyph pages and lay every text out again.
+        No hole accounting is involved, because a retired page takes its holes with it. */
+        for (const auto& [container, content] : textRebuildWork) {
+            RetireContainerPagesOfKind(container, Cad2DPageKind::Text);
+            AppendText(container, content.textVertices, content.textIndices);
         }
         for (const auto& [container, content] : appendWork) {
             AppendContent(container, content);
         }
+
+        /* Selection, as flag stores rather than a rebuild - the operation a 2D user performs most,
+        and the last O(records) one on this path (id.md §11.4, step 2d). It runs AFTER the appends
+        so that gpuLocation names the records now being drawn, never a run a rebuild just retired.
+
+        An object this batch also re-expanded is written twice: once by the expansion, which stamps
+        from the same selection set, and once here. The second store is the same value at the same
+        address, and the delta is the size of the selection CHANGE, so the waste is bounded by it. */
+        for (const auto& [objectId, flags] : selectionDelta) {
+            auto found = storage.gpuLocation.find(objectId);
+            if (found != storage.gpuLocation.end()) StoreFlagWord(found->second, flags);
+        }
+        storage.stampedSelection = std::move(selected2D);
 
         // A fresh page is in no published snapshot, so its argument buffer can be written once,
         // here, with the count it ends the batch on. No patch, no second submit.
@@ -1328,10 +1640,15 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
             }
         }
 
-        if (pagesToPatch.empty()) {
+        if (pagesToPatch.empty() && hideStores.empty()) {
             SubmitRecording(false);
         } else {
             SubmitRecording(true); // Waits: every appended record is in VRAM before the count moves.
+            // Only now do the superseded records go out - the wait above is what guarantees their
+            // replacements are already in VRAM, so the object is never absent from the drawing.
+            for (const Cad2DGpuLocation& location : hideStores) {
+                StoreFlagWord(location, kCad2DHiddenFlag);
+            }
             for (Cad2DPageGPU* page : pagesToPatch) {
                 const uint32_t newCount = pendingCount[page];
                 StageInto(page->indirectBuffer.Get(), offsetof(D3D12_DRAW_ARGUMENTS, InstanceCount),
@@ -1346,6 +1663,12 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
             page->count.store(newCount, std::memory_order_release);
         }
         if (snapshotDirty) PublishCad2DSnapshot(storage);
+
+        // The gauge step 2e exists to bound, read AFTER this batch's own hides so it is current
+        // rather than one batch stale. Same O(pages) walk the compaction check does.
+        for (const auto& page : storage.activePages) {
+            if (page) statHoleRecords += page->holeRecords;
+        }
     }
 
     const uint64_t batchMicros = static_cast<uint64_t>(
@@ -1359,6 +1682,9 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
     gCopyStats.cad2dBytesStaged.fetch_add(statBytesStaged, std::memory_order_relaxed);
     gCopyStats.cad2dPagesBuilt.fetch_add(statPagesBuilt, std::memory_order_relaxed);
     gCopyStats.cad2dPagesRetired.fetch_add(statPagesRetired, std::memory_order_relaxed);
+    gCopyStats.cad2dFlagStores.fetch_add(statFlagStores, std::memory_order_relaxed);
+    gCopyStats.cad2dPagesCompacted.fetch_add(statPagesCompacted, std::memory_order_relaxed);
+    gCopyStats.cad2dHoleRecords.store(statHoleRecords, std::memory_order_relaxed); // Gauge.
     gCopyStats.cad2dBatchMicros.fetch_add(batchMicros, std::memory_order_relaxed);
     gCopyStats.cad2dLastBatchMicros.store(batchMicros, std::memory_order_relaxed);
 
@@ -1372,6 +1698,12 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
               << " expanded=" << statRecordsExpanded
               << " staged=" << statBytesStaged << " B" // Bytes, not KB: step 2c's criterion is 160.
               << " pages=+" << statPagesBuilt << "/-" << statPagesRetired
+              << " flags=" << statFlagStores // Step 2d: selection and hiding, 4 bytes each.
+              // Step 2e. `holes` is the LIVE total after this batch - the number that must stay
+              // bounded while a user edits; `packed` is pages/records the compaction moved, and
+              // those records never touch the upload ring, so they are absent from `staged`.
+              << " holes=" << statHoleRecords
+              << " packed=" << statPagesCompacted << "/" << statCompactedRecords
               << " in " << (batchMicros / 1000.0) << " ms" << std::endl;
 #endif
 }

@@ -35,7 +35,7 @@ enum class CommandToCopyThread2DType : uint8_t {
     AddCircle = 4,
     AddEllipse = 5,
     AddArc = 6,
-    SelectionRefresh = 7, // No geometry; forces a page rebuild so selection flags re-apply.
+    SelectionRefresh = 7, // No geometry; wakes the copy thread so it notices the selection changed.
     ReportIngestStats = 8 // Debug diagnostics: print the container's record counts + bbox once
                           // every command queued before it has been ingested.
 };
@@ -43,6 +43,13 @@ enum class CommandToCopyThread2DType : uint8_t {
 // GPU record 'flags' bit set for the currently selected 2D objects; the 2D vertex shaders read it
 // and override the stroke color to the deep-blue selection color. See selection.md.
 constexpr uint32_t kCad2DSelectedFlag = 1u;
+
+/* GPU record 'flags' bit that takes a record out of the drawing without moving anything: the 2D
+vertex shaders collapse its quad to zero area. It is what makes a modify O(1) - the copy thread
+appends the object's new records and sets this on the old ones, instead of rebuilding the page
+(id.md §11.4, step 2d). The hidden records stay resident until 2e's compaction packs them out.
+Both bits are literals in the HLSL (1u / 2u); changing either means editing the shaders too. */
+constexpr uint32_t kCad2DHiddenFlag = 2u;
 
 // ---------- GPU record ABI layouts (shared by the HLSL / future SPIR-V / MSL shaders) ----------
 // Byte-exact shader input layouts, identical on every platform. The static_asserts are the
@@ -222,6 +229,12 @@ frame compared against the pre-change build. The whole burst goes onto the copy 
 lock so it arrives as one batch; enqueuing line by line would let the copy thread drain partial
 batches and rebuild the growing sheet dozens of times over. */
 void Cad2DGenerateBulkLines(DATASETTAB& tab, uint32_t count);
+/* The other half of that harness, for step 2e. Moves the last `count` lines of the active Page2D
+up by half a CU - `count` DISTINCT objects modified once each, which is what makes holes: each one
+appends a new run and hides its old. `count` 0 means every line of the container. Pressing it
+repeatedly is the acceptance test, and what to watch is `holes=` in the [cad2d][perf] line rising
+to about a quarter of a page and then being packed back, while `pages=+N/-N` stays balanced. */
+void Cad2DModifyBulkLines(DATASETTAB& tab, uint32_t count);
 // Zoom Max / Zoom Focus: recenter the view on the objects of the active Page2D and rescale
 // zoomPixelsPerCU so they fit the viewport. selectedOnly limits the fit to the current 2D
 // selection (falls back to all objects when nothing is selected).

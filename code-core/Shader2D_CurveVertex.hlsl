@@ -80,6 +80,15 @@ float CurveAngle(float2 pointCU, float2 centerCU, float2 radiiCU, float rotation
 
 PSInput main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID) {
     Cad2DCurveRecord rec = Curves[instanceId];
+
+    // HIDDEN bit (kCad2DHiddenFlag), same as the line shader: collapse the quad to a point so the
+    // superseded record of a modified object rasterizes to nothing (id.md §11.4, step 2d).
+    if (rec.flags & 2u) {
+        PSInput hidden = (PSInput)0;
+        hidden.position = float4(0.0, 0.0, 0.0, 1.0);
+        return hidden;
+    }
+
     float2 centerPx = ModelToScreen(rec.centerCU);
     float2 radiiPx = max(abs(rec.radiiCU) * zoomPixelsPerCU, float2(0.0001, 0.0001));
     float halfWidth = ResolveLineWidthPx(rec) * 0.5;

@@ -571,8 +571,10 @@ void EnqueueCad2DText(uint64_t tabID, uint64_t containerMemoryId, Cad2DTextRecor
 }
 
 void EnqueueCad2DSelectionRefresh(uint64_t tabID, uint64_t containerMemoryId) {
-    // A no-op command: it carries no geometry, but its presence forces the copy thread to rebuild
-    // and republish this tab's pages, re-applying selection flags into the GPU records.
+    /* A wake-up, and nothing more. The copy thread diffs the tab's selection set against what it
+    last stamped and writes kCad2DSelectedFlag into the affected records - a 4-byte store per
+    record - so this command carries no work of its own and its containerMemoryId is diagnostic
+    only. It used to force a full page rebuild of that container (id.md §11.4, step 2d). */
     CommandToCopyThread2D command{};
     command.type = CommandToCopyThread2DType::SelectionRefresh;
     command.tabID = tabID;
@@ -1409,31 +1411,36 @@ bool Cad2DReadPaneSelection(DATASETTAB& tab, Cad2DPaneSelection& out) {
     if (singleId == 0) return true; // Empty or multiple: the pane draws its count line.
     out.objectId = singleId;
 
-    // Object ids are unique across the process, so no container filter is needed to identify the
-    // record - and a selection can only hold ids from the active container anyway.
+    /* One index lookup, not a scan of up to all seven vectors (id.md §11.4, step 2d'). This runs
+    on the RENDER thread, once per frame per monitor for as long as the pane shows a 2D object,
+    and it holds cpuRecordsMutex while it does - so at a million records the scan was blocking the
+    engineering thread every frame. Object ids are unique across the process, so the type recorded
+    beside the position is enough to pick the vector. */
     std::lock_guard<std::mutex> lock(s.cpuRecordsMutex);
+    auto found = s.recordIndex.find(singleId);
+    if (found == s.recordIndex.end()) return true;
+    const uint32_t at = found->second.index;
     auto take = [&](const auto& records, VishwakarmaStorage::ObjectType type) {
-        if (out.objectType != VishwakarmaStorage::ObjectType::Unknown) return; // Already found.
-        for (const auto& r : records) {
-            if (r.isDeleted || r.objectId != singleId) continue;
-            out.objectType = type;
-            // nullptr for POLYLINE2D / POLYGON2D / TEXT2D: variable-arity types have no field
-            // table, so the pane shows Type + ID only, as it does for the vertex-list solids.
-            out.table = FindPropertyTable(type);
-            if (out.table) {
-                out.valueCount = out.table->fieldCount;
-                ReadPropertyValuesRaw(*out.table, &r, out.values);
-            }
-            return;
+        if (at >= records.size() || records[at].isDeleted) return;
+        out.objectType = type;
+        // nullptr for POLYLINE2D / POLYGON2D / TEXT2D: variable-arity types have no field
+        // table, so the pane shows Type + ID only, as it does for the vertex-list solids.
+        out.table = FindPropertyTable(type);
+        if (out.table) {
+            out.valueCount = out.table->fieldCount;
+            ReadPropertyValuesRaw(*out.table, &records[at], out.values);
         }
     };
-    take(s.lineRecords, VishwakarmaStorage::ObjectType::Line2D);
-    take(s.polylineRecords, VishwakarmaStorage::ObjectType::Polyline2D);
-    take(s.polygonRecords, VishwakarmaStorage::ObjectType::Polygon2D);
-    take(s.circleRecords, VishwakarmaStorage::ObjectType::Circle2D);
-    take(s.ellipseRecords, VishwakarmaStorage::ObjectType::Ellipse2D);
-    take(s.arcRecords, VishwakarmaStorage::ObjectType::Arc2D);
-    take(s.textRecords, VishwakarmaStorage::ObjectType::Text2D);
+    switch (found->second.type) {
+    case VishwakarmaStorage::ObjectType::Line2D:     take(s.lineRecords, found->second.type); break;
+    case VishwakarmaStorage::ObjectType::Polyline2D: take(s.polylineRecords, found->second.type); break;
+    case VishwakarmaStorage::ObjectType::Polygon2D:  take(s.polygonRecords, found->second.type); break;
+    case VishwakarmaStorage::ObjectType::Circle2D:   take(s.circleRecords, found->second.type); break;
+    case VishwakarmaStorage::ObjectType::Ellipse2D:  take(s.ellipseRecords, found->second.type); break;
+    case VishwakarmaStorage::ObjectType::Arc2D:      take(s.arcRecords, found->second.type); break;
+    case VishwakarmaStorage::ObjectType::Text2D:     take(s.textRecords, found->second.type); break;
+    default: break; // The two asset types are in the index but never selectable.
+    }
     return true;
 }
 
@@ -1902,6 +1909,65 @@ void Cad2DGenerateBulkLines(DATASETTAB& tab, uint32_t count) {
         std::chrono::steady_clock::now() - start).count() / 1000.0;
     std::cout << "[cad2d][stress] queued " << count << " lines, cells " << firstCell << ".."
               << (firstCell + count - 1) << ", in " << queueMs << " ms" << std::endl;
+}
+
+void Cad2DModifyBulkLines(DATASETTAB& tab, uint32_t count) {
+    if (!tab.cad2d) return;
+    const uint64_t page2DMemoryId = Cad2DFindTargetPage2DMemoryId(tab);
+    if (page2DMemoryId == 0) return;
+    TabCad2DStorage& storage = *tab.cad2d;
+    // 0 means EVERY line of the container - the "move the whole drawing" extreme, and the only
+    // thing that takes a page to 100% holes in one batch, which is the case where compaction
+    // hands a megabyte back instead of only reclaiming draw work.
+    if (count == 0) count = UINT32_MAX;
+
+    /* DISTINCT lines, one modify each, taken from the end of the record vector - which is where
+    Cad2DGenerateBulkLines put them, so a press edits a contiguous block and the holes it makes land
+    on one or two pages rather than smeared over thirty.
+
+    Distinct rather than "one line N times" on purpose. The copy thread collapses repeated modifies
+    of ONE id within a batch to a single append, so a burst of them would make no holes at all and
+    would test nothing; N different objects is also the shape of the operation a user actually runs
+    into - a Move of a large selection. */
+    std::vector<Cad2DLineRecordCPU> edited;
+    {
+        std::lock_guard<std::mutex> lock(storage.cpuRecordsMutex);
+        // Reserve against the vector, not against `count`: the sentinel is UINT32_MAX and
+        // reserving that many records throws, which on this thread means the engineering thread
+        // dies and the window quietly stops responding to every later key.
+        edited.reserve((std::min)(static_cast<size_t>(count), storage.lineRecords.size()));
+        for (size_t i = storage.lineRecords.size(); i-- > 0 && edited.size() < count; ) {
+            const Cad2DLineRecordCPU& record = storage.lineRecords[i];
+            if (record.isDeleted || record.containerMemoryId != page2DMemoryId) continue;
+            Cad2DLineRecordCPU moved = record;
+            // Half a CU up. Big enough to see at a zoom where individual strokes resolve, small
+            // enough that repeated presses keep the drawing recognisable.
+            moved.y1 += 0.5;
+            moved.y2 += 0.5;
+            edited.push_back(std::move(moved));
+        }
+    }
+    if (edited.empty()) return;
+
+    const auto start = std::chrono::steady_clock::now();
+    { // One lock hold, exactly as the append harness does it, so the burst arrives as one batch.
+        std::lock_guard<std::mutex> lock(gCad2DCopyQueueMutex);
+        for (Cad2DLineRecordCPU& line : edited) {
+            CommandToCopyThread2D command{};
+            command.type = CommandToCopyThread2DType::AddLine;
+            command.id = line.objectId;
+            command.tabID = tab.tabID;
+            command.containerMemoryId = page2DMemoryId;
+            command.line = std::move(line);
+            gCad2DCopyQueue.push(std::move(command));
+        }
+    }
+    toCopyThreadCV.notify_one();
+
+    const double queueMs = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - start).count() / 1000.0;
+    std::cout << "[cad2d][stress] queued " << edited.size() << " line modifies, in "
+              << queueMs << " ms" << std::endl;
 }
 
 void Cad2DZoomToExtents(DATASETTAB& tab, bool selectedOnly) {

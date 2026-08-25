@@ -2462,6 +2462,16 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 if (input.x == 66 || input.x == 98) { // 'B' & 'b'
                     Cad2DGenerateBulkLines(*myTab, (input.x == 66) ? 100000u : 5u);
                 }
+                /* Temporary Debug Key: "e" MODIFIES lines already on the active Page2D, which is
+                what makes holes - every modify appends a new run and hides the old one (id.md §11,
+                step 2e). Shift+E moves 1,000 of them; plain "e" moves EVERY line, which is the
+                only way to take a page to 100% holes in one batch and so the only way to see
+                compaction hand a whole page back. Acceptance is two numbers in the [cad2d][perf]
+                line: `holes=` must climb and then fall back when `packed=` fires, and `pages=`
+                must stay balanced (or retire more than it builds) instead of growing. */
+                if (input.x == 69 || input.x == 101) { // 'E' & 'e'
+                    Cad2DModifyBulkLines(*myTab, (input.x == 69) ? 1000u : 0u);
+                }
                 if (input.x == 86 || input.x == 118) { // 'V' & 'v'
                     // Report the COUNT, not the intent: with an empty selection this is a no-op,
                     // and a message that claims otherwise makes a missed selection look like a

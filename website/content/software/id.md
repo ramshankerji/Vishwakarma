@@ -518,7 +518,13 @@ The order matters more than the individual steps, because two of them make the o
      slowing the rebuild down and then fixing it.
      -> verify: appending 5 lines to a 1M-line sheet touches O(pages), not O(records).
      PLANNED IN DETAIL IN §11 - the page model, the eight decisions taken, and sub-steps
-     2a-2f each with its own verify criterion and status marker.
+     2a-2f each with its own verify criterion and status marker. 2a THROUGH 2e ARE DONE and
+     every criterion is met: +5 lines cost 164 bytes and 1.29 ms against a baseline of
+     30.5 MB and 3,386 ms; a selection click - the operation a 2D user performs most - costs
+     FOUR bytes; a thousand objects modified cost 36 KB and 10 ms; and the superseded
+     records those edits leave behind are packed out once a page is a quarter holes, so the
+     page count does not grow. Only 2f remains, which is documentation: the design and the
+     numbers still owe an appearance in 2Drendering.md.
 
 3. Migrate the 2D object model.
      std::vector<StoredGeometryObject2D> mirroring the 3D directory; payloads in the arena.
@@ -666,6 +672,27 @@ in place, one aligned 4-byte store" (§ the per-tab store table in `graphics.md`
 exception: glyph quads carry no flags word, so modify and delete on a text rebuild its text page,
 which is small.
 
+*As built (2c):* the last row turned out not to need an RCU clone at all. A container rebuild
+**retires its pages and appends everything into fresh ones**, which is the same filling code the
+append path uses — so there is one filling path rather than a fast one and a slow one, and "clone"
+never appears in the 2D code. The clone proper is still what 2e's compaction will want.
+
+*As built (2d):* the middle three rows are real, and the table above is what they cost. Two things
+the table does not say. **An object never straddles a page** — the filler opens a new one rather
+than split a run — because "Modify" and "Delete" need to reach every record of an object from one
+registry entry. And **the flag word is staged once per OBJECT, not per record**: all of an object's
+records carry the same flags, so a 16-segment polygon costs 4 staged bytes and 16 copies from them.
+The exception the paragraph above predicts held exactly — text has no flags word, so a text modify
+is the one edit that still rebuilds its pages.
+
+*As built (2e):* the last row is the one that changed most. **The clone the table promised for
+compaction is a GPU-to-GPU copy, not an RCU clone of expanded records** — the survivors are already
+in VRAM exactly as they should be, flags included, so packing a page reads nothing from the CPU
+records, takes no lock, and stages no bytes at all. "Clone" still never appears in the 2D code.
+And the text row narrowed the rest of the way: a modified text re-lays-out its container's TEXT
+pages, which is what this section always said it should, leaving the line and curve pages of the
+same container — and the selection flags on them — untouched.
+
 ### 11.3 Decisions taken, recorded so they are not re-litigated
 
 1. **Append-into-tail plus 4-byte stores**, not a clone per change. Appends and selection become
@@ -685,7 +712,12 @@ which is small.
 6. **Delete gets plumbing but no command.** Hole accounting and the hidden flag are what modify and
    compaction need; a user-facing 2D delete belongs with `undo-redo.md`, not here. The rebuild's
    failure to filter `isDeleted` — real today, harmless only because nothing ever sets it — is
-   fixed in this step.
+   fixed in this step. *Done in 2d,* and in one place rather than fourteen: the filter sits in the
+   seven `add*` expansion lambdas, so a soft-deleted record expands to nothing and therefore leaves
+   the drawing by the same append-plus-hide path an edit uses. *Hole accounting arrived with 2e* —
+   `Cad2DPageGPU::holeRecords`, incremented at the two places that stop naming a placement rather
+   than derived by a scan. So the plumbing decision 6 asked for is now complete, and a user-facing
+   2D delete would be a command and a soft-delete flag, nothing more.
 7. **Inactive containers keep their GPU pages resident**, as today. Eviction is noted, not built.
 8. **The design and the measured numbers land in `2Drendering.md`**, and §8 step 2 gets a status
    paragraph here the way steps 0 and 1 did.
@@ -703,8 +735,9 @@ which is small.
       later sub-step is checked by watching its own number fall. Two things the shape of the
       work changed: the counters split into recordsIndexed / recordsCopied / recordsExpanded
       (one per O(N) family, since 2b and 2c retire different ones), and pagesCloned was NOT
-      added - today every rebuild replaces every page, so it would have been a second name for
-      pagesBuilt. It arrives with 2c, where a clone becomes a distinct event.
+      added - at the time every rebuild replaced every page, so it would have been a second
+      name for pagesBuilt. 2c added it under the name it earned there: `cad2dPagesRetired`,
+      the pages a container rebuild throws away, printed as `pages=+built/-retired`.
 
 2b. Delete the CPU-side O(N) per batch.   ** DONE **
       A persistent objectId -> {type, index} map on TabCad2DStorage replaces the seven
@@ -799,21 +832,141 @@ which is small.
       from KERNELBASE (a RaiseException, not an access violation), Report Id
       6a2e9748-ffbb-485b-835e-3fdff0b7d613. The identical sequence - 1M lines, selection
       click, minimise, 60 s - did not reproduce it. Watch for it.
-
-2d. Modify / hide / selection as <=8-byte stores.   ** NOT STARTED **
+      SEEN A SECOND TIME 2026-08-25, while measuring 2e - and it is worth its own look now,
+      because a second sighting makes the shape of it visible. SAME exception code
+      0x0000087d, SAME faulting module KERNELBASE.dll, Report Id
+      db626d65-2513-4643-8248-e8316ceaa18c, Vishwakarma.exe 0.0.0.279. What the two have in
+      common is not the edit that preceded them: it is that the window had been MINIMISED
+      and left that way for roughly a minute with a large 2D drawing loaded. It is not
+      caused by 2e - the first sighting predates 2e by a day - and it is not every minimise
+      either; the same session minimised the window a dozen times to read the console
+      without incident. The hypothesis worth testing first is the one graphics.md already
+      names: a monitor that stops presenting stops advancing its fence, `safeRetireFence`
+      freezes, and nothing deferred is ever freed. The heartbeat's
+      `retireBacklog(live/peak)` is the number that would show it, and it needs reading
+      WHILE minimised, which is exactly what no capture so far has done.
+2d. Modify / hide / selection as <=8-byte stores.   ** DONE **
       kCad2DHiddenFlag plus a shader early-out in Shader2D_LineVertex/CurveVertex; modify
       becomes append-plus-hide; SelectionRefresh stops forcing a rebuild; the rebuild
       starts honouring isDeleted (decision 6).
       -> verify: selecting one object in a 1M-line sheet uploads 4 bytes.
+      VERIFIED LITERALLY, on a 2M-line sheet rather than 1M: a selection click reads
+      `staged=4 B pages=+0/-0 flags=1 in 0.51 ms`, against 3,437 ms and 31 MB at the §11.7
+      baseline. Deselecting into an empty selection short-circuits before the command list
+      is even opened: `staged=0 B in 0.075 ms`. Numbers in §11.8.
+      FIVE THINGS THAT CAME OUT DIFFERENTLY FROM THE PLAN, all deliberate:
+      (a) AN OBJECT NEVER STRADDLES A PAGE. The registry names ONE run - {page,
+          firstRecord, count} - so the filler now places whole objects: the tail page takes
+          as many CONSECUTIVE objects as fit and the remainder opens a new page. That did
+          not cost a staging call per object, which was the fear: the expansion emits the
+          objects in order and their spans TILE the array, so a run of them is still one
+          contiguous copy. A 100k-line burst stages the same 3,200,052 bytes it did at 2c.
+      (b) SelectionRefresh CARRIES NO WORK AT ALL now - not even its container. The copy
+          thread diffs the tab's selection set against a copy-thread-private
+          `stampedSelection` of what the records were last stamped with. That is strictly
+          more correct than the per-container rebuild it replaces: a click that moved the
+          selection from container A to container B refreshed only B, so A kept its stale
+          highlight. A diff cannot miss the leavers.
+      (c) ONE STAGED WORD PER OBJECT, NOT PER RECORD. Every record of an object carries the
+          same flags, so StoreFlagWord allocates 4 bytes once and issues `count` copies
+          from that one source. Selecting a 16-segment polygon stages 4 bytes, not 64.
+      (d) THE HIDE IS RECORDED IN THE SECOND SUBMIT, beside the InstanceCount patch, not
+          the first. Both orderings are correct; this one is kinder to the eye. Hiding in
+          the first submit blanks the old records while the new ones are still uncounted,
+          so a modify would flash a one-frame HOLE; hiding after the fence wait leaves the
+          object drawn where it was until the patch lands, so it reads as a one-frame lag.
+      (e) NO "objects registered by this batch" SET. It was there to stop the selection
+          pass rewriting a flag the expansion had just stamped, and it cost more on a 100k
+          import than the redundant stores it saved - measured, 650-930 ms against 468.
+          The stores are idempotent (same value, same address) and the delta is the size of
+          the selection CHANGE, so the waste is bounded by it. Deleted.
+      A TEXT MODIFY STILL REBUILDS ITS CONTAINER, per (d) of the old plan - glyph quads have
+      no flags word, so there is nothing to hide them with. That is now the ONLY producer of
+      rebuildContainers, and the reason the whole-container rebuild path still exists. It is
+      also the one remaining O(container) interactive operation: typing into a text object
+      re-enqueues it per keystroke. Rebuilding only the container's TEXT pages would fix it
+      and is what §11.2's "modify and delete on a text rebuild its page" actually asks for -
+      but it would leave the whole-container rebuild with no caller at all, so it is a
+      decision for 2e, which has to touch the filler anyway.
+      COST, stated because it is real and it is the same shape as 2b's: the registry is a
+      second per-object hash map (~50 MB at a million objects) and the per-page placement
+      lists are 16 bytes an object (~16 MB). Both are copy-thread-private and neither is
+      persisted. Step 3 revisits them with recordIndex.
+      NOT exercised: printing (unchanged, and a hidden record cannot print because the print
+      path runs the same shaders); a modify of a POLYLINE or a CURVE (only a line was moved);
+      compaction, which does not exist yet - so a session that modifies one object 10,000
+      times leaves 10,000 hidden records resident. That is exactly what 2e is for.
 
-2e. Compaction.   ** NOT STARTED **
+2d'. Cad2DReadPaneSelection got the same fix.   ** DONE **
+      It runs on the RENDER thread, once per frame per monitor while the properties pane
+      shows a 2D object, and it found the selected record by scanning up to all seven
+      vectors linearly under cpuRecordsMutex. recordIndex turns that into one lookup: the
+      stored type picks the vector, the stored position indexes it, and the nine-branch
+      scan collapsed to a switch. Done here rather than left optional because it is the
+      same defect 2b removed everywhere else and it holds the records mutex every frame.
+
+2e. Compaction.   ** DONE **
       holeCount past ~25% of a page makes its next touch RCU-clone it packed, re-expanding
       only that page's own objects from the CPU records.
       -> verify: 10k modifies of one object leave the page count stable and holes bounded.
+      VERIFIED, on 12,000 modifies across a 100,000-line sheet rather than 10,000 of one
+      object - see the note on the harness below for why that is the harder test. `holes=`
+      climbed 1,000 per round to 9,000 and then read `pages=+1/-1 packed=1/1760 holes=0`:
+      the page count did not move and the holes went back to zero. Numbers in §11.8.
+      FIVE THINGS THAT CAME OUT DIFFERENTLY FROM THE PLAN, all deliberate:
+      (a) IT DOES NOT RE-EXPAND FROM THE CPU RECORDS. The surviving records are already in
+          VRAM, correct down to their selection flags, so packing is a GPU-to-GPU
+          CopyBufferRegion per contiguous run of survivors. Nothing is expanded, nothing
+          goes through the upload ring, and no lock is taken - cpuRecordsMutex was released
+          long before. A 1,760-record pack stages ZERO bytes, which is why `packed=` had to
+          be its own counter instead of showing up in `staged=`.
+      (b) ONE COPY PER RUN, NOT PER OBJECT. The placements tile the page in order, so
+          survivors with no hole between them are contiguous in the source too. A page that
+          is a quarter holes in a few clumps costs a handful of copies.
+      (c) THE PACKED PAGE GOES BACK IN THE STALE ONE'S SLOT. CreatePage appends, and leaving
+          it at the end would move every object on the page to the end of the container's
+          draw order - §11.6 accepts an EDITED object moving, not its neighbours moving
+          because something else was edited. It also keeps "only the last page of a kind has
+          room" true, which TailPage relies on.
+      (d) A SECOND TRIGGER FOR "NO SURVIVORS AT ANY SIZE" WAS TRIED AND REMOVED. It never
+          fires: a page can only lose all its objects once it has stopped taking appends,
+          which means it is full, which means its holes have reached capacity and the
+          ordinary test already caught it. Measured, not reasoned - a whole-drawing move
+          leaves one partially-filled page whose tail absorbed the new records, and that
+          page is 95% LIVE, not empty.
+      (e) THE COMPACTION RUNS FIRST IN THE BATCH, before the hides and appends, while every
+          page count is settled and nothing has been staged into a tail. That is what lets
+          the same batch's appends land in the room it just freed - the mechanism that keeps
+          a repeatedly-edited object inside one page. Holes made by a batch are packed by
+          the next one; the threshold is a bound, not a promise of immediacy.
+      ALSO FIXED HERE, because it is 2d's mess and 2e found it: TWO COMMANDS FOR ONE OBJECT
+      IN ONE BATCH drew the object TWICE. 2d's hide pre-pass cannot catch it - at the time
+      it runs the object is either brand new (nothing registered) or already erased by its
+      own hide - so the second append registered a second placement and the first stayed
+      visible. Two defences, each free on the path that matters: `classify` drops a repeated
+      MODIFY of an id it has already queued (a hash insert per modify, none per insert), and
+      RegisterPlacement uses `insert` rather than `operator[]` so the "already there" answer
+      costs nothing and supersedes the earlier run. Reachable in practice - two clicks of a
+      polyline draining together is exactly it.
+      AND THE TEXT REBUILD FINALLY NARROWED, as §11.4's 2d entry said it would have to wait
+      for: a modified text re-lays-out its container's TEXT pages only. The line and curve
+      pages of the same container, and the selection flags on them, now stand. That deletes
+      the whole-container rebuild - the last O(container) operation on the interactive path -
+      and with it the last caller of the code that retired every page of a container.
+      COST: `holeRecords` is 4 bytes per page, i.e. nothing. The compaction walk is O(pages)
+      per batch, ~62 iterations on a two-million-line sheet.
+      NOT exercised: a pixel diff bracketing one compaction event. The numbers close exactly
+      (§11.8) and the subsequent batches keep resolving their objects, but the input
+      automation could not be made to land keystrokes reliably enough to capture a clean
+      before/after pair. Also unexercised: compaction of a CURVE page (only line pages were
+      ever driven past the threshold), and printing, which is untouched but still never run.
 
-2f. Numbers and documentation.   ** NOT STARTED **
+2f. Numbers and documentation.   ** NOT STARTED - START HERE **
       Re-run 2a's benchmark. Design and measured before/after into 2Drendering.md; §8
       step 2 marked DONE here with what it actually cost and what was left undone.
+      Most of the numbers already exist in §11.7 and §11.8; what 2f owes is the narrative in
+      2Drendering.md, which has had nothing from this whole step, and a decision on whether
+      the `B`/`b`/`E`/`e` debug keys and the [cad2d][perf] line stay in the shipped build.
 ```
 
 ### 11.5 Deliberately out of scope
@@ -829,6 +982,15 @@ cheap but which `2Drendering.md` MVP item 8 defers.
 Draw order moves from "all lines, then all polylines, then all polygons" to insertion order.
 Invisible for opaque strokes on white, real if coloured 2D geometry overlaps. Accepted; the fallback
 if it ever matters is to keep per-class ordering *within* a page rather than across the container.
+
+*2d widened it, as it had to:* a modified object is appended like a new one, so **editing an object
+moves it to the front of the overlap order**. That is the same change with the same fallback, but it
+is now reachable without drawing anything — dragging a coloured object can change what it hides.
+
+*2e did NOT widen it further*, and that cost four lines worth having: packing a page puts the packed
+copy back in the stale one's slot rather than at the end of the list. Otherwise every object on a
+page would jump the order because some *other* object on it was edited, which is a different and
+much more surprising thing than the rule above.
 
 ### 11.7 The measured baseline — 2026-08-24
 
@@ -891,9 +1053,96 @@ Two supporting readings from the same run: a 100,000-line burst appends in 441 m
 existing ones), and the once-per-second demo line costs `staged=36 B` and ~1.1 ms at a million
 records, where it cost ~880 ms after 2b and ~2,100 ms before it.
 
-**What 2c did NOT make cheap is a selection click**, which still forces its container to rebuild —
-at 1M lines that is 31 pages retired and 31 rebuilt. It is the last O(N) operation on the 2D write
-path and it is the whole of step 2d.
+**What 2c did NOT make cheap is a selection click**, which still forced its container to rebuild —
+at 1M lines that is 31 pages retired and 31 rebuilt. It was the last O(N) operation on the 2D write
+path, and it is what step 2d removed.
+
+**The selection click, after 2d — 2026-08-25.** Same build and the same debug key, on a sheet of
+**2,000,000 lines** rather than 1M, because ten more `B` presses had gone in before the measurement
+and a bigger sheet only makes the point harder to fake:
+
+| Event | cmds | indexed | expanded | staged | pages | flags | time |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Selection click, §11.7 baseline (1M) | 1 | 2,000,232 | 1,000,162 | 32,004,096 B | 1 built | — | 3,437 ms |
+| Selection click, after 2c (1M) | 1 | 0 | 1,000,000 | 32 MB | +31 / −31 | — | not timed |
+| **Selection click, after 2d (2M)** | **1** | **0** | **0** | **4 B** | **+0 / −0** | **1** | **0.51 ms** |
+| Click that selects nothing, after 2d | 1 | 0 | 0 | **0 B** | +0 / −0 | 0 | **0.075 ms** |
+
+**Four bytes, on a sheet twice the size of the one the baseline was taken on.** Against §11.7 that
+is 6,700× faster and eight million times less staged, and `flags=1` says why: one record's 4-byte
+`flags` word was overwritten in place. The empty-selection row is the same path short-circuiting
+before the command list is opened at all — a click on blank canvas costs 75 microseconds.
+
+The 2c row is arithmetic, not a stopwatch reading — that build re-expanded the whole container and
+restaged it, which is where its 31 retired and 31 rebuilt pages come from; only the two 2d rows and
+the baseline were measured. And `indexed=0` on the 2d rows is not a regression from 2b's
+`indexed=cmds`: a `SelectionRefresh` carries no record, so it performs no lookup. It is the append
+rows that still read `indexed=cmds`.
+
+**Appending did not get slower**, which was the risk in making the filler place whole objects rather
+than bulk-copy a container's records: a 100,000-line burst reads `expanded=100000 staged=3200052 B
+pages=+3/-0 in 468 ms`, against 2c's `staged=3200020 B` and 441 ms. The 32 extra bytes are two more
+fresh pages' argument buffers, not per-object staging. (An intermediate build that also kept a
+per-batch set of registered objects ran the same burst in 650–930 ms; that set is what §11.4 (e)
+records deleting.)
+
+**The modify path, verified visually rather than numerically.** One line selected in the demo
+drawing, then `EDIT_MOVE` with a +300 px screen vector. The highlighted geometry's bounding box went
+from x∈[1199, 1258] to x∈[1499, 1558] — the same 59-pixel-wide, 302-pixel-tall shape, **translated**.
+That is the whole test: had the hide failed, the old records would still be drawn and the box would
+span [1199, 1558]. Append-plus-hide and the shader early-out are both doing their job. The batch's
+own `[cad2d][perf]` line scrolled out of the console before it could be captured, so the byte count
+for a modify is stated by construction and not measured: 32 for the new line record, 4 for the
+`InstanceCount` patch, 4 for the hide.
+
+**And selection still LOOKS right**, which the byte count alone does not prove: after the click,
+exactly 389 pixels of the viewport are the deep-blue selection colour, all of them on the single
+line passing through the clicked point.
+
+**Modifying in bulk, and the compaction — 2026-08-25.** Step 2d made an edit O(1) and left every
+superseded record resident; this is what 2e does about it. Debug x64, a 100,000-line sheet from the
+`B` key, then the `E` key — which moves 1,000 DISTINCT lines up by half a CU, one modify each.
+
+| Event | cmds | expanded | staged | pages | flags | holes after | packed | time |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `E` — 1,000 lines modified | 1,000 | 1,000 | 36,004 B | +0 / −0 | 1,000 | +1,000 | 0/0 | 8–12 ms |
+| …repeated, rounds 2–9 | 1,000 | 1,000 | 36,004 B | +0 / −0 | 1,000 | 2,000 … 9,000 | 0/0 | 8–25 ms |
+| **the next batch after 9,000** | 1 | 1 | 48 B | **+1 / −1** | 0 | **0** | **1 / 1,760** | 10.5 ms |
+| `e` — all 100,032 lines modified | 100,032 | 100,032 | 3,601,096 B | +3 / −0 | 100,032 | +100,032 | 0/0 | 1,310 ms |
+| **the next batch after that** | 3 | 3 | 100 B | **+0 / −3** | 0 | **1,725** | **3 / 0** | 125 ms |
+
+**`staged=36004` is the whole of what a thousand edits costs**: 32,000 bytes of new line records,
+4,000 of hide flag words — four bytes an object, per 2d — and the 4-byte `InstanceCount` patch that
+publishes them. No page was built or retired. At 100,032 objects the same arithmetic gives
+3,601,096: 3,201,024 + 400,128 + 48 for three new pages' argument buffers, and no patch.
+
+**The compaction rows are the point.** Nine rounds put 9,000 holes in a 32,768-record page — past
+the one-quarter threshold — and the next batch packed it: **one page built, one retired, 1,760
+records moved, holes back to zero**, in 10.5 ms. The 48 bytes it staged are the demo line that
+shared the batch plus the packed page's argument buffer. **The 1,760 records themselves staged
+nothing**, because packing is a GPU-to-GPU copy; that is why `packed=` is a separate counter.
+
+**The last row is the only one that gives memory back.** Moving every line at once leaves the three
+full pages holding nothing alive, and a page with no survivors is retired outright with no
+replacement: `pages=+0/-3 packed=3/0` — three megabytes, and zero records copied to earn them.
+
+**And `holes=1725` afterwards is the right answer, not a leftover.** 100,032 records is three full
+pages plus 1,728, and that fourth page's tail absorbed the first of the new records, so it ends
+~95% live. Its 1,725 dead records are 0.86% of the drawing and are correctly judged not worth a
+copy. That number then sits still, which is what "holes bounded" means.
+
+**Two things this did NOT cost.** A batch that changes nothing still walks the page list to check
+the threshold — ~62 iterations on a two-million-line sheet, invisible against the 0.075 ms an empty
+batch already takes. And the bulk append path is untouched: 100,000 fresh lines still read
+`staged=3,200,052 B pages=+3/-0` in 470–570 ms.
+
+**What is measured and what is not.** Every figure above is a `[cad2d][perf]` line. What could not
+be obtained is a pixel diff bracketing a single compaction: the desktop kept stealing focus from the
+window, and two attempts captured an unrelated window instead of the drawing (the ink counts those
+produced are discarded, not reported). The arithmetic closing exactly on both compaction rows —
+1,760 survivors where 1,696 originals plus 64 demo lines were expected, and 100,032 − 3 × 32,768 =
+1,728 residue — is the evidence in its place, together with the fact that the batches after a
+compaction keep resolving their objects and re-accumulating holes cleanly from zero.
 
 **Loading a `.yyy`, after 2b'.** Same build, two files, measured through `LoadYyyIntoTab`:
 

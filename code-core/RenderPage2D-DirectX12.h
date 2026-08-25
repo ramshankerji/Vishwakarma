@@ -46,6 +46,15 @@ constexpr uint32_t kCad2DTextPageVertexCapacity =
     (kCad2DPageBytes / sizeof(Cad2DTextVertex)) / 4 * 4;
 constexpr uint32_t kCad2DTextPageIndexCapacity = kCad2DTextPageVertexCapacity / 4 * 6;
 
+/* Which run of a page's records one object owns (id.md §11.4, step 2d). An object is never split
+across pages - the filler opens a new page rather than straddle one - so a single run says all of
+it, which is what lets a modify find the records to hide from the objectId alone. */
+struct Cad2DPagePlacement {
+    uint64_t objectId = 0;
+    uint32_t firstRecord = 0;
+    uint32_t count = 0;
+};
+
 struct Cad2DPageGPU {
     uint64_t containerMemoryId = 0;
     Cad2DPageKind kind = Cad2DPageKind::Line;
@@ -62,13 +71,37 @@ struct Cad2DPageGPU {
     then does this advance - a single aligned 4-byte store whose old and new values are both
     valid, so a render thread reads one or the other and never a torn count. That is invariant 2's
     stated exception, the same one InstanceSlotOf and VisibilityMask already use on the 3D side.
-    Everything else about a published page is immutable; a modify or a delete rebuilds it. */
+
+    Step 2d added the SECOND such field, inside the records: a record's 4-byte `flags` word, where
+    selection and hiding are single aligned stores at a known offset. Everything else about a
+    published page is still immutable. */
     /* A text page's index count is DERIVED from this, never stored: glyph quads are emitted 4
     vertices to 6 indices in lockstep, so `count / 4 * 6` is exact. A second atomic would be a
     second source of truth, and a reader that loaded the two on either side of an append could
     size an index view past the end of the vertices it can see. One load, both numbers. */
     std::atomic<uint32_t> count{ 0 };
+
+    /* COPY-THREAD PRIVATE - no render thread reads this. What the page holds, in fill order,
+    including the runs a modify has since hidden. Retiring the page needs it to take exactly its
+    own objects out of TabCad2DStorage::gpuLocation, and the compaction needs it to re-place the
+    survivors. Text pages leave it empty: glyph quads carry no flags word, so a text object is
+    never hidden and never registered. */
+    std::vector<Cad2DPagePlacement> placements;
+
+    /* COPY-THREAD PRIVATE. Records of the `count` above that no live object owns any more - the
+    runs append-plus-hide left behind (id.md §11.4, step 2e). They still cost their slot AND a
+    vertex-shader invocation apiece, because InstanceCount cannot skip them; the shader can only
+    make them draw nothing. Past kCad2DCompactionHoleShare of the page the copy thread packs them
+    out. A placement is a hole exactly when gpuLocation no longer names it, which is why this is
+    incremented at the two places that stop naming one rather than derived by a scan. */
+    uint32_t holeRecords = 0;
 };
+
+/* Compact a page once this fraction of its CAPACITY is holes - 1/4, as id.md §11.3 decision 2's
+sizing assumed. Measured against capacity rather than fill so that a nearly-empty page is left
+alone: 90 holes among 100 records waste 2.8 KB and 90 shader invocations, which is not worth a
+1 MB page copy, while 8,192 holes in a line page are worth exactly that. */
+constexpr uint32_t kCad2DCompactionHoleShare = 4;
 
 struct Cad2DPageSnapshot {
     std::vector<Cad2DPageGPU*> pages;
@@ -107,6 +140,20 @@ rebuild this map in the same pass. */
 struct Cad2DRecordLocation {
     VishwakarmaStorage::ObjectType type = VishwakarmaStorage::ObjectType::Unknown;
     uint32_t index = 0;
+};
+
+/* Where an object's LIVE GPU records are (id.md §11.4, step 2d). The mirror of InstanceRegistry on
+the 3D side, and the same caveat applies: this maps to a GPU location and is explicitly NOT the CPU
+object directory §3 wants - `recordIndex` above is the one that finds the engineering record.
+
+An object appears here at most once. A modify erases the entry, hides the old run and re-registers
+the object wherever its new records landed, so the entry always names the run that is drawn. An
+object with no entry has no drawn records: text (no flags word, never registered), a degenerate
+shape that expanded to nothing, or a deleted one. */
+struct Cad2DGpuLocation {
+    Cad2DPageGPU* page = nullptr;
+    uint32_t firstRecord = 0;
+    uint32_t count = 0;
 };
 
 // Which vector a record belongs to, deduced from its own type - so the generic appenders (the
@@ -156,6 +203,17 @@ struct TabCad2DStorage {
 
     std::atomic<Cad2DPageSnapshot*> activeSnapshot{ nullptr };
     std::vector<std::unique_ptr<Cad2DPageGPU>> activePages;
+
+    /* COPY-THREAD PRIVATE, the two of them - written and read only inside ProcessCad2DCopyBatch,
+    which is why neither takes a mutex (decision 4). They are what step 2d needs and 2c did not:
+    to hide a record you have to find it, and to know which flags to change you have to know which
+    ones you last wrote.
+
+    stampedSelection is the selection set as the GPU records currently carry it. Diffing it against
+    selectedObjectIds is what turns a selection click into a handful of 4-byte stores instead of a
+    container rebuild - and it is why SelectionRefresh no longer has to name a container. */
+    std::unordered_map<uint64_t, Cad2DGpuLocation> gpuLocation;
+    std::unordered_set<uint64_t> stampedSelection;
 
     struct RetiredSnapshot { Cad2DPageSnapshot* snapshot = nullptr; uint64_t retireFence = 0; };
     struct RetiredPage { std::unique_ptr<Cad2DPageGPU> page; uint64_t retireFence = 0; };

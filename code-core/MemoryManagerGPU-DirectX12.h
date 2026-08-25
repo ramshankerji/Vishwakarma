@@ -305,6 +305,18 @@ struct GpuCopyStats {
     // Pages a container rebuild threw away. It is the count that says whether edits are landing
     // on the append path (built small, retired 0) or still forcing rebuilds (2c/2d).
     std::atomic<uint64_t> cad2dPagesRetired{ 0 };
+    /* Records whose 4-byte `flags` word was overwritten in place - selection, deselection and the
+    hide half of a modify (2d). It is the counter that says the cheap path was taken: a selection
+    click on a line reads `pages=+0/-0 staged=4 B flags=1` where it used to retire and rebuild
+    every page of the container. */
+    std::atomic<uint64_t> cad2dFlagStores{ 0 };
+    /* Pages packed by the compaction (2e), and the hole records resident across the tab AFTER it
+    ran. The second is a GAUGE, stored not added: it is the number the step exists to bound, and a
+    running total would only say how much churn there had been. Watch it flatten while
+    `cad2dPagesBuilt` stays put - that pair is what "10k modifies leave the page count stable and
+    holes bounded" looks like from outside. */
+    std::atomic<uint64_t> cad2dPagesCompacted{ 0 };
+    std::atomic<uint64_t> cad2dHoleRecords{ 0 };
     std::atomic<uint64_t> cad2dBatchMicros{ 0 };    // Cumulative wall time inside the function.
     std::atomic<uint64_t> cad2dLastBatchMicros{ 0 };// The last batch alone - what you read for "+5 lines".
 };
