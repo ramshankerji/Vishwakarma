@@ -24,19 +24,13 @@ struct DX12ResourcesUI;
 
 using Microsoft::WRL::ComPtr;
 
-/* A Page2D GPU page: ONE container, ONE record class, fixed capacity (id.md §11.2, step 2c). It
-used to be one page per container holding all three classes, which is why every edit rebuilt the
-whole drawing.
-
-One class per page because no 2D object emits more than one - lines, polylines and polygons all
-expand to line records, circles, ellipses and arcs to curve records, text to glyph quads. So an
-object lives in exactly one page and a page never mixes strides. */
+/* A Page2D GPU page: ONE container, ONE record class, fixed capacity. One class per page because
+no 2D object emits more than one, so a page never mixes strides.
+Design and measurements: 2Drendering.md, "Page2D memory paging". */
 enum class Cad2DPageKind : uint8_t { Line = 0, Curve = 1, Text = 2 };
 
-/* 1 MB of records per page: 32,768 lines, 16,384 curves or 10,922 glyph quads. Small enough that
-rebuilding one is cheap and a nearly-empty Page2D wastes little, large enough that a million-line
-sheet is ~32 pages rather than thousands. An object needing more than this gets a page sized to
-fit it - a 40,000-segment polyline has to land somewhere. */
+/* 1 MB of records per page: 32,768 lines, 16,384 curves or 10,922 glyph quads. An object needing
+more than this gets a page sized to fit it - a 40,000-segment polyline has to land somewhere. */
 constexpr uint32_t kCad2DPageBytes = 1u << 20;
 constexpr uint32_t kCad2DLinePageCapacity = kCad2DPageBytes / sizeof(Cad2DLineGPURecord);
 constexpr uint32_t kCad2DCurvePageCapacity = kCad2DPageBytes / sizeof(Cad2DCurveGPURecord);
@@ -46,9 +40,9 @@ constexpr uint32_t kCad2DTextPageVertexCapacity =
     (kCad2DPageBytes / sizeof(Cad2DTextVertex)) / 4 * 4;
 constexpr uint32_t kCad2DTextPageIndexCapacity = kCad2DTextPageVertexCapacity / 4 * 6;
 
-/* Which run of a page's records one object owns (id.md §11.4, step 2d). An object is never split
-across pages - the filler opens a new page rather than straddle one - so a single run says all of
-it, which is what lets a modify find the records to hide from the objectId alone. */
+/* Which run of a page's records one object owns. An object is never split across pages - the
+filler opens a new page rather than straddle one - so a single run says all of it, which is what
+lets a modify find the records to hide from the objectId alone. */
 struct Cad2DPagePlacement {
     uint64_t objectId = 0;
     uint32_t firstRecord = 0;
@@ -89,18 +83,14 @@ struct Cad2DPageGPU {
     std::vector<Cad2DPagePlacement> placements;
 
     /* COPY-THREAD PRIVATE. Records of the `count` above that no live object owns any more - the
-    runs append-plus-hide left behind (id.md §11.4, step 2e). They still cost their slot AND a
-    vertex-shader invocation apiece, because InstanceCount cannot skip them; the shader can only
-    make them draw nothing. Past kCad2DCompactionHoleShare of the page the copy thread packs them
-    out. A placement is a hole exactly when gpuLocation no longer names it, which is why this is
-    incremented at the two places that stop naming one rather than derived by a scan. */
+    runs append-plus-hide left behind. A placement is a hole exactly when gpuLocation no longer
+    names it, which is why this is incremented at the two places that stop naming one rather than
+    derived by a scan. */
     uint32_t holeRecords = 0;
 };
 
-/* Compact a page once this fraction of its CAPACITY is holes - 1/4, as id.md §11.3 decision 2's
-sizing assumed. Measured against capacity rather than fill so that a nearly-empty page is left
-alone: 90 holes among 100 records waste 2.8 KB and 90 shader invocations, which is not worth a
-1 MB page copy, while 8,192 holes in a line page are worth exactly that. */
+/* Compact a page once this fraction of its CAPACITY - not its fill - is holes.
+Why capacity: 2Drendering.md, "Compaction". */
 constexpr uint32_t kCad2DCompactionHoleShare = 4;
 
 struct Cad2DPageSnapshot {
@@ -130,9 +120,7 @@ struct DX12Resources2DPerTab {
 // holds its GPU-side state through this name; other platforms bind it to their own struct.
 using Page2DGpuResources = DX12Resources2DPerTab;
 
-/* objectId -> which of the seven record vectors holds it, and where (id.md §11.4, step 2b). This
-replaces the seven per-batch index rebuilds the copy thread used to do, so ingesting K commands
-into an N-record tab costs O(K) hash operations rather than O(N).
+/* objectId -> which of the seven record vectors holds it, and where.
 
 The stored position stays valid because the record vectors are APPEND-ONLY: nothing erases from
 them, and soft delete (isDeleted) keeps the slot. Whoever eventually compacts those vectors has to
@@ -146,9 +134,9 @@ struct Cad2DRecordLocation {
     uint32_t index = 0;
 };
 
-/* Where an object's LIVE GPU records are (id.md §11.4, step 2d). The mirror of InstanceRegistry on
-the 3D side, and the same caveat applies: this maps to a GPU location and is explicitly NOT the CPU
-object directory §3 wants - `recordIndex` above is the one that finds the engineering record.
+/* Where an object's LIVE GPU records are. The mirror of InstanceRegistry on the 3D side, and the
+same caveat applies: this maps to a GPU location and is explicitly NOT the CPU object directory
+that id.md §3 specifies - `recordIndex` above is the one that finds the engineering record.
 
 An object appears here at most once. A modify erases the entry, hides the old run and re-registers
 the object wherever its new records landed, so the entry always names the run that is drawn. An
@@ -215,8 +203,7 @@ struct TabCad2DStorage {
     std::atomic<uint32_t> demoLineCounter{ 0 };
     std::atomic<bool> demoTextQueued{ false };
     // Grid cell the next Cad2DGenerateBulkLines line lands in. Separate from demoLineCounter so
-    // the benchmark sheet stays byte-identical between runs whether or not Auto Random has been
-    // on - step 2c compares frames of it (id.md §11.4).
+    // the benchmark sheet stays byte-identical between runs whether or not Auto Random has been on.
     std::atomic<uint32_t> bulkLineCounter{ 0 };
 
     std::atomic<bool> lineCreationMode{ false };

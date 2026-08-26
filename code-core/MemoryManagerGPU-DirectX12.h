@@ -286,31 +286,25 @@ struct GpuCopyStats {
     std::atomic<uint64_t> maskWrites{ 0 };      // VisibilityMask entries written (Step 5).
     std::atomic<uint64_t> hiddenInstances{ 0 }; // Objects hidden in at least one SubTab right now.
 
-    /* Page2D copy path (id.md §11, step 2a). ProcessCad2DCopyBatch rebuilds every container of the
-    tab from scratch on every batch, so each counter below is O(records) today and each one is
-    retired by a NAMED later sub-step. They are the BEFORE baseline the paging work has to beat,
-    and they stay afterwards as the regression guard. The number that matters is a RATIO:
-    `cad2dCommands` against the three record counters. Five commands moving a million records is
-    the defect, stated in one line. */
+    /* Page2D copy path. Each counter must stay proportional to the BATCH, never to the drawing -
+    that is the whole regression guard, and the number that matters is the RATIO of `cad2dCommands`
+    to the record counters. Five commands moving a million records is the defect, stated in one
+    line. Baseline and current figures: 2Drendering.md, "Measured, before and after". */
     std::atomic<uint64_t> cad2dBatches{ 0 };        // ProcessCad2DCopyBatch invocations.
     std::atomic<uint64_t> cad2dCommands{ 0 };       // 2D commands in those batches.
-    // These two were the per-batch index rebuild and the two full deep copies. Step 2b retired
-    // both: `indexed` is now one hash lookup per COMMAND and `copied` is structurally zero. They
-    // stay because "this number must not grow with the drawing" is the cheapest regression guard.
     std::atomic<uint64_t> cad2dRecordsIndexed{ 0 }; // Hash lookups into TabCad2DStorage::recordIndex.
     std::atomic<uint64_t> cad2dRecordsCopied{ 0 };  // Records deep-copied. Must stay 0.
-    std::atomic<uint64_t> cad2dRecordsExpanded{ 0 };// GPU records produced by the expansion (2c).
-    std::atomic<uint64_t> cad2dBytesStaged{ 0 };    // Bytes staged for 2D page buffers (2c).
-    std::atomic<uint64_t> cad2dPagesBuilt{ 0 };     // Pages created and uploaded (2c).
+    std::atomic<uint64_t> cad2dRecordsExpanded{ 0 };// GPU records produced by the expansion.
+    std::atomic<uint64_t> cad2dBytesStaged{ 0 };    // Bytes staged for 2D page buffers.
+    std::atomic<uint64_t> cad2dPagesBuilt{ 0 };     // Pages created and uploaded.
     // Pages a container rebuild threw away. It is the count that says whether edits are landing
-    // on the append path (built small, retired 0) or still forcing rebuilds (2c/2d).
+    // on the append path (built small, retired 0) or still forcing rebuilds.
     std::atomic<uint64_t> cad2dPagesRetired{ 0 };
     /* Records whose 4-byte `flags` word was overwritten in place - selection, deselection and the
-    hide half of a modify (2d). It is the counter that says the cheap path was taken: a selection
-    click on a line reads `pages=+0/-0 staged=4 B flags=1` where it used to retire and rebuild
-    every page of the container. */
+    hide half of a modify. It is the counter that says the cheap path was taken: a selection click
+    on a line reads `pages=+0/-0 staged=4 B flags=1`. */
     std::atomic<uint64_t> cad2dFlagStores{ 0 };
-    /* Pages packed by the compaction (2e), and the hole records resident across the tab AFTER it
+    /* Pages packed by the compaction, and the hole records resident across the tab AFTER it
     ran. The second is a GAUGE, stored not added: it is the number the step exists to bound, and a
     running total would only say how much churn there had been. Watch it flatten while
     `cad2dPagesBuilt` stays put - that pair is what "10k modifies leave the page count stable and

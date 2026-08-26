@@ -570,7 +570,7 @@ void EnqueueCad2DSelectionRefresh(uint64_t tabID, uint64_t containerMemoryId) {
     /* A wake-up, and nothing more. The copy thread diffs the tab's selection set against what it
     last stamped and writes kCad2DSelectedFlag into the affected records - a 4-byte store per
     record - so this command carries no work of its own and its containerMemoryId is diagnostic
-    only. It used to force a full page rebuild of that container (id.md §11.4, step 2d). */
+    only. */
     CommandToCopyThread2D command{};
     command.type = CommandToCopyThread2DType::SelectionRefresh;
     command.tabID = tabID;
@@ -827,7 +827,7 @@ void Cad2DCreateAssetFromSelection(DATASETTAB& tab) {
             master.memoryIDContainer = 0;
             tab.allIDsInThisTab.push_back(master.memoryID);
             records.push_back(std::move(master)); // May reallocate; re-index the original below.
-            Cad2DIndexAppendedRecord(s, records); // Third appender to the record vectors (id.md §11.4).
+            Cad2DIndexAppendedRecord(s, records); // Third appender to the record vectors.
             records[i].memoryIDGenerator = firstInsert.memoryID;
         }
     };
@@ -1413,7 +1413,7 @@ bool Cad2DReadPaneSelection(DATASETTAB& tab, Cad2DPaneSelection& out) {
     if (singleId == 0) return true; // Empty or multiple: the pane draws its count line.
     out.objectId = singleId;
 
-    /* One index lookup, not a scan of up to all seven vectors (id.md §11.4, step 2d'). This runs
+    /* One index lookup, not a scan of up to all seven vectors. This runs
     on the RENDER thread, once per frame per monitor for as long as the pane shows a 2D object,
     and it holds cpuRecordsMutex while it does - so at a million records the scan was blocking the
     engineering thread every frame. Object ids are unique across the process, so the type recorded
@@ -1623,7 +1623,7 @@ uint64_t Cad2DCreateAssetDefinition(DATASETTAB& tab, double baseX, double baseY,
         master.memoryIDContainer = 0;
         tab.allIDsInThisTab.push_back(master.memoryID);
         records.push_back(std::move(master));
-        Cad2DIndexAppendedRecord(s, records); // Third appender to the record vectors (id.md §11.4).
+        Cad2DIndexAppendedRecord(s, records); // Third appender to the record vectors.
     };
     for (const Cad2DLineRecordCPU& r : masterLines) addMaster(r, s.lineRecords);
     for (const Cad2DTextRecordCPU& r : masterTexts) addMaster(r, s.textRecords);
@@ -1880,7 +1880,7 @@ void Cad2DGenerateBulkLines(DATASETTAB& tab, uint32_t count) {
 
     // Built and pushed inside ONE lock hold: the copy thread cannot drain a partial burst, so a
     // press costs one rebuild instead of one per wake-up. It also keeps only the queue's copy of
-    // each command alive, which matters at 736 bytes apiece (id.md §10).
+    // each command alive, which matters at nearly a kilobyte apiece.
     {
         std::lock_guard<std::mutex> lock(gCad2DCopyQueueMutex);
         for (uint32_t i = 0; i < count; ++i) {

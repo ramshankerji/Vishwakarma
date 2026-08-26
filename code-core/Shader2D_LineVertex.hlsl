@@ -60,9 +60,9 @@ PSInput main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID) {
     Cad2DLineRecord rec = Lines[instanceId];
 
     /* HIDDEN bit (kCad2DHiddenFlag): a modify appends the object's new records and sets this on
-    the old ones, so editing an object is a 4-byte store rather than a page rebuild (id.md §11.4,
-    step 2d). Every vertex of the quad collapses onto one point, so the triangle has zero area and
-    rasterizes to nothing - the record stays in the page until compaction packs it out. */
+    the old ones, so editing an object is a 4-byte store rather than a page rebuild. Every vertex
+    of the quad collapses onto one point, so the triangle has zero area and rasterizes to nothing -
+    the record stays in the page until compaction packs it out. */
     if (rec.flags & 2u) {
         PSInput hidden = (PSInput)0;
         hidden.position = float4(0.0, 0.0, 0.0, 1.0);

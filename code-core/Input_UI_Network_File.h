@@ -123,9 +123,9 @@ void FileInputThread() {
 
     Load then save, with no GUI dialogs in between, so that
     validations/yyy_roundtrip/check_roundtrip.py can compare the two files field by field. That
-    comparison is the oracle for id.md §8 step 3: the 2D object-model migration runs through this
-    exact path, and §9 warns that a defect there corrupts user files silently rather than
-    crashing. "It still draws correctly" is not evidence; this is.
+    comparison is the oracle for the 2D object-model migration (2Drendering.md, "The 2D object
+    model"): it runs through this exact path, where a defect corrupts user files silently rather
+    than crashing. "It still draws correctly" is not evidence; this is.
 
     It runs on the file thread rather than the engineering thread deliberately - SaveTabToYyy and
     LoadYyyIntoTab both take the tab's own mutexes, so they are safe from here, and keeping the

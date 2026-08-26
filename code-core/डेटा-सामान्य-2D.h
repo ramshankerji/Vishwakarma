@@ -29,8 +29,8 @@ junk: it carries design the shipped MVP went around rather than through. Layers,
 indexed colour palettes and back-to-front draw order are all in Part 2 and absent from Part 1,
 and roughly half its types (DIMENSION, LEADER, NURBS, TABLE, HATCH_STYLE, POINT2D) have no Part 1
 counterpart at all. Merging the two is a design decision per field - MVP-deferred versus
-genuinely superseded - not a refactor, and it belongs with the object-model unification described
-at mv.ramshanker.in/software/id.
+genuinely superseded - not a refactor, and it belongs with the object-model migration described
+at mv.ramshanker.in/software/2drendering, "The 2D object model".
 
 Every Part 2 struct is annotated with its Part 1 replacement, or with the fact that it has none.
 */
@@ -40,10 +40,8 @@ Every Part 2 struct is annotated with its Part 1 replacement, or with the fact t
    These are the nine record types the application actually creates, edits, draws and persists.
    Moved here from RenderPage2D.h; the field layouts are unchanged.
 
-   They do NOT yet derive META_DATA - they carry their own copies of the identity fields under
-   different names (objectId, containerMemoryId, parentObjectId). Aligning that is step 3 of the
-   sequencing at mv.ramshanker.in/software/id, which is where containerMemoryId becomes
-   memoryIDContainer and parentObjectId becomes memoryIDGenerator.
+   They all derive META_DATA, so identity is shared with the 3D world. What is NOT yet shared is
+   residency - see the note on Cad2DLineRecordCPU below.
    ============================================================================================= */
 
 enum class Cad2DLineWeightMode : uint32_t {
@@ -69,8 +67,9 @@ struct Cad2DPoint2D {
     double y = 0.0;
 };
 
-/* ALL NINE 2D RECORD TYPES DERIVE META_DATA (mv.ramshanker.in/software/id section 8, step 3).
-This one went first, alone, so the true cost per type was known before the other eight followed.
+/* ALL NINE 2D RECORD TYPES DERIVE META_DATA. See mv.ramshanker.in/software/2drendering,
+"The 2D object model". This one went first, alone, so the true cost per type was known before the
+other eight followed.
 
 There is now ONE object model: 2D and 3D objects share identity, soft-delete, schema version and
 dataVersion, and generic code can dispatch on META_DATA instead of on which vector a record came
@@ -100,10 +99,10 @@ struct Cad2DLineRecordCPU : META_DATA {
     uint32_t colorABGR = 0xFF000000u;
 };
 /* 88 -> 112 bytes: 43 bytes of hand-rolled identity fields replaced by META_DATA's 64, plus
-padding. About +27%, or +24 MB on a two-million-line sheet - the cost id.md section 2.7 predicted
-and accepted. Asserted so the next field added here is a deliberate decision rather than a
-discovery, exactly as sizeof(META_DATA) is. */
-static_assert(sizeof(Cad2DLineRecordCPU) == 112, "Cad2DLineRecordCPU grew - see id.md section 2.7.");
+padding. Asserted so the next field added here is a deliberate decision rather than a discovery,
+exactly as sizeof(META_DATA) is. Sizes for all nine: 2Drendering.md, "Measured sizes". */
+static_assert(sizeof(Cad2DLineRecordCPU) == 112,
+    "Cad2DLineRecordCPU grew - see 2Drendering.md, Measured sizes.");
 
 struct Cad2DPolylineRecordCPU : META_DATA {
     Cad2DPolylineRecordCPU() { dataType = static_cast<uint16_t>(VishwakarmaStorage::ObjectType::Polyline2D); }

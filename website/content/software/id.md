@@ -46,40 +46,43 @@ In this article we learned about importance and planning of IDs in Mission Vishw
 
 5. Allocation strategy differs between the two bands, deliberately. Catalogue IDs are drawn RANDOMLY within the [2^32, 2^40) band ( checked against the existing catalogue, redrawn in the rare case of a collision ). Multiple developers keep adding catalogue items in parallel, each on their own version control branch. A shared next-ID counter would turn every concurrent addition into a merge conflict; random draws need no counter, so branches merge cleanly. User entity IDs are the opposite: the central authority assigns them SEQUENTIALLY ( point 4 above ). Entities created together receive adjacent IDs, hence sit adjacent on disc and in RAM, which is exactly what file caches and CPU caches love. In short: the band without a central authority gets randomness, the band with one gets locality.
 
+<strong>Update ( August 2026 ):</strong> Designing inter-object references — a pipe pointing at the nozzle it connects to, a member pointing at the catalogue profile it is made from — forced a second revisit. The numbered sections below are the current specification. Two things in the text above are now **superseded**, and are kept only because this page is a record of how the design got here:
 
+- **The 62nd-bit internal-vs-external flag is retired** ( July update point 4, and the paragraph above it ). Every reference field, in RAM and on disc, now holds a plain same-file id; a reference that leaves the file goes through a **ForeignReference proxy object** instead ( §5 ). No reference field is ever 128 bits, and no bit of an id carries meaning. Persisted ids lose only the sign bit, and remain capped at 2^48 by the top-16-reserved rule regardless.
+- **Foreign file references are not packed into the id.** An earlier design in `storage.md` §7.3 packed a 16-bit file alias and a 40-bit object id into one 64-bit word. That is withdrawn: a `.zzz` project may reference more than 2^32 files, and permanent ids are no longer constrained to 40 bits. §4.4 and §9 carry the detail.
 
-This page records how engineering objects are laid out in CPU memory, why the 2D and 3D worlds
-did it differently, and what it took to make them one. Read it before touching the object model,
-and before adding a second mechanism to either half.
+## Scope of this page
 
-**Status, 2026-08-26.** §7 steps 0, 1 and 2 are shipped. Step 3 is half done: all nine 2D record
-types now derive `META_DATA`, so there is ONE object model — but they still live by value in
-`std::vector` on the heap, not in the arena, which is the half `Optional64` waits on (§2.6). §3 —
-inter-object references and the resolver — is entirely unbuilt, and is the largest thing here that
-is still only a plan.
+**This page is about ids and references, and nothing else.** memoryID, persistedId, how one object refers to another, how that reference is resolved in RAM, how it is written to disc, and what happens when the thing it refers to is not there.
 
-This page began as an analysis and a proposal; what survives is the reasoning that still decides
-something, plus the record of what was built. §1–§6 are why, §7 is what and what is next, §8 the
-live risks, §9 the loose ends. Step 2's design and numbers are not repeated here — they live in
-`2Drendering.md`, "Page2D memory paging — as built".
+The object-model migration that this page used to carry — the 2D world's move to `META_DATA`, `Optional64`, arena residency, Page2D paging and the sizing tables — has moved to **`2Drendering.md`**, under "The 2D object model". Anything that mentions a record type, a page, or a GPU buffer belongs there, not here.
 
-## 1. The question, and the answer
+The scale everything here is judged against, stated 2026-08-26:
 
-3D engineering objects derive `META_DATA` and are allocated out of the CPU RAM arena (`राम`, in
-`MemoryManagerCPU.h`). The nine Page2D record types did neither: they were plain structs living by
-value in `std::vector` members of `TabCad2DStorage`.
+> "Expected scale is 10M objects on a regular PC / Workstation. 1 Billion Object on central Server."
 
-That split cost twice. The Properties Pane had to widen its whole accessor contract to `void*`
-because the two worlds had no common base (`propertiesPane.md`, amendment), and `snapping.md` §14
-was about to plan a second candidate gatherer for the same reason — there was no one type to
-dispatch on.
+Both numbers, not just the first. An answer that is elegant at 10M and needs 50 GB of index at 1B is not an answer.
 
-**Answered in two halves.** All nine types now derive `META_DATA`, so there is one object model and
-the second snapping gatherer was never written. They are still value types in `std::vector`, not
-arena objects, which is the half that remains and the half `Optional64` waits on (§2.6). §7 is the
-record; the rest of this section is what the decision rested on.
+## 1. Two id spaces, and the rule that keeps them apart
 
-## 2. What exists today
+Almost every confusion on this page came from letting one mechanism try to serve both. They are different in lifetime, in who assigns them, in what they are unique against, and in how they are resolved.
+
+| | **memoryID** | **persistedId** |
+|---|---|---|
+| Lives | one process, one session | the file, forever |
+| Assigned by | `MemoryID::next()`, a global atomic | the authority — server, or the local `.yyy` virtual-server host |
+| Unique against | every object loaded in this process | every object inside **one** file |
+| Assigned to | **every** loaded object, always | only objects that have been committed |
+| Banded | **never** ( §3.5 ) | yes ( §4 ) |
+| Recycled | never | never |
+| Resolved by | binary search of the owning tab's directory ( §3.4 ) | translation maps at load and save ( §6 ) |
+| Written to disc | never | that is its whole purpose |
+
+**The rule: no mechanism serves both spaces.** §2 and §3 are entirely about memoryID and RAM. §4, §5 and §6 are entirely about persistedId and disc. The only place they meet is the load/save boundary, where a translation happens explicitly and in one direction at a time.
+
+The reason this matters practically: an object loaded from a file has *both* — a memoryID because it is in RAM, and a persistedId because it came from a file. An object the user just drew has only a memoryID until it is committed. Code that reaches for "the id" without saying which one is a bug waiting for a save cycle.
+
+## 2. memoryID — what exists today
 
 Everything in this section was checked against the tree, not recalled.
 
@@ -99,29 +102,25 @@ a per-tab arena group of 4 MB chunks, with 8 bytes of allocation header
 
 **This is already the "vector of ids, objects in the arena" shape** — and better than a bare id
 vector, because the pointer is carried inline, so a scan is one contiguous walk plus a dereference
-rather than a walk plus a map lookup.
+rather than a walk plus a map lookup. `storageLogicalObjects` has the same shape.
 
-### 2.2 2D — value records in contiguous vectors
+**`memoryGroupNo == tabNo` is load-bearing**, and it is why the directory is per tab and not per
+world or per container. `CPU_RAM_4MB::reset(tabNo)` makes the group *be* the tab, which is what lets
+`राम::MemoryGroupOf(anyPointer)` answer "which tab owns this address" from an address alone. Any
+other partitioning of the arena breaks that. `2Drendering.md` carries the consequence for optional
+properties.
 
-**STILL TRUE, and it is the half of step 3 that has not happened.** The records derive `META_DATA`
-now, but deriving it changed only their identity: they are still value types in `std::vector`, on
-the CRT heap, and all three consequences below still hold. That is why `Optional64` is still out of
-reach (§2.6) — it is residency, not inheritance, that the arena question is about.
+### 2.2 2D — value records in vectors
 
-`std::vector<Cad2DLineRecordCPU>`, `…Circle…`, and seven more, all members of `TabCad2DStorage`.
-They go to the CRT heap, not the arena. Three consequences follow from that, and they are the real
-argument for the current design:
+The nine `Cad2D*RecordCPU` types derive `META_DATA`, so they carry a memoryID like everything else
+and there is one object model. They are still value types in `std::vector` on the CRT heap rather
+than arena objects behind a directory, so **they are not reachable by `ResolveObject`** and the
+2D world has no id directory yet.
 
-1. **The rebuild is a streaming scan.** `RenderPage2D-DirectX12.cpp` walks every record of every
-   type to rebuild a page. Contiguous 88-byte records stream; arena pointers would not.
-2. **The copy queue ships records by value.** `CommandToCopyThread2D` carries the record itself, so
-   what crosses the engineering→copy thread boundary is a snapshot: trivially safe, no lifetime
-   question, no fence discipline.
-3. **`upsert` is one assignment.** The copy-thread ingest is literally
-   `existing = std::move(updated)`.
-
-Per-tab isolation still holds, but structurally (membership in a per-tab struct) rather than through
-the arena's `memoryGroupNo`. Nothing leaks — the vectors die with the tab's `cad2d`.
+The reasoning, the sizes, the residency migration and what it is waiting on are in `2Drendering.md`.
+The only thing this page needs from it: **when 2D records move into the arena they adopt §3.4's
+directory and §3.5's scope rule unchanged** — one directory per tab, sorted by memoryID, binary
+searched. There is no second id mechanism for 2D, and no separate 2D id space.
 
 ### 2.3 The identity fields matched, so they were merged — DONE
 
@@ -131,6 +130,12 @@ same `MemoryID::next()` global atomic. That is why the merge was cheap: `objectI
 `persistedId`, `persistedParentId`, `schemaVersion` and `isDeleted` already identically named.
 `dataVersion` and `dataType` arrived with the base — 2D had neither, and `undo-redo.md` needs the
 first regardless.
+
+One consequence that is pure id semantics and worth not re-deriving: **"0 means unassigned" stopped
+being expressible for memoryID**, because `META_DATA`'s constructor issues one. Every `objectId == 0`
+sentinel went unreachable and was retired. `persistedId == 0` still means unassigned, and still
+does — that asymmetry is correct, not an oversight: an object always has a memoryID and does not
+always have a persistedId.
 
 ### 2.4 Container versus generator — SETTLED
 
@@ -143,124 +148,52 @@ The dividing line is *"lives inside a container"* versus *"does not"* — a cont
 a dimensionality one, which is why 3D templates will want the same pair and why a separate
 `META_DATA2D` would have frozen the wrong axis into the type system.
 
-### 2.5 memoryID resolution is a linear scan, and both indices are dead
+**There is no `persistedGeneratorId`.** The file stores ONE parent id — the generator if there is
+one, else the container — and the loader rebuilds the split by asking what TYPE the stored parent
+turned out to be. This is the one place where two RAM fields collapse into one persisted field, and
+it is deliberate.
+
+### 2.5 memoryID resolution is a linear scan, and all three indices are dead
 
 There is no working memoryID → object index anywhere in the application. Resolution is a linear
-scan over `storageObjects3D`, in **12 places** across the `.cpp` files. Two mechanisms were built
-for this job and neither is alive:
+scan over `storageObjects3D`. **Three** mechanisms were built for this job and none of them is
+alive:
 
 - `राम::id2MemoryMap` (`std::unordered_map<uint64_t, std::byte*>`, `MemoryManagerCPU.h`) is
-  declared and `.clear()`ed on shutdown, but **nothing ever inserts into it**.
-- `MemoryIDMap` in `ID.h` — "Highly scalable mapping: memoryID → data pointer" — is **referenced
-  nowhere**.
+  declared and `.clear()`ed on shutdown, but **nothing ever inserts into it**. The
+  `DefragmentRAMChunks` comment still names it as the thing compaction must update.
+- `MemoryIDMap` in `ID.h` — a 256-shard `std::shared_mutex` map, "highly scalable mapping:
+  memoryID → data pointer" — is **referenced nowhere**.
+- `ReferenceID` in `ID.h` — process-local `memoryID`, cached `data` pointer, persistent `realID`,
+  `savedFileReference` — is **referenced nowhere**.
+
+**All three are to be deleted** ( §3.7 ). A declared-but-unpopulated index invites someone to trust
+it, and three of them invites someone to wire the wrong one.
 
 The only live id map is `InstanceRegistry::indexOfMemoryId`, and it maps memoryID →
 `gpuInstanceIndex`. That is copy-thread-owned GPU identity, not the CPU object, and it is not a
-substitute.
+substitute. Page2D's `TabCad2DStorage::recordIndex` is the same kind of thing one level over: an
+index into a record vector, copy-path-owned.
 
-This is worth stating plainly because it inverts an assumption: 2D is not missing an indexing
-mechanism that 3D has. Neither world has one.
+**The linear scan is smaller than it looks.** Twelve sites scan `storageObjects3D`; ten of them are
+genuine full traversals — persistedId assignment, save, zoom-to-fit, hide/move-selected, tree build
+— that want every object and are already optimal. Only **two** are id-to-object lookups:
+`ModifyObjectProperty` and the properties-pane read. `ResolveObject` is therefore a two-call-site
+change on the 3D side.
 
-### 2.6 `Optional64` — built, and why 2D cannot use it yet
-
-Real code in `OptionalProperties.h`, in the vcxproj, driver-tested — and with **no consumer**. The
-`LINE_MEMBER` pilot property was removed again in step 1, so nothing in the application declares an
-optional property today. Say so rather than letting it look wired.
-
-**40 bytes inline, and 0 arena bytes until something is set.** Allocation is lazy: `x` and `y` stay
-null until the first `set`, which matters because the eager version would have cost a 100k-element
-DXF import ~9.6 MB and 200k allocations for properties nobody set. The schema is declared through
-an x-macro list per type, generating the enumerators, the byte-size table, `has/get/set/unset` and
-a schema hash.
-
-It needed four additions to the arena, all deriving their answer from an address alone:
-
-```text
-राम::MemoryGroupOf(anyPointer)        which tab owns the chunk this address is in
-राम::ChunkIndexOf(anyPointer)         pool-relative chunk index, or kInvalidChunkIndex
-राम::OffsetInChunkOf(anyPointer)      byte offset within that chunk
-राम::AddressOf(chunkIndex, offset)    the inverse
-```
-
-`MemoryGroupOf` is what keeps the class at 40 bytes: an **interior** pointer reports the enclosing
-object's group, so `Optional64` finds its own tab from `this` and stores neither a group nor a
-chunk index. The other three let `ByteArrayData` stay position-independent — it holds
-`{chunkIndex, offset}` rather than a pointer, so `DefragmentRAMChunks` can move a dynamic
-property's bytes and rewrite the pair instead of hunting down every copy of an address. Same
-reasoning as §3.3, one level down.
-
-**Copy and move are deleted**, deliberately — a shallow copy would double-free. That single fact is
-why the residency half exists: a type containing an `Optional64` cannot live in a `std::vector`,
-because growth moves its elements.
-
-**AND IT CANNOT BE REACHED FROM OUTSIDE THE ARENA — a correctness constraint, not a preference.**
-`Optional64::set` allocates with `cpu.Allocate(size, cpu.MemoryGroupOf(this))`, and
-`राम::MemoryGroupOf` **returns 0 for any pointer outside the chunk pool**. So an `Optional64` on a
-record living by value in a `std::vector` would not fail — it would silently allocate into **group
-0**, the Application Tab, which never closes. The properties would outlive their tab and
-`notifyTabClosed` would never de-commit them: a slow leak with cross-tab ownership, and no crash to
-find it by.
-
-Two consequences:
-
-1. **2D gets `Optional64` only after 2D objects live in the arena**, and after there is a lookup
-   mechanism to reach them by id. Until both exist, no 2D type declares an optional property.
-   Decided 2026-08-26.
-2. **`memoryGroupNo == tabNo` is load-bearing.** `CPU_RAM_4MB::reset(tabNo)` makes the group the
-   tab, and that identity is the whole reason the address-derived lookup works. Partitioning the
-   arena any other way — per world, per container — means `Optional64` needs a group-to-tab map and
-   stops being 40 bytes. This is the argument against giving 2D its own arena group when it moves:
-   separate accounting is worth a counter, not a partition.
-
-### 2.7 Measured sizes
-
-Compiled against the real headers, x64 MSVC, 2026-08-26.
-
-```text
-META_DATA base                              64 B   (was 56 before step 1)
-arena per-allocation overhead                8 B
-Optional64                                  40 B   (inline; 0 arena bytes until a property is set)
-
-2D CPU records, deriving META_DATA, still by value in std::vector on the heap
-  Cad2DLineRecordCPU       112  (was  88)    Cad2DArcRecordCPU              152  (was 128)
-  Cad2DCircleRecordCPU     104  (was  80)    Cad2DPolylineRecordCPU         112  (was  80)
-  Cad2DEllipseRecordCPU    120  (was  96)    Cad2DTextRecordCPU             160  (was 136)
-  Cad2DPolygonRecordCPU    120  (was  96)    Cad2DAssetDefinitionRecordCPU   88
-                                             Cad2DAssetInsertRecordCPU      112
-  (polyline and text carry heap allocations on top, for points and string)
-
-3D arena objects, for scale
-  SPHERE 128    CYLINDER 160    CUBOID 152
-```
-
-+24 bytes per record almost everywhere; polyline paid +32 because its old field order padded
-differently. `sizeof(Cad2DLineRecordCPU) == 112` is static_asserted, the way `META_DATA`'s 64 is.
-
-**The bytes were never the problem** — +2.4 MB on a 100k-line DXF, noise on the largest data set the
-application handles, and currently zero extra allocations because the records are not in the arena.
-What the residency half has to answer for is the 100k separate arena allocations it would add, which
-is what §8 still calls untested and what the fixed-block idea in §7 is meant to avoid.
-
-## 3. Object references and directory scope
-
-§2.5 said resolution is a linear scan. The consequence deserves stating on its own, because it is
-the first thing intelligent objects will need and it is currently absent end to end.
+## 3. In-RAM references and directory scope
 
 ### 3.1 There are no inter-object references at all
 
 Not merely no resolution mechanism — **nothing in the object model refers to another object**,
 except containment. `ELBOW`, `TEE`, `FLANGE` and `PIPE` are pure geometry: centre, radii, sweep
-angle, colours. The only reference field anywhere is `memoryIDContainer`.
+angle, colours. The only reference fields anywhere are `memoryIDContainer` and `memoryIDGenerator`.
 
 So a pipe cannot record which nozzle it connects to, and the lookup was never built because nothing
 ever needed it. That is a better position than having references that resolve badly, but it means
-the whole capability is greenfield.
+the whole capability is greenfield. Everything in §3 through §6 is design, not description.
 
-A **third** dead mechanism exists for this, beyond the two in §2.5. `ReferenceID` in `ID.h` is
-designed precisely for the job — process-local `memoryID`, a cached `data` pointer, the persistent
-`realID`, and `savedFileReference` for cross-file targets — and it is **referenced nowhere**. Three
-designs for one problem, none wired, which suggests the problem kept being deferred rather than
-being missed.
+The one field that looks like an exception is `LINE_MEMBER::profileId`, and it is not one — see §8.
 
 ### 3.2 Representation and resolution are different decisions
 
@@ -268,17 +201,17 @@ Keeping these apart avoids a lot of confusion:
 
 | Axis | Question | Decision |
 |---|---|---|
-| **Representation** | what the referring object stores | **`memoryID`, never a raw pointer** |
-| **Resolution** | how an id becomes an object | binary search per directory — see §3.4 |
+| **Representation** | what the referring object stores | **an id, never a raw pointer** — §3.3 |
+| **Resolution** | how an id becomes an object | binary search of the calling tab's directory — §3.4 |
 
 Storing the id is what makes a resolution mechanism necessary in the first place; store pointers and
 no lookup is needed. The two are complementary, not alternatives.
 
 ### 3.3 Why the reference stores an id, not a pointer
 
-The routine reasons are good: 8 bytes rather than `ReferenceID`'s 32, meaningful on disk, no
-thread-lifetime rules for a value that crosses threads, and arena defragmentation only has to fix
-the *index* rather than hunt down every reference in the model.
+The routine reasons are good: 8 bytes rather than 24, meaningful on disc, no thread-lifetime rules
+for a value that crosses threads, and arena defragmentation only has to fix the *directory entry*
+rather than hunt down every reference in the model.
 
 **The decisive reason is the failure mode.** `MemoryID::next()` is a monotonic counter that never
 recycles, so a reference to a deleted object *fails to resolve* — a null, reportable as "connection
@@ -287,299 +220,492 @@ reuses the block, silently addresses a **different live object, possibly of anot
 safe; pointers fail dangerous. In a file where a mis-resolved nozzle is a fabrication error, that
 difference decides it.
 
-This **inverts `ReferenceID`'s design**, which caches `data` alongside the id — and that cached
-pointer is exactly why `DefragmentRAMChunks` carries the note that every move must update the
-central map. Dropping the field removes the coupling. If `ReferenceID` is adopted, drop `data` or
-accept 8 dead bytes per reference.
+The same argument is why persistent ids are never recycled either ( `storage.md` §7.2 ): recycling
+makes an old reference resolve to a *wrong new object*, which is worse than resolving to nothing.
 
-A transient cache is still fine, but it must live in a scratch structure for the duration of one
-operation. Never as a field on a persisted object, or the problem is back.
+This **inverts `ReferenceID`'s design**, which cached a `data` pointer alongside the id — and that
+cached pointer is exactly why `DefragmentRAMChunks` carries the note that every move must update the
+central map. Dropping the field removes the coupling entirely.
+
+**A transient cache is still fine, and §5 uses one**: the ForeignReference proxy caches its
+resolved target as a **memoryID, never a pointer**, and re-resolves per session. A cache that holds
+an id is still id-safe; a cache that holds a pointer is not.
 
 ### 3.4 The directory is already sorted — make that a guarantee
 
-`storageObjects3D` has exactly two `push_back` sites, is `clear()`ed only on teardown, and is never
-erased from or sorted. Ids come from a monotonic counter assigned at construction, immediately
-before the append. **So the vector is already sorted by memoryID**, and `std::lower_bound` resolves
-in O(log n) — 24 comparisons at 10M — with no extra memory at all. Soft-delete via `isDeleted`
-leaves tombstones in place, which preserves the ordering.
+`storageObjects3D` is `clear()`ed only on teardown, and is never erased from or sorted. Ids come
+from a monotonic counter assigned at construction, immediately before the append. **So the vector is
+already sorted by memoryID**, and `std::lower_bound` resolves in O(log n) — 24 comparisons at 10M,
+30 at 1B — with **no extra memory at all**. Soft-delete leaves tombstones in place, which preserves
+the ordering.
 
-That property currently holds *by accident*. It should be enforced, because a later "compact the
+That property currently holds *by accident*. It must be enforced, because a later "compact the
 vector" or "sort by type for cache locality" would break it silently and the failure mode is a wrong
 lookup rather than a crash:
 
 ```cpp
-// At both append sites. Two lines that turn an emergent property into an invariant.
+// At every append site. Two lines that turn an emergent property into an invariant.
 assert(tab.storageObjects3D.empty() ||
        tab.storageObjects3D.back().memoryId < object->memoryID);
 ```
 
-Behind a `ResolveObject(memoryID)` function this also stays swappable: `lower_bound` today, a dense
-registry mirroring `InstanceRegistry` (§5, option D) later, without touching a call site.
+**There are three append sites, not two**, and the third has no check: `FlushGeneratedGeometryBatch`
+bulk-inserts. It is correct today — one thread, ids issued in order — but it is the import path, so
+it is the one most likely to acquire a second producer later. It gets the assert.
 
-The 2D record vectors are *probably* sorted too — append-only through a FIFO queue with one producer
-per tab — but that is unverified and must not be relied on until it is.
+**Why binary search and not a hash map, at 1 Billion.** A `std::unordered_map` costs ~50 bytes per
+entry measured on this codebase's own 2D record index: ~500 MB at 10M and **~50 GB at 1B**, to
+duplicate ordering information the vector already carries. Binary search costs zero bytes. The
+O(1) alternatives were weighed and rejected:
 
-### 3.5 Directory scope: per tab, plus tab 0. Not one global directory
+| Option | Bytes at 1B | Verdict |
+|---|---|---|
+| Sorted directory + `lower_bound` | **0** | **Chosen** |
+| Per-tab hash map | ~50 GB | Rejected — memory |
+| Global sharded map ( `MemoryIDMap` ) | ~50 GB + a lock per lookup | Rejected — memory and contention |
+| Arena-owned global map ( `id2MemoryMap` ) | ~30 GB | Rejected — arena must not know object identity |
+| Paged slot array over a partitioned id space | ~4 GB | **Rejected — partitioning is FINAL no ( §3.5 )** |
 
-Catalog files will live under the un-closable tab 0 and be referenced by engineering objects in
-many tabs, which raises the obvious question of whether the directory should be process-wide. It
-should not, for two reasons.
+If a lookup-heavy consumer ever appears and profiling shows resolution on a hot path,
+**interpolation search** is the upgrade that costs nothing: ids are near-dense within a tab, so it
+converges in ~4-6 probes instead of 24-30, with no new structure and no memory. Behind a
+`ResolveObject(memoryID)` function this stays a one-function change with no call site touched.
 
-**A shared directory destroys the sortedness property.** `MemoryID::next()` is globally monotonic,
-but monotonic *issue* order is not monotonic *append* order once several producers share one
-vector: engineering thread A takes id 100, thread B takes 101, B appends first, and the directory is
-`[…, 101, 100]`. Per-tab directories are immune because each tab has exactly one engineering thread
-— single producer, so append order **is** id order. Give that up and §3.4 goes with it, forcing a
-hash map and its node overhead at 10M entries (§5, option B).
+### 3.5 Directory scope: the calling tab, and nothing else
 
-**And tab close becomes expensive.** Dropping a per-tab directory is O(1). Erasing one tab's entries
-from a shared structure is O(closed tab size) under a lock every other engineering thread contends
-on.
+**The memoryID space is NOT partitioned. Decided 2026-08-26, FINAL.** No range of it is reserved for
+any tab, world, container or purpose; `MemoryID::next()` starts at 1 and increments, forever. No
+code may infer anything from an id's value except that it is not zero. Routing a lookup to a
+directory is therefore never done by inspecting the id.
 
-So resolution is two steps — *route to a directory, then search it*:
+That leaves the question of *which* directory. The answer is now simple, and it got simpler because
+of §5.6's decision to give each tab its own copy of a mounted catalog file:
 
 ```text
 ResolveObject(memoryID):
-    if IsCatalogId(memoryID):  search tab 0's directory      (read-only, never closes)
-    else:                      search the calling tab's directory
+    binary search the CALLING TAB's directory. That is the whole algorithm.
 ```
 
-**Routing can be O(1) if the id says which space it belongs to.** `id.md` already partitions the
-*persisted* id space along exactly this line — the first 2^40 ids are reserved for catalogue items,
-the next 2^40 for local use, and server-assigned ids start at 2^42. `MemoryID::next()` implements
-none of that: it starts at 1 and increments, so every memoryID today sits in what `id.md` calls the
-catalogue range. Extending the same partitioning to the memoryID space — a reserved range issued to
-tab 0 — makes `IsCatalogId` a bit test and costs one change in one place.
+**Every memoryID a tab's objects can legally reference lives in that tab's own directory** — its own
+objects, and the objects of any catalog file it has mounted, because under §5.6 option (i) a mounted
+catalog is loaded *into the mounting tab*. There is no fallback search, no tab-0 special case, no
+process-wide structure. A reference that does not resolve in the calling tab does not resolve at
+all, and that is a reportable state, not a reason to look elsewhere.
 
-Without that, the fallback is still cheap: search the calling tab, then tab 0. Two binary searches,
-~48 comparisons, and it expresses the intended semantics directly.
+**Tabs may not reference each other, and this makes it structural rather than policed.** A
+tab-3-object → tab-5-object reference cannot be resolved even in principle, so closing tab 3 can
+never leave tab 5 holding a dangling pointer into freed arena memory. A `_DEBUG` assert at
+reference-creation time catches an attempt at the source rather than at the failed lookup.
 
-**The rule that keeps this sound: a reference may target the calling tab or tab 0, nothing else.**
-A fully process-wide directory would legitimise tab-3-object → tab-5-object references, and then
-closing tab 3 leaves tab 5 holding dangling ids. The catalog case is safe *precisely because* tab 0
-never closes. That asymmetry is the design, not an accident of it, and the rule is assertable.
+Two properties this rests on, both worth stating as requirements rather than observations:
 
-One threading note: tab 0 **has no engineering thread** — the main UI thread fills it at startup. So
-catalog objects are written once at load and read concurrently by every tab's engineering thread
-thereafter. That is the ideal shape for a shared directory, but it has to be stated as a
-requirement: the catalog directory is immutable after load.
+- **One writer per directory.** Each tab has exactly one engineering thread, so append order is id
+  order and §3.4's sortedness holds. A shared directory would destroy it — thread A takes id 100, B
+  takes 101, B appends first, and the vector is `[…, 101, 100]`. This is the structural reason the
+  directory is per tab, independent of the catalog question.
+- **Tab close is O(1).** Dropping a per-tab directory is a `clear()`. Erasing one tab's entries from
+  a shared structure is O(closed tab size) under a lock every other engineering thread contends on.
+
+**What §5.6 option (ii) would cost.** A process-wide shared catalog, loaded once and referenced by
+many tabs, reintroduces exactly the cross-directory routing this section just removed: a second
+directory to search, a lifetime that is not any tab's, and an arena group that is not any tab's
+either — which collides with §2.1's `memoryGroupNo == tabNo` invariant. None of that is
+unsolvable, and none of it is free. It is the price of (ii), to be paid when the memory duplication
+of (i) is measured and found to matter, not before.
 
 ### 3.6 What this still does not solve
 
-**Reverse lookup.** The pipe knows the nozzle; the nozzle does not know the pipe. Deleting or moving
-a nozzle needs its referrers, and forward ids cannot answer that below a full scan. Either
-references are mirrored with back-references, or referrer queries stay O(n).
-
-**Persistence.** memoryID is process-local, so save must translate to `persistedId` and load must
-re-resolve. That machinery half-exists: the save path already builds a temporary
-`memoryIdToPersistedId` for `memoryIDContainer` and discards it. A reference field needs both halves
-carried, which is what `ReferenceID` was for.
+**Reverse lookup — DECIDED: linear scan, and nothing more.** The pipe knows the nozzle; the nozzle
+does not know the pipe. Deleting or moving a nozzle needs its referrers, and forward ids cannot
+answer that below a full scan. **No back-references, no mirror index, no referrer table.** Referrer
+queries are O(n) over the tab's directory, and that is accepted: they happen on delete and on
+"where is this used", both user-initiated and both rare, and the alternative is a second index to
+keep consistent through every edit — the exact class of duplicated truth this page keeps removing.
+§5 improves the foreign half of the problem for free: "who references foreign object X" reduces to
+the local question "who references proxy P".
 
 **One directory per world.** A memoryID may live in `storageLogicalObjects`, in `storageObjects3D`,
-or in any of the nine 2D record vectors. A pipe→nozzle reference stays inside `storageObjects3D` and
-is fine — but a P&ID symbol referring to the 3D equipment it represents, an ordinary CAD
-requirement, needs a resolver spanning all of them. **This is the unification question of this page
-arriving from another direction: one object directory is what makes one resolver possible.**
+or — once residency lands — in the 2D world's directory. A pipe→nozzle reference stays inside
+`storageObjects3D` and is fine, but a P&ID symbol referring to the 3D equipment it represents, an
+ordinary CAD requirement, needs a resolver spanning all of them. `ResolveObject` must therefore be
+specified from the start as *searching the tab*, not *searching one vector*, even while only one
+vector is searchable.
 
-### 3.7 Status
+### 3.7 Decisions
 
-Decided: references store `memoryID`; directories stay per-tab with tab 0 as the shared catalog;
-references may only target the calling tab or tab 0.
+Decided, and not to be re-litigated:
 
-Open: whether to partition the memoryID space for O(1) routing, whether to adopt `ReferenceID`
-(minus `data`) or a plain `uint64_t`, and how reverse lookup is answered. None of it is built.
+1. **References store an id, never a raw pointer** ( §3.3 ). A transient cache may hold an id.
+2. **The memoryID space is never partitioned** ( §3.5 ). FINAL.
+3. **`ResolveObject(memoryID)` binary searches the calling tab's directory only.** No fallback, no
+   process-wide index.
+4. **The sortedness invariant is asserted at all three append sites**, including
+   `FlushGeneratedGeometryBatch`.
+5. **All three dead mechanisms are deleted**: `राम::id2MemoryMap` ( and the `DefragmentRAMChunks`
+   comment that names it, which should instead say "update the owning tab's directory entry" ),
+   `MemoryIDMap`, and the `ReferenceID` struct — whose useful content survives as the
+   ForeignReference payload in §5, and whose cached `data` pointer does not survive at all.
+6. **Reverse lookup is a linear scan** ( §3.6 ).
 
-## 4. Why the residency half still matters
+None of it is built.
 
-Not memory. **Optional properties on intelligent 2D objects.**
+## 4. persistedId — the bands
 
-Page2D today is dumb geometry, so it has no optional properties and the arena buys it nothing. That
-ends with P&ID, SLD, PFD and interlock diagrams. A P&ID line is not a line: it carries service,
-fluid, line number, pipe class, insulation spec, tracing, tag, and from/to equipment. Most lines
-carry a few of those; no line carries all of them. That is precisely the case `Optional64` was
-specified for — and §2.6 is why it cannot be reached until the records live in the arena.
+memoryID has no bands. persistedId has them, they are the ones declared at the top of this page,
+and the August 2026 revisit left them intact. What changed is what they *mean* and what they are
+*not* allowed to imply.
 
-The hazard if that half is skipped is not fat records, it is **a second, parallel optional-property
-mechanism for the 2D side**. Two of everything is the pain the Properties Pane already felt; a
-second `Optional64` would make it structural.
+### 4.1 The bands as they now stand
 
-## 5. Options — and which one landed
+| Range | Band | Assigned by | Allocation |
+|---|---|---|---|
+| [0, 2^32) | **permanently invalid** | nobody | the truncation guard — §4.5 |
+| [2^32, 2^40) | **application catalogue** | Mission Vishwakarma developers | random draw — §4.3 |
+| [2^40, 2^41) | **local** | the client, offline or pre-commit | sequential |
+| [2^41, 2^42) | reserved gap | nobody | — |
+| [2^42, 2^48) | **permanent** | the authority | sequential |
+| ≥ 2^48 | reserved ( top 16 bits zero ) | nobody | — |
 
-Four were weighed: **A** leave the split; **B** a common identity POD header in both types;
-**C** a separate `META_DATA2D`; **D** full unification, 2D deriving `META_DATA` and living in the
-arena behind a directory.
+Uniqueness is **within one file**. Two files may hold the same persistedId for entirely different
+objects — that is normal and expected, and it is precisely why memoryID exists ( §1, and the
+original essay's closing paragraphs ).
 
-**C was rejected outright** — everything it would hold is common to both worlds, so it would have
-guaranteed two of everything forever. **D is the destination.** What has actually been built is
-**B's outcome by D's mechanism**: the records derive `META_DATA` (D's inheritance, not a separate
-header) but stayed value types in `std::vector` (B's residency). That was not a compromise so much
-as the discovery that step 3 is two migrations wearing one number — and it leaves the route to D
-open, because finishing it is now "change where they are allocated" rather than "change the type
-again".
+### 4.2 The local band and the renumbering dance — RETAINED
 
-## 6. Settled — do not re-litigate
+Points 3 and 4 of the original essay stand: a client working offline assigns ids from the local
+band, and when the work reaches the authority — a central server, or the local `.yyy`
+virtual-server host — the authority **assigns permanent ids and tells the client to update its
+memory**. Local-band ids may be duplicated across machines until that happens.
 
-1. **No `META_DATA2D`.** One object model. §2.4 has the reason: the dividing line is containment,
-   not dimensionality.
-2. **`memoryIDContainer` is the container and `memoryIDGenerator` is the owner**, both ordinary
-   fields on `META_DATA`. This reversed the page's original proposal to make ownership an
-   *optional property*, which was wrong about what optional properties are for: `Optional64` exists
-   for the P&ID case — dozens declared, a handful set per instance — not for one field an object
-   either has or has not. A plain field is 8 bytes and one load; reaching it through
-   `enableProperty` and a packed-buffer shift would cost 40 bytes of machinery on exactly the
-   objects that carry it.
-3. **References store `memoryID`, never a raw pointer**, and directories stay per tab with tab 0 as
-   the shared catalog. §3 has the reasoning; none of it is built.
-4. **No 2D type declares an optional property** until 2D objects are in the arena and a lookup
-   mechanism exists (§2.6).
+This was reconsidered in August 2026 and **deliberately kept**. The alternative — the file's own
+host assigns permanent ids immediately, so nothing is ever renumbered — is simpler, but it gives up
+the property that made the band scheme worth having: a client can create thousands of objects with
+no authority reachable, and the ids it hands out are unmistakably provisional *by their value*. A
+reader can tell a committed id from an uncommitted one without consulting anything.
 
-## 7. Sequencing — and what it came to
+The cost is real and must be designed for, not discovered: **renumbering rewrites references.** When
+the authority renumbers object 2^40+7 to 2^42+9000, every reference field in that file that named
+2^40+7 has to be rewritten in the same transaction. Two things keep that bounded:
 
-Steps 0, 1 and 2 are shipped. Step 3 is half done. What follows is the state of each and the facts
-that constrain what is built next; the blow-by-blow of how each landed is in git history and, for
-step 2, in `2Drendering.md`.
+- **It is file-internal.** Nothing outside a file ever names that file's renumberable ids, because
+  a foreign reference goes through a proxy and §5.5 forbids pointing a proxy at a provisional id.
+  So renumbering never reaches across a file boundary, and never invalidates anyone else's data.
+- **The reference set is enumerable.** Every reference is either a plain same-file id field or a
+  proxy payload; both are ordinary object payloads reached by the same sweep that renumbers.
 
-### Step 0 — `Optional64`. DONE
-Built, driver-tested, and with no consumer — §2.6 has what it is, what it cost the arena, and the
-constraint that governs when 2D can use it.
+### 4.3 What the catalogue band is, and is not
 
-### Step 1 — parenthood. DONE
-`memoryIDContainer` is the container and `META_DATA::memoryIDGenerator` is the owner, in both
-worlds. `META_DATA` went 56 → 64 bytes, now static_asserted; a `uint64_t` cannot fit the 7 trailing
-pad bytes in any field order, so those 7 survive and the next *small* field is still free.
+**Clarified 2026-08-26, and this correction matters.** The [2^32, 2^40) catalogue band is for
+**items shipped as part of the application itself** — the standard steel section catalogue, and
+anything else the developers assign and version alongside the binary. Nothing else.
 
-**There is no `persistedGeneratorId`, and that is the load-bearing discovery.** The file stores ONE
-parent id — the generator if there is one, else the container — and the loader rebuilds the split
-by asking what TYPE the stored parent turned out to be. 3D needed no change at all: every existing
-read of `memoryIDContainer` was already container semantics. The 3D save path still does not
-perform the collapse, because no 3D type can generate anything until templates exist; a `_DEBUG`
-`[3d][warn]` fires if one ever sets the field.
+**A company's own catalog is not this.** Company-specific catalogue items — a firm's standard
+nozzle library, its own bolt tables, its internal component families — are **ordinary engineering
+objects in an ordinary `.yyy` file**, drawing ordinary ids from the local and permanent bands like
+any 3D or 2D object. They are catalog-like in *use*, not in *identity*.
 
-### Step 2 — page the Page2D world. DONE
-**+5 lines on a 1M-line sheet: 3,386 ms → 1.29 ms, 30.5 MB staged → 164 bytes. A selection click on
-a 2M-line sheet costs 4 bytes and 0.51 ms.** The design, the cost table, compaction and the full
-before/after numbers are in **`2Drendering.md`, "Page2D memory paging — as built"** — they are not
-repeated here.
+Two consequences follow, and neither is a problem once §5 is in place:
 
-The RCU clone this step was named after never appeared: a 2D page holds fixed-stride records under
-ONE indirect command, so appends write the unpublished tail and patch `InstanceCount`, edits are
-≤8-byte flag stores, and the only copy is compaction's GPU-to-GPU pack. The word "clone" does not
-occur in the 2D code.
+1. **A band no longer tells you what kind of thing an id names.** A company catalog item and a piece
+   of project geometry are numerically indistinguishable. Any design that wanted to route a lookup
+   by testing "is this a catalog id" is therefore impossible — which is a second, independent reason
+   for §3.5's no-partitioning rule and for §5's proxy: **file identity, not id value, is what
+   distinguishes a foreign target.**
+2. **Random allocation is a catalogue-band property only** ( July update point 5 ). It exists to
+   stop parallel developer branches conflicting over a shared counter. A company catalog file has an
+   authority like any other file, so it gets sequential ids and the locality they buy.
 
-Four things that constrain anything built on top of it:
+### 4.4 Packing is gone
 
-- **The `objectId -> page` registry is copy-thread-private and deliberately NOT the CPU object
-  directory §3 wants.** It maps to a GPU location, which is what §2.5 says `InstanceRegistry` is.
-  Same for `gpuLocation`, the per-page `placements` and `stampedSelection`: all unlocked, so
-  anything touching them lives inside `ProcessCad2DCopyBatch`.
-- **An object never straddles a page** — the registry names one run, so the filler places whole
-  objects and opens a new page for the remainder.
-- **Two commands for one object in one batch used to draw it twice.** The hide pre-pass cannot
-  catch it structurally, so `classify` drops a repeated MODIFY of an id it has already queued and
-  `RegisterPlacement` uses `insert` rather than `operator[]`. Reachable in practice — two clicks of
-  a polyline draining together.
-- **Editing an object moves it to the front of the overlap order**, because a modify is an append.
-  Invisible for opaque strokes on white; real for overlapping coloured geometry. Accepted.
+`storage.md` §7.3 specified a packed 64-bit reference: 8 bits reserved, 16 bits of file alias, 40
+bits of local object id. **Withdrawn, 2026-08-26.** Three independent reasons, any one sufficient:
 
-What it cost that is new and resident: `recordIndex` ~50 MB at a million objects, `gpuLocation`
-another ~50 MB, per-page placement lists ~16 MB. All three are revisited by step 3's residency half.
+- **A `.zzz` project may reference more than 2^32 files**, so a 16-bit alias — and any fixed alias
+  width — is a ceiling that will be hit. The 65,534-external-files-per-`.yyy` limit is **lifted**.
+- **Permanent ids are no longer constrained to 2^40.** The permanent band runs to 2^48, so 40 bits
+  cannot hold one. `storage.md`'s `CHECK (object_id < 1099511627776)` constraints are superseded.
+- **Packing forces every schema to understand aliasing.** With the proxy, only one payload does.
 
-**One unreproduced crash, twice seen**, both times after the window sat minimised for about a
-minute with a large 2D drawing loaded — `2Drendering.md` carries the detail and the diagnostic that
-would settle it (`retireBacklog`, read *while* minimised). Not caused by step 2; surfaced during it.
+The replacement is not a wider packed word. It is §5: **the alias and the target id are two
+separate `uint64` fields in the proxy's protobuf payload**, varint-encoded, so a small alias still
+costs one or two bytes on disc while nothing has a width ceiling at all.
 
-### Step 3 — migrate the 2D object model. IDENTITY DONE, RESIDENCY NOT STARTED
-It is two migrations wearing one number, and only the second needs the arena:
+### 4.5 What survives unchanged
 
-**(A) Identity — DONE 2026-08-26.** All nine `Cad2D*RecordCPU` types derive `META_DATA`. One object
-model, one type to dispatch on, `dataVersion` in 2D, `dataType` set by every constructor (which
-retired the nine-overload `Cad2DKindOf` table). Records stay value types in `std::vector`. Sizes in
-§2.7. The round-trip oracle (`validations/yyy_roundtrip`) stayed green throughout.
+- **The invalid floor below 2^32**, and the truncation guard it buys. Every valid id, in either
+  space, has a bit set above the 31st. `MINIMUM_VALID_ID` in `ID.h` is the check.
+- **The top 16 bits are zero.**
+- **The 63rd bit is the SQLite sign bit and is always 0.**
+- **Ids are never recycled**, in either space ( §3.3 ).
+- **The 62nd bit is no longer a flag** and returns to being an ordinary unusable-because-reserved
+  bit. Nothing is gained by reclaiming it and nothing needs it.
 
-Two things worth not re-deriving:
+## 5. Foreign references — the ForeignReference proxy
 
-- **A phased migration needs an accessor bridge, and it is what a mechanical rename destroys.**
-  Migrating one type first meant generic code could name neither spelling, so getters and setters
-  overloaded on `const META_DATA&` versus each unmigrated type carried it — the overload set phases
-  itself. Eight generic sites needed it. The bridge was deleted the moment the ninth type landed.
-- **"0 means unassigned" stops being expressible**, because `META_DATA`'s constructor issues an id.
-  Every `objectId == 0` sentinel went unreachable and was retired, and three lambdas that set the
-  id to 0 for later assignment now take a fresh one eagerly. No compiler error points at any of it.
+A reference that leaves the file needs three things a same-file reference does not: which file, a
+resolution state that can be something other than "resolved", and somewhere to put both. The design
+adopted 2026-08-26 gives all three one home.
 
-**(B) Residency — not started.** Payloads into the arena behind a directory; `CommandToCopyThread2D`
-stops shipping records by value and becomes a variant (§9); `Optional64` becomes reachable, but
-only under §2.6's constraint and once a lookup mechanism exists. **Worth deciding before committing
-to option D as written: arena-allocated fixed BLOCKS of records rather than one allocation per
-record.** It keeps streaming contiguity inside a block, keeps `MemoryGroupOf` correct because the
-blocks come from the tab's own group, and turns a 100k-object DXF import into ~100 allocations
-rather than 100,000 — which is exactly the allocation pattern §8 still calls untested.
+### 5.1 The shape
 
-Left over, cheap, unblocking nothing: decide whether upsert should *increment* `dataVersion` rather
-than overwrite it, and whether `META_DATA` wants a constructor that issues no id — the 912-byte
-`CommandToCopyThread2D` holds all seven geometry types as members and so burns seven ids per
-command constructed.
+- **Same-file reference:** the field holds a plain 64-bit id. A memoryID in RAM; the target's
+  persistedId on disc. Nothing else. This is the overwhelmingly common case and it stays free.
+- **Foreign reference:** the field holds the id of a **ForeignReference proxy object living in this
+  same file**. The proxy's payload names the foreign file and the object inside it.
 
-## 8. Risks
+So **every reference field, everywhere, in RAM and on disc, is one 64-bit same-file id.** The
+referring object never learns that foreign files exist. Only the proxy's payload does.
 
-- **Page2D is currently the more complete half of the application** — transforms, assets, DXF
-  import, printing, persistence all live there. Step 3 is weeks, not days.
-  *RETIRED for the identity half, which took hours rather than weeks — 234 mechanical renames the
-  compiler located. It stands for the residency half, which is where the weeks are.*
-- **It runs through the save/load path**, where a defect corrupts user files silently rather than
-  crashing. That path needs round-trip assertions before the migration, not after.
-  *DONE, and it earned its keep: `validations/yyy_roundtrip` was built first and stayed green
-  through every step. Two of its three initial red rounds were the TEST misunderstanding the
-  object model, not defects — which is exactly the confusion worth having before a migration
-  rather than during one.*
-- **Step 2 must justify itself on its own performance numbers** before step 3 is committed to. If
-  paging does not land, step 3 buys the object model at the price of the rebuild.
-  *SATISFIED — the numbers are in `2Drendering.md`.*
-- **The arena has no defragmentation in service yet** (`DefragmentRAMChunks` exists; the chunk
-  compaction path is not exercised at 2D volumes). A DXF import creating 100k arena objects is a
-  much heavier allocation pattern than anything the arena has carried so far.
-  *STILL LIVE, and now the main risk left in step 3, because it belongs entirely to the residency
-  half. It is also the argument for arena-allocated fixed BLOCKS of records rather than one
-  allocation per record (§7 step 3): the same import becomes ~100 allocations instead of 100,000.*
+### 5.2 Why a proxy rather than an inline foreign reference
 
-## 9. Incidental findings
+- **Uniformity.** One field shape, one resolution entry point, one thing for the properties pane,
+  undo, and the copy threads to understand. This is what retires the 62nd-bit flag: there is no
+  longer anything to flag.
+- **Fan-in dedup.** Ten members made from the same catalogue profile store ten 8-byte local ids and
+  share **one** proxy. An inline design repeats the full foreign identity ten times.
+- **One home for state.** Resolution state, the cached resolved target, the expected type, and any
+  future permission or version outcome live on the proxy — **once per foreign target**, not once per
+  referrer. §6 is only writable because this place exists.
+- **Re-resolution touches proxies only.** A catalog remounted at a new path, re-aliased, updated, or
+  temporarily unavailable changes *N-distinct-targets* proxy objects. It never touches the model.
 
-Recorded here because they surfaced during this analysis, not because they are part of the proposal.
+The cost is one indirection on a foreign hop, and it is paid against a cached memoryID, not a
+search. Accepted.
 
-- **`CommandToCopyThread2D` is 912 bytes** — it was 736, and grew by 176 when the seven geometry
-  records it holds as simultaneous members each gained a `META_DATA` base (§2.7). Six of the seven
-  are dead on every command, so a 100k-record DXF import now pushes ~91 MB through the queue
-  instead of ~11 MB. A variant or union fixes it; step 3's residency half forces the change anyway,
-  because a record that lives in the arena cannot be shipped by value.
-- **The Application Tab's Stats view under-reports.** It reads the arena's `liveChunkCount`, and 2D
-  records are not in the arena — so a 100k-line drawing is invisible to it today.
-- **The 2D object model used to live in a rendering header, and the reason it did is structural.**
-  The nine `Cad2D*RecordCPU` types were declared in `RenderPage2D.h`; they have since moved to the
-  2D data header, which is where the 3D half keeps its equivalents — `RenderScene3D.h` defines no
-  engineering object at all. But the *cause* is worth recording because it outlives the file move:
-  the two copy threads are fed differently. `CommandToCopyThread` carries `GeometryData` — vertices
-  baked by `GeometryForObject` on the **engineering** thread — so 3D's render layer never learns
-  what a `CUBOID` is. `CommandToCopyThread2D` carries the engineering records themselves and the
-  copy thread generates the geometry, so 2D's render layer structurally must know the object model.
-  That is also why the command is so large. **Any fix that makes 2D's render layer stop depending
-  on the object model has to move geometry generation to the engineering thread first**, which is
-  the same territory as step 2 above. Until then the dependency is honest and merely points the
-  right way.
-- **`डेटा-सामान्य-2D.h` holds an earlier, unbuilt 2D schema** — 18 types, referenced nowhere. Kept
-  rather than deleted, because it is not superseded junk: it carries **layers**, **line types**,
-  indexed colour palettes and explicit draw order, none of which exist in the shipped records, plus
-  `DIMENSION`, `LEADER`, `NURBS`, `TABLE`, `HATCH_STYLE`, `POINT2D` and a true `RECTANGLE`, which
-  have no counterpart at all. Neither generation is a superset of the other, so merging them is a
-  per-field decision belonging with step 3, not a refactor. Each dead type now names its live
-  replacement in a comment.
-- **Three dead mechanisms** (§2.5, §3.1): `राम::id2MemoryMap`, `MemoryIDMap` and `ReferenceID`
-  are each declared for the id-to-object job and none of them is referenced anywhere. Wire one or
-  delete the rest; a declared-but-unpopulated index invites someone to trust it.
-- **§2.5's "linear scan in 12 places" over-counts what a resolver would replace.** Ten of the
-  twelve are genuine full traversals — persistedId assignment, save, zoom-to-fit,
-  hide/move-selected, tree build — that want every object and are already optimal. Only two are
-  id-to-object lookups: `ModifyObjectProperty` and the properties-pane read. Good news rather
-  than bad: `ResolveObject` is a two-call-site change on the 3D side.
-- **There is a third append site to `storageObjects3D`**, `FlushGeneratedGeometryBatch`, which
-  bulk-inserts and carries no sortedness check — though the header comment claims both sites do.
-  It is correct today (one thread, ids issued in order) but it is the import path, so it is the
-  one most likely to acquire a second producer later.
+### 5.3 Payload, and what never persists
+
+The proxy is an **ordinary object**: it derives `META_DATA`, lives in the arena, appears in the
+tab's directory, carries a `dataType`, and is stored as an ordinary `object_store` row with an
+ordinary persistedId from its own file's space. It therefore rides transactions, sync, `change_seq`,
+tombstones and the two-phase loader **for free**, with no parallel machinery. This is also
+consistent with `storage.md` §14.6's own verdict that relationships are engineering data, not a
+database-layer table.
+
+Persisted payload — protobuf, no packing, varint-encoded:
+
+```text
+fileAlias      uint64   which external file. 0 = this file (a dangling same-file ref, §6.2)
+targetObjectId uint64   the target's persistedId INSIDE that file
+expectedType   uint32   what type the reference was created against
+```
+
+`expectedType` earns its place: a foreign resolution that lands on a *different* type than the
+reference was created against is a replaced-or-corrupt outcome, not a valid target. Without it, a
+recycled-by-file-rewrite id resolves silently to the wrong kind of object — the failure §3.3 exists
+to prevent, arriving through the file boundary instead of through a pointer.
+
+RAM-only, never serialized, recomputed every session:
+
+```text
+state              the resolution outcome (storage.md §8's set)
+resolvedMemoryId   the target once found. An ID, never a pointer (§3.3)
+resolutionEpoch    which mount generation this answer belongs to
+```
+
+### 5.4 The alias table
+
+The proxy stores an **alias**, not a file identity. The alias resolves through the file's own
+`external_file` table ( `storage.md` §14.3 ) to the `file_uuid`, canonical URI, last known path and
+content hash.
+
+That indirection is kept deliberately: **file identity lives in exactly one row**, so a catalog that
+moved, was renamed, or was replaced by a newer revision is **one table update**, not a sweep over
+every proxy. Aliases are per-file and never global — file A may know catalog C as alias 7 while file
+B knows the same catalog as alias 12 — which is `storage.md` §8's rule and stays true.
+
+Two amendments to that table follow from §4.4: the alias is **`uint64` with no upper CHECK**, and
+alias values keep only their two reserved meanings — `0` = this same file, `1` = a
+transaction-scoped temporary reference that must never appear in a committed payload.
+
+### 5.5 Rules
+
+1. **A foreign reference may target a mounted catalog `.yyy`, never a sibling project.** Decided
+   2026-08-26. It keeps authority boundaries clean and means the server's permission model never has
+   to answer for cross-project object visibility.
+2. **A foreign reference may only target a permanent id.** Creating a proxy that points at an object
+   whose id is still local-band, or at an alias-1 temporary, fossilizes a number that is about to
+   change ( §4.2 ). Assert at proxy creation, not at resolution.
+3. **One proxy per (alias, targetObjectId) per file.** A unique index enforces it going forward;
+   the loader merges duplicates found in files written before the rule.
+4. **A proxy is never shared between files.** It belongs to the file that refers outward.
+5. **Alias 1 never reaches disc.** RAM and transaction scope only.
+
+### 5.6 Loading a shared catalog: one copy per tab now, a registry later
+
+Multiple projects may share one catalog `.yyy`, and the same catalog file may be needed by several
+independently-opened tabs. Two options, and the sequence is decided:
+
+**(i) Each tab loads its own copy — do this first.** The catalog's objects are loaded into the
+mounting tab's own arena group and its own directory. Simple, obviously correct, no lifetime
+question, no cross-thread sharing, and it is what makes §3.5's single-directory resolution possible.
+The cost is duplicated memory: a catalog mounted by four tabs is resident four times.
+
+**(ii) A process-wide `FileRegistry` keyed by `file_uuid` — later.** First mount loads the file
+read-only; later tabs reuse it. `DATASETTAB` already carries the `fileID` field this would key on.
+It is the optimization the old `ReferenceID` TODO was reaching for, and it is worth doing when
+duplication is *measured* to matter — a large shared catalog open in many tabs — not before.
+
+**The proxy design is indifferent to which is in force**, which is the point: it resolves through
+the alias and the registry either way, so (i) → (ii) changes no reference, no payload and no schema.
+What (ii) *does* change is §3.5 — it reintroduces a second directory to route to, a lifetime owned
+by no tab, and an arena group that breaks `memoryGroupNo == tabNo`. That is the bill for (ii), and
+§3.5 states it so it is not a surprise later.
+
+## 6. Loading, staleness and broken references
+
+A persisted reference names an object that may not have been read yet, may never have existed, may
+have been deleted, may have been replaced, or may live in a file this session cannot open. All five
+must be survivable. **None of them may lose data, and none of them may fail a load.**
+
+### 6.1 Two-phase load — ordering is not a state, it is a phase
+
+A reference to an object further down the file is not a problem to record; it is a problem to
+*sequence away*:
+
+```text
+Phase 1  read every row; construct every object; build persistedId -> memoryID for the file;
+         push each unresolved reference field onto a fixup list
+Phase 2  sweep the fixup list, translating each persisted target id into a memoryID
+```
+
+Order-independence comes free, and it must, because SQLite promises no row order — a `VACUUM` can
+reorder the table under a loader that assumed topological order. The save path's mirror
+(`memoryIdToPersistedId`) and the load path's `persistedIdToMemoryId` already exist for
+containment; a reference field carries both halves through the same maps.
+
+### 6.2 When the target is not there
+
+After phase 2, an unresolved same-file target is a real inconsistency — corruption, external
+tampering, a partial write, or a genuinely deleted object. The response is graded, not binary:
+
+1. **Consult `object_tombstone`.** Found → the state is *deleted*, or *replaced* if
+   `replacement_object_id` names a successor. Follow a replacement chain with a **depth cap and a
+   cycle guard** — a chain can dangle or loop, and neither may hang a load.
+2. **Not found → *missing*.** Combined with the payload CRC and the §4.5 validity floor, a target id
+   below 2^32 is reported as *corrupt* rather than *missing*, because it is diagnostic: it means
+   something truncated a 64-bit id.
+3. **Promote the dangling reference to a proxy.** Build a ForeignReference with `fileAlias = 0`
+   carrying the original target id and the outcome state. The referring field now holds a valid,
+   resolvable local id; the properties pane can say *"target #N missing"*; and — the point —
+   **saving round-trips the original id unchanged.**
+
+That third step is why one object type serves foreign references, broken references and
+permission-denied references alike. The uniformity is not tidiness; it is what makes the recovery
+path exist at all.
+
+For a foreign target the same grading applies, driven by the proxy's `state` field over
+`storage.md` §8's outcomes: *resolved*, *missing*, *deleted*, *moved*, *replaced*,
+*permission_denied*, *file_not_loaded*, *file_alias_unknown*, *schema_unsupported*, *corrupt_payload*.
+`file_not_loaded` is the ordinary case, not an error — an `external_file` row may carry
+`load_policy = load_on_demand` or `never_auto_load`, so a proxy may sit unresolved for an entire
+session and that is correct behaviour.
+
+**State is derived truth.** It is recomputed per session and invalidated by bumping a
+per-mounted-file **resolution epoch**, so remounting or updating a catalog cannot leave a stale
+*resolved* answer standing. Only the target's *identity* is ever persisted.
+
+### 6.3 Never write zero, never hard-fail
+
+Two rules, both about not converting a recoverable problem into a permanent one:
+
+- **A reference whose target was absent this session is never written back as 0.** The original id
+  round-trips. The file may be opened tomorrow with the catalog mounted, the network up, or the
+  corruption repaired from backup — and it must then resolve. Zeroing it makes the loss permanent
+  and silent, which is the worst outcome available.
+- **A bad reference never fails a load.** One corrupt row degrading to a reported broken reference
+  beats refusing a 10-million-object file. Loading reports counts by outcome at the end; the
+  properties pane and the model tree show the state per object.
+
+### 6.4 Lifecycle states
+
+`META_DATA::isDeleted` is a bool today. `storage.md` §9 specifies four states, and they exist
+precisely so that external references can be answered after a deletion:
+
+```text
+0  live
+1  soft_deleted             hidden from the model, payload still present (undo, recovery, review)
+2  tombstone_retained       payload may be gone; identity and deletion metadata remain,
+                            so a foreign reference can be answered "deleted" or "replaced"
+3  purged / archive boundary  only after explicit compaction policy. Never permits id reuse.
+```
+
+**Adopted in the design now; implemented when delete ships.** No delete operation exists anywhere in
+the application yet ( `undo-redo.md` ), so there is nothing to set the states from. `META_DATA` and
+the relevant code take the enum when the delete path is built — the bool is not widened
+speculatively, but nothing may be designed that assumes a bool is enough.
+
+## 7. Settled — do not re-litigate
+
+1. **One object model, no `META_DATA2D`** ( §2.4 ): the dividing line is containment, not
+   dimensionality.
+2. **`memoryIDContainer` is the container, `memoryIDGenerator` is the owner**, both ordinary fields
+   on `META_DATA`. Not optional properties — a plain field is 8 bytes and one load.
+3. **References store ids, never raw pointers** ( §3.3 ).
+4. **The memoryID space is never partitioned** ( §3.5 ). FINAL.
+5. **Resolution searches the calling tab's directory and nothing else** ( §3.5 ).
+6. **Reverse lookup is a linear scan** ( §3.6 ).
+7. **Foreign references go through a ForeignReference proxy, stored as an ordinary object row**
+   ( §5 ), with alias and target as separate unpacked `uint64` fields.
+8. **No packing of file alias into an id, and no external-file count limit** ( §4.4 ).
+9. **The local band and the renumbering dance are retained** ( §4.2 ).
+10. **The application catalogue band is for application-shipped items only**; company catalogs are
+    ordinary objects in ordinary files ( §4.3 ).
+11. **A foreign reference may target a mounted catalog `.yyy`, never a sibling project** ( §5.5 ).
+12. **Shared catalog: one copy per tab now, a `FileRegistry` later** ( §5.6 ).
+13. **A broken reference is promoted to a proxy and round-trips its original id. Never zeroed, never
+    fatal** ( §6.2, §6.3 ).
+
+## 8. Open, and deliberately deferred
+
+**Open — needs a decision before implementation:**
+
+- **When is a file safe to reference?** §4.3 made company catalogs ordinary files with ordinary
+  ids, and §4.2 keeps local-band ids renumberable. A company catalog that has never reached an
+  authority therefore holds provisional ids. §5.5 rule 2 forbids pointing a proxy at one, which
+  makes the failure loud rather than silent — but it leaves a workflow question: a firm builds a
+  catalog locally and wants to reference it before any server exists. The candidate rule is
+  **a file is mountable as a shared catalog only once it contains no local-band ids**, checked at
+  mount. Assertable, and it makes renumbering strictly file-internal ( §4.2 ). Not yet decided.
+- **Version skew on a mounted catalog.** `external_file` carries `content_hash` and
+  `expected_schema_catalog_hash`. Decide whether a mismatch warns and re-resolves, or blocks the
+  mount. Proxies re-resolve per session ( §6.2 ), so a stale cached resolution cannot survive an
+  update — but a *silently different* catalog revision is a different problem.
+- **Proxy orphan collection.** When the last referrer to a proxy is deleted, the proxy is garbage.
+  It is small and harmless, so the choice is between never collecting, collecting at save, and
+  collecting during compaction. No urgency until delete exists.
+
+**Deferred, deliberately — these are decisions, not gaps:**
+
+- **Reverse lookup stays a linear scan** ( §3.6 ). Revisit only if a real workflow makes referrer
+  queries hot.
+- **`LINE_MEMBER::profileId` stays as it is.** It names a row in the compile-time embedded steel
+  catalogue ( `SteelProfileCatalog.h` ), which is application-shipped data in the [2^32, 2^40) band
+  ( §4.3 ), version-locked to the binary, and needs no file identity and no proxy. If catalogues
+  later become mountable `.yyy` files, it becomes an ordinary foreign reference through a proxy like
+  anything else — decided then, not now.
+- **The 62nd bit is not reclaimed** ( §4.5 ).
+- **Optional-property back-references are not built.** §3.6 chose the scan instead.
+
+## 9. Relationship to `storage.md`
+
+`storage.md` is the authority on the **file format** — schema, tables, transactions, sync,
+permissions. **This page is the authority on identity**: what an id means, which band it comes from,
+what a reference stores, and how it resolves. Where the two disagree, this page wins on identity and
+`storage.md` wins on everything else.
+
+Four parts of `storage.md` were superseded by the August 2026 decisions. **All were amended
+2026-08-26**, so the two pages now agree:
+
+| `storage.md` | Used to say | Amended to |
+|---|---|---|
+| §7.2 | persistent ids use the **lower 40 bits** only | the band table of §4.1, with the [2^32, 2^48) range and the company-catalog clarification of §4.3 |
+| §7.3 | **packed** reference: 16-bit alias + 40-bit id | the ForeignReference proxy, alias and target as separate unpacked `uint64` varints ( §4.4, §5.3 ) |
+| §14 | `CHECK (object_id < 1099511627776)`; `CHECK (external_file_alias BETWEEN 2 AND 65535)` | `CHECK (object_id >= 2^32 AND object_id < 2^48)`; alias `>= 2` with no ceiling. §14.4 notes proxies are ordinary rows; §14.6's discarded `object_relation` names the proxy as its replacement |
+| §17 | resolution by unpacking a packed reference | resolution by branching on whether the id names a proxy, with the expectedType check and the never-zero / never-fatal rules of §6 |
+
+What `storage.md` contributes to this page and keeps: the ten resolution outcomes ( §8 there → §6.2
+here ), the four lifecycle states ( §9 there → §6.4 here ), the `external_file` alias table ( §14.3
+there → §5.4 here ), the `object_tombstone` table with `replacement_object_id` ( §14.5 there → §6.2
+here ), and the authority model that decides who may assign a permanent id at all ( §10.1 there →
+§4.2 here ). Its §14.6 `object_relation` table stays discarded, as it already says — the proxy in
+§5 is engineering data in an ordinary object row, which is exactly what that note asked for.

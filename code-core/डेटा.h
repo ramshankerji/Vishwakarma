@@ -37,7 +37,7 @@ The sequence of fields in this struct has been specifically planned considering 
 For our Data-Structure design approach, read commentary on MemoryManagerCPU.h
 
 One field HAS been added since that warning was written: memoryIDGenerator, 2026-08-23, settling
-parenthood across 2D and 3D (mv.ramshanker.in/software/id section 7.2). In the same pass
+parenthood across 2D and 3D (mv.ramshanker.in/software/id section 2.4). In the same pass
 memoryIDParent was RENAMED to memoryIDContainer - it always meant the container, and sitting next
 to a second parent-ish id it had to say so. Anything written before that date, git history and
 older design notes included, uses the old name. It took the struct from 56
@@ -218,7 +218,7 @@ struct META_DATA {
     uint64_t memoryID = 0;// This is temporary CPU ID inside currently running software process.
     /* THE CONTAINER this object lives in - the Scene3D, Page2D or FOLDER that holds it. Temporary
     CPU ID. "0" simply means it has not been initialized. This meaning is uniform across 2D and 3D
-    (mv.ramshanker.in/software/id section 7.2): if you want to know WHERE an object is shown, this
+    (mv.ramshanker.in/software/id section 2.4): if you want to know WHERE an object is shown, this
     is the field. Do not overload it with ownership - that is the next one. */
     uint64_t memoryIDContainer = 0;
     /* THE GENERATOR that produced this object - the asset instance or template it was stamped out

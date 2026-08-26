@@ -82,7 +82,7 @@ PSInput main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID) {
     Cad2DCurveRecord rec = Curves[instanceId];
 
     // HIDDEN bit (kCad2DHiddenFlag), same as the line shader: collapse the quad to a point so the
-    // superseded record of a modified object rasterizes to nothing (id.md §11.4, step 2d).
+    // superseded record of a modified object rasterizes to nothing.
     if (rec.flags & 2u) {
         PSInput hidden = (PSInput)0;
         hidden.position = float4(0.0, 0.0, 0.0, 1.0);

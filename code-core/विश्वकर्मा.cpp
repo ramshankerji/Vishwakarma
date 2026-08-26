@@ -2318,7 +2318,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 their drawing, "e" modifies every line on it, "m" moves every object in the
                 Scene3D and "n" re-meshes it - each of which PERSISTS. Gate the block as a
                 block: guarding only some of them leaves the rest looking like an oversight
-                rather than a decision (id.md §11.4, sub-step 2f). The camera reset above
+                rather than a decision. The camera reset above
                 stays out of the guard - it is a user convenience, not a stress key.
                 Page2D text entry never reaches here: Cad2DHandleInput consumes CHAR while a
                 text object is being typed, and `continue`s before this switch. */
@@ -2465,17 +2465,16 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 presses accumulate, which is what proves the delta composes onto the existing
                 placement rather than replacing it. */
                 /* Temporary Debug Key: "b" appends lines to the active Page2D on a deterministic
-                grid, to measure and then to beat the Page2D rebuild (id.md §11, step 2a). Shift+B
-                is the sheet - ten presses make the million-line drawing - and plain "b" is the
-                measured event, the five appended lines §8 step 2 states its criterion in. Watch
-                the [cad2d][perf] line the copy thread prints: today `cmds=5` sits next to
-                `expanded=1000000`, and that ratio is the whole point of the step. */
+                grid. Shift+B is the sheet - ten presses make the million-line drawing - and plain
+                "b" is the measured event, five appended lines. Watch the [cad2d][perf] line the
+                copy thread prints: `cmds=5` must sit next to `expanded=5`, not `expanded=1000000`.
+                Figures: 2Drendering.md, "Measured, before and after". */
                 if (input.x == 66 || input.x == 98) { // 'B' & 'b'
                     Cad2DGenerateBulkLines(*myTab, (input.x == 66) ? 100000u : 5u);
                 }
                 /* Temporary Debug Key: "e" MODIFIES lines already on the active Page2D, which is
-                what makes holes - every modify appends a new run and hides the old one (id.md §11,
-                step 2e). Shift+E moves 1,000 of them; plain "e" moves EVERY line, which is the
+                what makes holes - every modify appends a new run and hides the old one.
+                Shift+E moves 1,000 of them; plain "e" moves EVERY line, which is the
                 only way to take a page to 100% holes in one batch and so the only way to see
                 compaction hand a whole page back. Acceptance is two numbers in the [cad2d][perf]
                 line: `holes=` must climb and then fall back when `packed=` fires, and `pages=`

@@ -136,26 +136,46 @@ The code already follows this pattern by assigning memoryID at object constructi
 
 7.2 Persistent local object ID: Persistent engineering identity inside one .yyy: local_object_id. Properties:
 * stored as INTEGER / uint64_t
-* only lower 40 bits used
-* 0 is invalid/null
+* 0 is invalid/null, and **everything below 2^32 is invalid** — the truncation guard
 * unique inside one .yyy file
 * assigned only by authority: server or local .yyy virtual-server host
-* monotonic
+* monotonic within its band
 * not reused during active project life
+
+**`id.md` is the authority on the id space; this section defers to it.** Amended 2026-08-26: the earlier "only lower 40 bits used" rule is **withdrawn**. Persistent ids use the full usable range and are banded:
+
+| Range | Band | Assigned by |
+|---|---|---|
+| [0, 2^32) | permanently invalid | nobody |
+| [2^32, 2^40) | application catalogue — items shipped with the binary only | Mission Vishwakarma developers, random draw |
+| [2^40, 2^41) | local / provisional, pre-commit and offline | the client, sequentially |
+| [2^41, 2^42) | reserved gap | nobody |
+| [2^42, 2^48) | permanent | the authority, sequentially |
+| ≥ 2^48 | reserved, top 16 bits zero | nobody |
+
+Two consequences for this document. **A 40-bit CHECK constraint cannot hold a permanent id** — see §14. And a **company's own catalog is not the catalogue band**: company catalogue items are ordinary engineering objects in an ordinary .yyy, drawing ordinary local and permanent ids. The catalogue band is application-shipped data only.
+
+Local-band ids are **provisional**. When the work reaches the authority it assigns permanent ids and the client updates its memory; references inside that file are rewritten in the same transaction. This is file-internal only, because nothing outside a file may name a provisional id (§7.3 rule below).
 
 Do not recycle object IDs during normal operation. Reason: Recycling IDs can make old external references resolve to a wrong new object. Wrong object resolution is worse than missing/deleted resolution.  
 
-7.3 Packed object reference References inside Protobuf payloads use compact 64-bit packed references:
-* bits 63..56  reserved, currently 0
-* bits 55..40  file_alias
-* bits 39..0   local_object_id
+7.3 Object references — NOT packed. Amended 2026-08-26. The earlier packed 64-bit reference (8 reserved bits, 16-bit file_alias, 40-bit local_object_id) is **withdrawn**. Three reasons, any one sufficient: a .zzz project may reference more than 2^32 files, so any fixed alias width is a ceiling that will be hit; permanent ids run to 2^48 and do not fit in 40 bits (§7.2); and packing forces every object schema to understand aliasing.
 
-Meaning: 
+What replaces it:
+
+* **Same-file reference**: the field holds a plain local_object_id. Nothing else.
+* **Foreign reference**: the field holds the local_object_id of a **ForeignReference proxy object in this same file**. The proxy is an ordinary object with an ordinary object_store row, and its Protobuf payload names the target as **two separate uint64 varint fields** — `fileAlias` and `targetObjectId` — plus an `expectedType`. No packing, so neither field has a width ceiling; varint keeps a small alias one or two bytes on disc.
+
+So **every reference field in every payload is one plain same-file id**, and only the proxy payload understands aliasing. Ten objects referring to the same foreign target share one proxy.
+
+Alias values keep only their two reserved meanings:
 file_alias = 0 :same .yyy file  
 file_alias = 1 :temporary same-file reference, RAM/transaction only, forbidden in committed persistent payload
-file_alias = 2..65535 : external file alias, resolved through external_file table
+file_alias >= 2 : external file alias, resolved through external_file table. **No upper bound.**
 
-Important distinction: object_store.object_id stores only local object ID. Protobuf references store packed file_alias + local object ID. The alias belongs to the referencing file, not the target object.
+Rules: a foreign reference may target a **mounted catalog .yyy, never a sibling project**. A foreign reference may only target a **permanent** id — pointing a proxy at a provisional local-band id or an alias-1 temporary fossilizes a number that is about to change. One proxy per (fileAlias, targetObjectId) per file.
+
+Important distinction: object_store.object_id stores only local object ID. The alias belongs to the referencing file, not the target object. Full design: `id.md` §5.
 
 8. External file references
 A .yyy may refer to other .yyy files. External file aliases are local to each .yyy. Example: In file A, catalog file C may be alias 7. In file B, the same catalog file C may be alias 12. Therefore aliases are not global. External reference resolution result must support: 
@@ -302,9 +322,11 @@ Required keys:
 
 14.3 external_file: Maps local 16-bit file aliases to external .yyy files.
 
+Amended 2026-08-26: the alias upper bound is **lifted** (§7.3). A .zzz project may reference any number of files.
+
 CREATE TABLE external_file (
     external_file_alias INTEGER PRIMARY KEY
-        CHECK (external_file_alias BETWEEN 2 AND 65535),
+        CHECK (external_file_alias >= 2),
 
     file_uuid           BLOB NOT NULL,
     file_public_key     BLOB,
@@ -335,9 +357,11 @@ Suggested load_policy values:
 
 Core engineering object table.
 
+Amended 2026-08-26: the 2^40 ceiling is **withdrawn** (§7.2). The CHECK now enforces the invalid floor and the top-16-reserved rule instead — 4294967296 is 2^32, 281474976710656 is 2^48.
+
 CREATE TABLE object_store (
     object_id       INTEGER PRIMARY KEY
-        CHECK (object_id > 0 AND object_id < 1099511627776),
+        CHECK (object_id >= 4294967296 AND object_id < 281474976710656),
 
     parent_id       INTEGER,
 
@@ -378,13 +402,17 @@ CREATE TABLE object_store (
         REFERENCES object_store(object_id)
 );
 
-Rules: object_id is local ID only, not packed reference. parent_id is same-file parent only. External parent ownership not allowed. object_version is used for conflict detection. change_seq is used for sync ordering. modified_time_utc is not sync truth. data is canonical Protobuf payload.
+Rules: object_id is a local ID. parent_id is same-file parent only. External parent ownership not allowed — a ForeignReference proxy is a reference, never a parent. object_version is used for conflict detection. change_seq is used for sync ordering. modified_time_utc is not sync truth. data is canonical Protobuf payload.
+
+Note: ForeignReference proxies (§7.3) are ordinary rows in this table, with their own object_type and their own object_id from this file's space. They need no separate table and ride transactions, sync and tombstones like any other object.
 
 14.5 object_tombstone: Durable deletion/reference-resolution table.
 
+Amended 2026-08-26: same id range as object_store above (§7.2).
+
 CREATE TABLE object_tombstone (
     object_id              INTEGER PRIMARY KEY
-        CHECK (object_id > 0 AND object_id < 1099511627776),
+        CHECK (object_id >= 4294967296 AND object_id < 281474976710656),
 
     object_type            INTEGER NOT NULL,
 
@@ -409,10 +437,13 @@ CREATE TABLE object_tombstone (
         REFERENCES object_store(object_id)
 );
 
-Rules: Tombstones are retained longer than transaction logs. Tombstone purge does not allow object ID reuse. replacement_file_alias = 0 means same file. replacement_file_alias >= 2 means external file alias.
+Rules: Tombstones are retained longer than transaction logs. Tombstone purge does not allow object ID reuse. replacement_file_alias = 0 means same file. replacement_file_alias >= 2 means external file alias, with no upper bound (§7.3).
+
+This table is what lets a reference to a deleted object resolve to *deleted* or *replaced* rather than merely *missing*, which is the whole reason lifecycle state 2 exists (§9). A replacement chain must be followed with a **depth cap and a cycle guard** — a chain can dangle or loop, and neither may hang a load.
 
 14.6 object_relation: Non-tree engineering relationships.
 THIS TABLE IS TO BE DISCARDED. THIS IS PART OF ENGINEERING DATA, NOT SUPPOSED TO BE EXPOSED TO DATABASE LAYER.
+Settled 2026-08-26: what replaces it is the ForeignReference proxy (§7.3) — engineering data in an ordinary object_store row, which is exactly what this note asked for. Same-file relationships are plain id fields in the referring object's own payload.
 CREATE TABLE object_relation (
     relation_id       INTEGER PRIMARY KEY AUTOINCREMENT,
 
@@ -727,9 +758,11 @@ CREATE TABLE reference_index (
         REFERENCES object_store(object_id)
 );
 
-This table is derived from Protobuf payloads. It is not the canonical source of references.
+This table is derived from Protobuf payloads. It is not the canonical source of references. target_file_alias has no upper bound (§7.3); for a reference that goes through a ForeignReference proxy, the extractor records the proxy's target, not the proxy's own id, so a where-used query answers about the real object.
 
 Use it for: dangling reference scan, safe tombstone purge, impact analysis, where-used queries
+
+Note this table is the ONLY reverse-lookup mechanism, and it is optional and derived. In RAM there is none: `id.md` §3.6 decides that referrer queries are a linear scan, with no back-references and no mirror index.
 
 14.18 integrity_issue: Persistent diagnostics table.  
 CREATE TABLE integrity_issue (
@@ -1126,18 +1159,23 @@ Use: file_uuid, file_public_key, file_fingerprint as separate fields.
 Used to detect whether the executable understands the file’s object types and persistence schemas.
 
 17. Object reference resolution
-Given packed reference: reserved_bits, file_alias, object_id  
-Resolution process:  
-* 1. reserved_bits must be 0.
-* 2. object_id = 0 means null reference.
-* 3. file_alias = 0 means current .yyy.
-* 4. file_alias = 1 is temporary; invalid in committed storage.
-* 5. file_alias >= 2 resolves through external_file.
-* 6. Check whether target file is loaded.
-* 7. Check permission if server-hosted.
-* 8. Check object_store.
-* 9. Check object_tombstone.
-* 10. Return resolution status.
+Amended 2026-08-26 for §7.3: there is no packed reference to unpack. A reference field holds a plain local_object_id, and resolution branches on what that id turns out to name.
+
+Given a reference field holding local_object_id:
+* 1. object_id = 0 means null reference.
+* 2. object_id below 2^32 means corrupt — something truncated a 64-bit id (§7.2).
+* 3. Look it up in this file's object_store. If it is NOT a ForeignReference proxy, it is a same-file reference and resolution ends here — check object_tombstone if the row is absent.
+* 4. If it IS a proxy, read fileAlias and targetObjectId from its payload and continue.
+* 5. fileAlias = 0 means a same-file target that failed to resolve at load — the proxy carries the original id and the recorded outcome (§6.2 of `id.md`). Do not treat it as external.
+* 6. fileAlias = 1 is temporary; invalid in committed storage.
+* 7. fileAlias >= 2 resolves through external_file.
+* 8. Check whether target file is loaded. load_policy may legitimately mean it is not — file_not_loaded is an ordinary outcome, not an error.
+* 9. Check permission if server-hosted.
+* 10. Check object_store, then object_tombstone; follow replacement_object_id with a depth cap.
+* 11. Verify the target's object_type against the proxy's expectedType. A mismatch is replaced/corrupt, never a valid target.
+* 12. Return resolution status.
+
+Two rules the loader must honour, whatever the outcome: a reference whose target was absent this session is **never written back as 0** — the original id round-trips, because the catalog may be mounted or the corruption repaired tomorrow. And a bad reference **never fails a load**; it degrades to a reported status. `id.md` §6 carries both.
 
 Possible status:
 
@@ -1202,7 +1240,7 @@ These are the strongest finalized rules so far:
 * Client temporary IDs are RAM/transaction-only.
 * Object IDs are not recycled during active project life.
 * object_store.object_id is local object ID only.
-* Packed references include file_alias + local object_id.
+* References are plain local object IDs. Foreign targets go through a ForeignReference proxy; nothing is packed (§7.3).
 * modified_time_utc is audit/display only. Not for sync.
 
 FOLLOWING NEED FURTHER DELIBERATION:  

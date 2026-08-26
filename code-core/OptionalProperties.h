@@ -28,7 +28,7 @@ has service, fluid, line number, pipe class, insulation spec, tracing, tag, from
 and no single line carries all of them. Widening the struct for every possible field charges every
 instance for fields it never sets. Optional64 charges only for what is set: a 64-bit flag word
 says which properties are present, and the values sit packed end to end with nothing in between.
-Rationale: mv.ramshanker.in/software/id section 4.
+Rationale: mv.ramshanker.in/software/2drendering, "Why the residency half still matters".
 
 TWO GROUPS, ONE PER FLAG WORD. flagsFixed covers properties of a compile-time known size - the
 14 primitive types plus Byte16 / Byte32 for short null-terminated UTF-8 strings - packed into

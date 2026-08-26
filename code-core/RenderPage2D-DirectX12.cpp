@@ -43,10 +43,8 @@ struct Cad2DObjectSpan {
     uint32_t count = 0;
 };
 
-/* One container's page content, already in GPU form (id.md §11.4, step 2b). The expansion writes
-straight into these while holding cpuRecordsMutex, which is what deletes stages 3-4 of §11.1: the
-CPU records are read in place and never copied. This replaced a Cad2DContainerRecords that held
-seven vectors of full CPU records - two deep copies of the whole tab per batch. */
+/* One container's page content, already in GPU form. The expansion writes straight into these
+while holding cpuRecordsMutex - the CPU records are read in place and never copied. */
 struct Cad2DContainerGpu {
     std::vector<Cad2DLineGPURecord> lines;
     std::vector<Cad2DCurveGPURecord> curves;
@@ -353,10 +351,10 @@ void AppendTextRecordGeometry(const Cad2DTextRecordCPU& text,
     }
 }
 
-/* Publish activePages as a new immutable snapshot. Unlike the function this replaced it retires
-NOTHING: pages are retired by whoever replaces them (a container rebuild), so a batch that only
-appended into existing pages retires nothing and, if it opened no new page, does not even come
-here - the append is published by the page's own count (id.md §11.2, step 2c). */
+/* Publish activePages as a new immutable snapshot. It retires NOTHING: pages are retired by
+whoever replaces them (a container rebuild), so a batch that only appended into existing pages
+retires nothing and, if it opened no new page, does not even come here - the append is published
+by the page's own count. */
 void PublishCad2DSnapshot(TabCad2DStorage& storage) {
     Cad2DPageSnapshot* newSnapshot = new Cad2DPageSnapshot();
     newSnapshot->pages.reserve(storage.activePages.size());
@@ -677,8 +675,8 @@ void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow
     const D3D12_GPU_VIRTUAL_ADDRESS viewCBV = winRes.cad2dViewConstantBuffer->GetGPUVirtualAddress();
 
     /* Only this container's pages, through the snapshot's directory rather than a scan over every
-    page in the tab (id.md §11.2). The three passes below filter by KIND, which preserves the draw
-    order the single-page build had: all lines, then all curves, then all text. */
+    page in the tab. The three passes below filter by KIND, which preserves the draw order the
+    single-page build had: all lines, then all curves, then all text. */
     Cad2DPageSnapshot* snapshot = storage.activeSnapshot.load(std::memory_order_acquire);
     if (!snapshot) return;
     auto containerPages = snapshot->pagesByContainer.find(activeContainerMemoryId);
@@ -836,25 +834,21 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
     ComPtr<ID3D12GraphicsCommandList>& commandList) {
     if (batch.empty()) return;
 
-    /* Step 2a instrumentation (id.md §11.4). Every counter measures one of the seven O(N) stages
-    §11.1 lists, so a later sub-step is checked by watching its own number fall rather than by
-    re-reasoning about the code. Locals first, atomics once at the end: the per-batch line is what
-    a human reads, the cumulative totals are what the heartbeat reads.
-
-    2b took `indexed` to one hash lookup per command and `copied` to zero. 2c takes `expanded`,
-    `staged` and `pages` to the batch's own objects whenever a batch only APPENDS - a batch that
-    modifies an object or changes the selection still rebuilds that container, and its numbers
-    still show it. They all stay: a number that must remain small is the cheapest regression
-    guard there is. */
+    /* Per-batch instrumentation. Locals first, atomics once at the end: the per-batch line is what
+    a human reads, the cumulative totals are what the heartbeat reads. A batch that only APPENDS
+    keeps `expanded`, `staged` and `pages` at its own object count; one that modifies an object or
+    changes the selection still rebuilds that container and its numbers show it. They all stay: a
+    number that must remain small is the cheapest regression guard there is.
+    Figures: 2Drendering.md, "Measured, before and after". */
     const auto batchStart = std::chrono::steady_clock::now();
     uint64_t statRecordsIndexed = 0, statRecordsExpanded = 0;
     uint64_t statBytesStaged = 0, statPagesBuilt = 0, statPagesRetired = 0, statFlagStores = 0;
     uint64_t statPagesCompacted = 0, statCompactedRecords = 0, statHoleRecords = 0;
     constexpr uint64_t statRecordsCopied = 0; // Nothing on this path deep-copies a record any more.
 
-    // Pointers, not copies, exactly as ProcessScene3DCopyBatch does it: CommandToCopyThread2D is
-    // 736 bytes and holds every record type as a simultaneous member (id.md §10), so grouping by
-    // value copied ~73 MB for a 100k import before a single record was read.
+    // Pointers, not copies, exactly as ProcessScene3DCopyBatch does it: CommandToCopyThread2D
+    // holds every record type as a simultaneous member, so grouping by value copied tens of MB
+    // for a 100k import before a single record was read.
     std::unordered_map<uint64_t, std::vector<const CommandToCopyThread2D*>> byTab;
     for (const CommandToCopyThread2D& command : batch) {
         byTab[command.tabID].push_back(&command);
@@ -890,7 +884,7 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
             if (selected2D.count(objectId) == 0) selectionDelta.emplace_back(objectId, 0u);
         }
 
-        /* Three kinds of work come out of the locked section (id.md §11.4, steps 2c to 2e):
+        /* Three kinds of work come out of the locked section:
 
              appendWork    - the GPU records of objects this batch created OR modified, to be
                              appended to the tail pages of their container. O(batch).
@@ -900,11 +894,8 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
                              flags word, so there is nothing to hide a superseded one with and the
                              text has to be laid out again. O(the container's TEXT).
 
-        The third used to be a whole-container rebuild, every record of every type; 2e narrowed it
-        to the pages that actually cannot do better, which is the last O(container) operation off
-        the interactive path. A container can be in all three at once - a batch that edits a line
-        and a caption in the same drawing - and they do not collide, because they touch pages of
-        different KINDS. */
+        A container can be in all three at once - a batch that edits a line and a caption in the
+        same drawing - and they do not collide, because they touch pages of different KINDS. */
         std::map<uint64_t, Cad2DContainerGpu> appendWork;
         std::map<uint64_t, Cad2DContainerGpu> textRebuildWork;
         std::vector<uint64_t> hideWork;
@@ -948,8 +939,8 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
                 existing = std::move(updated);
                 return false;
             };
-            /* Where an incoming command becomes cheap or expensive (id.md §11.4, step 2d). A new
-            object is appended. A MODIFIED one is appended too, and its old records are hidden -
+            /* Where an incoming command becomes cheap or expensive. A new object is appended.
+            A MODIFIED one is appended too, and its old records are hidden -
             append-plus-hide, which is O(the object) instead of O(the container). Only a modified
             TEXT is different, because its glyph quads have no flags word to hide it with: its
             container's text pages are laid out again from the CPU records.
@@ -1301,9 +1292,9 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
             };
 
         /* A run that no live object owns any more: it leaves the drawing as a kCad2DHiddenFlag
-        store, in the second submit, and stays a hole on its page until the compaction packs it out
-        (id.md §11.4, 2d and 2e). The two callers are a modify superseding an object's old records
-        and, below, a second command for the same object inside one batch. */
+        store, in the second submit, and stays a hole on its page until the compaction packs it
+        out. The two callers are a modify superseding an object's old records and, below, a second
+        command for the same object inside one batch. */
         std::vector<Cad2DGpuLocation> hideStores;
         auto Supersede = [&](const Cad2DGpuLocation& location) {
             if (!location.page || location.count == 0) return;
@@ -1489,15 +1480,10 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
             }
             };
 
-        /* PACK ONE PAGE (id.md §11.4, step 2e). Append-plus-hide is what makes an edit O(1), and
-        this is what stops that being a leak: the superseded runs stay in the page, holding their
-        slot AND a vertex-shader invocation each, until enough of them accumulate to be worth a
-        copy.
-
-        The copy is GPU to GPU. Nothing is re-expanded from the CPU records and nothing goes
-        through the upload ring - the surviving records already exist in VRAM, exactly as they
-        should be, selection flags and all. That also means it needs no lock: cpuRecordsMutex was
-        released long before this point. */
+        /* PACK ONE PAGE. The copy is GPU to GPU: nothing is re-expanded from the CPU records and
+        nothing goes through the upload ring, because the surviving records already exist in VRAM
+        exactly as they should be, selection flags and all. That is also why it needs no lock -
+        cpuRecordsMutex was released long before this point. */
         auto CompactPage = [&](size_t index) {
             Cad2DPageGPU* stale = storage.activePages[index].get();
             const uint32_t stride = stale->kind == Cad2DPageKind::Line
@@ -1605,9 +1591,8 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
             AppendContent(container, content);
         }
 
-        /* Selection, as flag stores rather than a rebuild - the operation a 2D user performs most,
-        and the last O(records) one on this path (id.md §11.4, step 2d). It runs AFTER the appends
-        so that gpuLocation names the records now being drawn, never a run a rebuild just retired.
+        /* Selection, as flag stores rather than a rebuild. It runs AFTER the appends so that
+        gpuLocation names the records now being drawn, never a run a rebuild just retired.
 
         An object this batch also re-expanded is written twice: once by the expansion, which stamps
         from the same selection set, and once here. The second store is the same value at the same

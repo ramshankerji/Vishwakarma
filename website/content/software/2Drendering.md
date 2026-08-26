@@ -83,9 +83,8 @@ Text reuses the UI's MSDF atlas infrastructure rather than carrying a second tex
 
 ## Page2D memory paging — as built
 
-Shipped 2026-08-25, as step 2 of the object-model sequencing in `id.md` §7.
-That page carries the sub-step-by-sub-step history — six sub-steps, each with its own verify
-criterion, and the decisions that were reversed along the way. This section is the renderer-side
+Shipped 2026-08-25, as step 2 of the object-model sequencing recorded further down this page under
+*The 2D object model*. That section carries the surrounding migration; this one is the renderer-side
 account: what the mechanism is, what each operation costs, and the measured before and after.
 
 The first pass deferred optimisation, and correctly. This is the work that came due when the
@@ -346,6 +345,309 @@ complete; the command and soft-delete flag are not written. See `undo-redo.md`.
   carries layers, line types, indexed colour palettes and explicit draw order — none of which the
   shipped records have — plus `DIMENSION`, `LEADER`, `TABLE` and a true `RECTANGLE`. Neither
   generation is a superset of the other, so merging is a per-field decision, not a refactor.
+
+## The 2D object model — one model, and the migration that made it one
+
+**Moved here from `id.md` in August 2026**, when that page was narrowed to ids and references only.
+This is the record of how the 2D world's engineering records became the same kind of object as the
+3D world's, what it cost, and the half that has not happened yet. Identity, references and
+resolution are `id.md`'s subject; residency, sizes and the record types are this page's.
+
+**Status, 2026-08-26.** Steps 0, 1 and 2 are shipped. Step 3 is half done: all nine 2D record types
+now derive `META_DATA`, so there is ONE object model — but they still live by value in
+`std::vector` on the heap, not in the arena, which is the half `Optional64` waits on.
+
+### The question, and the answer
+
+3D engineering objects derive `META_DATA` and are allocated out of the CPU RAM arena (`राम`, in
+`MemoryManagerCPU.h`). The nine Page2D record types did neither: they were plain structs living by
+value in `std::vector` members of `TabCad2DStorage`.
+
+That split cost twice. The Properties Pane had to widen its whole accessor contract to `void*`
+because the two worlds had no common base (`propertiesPane.md`, amendment), and `snapping.md` §14
+was about to plan a second candidate gatherer for the same reason — there was no one type to
+dispatch on.
+
+**Answered in two halves.** All nine types now derive `META_DATA`, so there is one object model and
+the second snapping gatherer was never written. They are still value types in `std::vector`, not
+arena objects, which is the half that remains.
+
+### What 2D records are today — value records in contiguous vectors
+
+**STILL TRUE, and it is the half of step 3 that has not happened.** The records derive `META_DATA`
+now, but deriving it changed only their identity: they are still value types in `std::vector`, on
+the CRT heap, and all three consequences below still hold. That is why `Optional64` is still out of
+reach — it is residency, not inheritance, that the arena question is about.
+
+`std::vector<Cad2DLineRecordCPU>`, `…Circle…`, and seven more, all members of `TabCad2DStorage`.
+They go to the CRT heap, not the arena. Three consequences follow from that, and they are the real
+argument for the current design:
+
+1. **The rebuild is a streaming scan.** `RenderPage2D-DirectX12.cpp` walks every record of every
+   type to rebuild a page. Contiguous records stream; arena pointers would not.
+2. **The copy queue ships records by value.** `CommandToCopyThread2D` carries the record itself, so
+   what crosses the engineering→copy thread boundary is a snapshot: trivially safe, no lifetime
+   question, no fence discipline.
+3. **`upsert` is one assignment.** The copy-thread ingest is literally
+   `existing = std::move(updated)`.
+
+Per-tab isolation still holds, but structurally (membership in a per-tab struct) rather than through
+the arena's `memoryGroupNo`. Nothing leaks — the vectors die with the tab's `cad2d`.
+
+Because they are not arena objects, **2D has no id directory and is not reachable by
+`ResolveObject`** (`id.md` §2.2). When residency lands, 2D adopts `id.md` §3.4's sorted per-tab
+directory unchanged — there is no second id mechanism for 2D and no separate 2D id space.
+
+### `Optional64` — built, and why 2D cannot use it yet
+
+Real code in `OptionalProperties.h`, in the vcxproj, driver-tested — and with **no consumer**. The
+`LINE_MEMBER` pilot property was removed again in step 1, so nothing in the application declares an
+optional property today. Say so rather than letting it look wired.
+
+**40 bytes inline, and 0 arena bytes until something is set.** Allocation is lazy: `x` and `y` stay
+null until the first `set`, which matters because the eager version would have cost a 100k-element
+DXF import ~9.6 MB and 200k allocations for properties nobody set. The schema is declared through
+an x-macro list per type, generating the enumerators, the byte-size table, `has/get/set/unset` and
+a schema hash.
+
+It needed four additions to the arena, all deriving their answer from an address alone:
+
+```text
+राम::MemoryGroupOf(anyPointer)        which tab owns the chunk this address is in
+राम::ChunkIndexOf(anyPointer)         pool-relative chunk index, or kInvalidChunkIndex
+राम::OffsetInChunkOf(anyPointer)      byte offset within that chunk
+राम::AddressOf(chunkIndex, offset)    the inverse
+```
+
+`MemoryGroupOf` is what keeps the class at 40 bytes: an **interior** pointer reports the enclosing
+object's group, so `Optional64` finds its own tab from `this` and stores neither a group nor a
+chunk index. The other three let `ByteArrayData` stay position-independent — it holds
+`{chunkIndex, offset}` rather than a pointer, so `DefragmentRAMChunks` can move a dynamic
+property's bytes and rewrite the pair instead of hunting down every copy of an address. Same
+reasoning as `id.md` §3.3's id-not-pointer rule, one level down.
+
+**Copy and move are deleted**, deliberately — a shallow copy would double-free. That single fact is
+why the residency half exists: a type containing an `Optional64` cannot live in a `std::vector`,
+because growth moves its elements.
+
+**AND IT CANNOT BE REACHED FROM OUTSIDE THE ARENA — a correctness constraint, not a preference.**
+`Optional64::set` allocates with `cpu.Allocate(size, cpu.MemoryGroupOf(this))`, and
+`राम::MemoryGroupOf` **returns 0 for any pointer outside the chunk pool**. So an `Optional64` on a
+record living by value in a `std::vector` would not fail — it would silently allocate into **group
+0**, the Application Tab, which never closes. The properties would outlive their tab and
+`notifyTabClosed` would never de-commit them: a slow leak with cross-tab ownership, and no crash to
+find it by.
+
+Two consequences:
+
+1. **2D gets `Optional64` only after 2D objects live in the arena**, and after there is a lookup
+   mechanism to reach them by id. Until both exist, no 2D type declares an optional property.
+   Decided 2026-08-26.
+2. **`memoryGroupNo == tabNo` is load-bearing.** `CPU_RAM_4MB::reset(tabNo)` makes the group the
+   tab, and that identity is the whole reason the address-derived lookup works. Partitioning the
+   arena any other way — per world, per container — means `Optional64` needs a group-to-tab map and
+   stops being 40 bytes. This is the argument against giving 2D its own arena group when it moves:
+   separate accounting is worth a counter, not a partition. It is also what `id.md` §5.6 names as
+   the bill for a process-wide shared catalog.
+
+### Measured sizes
+
+Compiled against the real headers, x64 MSVC, 2026-08-26.
+
+```text
+META_DATA base                              64 B   (was 56 before step 1)
+arena per-allocation overhead                8 B
+Optional64                                  40 B   (inline; 0 arena bytes until a property is set)
+
+2D CPU records, deriving META_DATA, still by value in std::vector on the heap
+  Cad2DLineRecordCPU       112  (was  88)    Cad2DArcRecordCPU              152  (was 128)
+  Cad2DCircleRecordCPU     104  (was  80)    Cad2DPolylineRecordCPU         112  (was  80)
+  Cad2DEllipseRecordCPU    120  (was  96)    Cad2DTextRecordCPU             160  (was 136)
+  Cad2DPolygonRecordCPU    120  (was  96)    Cad2DAssetDefinitionRecordCPU   88
+                                             Cad2DAssetInsertRecordCPU      112
+  (polyline and text carry heap allocations on top, for points and string)
+
+3D arena objects, for scale
+  SPHERE 128    CYLINDER 160    CUBOID 152
+```
+
++24 bytes per record almost everywhere; polyline paid +32 because its old field order padded
+differently. `sizeof(Cad2DLineRecordCPU) == 112` is static_asserted, the way `META_DATA`'s 64 is.
+
+**The bytes were never the problem** — +2.4 MB on a 100k-line DXF, noise on the largest data set the
+application handles, and currently zero extra allocations because the records are not in the arena.
+What the residency half has to answer for is the 100k separate arena allocations it would add, which
+is what the risk list below still calls untested and what the fixed-block idea in step 3 is meant to
+avoid.
+
+### Why the residency half still matters
+
+Not memory. **Optional properties on intelligent 2D objects.**
+
+Page2D today is dumb geometry, so it has no optional properties and the arena buys it nothing. That
+ends with P&ID, SLD, PFD and interlock diagrams. A P&ID line is not a line: it carries service,
+fluid, line number, pipe class, insulation spec, tracing, tag, and from/to equipment. Most lines
+carry a few of those; no line carries all of them. That is precisely the case `Optional64` was
+specified for — and the arena constraint above is why it cannot be reached until the records live
+in the arena.
+
+The hazard if that half is skipped is not fat records, it is **a second, parallel optional-property
+mechanism for the 2D side**. Two of everything is the pain the Properties Pane already felt; a
+second `Optional64` would make it structural.
+
+### The options, and which one landed
+
+Four were weighed: **A** leave the split; **B** a common identity POD header in both types;
+**C** a separate `META_DATA2D`; **D** full unification, 2D deriving `META_DATA` and living in the
+arena behind a directory.
+
+**C was rejected outright** — everything it would hold is common to both worlds, so it would have
+guaranteed two of everything forever. **D is the destination.** What has actually been built is
+**B's outcome by D's mechanism**: the records derive `META_DATA` (D's inheritance, not a separate
+header) but stayed value types in `std::vector` (B's residency). That was not a compromise so much
+as the discovery that step 3 is two migrations wearing one number — and it leaves the route to D
+open, because finishing it is now "change where they are allocated" rather than "change the type
+again".
+
+### Sequencing — and what it came to
+
+Steps 0, 1 and 2 are shipped. Step 3 is half done. What follows is the state of each and the facts
+that constrain what is built next; the blow-by-blow of how each landed is in git history.
+
+**Step 0 — `Optional64`. DONE.** Built, driver-tested, and with no consumer — see above for what it
+is, what it cost the arena, and the constraint that governs when 2D can use it.
+
+**Step 1 — parenthood. DONE.** `memoryIDContainer` is the container and `META_DATA::memoryIDGenerator`
+is the owner, in both worlds. `META_DATA` went 56 → 64 bytes, now static_asserted; a `uint64_t`
+cannot fit the 7 trailing pad bytes in any field order, so those 7 survive and the next *small*
+field is still free. **There is no `persistedGeneratorId`** — the file stores ONE parent id and the
+loader rebuilds the split from the stored parent's TYPE; `id.md` §2.4 carries that rule. 3D needed
+no change at all: every existing read of `memoryIDContainer` was already container semantics. The 3D
+save path still does not perform the collapse, because no 3D type can generate anything until
+templates exist; a `_DEBUG` `[3d][warn]` fires if one ever sets the field.
+
+**Step 2 — page the Page2D world. DONE.** **+5 lines on a 1M-line sheet: 3,386 ms → 1.29 ms,
+30.5 MB staged → 164 bytes. A selection click on a 2M-line sheet costs 4 bytes and 0.51 ms.** The
+design, the cost table, compaction and the full before/after numbers are in *Page2D memory paging —
+as built*, above.
+
+The RCU clone this step was named after never appeared: a 2D page holds fixed-stride records under
+ONE indirect command, so appends write the unpublished tail and patch `InstanceCount`, edits are
+≤8-byte flag stores, and the only copy is compaction's GPU-to-GPU pack. The word "clone" does not
+occur in the 2D code.
+
+Four things that constrain anything built on top of it:
+
+- **The `objectId -> page` registry is copy-thread-private and deliberately NOT a CPU object
+  directory.** It maps to a GPU location, which is what `id.md` §2.5 says `InstanceRegistry` is.
+  Same for `gpuLocation`, the per-page `placements` and `stampedSelection`: all unlocked, so
+  anything touching them lives inside `ProcessCad2DCopyBatch`.
+- **An object never straddles a page** — the registry names one run, so the filler places whole
+  objects and opens a new page for the remainder.
+- **Two commands for one object in one batch used to draw it twice.** The hide pre-pass cannot
+  catch it structurally, so `classify` drops a repeated MODIFY of an id it has already queued and
+  `RegisterPlacement` uses `insert` rather than `operator[]`. Reachable in practice — two clicks of
+  a polyline draining together.
+- **Editing an object moves it to the front of the overlap order**, because a modify is an append.
+  Invisible for opaque strokes on white; real for overlapping coloured geometry. Accepted.
+
+What it cost that is new and resident: `recordIndex` ~50 MB at a million objects, `gpuLocation`
+another ~50 MB, per-page placement lists ~16 MB. All three are revisited by step 3's residency half.
+The `recordIndex` figure is also the measured datum behind `id.md` §3.4's rejection of a hash map
+as the id directory: ~50 bytes per entry is ~50 GB at a billion objects.
+
+**Step 3 — migrate the 2D object model. IDENTITY DONE, RESIDENCY NOT STARTED.** It is two migrations
+wearing one number, and only the second needs the arena:
+
+*(A) Identity — DONE 2026-08-26.* All nine `Cad2D*RecordCPU` types derive `META_DATA`. One object
+model, one type to dispatch on, `dataVersion` in 2D, `dataType` set by every constructor (which
+retired the nine-overload `Cad2DKindOf` table). Records stay value types in `std::vector`. The
+round-trip oracle (`validations/yyy_roundtrip`) stayed green throughout.
+
+Two things worth not re-deriving:
+
+- **A phased migration needs an accessor bridge, and it is what a mechanical rename destroys.**
+  Migrating one type first meant generic code could name neither spelling, so getters and setters
+  overloaded on `const META_DATA&` versus each unmigrated type carried it — the overload set phases
+  itself. Eight generic sites needed it. The bridge was deleted the moment the ninth type landed.
+- **"0 means unassigned" stops being expressible** for memoryID, because `META_DATA`'s constructor
+  issues an id. Every `objectId == 0` sentinel went unreachable and was retired, and three lambdas
+  that set the id to 0 for later assignment now take a fresh one eagerly. No compiler error points
+  at any of it. `persistedId == 0` still means unassigned — `id.md` §2.3 has why that asymmetry is
+  correct.
+
+*(B) Residency — not started.* Payloads into the arena behind a directory; `CommandToCopyThread2D`
+stops shipping records by value and becomes a variant; `Optional64` becomes reachable, but only
+under the group-0 constraint above and once `ResolveObject` reaches 2D. **Worth deciding before
+committing to option D as written: arena-allocated fixed BLOCKS of records rather than one
+allocation per record.** It keeps streaming contiguity inside a block, keeps `MemoryGroupOf` correct
+because the blocks come from the tab's own group, and turns a 100k-object DXF import into ~100
+allocations rather than 100,000 — which is exactly the allocation pattern the risks below still call
+untested.
+
+Left over, cheap, unblocking nothing: decide whether upsert should *increment* `dataVersion` rather
+than overwrite it, and whether `META_DATA` wants a constructor that issues no id — the 912-byte
+`CommandToCopyThread2D` holds all seven geometry types as members and so burns seven ids per
+command constructed.
+
+### Risks
+
+- **Page2D is currently the more complete half of the application** — transforms, assets, DXF
+  import, printing, persistence all live there. Step 3 is weeks, not days.
+  *RETIRED for the identity half, which took hours rather than weeks — 234 mechanical renames the
+  compiler located. It stands for the residency half, which is where the weeks are.*
+- **It runs through the save/load path**, where a defect corrupts user files silently rather than
+  crashing. That path needs round-trip assertions before the migration, not after.
+  *DONE, and it earned its keep: `validations/yyy_roundtrip` was built first and stayed green
+  through every step. Two of its three initial red rounds were the TEST misunderstanding the
+  object model, not defects — which is exactly the confusion worth having before a migration
+  rather than during one.*
+- **Step 2 must justify itself on its own performance numbers** before step 3 is committed to.
+  *SATISFIED — the numbers are above.*
+- **The arena has no defragmentation in service yet** (`DefragmentRAMChunks` exists; the chunk
+  compaction path is not exercised at 2D volumes). A DXF import creating 100k arena objects is a
+  much heavier allocation pattern than anything the arena has carried so far.
+  *STILL LIVE, and now the main risk left in step 3, because it belongs entirely to the residency
+  half. It is also the argument for arena-allocated fixed BLOCKS of records rather than one
+  allocation per record: the same import becomes ~100 allocations instead of 100,000.*
+
+### Incidental findings
+
+Recorded because they surfaced during this analysis, not because they are part of the proposal.
+
+- **`CommandToCopyThread2D` is 912 bytes** — it was 736, and grew by 176 when the seven geometry
+  records it holds as simultaneous members each gained a `META_DATA` base. Six of the seven are dead
+  on every command, so a 100k-record DXF import now pushes ~91 MB through the queue instead of
+  ~11 MB. A variant or union fixes it; step 3's residency half forces the change anyway, because a
+  record that lives in the arena cannot be shipped by value.
+- **The Application Tab's Stats view under-reports.** It reads the arena's `liveChunkCount`, and 2D
+  records are not in the arena — so a 100k-line drawing is invisible to it today.
+- **The 2D object model used to live in a rendering header, and the reason it did is structural.**
+  The nine `Cad2D*RecordCPU` types were declared in `RenderPage2D.h`; they have since moved to
+  `डेटा-सामान्य-2D.h`, which is where the 3D half keeps its equivalents — `RenderScene3D.h` defines
+  no engineering object at all. But the *cause* outlives the file move: the two copy threads are fed
+  differently. `CommandToCopyThread` carries `GeometryData` — vertices baked by `GeometryForObject`
+  on the **engineering** thread — so 3D's render layer never learns what a `CUBOID` is.
+  `CommandToCopyThread2D` carries the engineering records themselves and the copy thread generates
+  the geometry, so 2D's render layer structurally must know the object model. That is also why the
+  command is so large. **Any fix that makes 2D's render layer stop depending on the object model has
+  to move geometry generation to the engineering thread first.**
+- **`डेटा-सामान्य-2D.h` holds an earlier, unbuilt 2D schema** — 18 types, referenced nowhere. Kept
+  rather than deleted, because it is not superseded junk: it carries **layers**, **line types**,
+  indexed colour palettes and explicit draw order, none of which exist in the shipped records, plus
+  `DIMENSION`, `LEADER`, `NURBS`, `TABLE`, `HATCH_STYLE`, `POINT2D` and a true `RECTANGLE`, which
+  have no counterpart at all. Neither generation is a superset of the other, so merging them is a
+  per-field decision belonging with step 3, not a refactor. Each dead type now names its live
+  replacement in a comment.
+
+### Settled — do not re-litigate
+
+1. **No `META_DATA2D`.** One object model. The dividing line is containment, not dimensionality —
+   `id.md` §2.4.
+2. **No 2D type declares an optional property** until 2D objects are in the arena and a lookup
+   mechanism exists.
+3. **2D adopts `id.md`'s directory and resolution unchanged** when residency lands. No second id
+   mechanism, no separate 2D id space.
 
 ## GPU Tesselation Pros and cons
 ### Pros

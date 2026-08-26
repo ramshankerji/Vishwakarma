@@ -52,9 +52,9 @@ DATASETTAB* ActiveTabForPrint() {
 // the underlying buffers alive even if the copy thread republishes/retires the snapshot
 // while our print command list is still executing on our private queue.
 struct Print2DPage {
-    // One container, one record class, exactly as Cad2DPageGPU is since id.md §11.2 step 2c. The
-    // count is read ONCE here, out of the live page's atomic, so the whole print sees one
-    // consistent size even if the copy thread appends to that page meanwhile.
+    // One container, one record class, exactly as Cad2DPageGPU is. The count is read ONCE here,
+    // out of the live page's atomic, so the whole print sees one consistent size even if the copy
+    // thread appends to that page meanwhile.
     Cad2DPageKind kind = Cad2DPageKind::Line;
     ComPtr<ID3D12Resource> buffer;
     ComPtr<ID3D12Resource> indexBuffer;

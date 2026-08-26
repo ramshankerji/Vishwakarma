@@ -154,8 +154,8 @@ bool EnsureSchema(sqlite3* db, std::string* errorMessage) {
         runs before re-inserting scans the whole table ONCE PER DELETED ROW. Measured before it
         existed: a 300k-record drawing saved into a new file in under a minute, and the same
         drawing saved over an existing 100k-row file had not finished after 15 minutes. The
-        partial index below cannot serve this purpose however much it looks like it can (id.md
-        §10). Added by EnsureSchema, which runs on save, so existing files pick it up. */
+        partial index below cannot serve this purpose however much it looks like it can.
+        Added by EnsureSchema, which runs on save, so existing files pick it up. */
         "CREATE INDEX IF NOT EXISTS idx_object_parent "
         "ON object_store(parent_id);"
         "CREATE INDEX IF NOT EXISTS idx_object_parent_live "
@@ -1123,10 +1123,10 @@ void AppendLogicalObjectToTab(DATASETTAB& tab, ObjectType objectType, META_DATA*
     tab.allIDsInThisTab.push_back(object->memoryID);
 }
 
-/* Insert-or-update one 2D record by objectId, through the tab's persistent index (id.md §11.4,
-step 2b'). Each of the nine Append*2DToTab functions below used to run a std::find_if over the
-whole record vector PLUS a std::find over allIDsInThisTab, once per record - two linear scans per
-row, which is what made loading an N-record drawing O(N^2). Both are one hash lookup now.
+/* Insert-or-update one 2D record by objectId, through the tab's persistent index. Each of the
+nine Append*2DToTab functions below used to run a std::find_if over the whole record vector PLUS a
+std::find over allIDsInThisTab, once per record - two linear scans per row, which is what made
+loading an N-record drawing O(N^2). Both are one hash lookup now.
 
 A type mismatch on the found entry means two record types share an objectId, which only a corrupt
 file can produce. Appending is exactly what the old find_if did with that case - it searched one
@@ -1963,8 +1963,8 @@ bool DataStorage::SaveTabToYyy(DATASETTAB& tab, const std::wstring& filePath,
 
 bool DataStorage::LoadYyyIntoTab(DATASETTAB& tab, const std::wstring& filePath,
     std::string* errorMessage) {
-    // Timed because step 2b' has to be checked, not asserted: the second phase below is where the
-    // nine Append*2DToTab calls happen, and it is the half that used to be O(N^2) (id.md §11.4).
+    // Timed because the second phase below is where the nine Append*2DToTab calls happen, and it
+    // is the half that used to be O(N^2).
     const auto loadStart = std::chrono::steady_clock::now();
     SQLiteDatabase database;
     int rc = sqlite3_open16(filePath.c_str(), &database.db);
