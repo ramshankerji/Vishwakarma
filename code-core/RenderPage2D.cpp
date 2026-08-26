@@ -144,7 +144,7 @@ void HandleLineCreationClick(DATASETTAB& tab, double xCU, double yCU) {
     if (page2DMemoryId == 0) return;
 
     Cad2DLineRecordCPU line{};
-    line.containerMemoryId = page2DMemoryId;
+    line.memoryIDContainer = page2DMemoryId;
     line.x1 = storage.lineCreationPreviousXCU.load(std::memory_order_acquire);
     line.y1 = storage.lineCreationPreviousYCU.load(std::memory_order_acquire);
     line.x2 = xCU;
@@ -175,8 +175,8 @@ void HandlePolylineCreationClick(DATASETTAB& tab, double xCU, double yCU) {
             storage.polylineCreationObjectId = MemoryID::next();
         }
 
-        polyline.objectId = storage.polylineCreationObjectId;
-        polyline.containerMemoryId = page2DMemoryId;
+        polyline.memoryID = storage.polylineCreationObjectId;
+        polyline.memoryIDContainer = page2DMemoryId;
         polyline.points = storage.polylineCreationPoints;
         polyline.lineWeight = 1.0f;
         polyline.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
@@ -208,7 +208,7 @@ void HandlePolygonCreationClick(DATASETTAB& tab, double xCU, double yCU) {
     if (radius <= kMinPolygonRadiusCU) return;
 
     Cad2DPolygonRecordCPU polygon{};
-    polygon.containerMemoryId = page2DMemoryId;
+    polygon.memoryIDContainer = page2DMemoryId;
     polygon.lineSegmentCount = kDefaultPolygonLineSegmentCount;
     polygon.centerX = centerX;
     polygon.centerY = centerY;
@@ -241,7 +241,7 @@ void HandleCircleCreationClick(DATASETTAB& tab, double xCU, double yCU) {
     if (radius <= kMinCurveRadiusCU) return;
 
     Cad2DCircleRecordCPU circle{};
-    circle.containerMemoryId = page2DMemoryId;
+    circle.memoryIDContainer = page2DMemoryId;
     circle.centerX = centerX;
     circle.centerY = centerY;
     circle.radius = radius;
@@ -285,7 +285,7 @@ void HandleEllipseCreationClick(DATASETTAB& tab, double xCU, double yCU) {
     if (page2DMemoryId == 0) return;
 
     Cad2DEllipseRecordCPU ellipse{};
-    ellipse.containerMemoryId = page2DMemoryId;
+    ellipse.memoryIDContainer = page2DMemoryId;
     ellipse.centerX = centerX;
     ellipse.centerY = centerY;
     ellipse.radiusX = radiusX;
@@ -331,8 +331,8 @@ void HandleArcCreationClick(DATASETTAB& tab, double xCU, double yCU) {
     if (std::abs(std::sin((endAngle - startAngle) * 0.5)) <= 1.0e-7) return;
 
     Cad2DArcRecordCPU arc{};
-    arc.containerMemoryId = Cad2DFindTargetPage2DMemoryId(tab);
-    if (arc.containerMemoryId == 0) return;
+    arc.memoryIDContainer = Cad2DFindTargetPage2DMemoryId(tab);
+    if (arc.memoryIDContainer == 0) return;
     arc.centerX = centerX;
     arc.centerY = centerY;
     arc.radiusX = radius;
@@ -345,7 +345,7 @@ void HandleArcCreationClick(DATASETTAB& tab, double xCU, double yCU) {
     arc.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
     arc.colorABGR = 0xFF000000u;
     arc.schemaVersion = VishwakarmaStorage::kGeometry2DArcSchemaVersion;
-    EnqueueCad2DArc(tab.tabID, arc.containerMemoryId, arc);
+    EnqueueCad2DArc(tab.tabID, arc.memoryIDContainer, arc);
 
     storage.arcCreationStep.store(0, std::memory_order_release);
 }
@@ -366,8 +366,8 @@ void HandleTextCreationClick(DATASETTAB& tab, double xCU, double yCU) {
 void EnqueueTextCreationDraft(DATASETTAB& tab, uint64_t page2DMemoryId, uint64_t objectId,
     double xCU, double yCU, std::string textValue) {
     Cad2DTextRecordCPU text{};
-    text.objectId = objectId;
-    text.containerMemoryId = page2DMemoryId;
+    text.memoryID = objectId;
+    text.memoryIDContainer = page2DMemoryId;
     text.x = xCU;
     text.y = yCU;
     text.textHeightCU = kDefaultTextHeightCU;
@@ -436,13 +436,15 @@ bool HandleTextCreationChar(DATASETTAB& tab, int charCode) {
 }
 
 void EnqueueCad2DLine(uint64_t tabID, uint64_t containerMemoryId, Cad2DLineRecordCPU line) {
-    if (line.objectId == 0) line.objectId = MemoryID::next();
-    line.containerMemoryId = containerMemoryId;
+    // The `if (objectId == 0) assign` every EnqueueCad2D* used to open with is gone: META_DATA
+    // issues the id in its constructor, so every record already carries one. Callers that used to
+    // pass 0 to mean "give me a fresh one" now take a fresh id themselves, at their own sites.
+    line.memoryIDContainer = containerMemoryId;
 #ifdef _DEBUG
     // Corruption checkpoint: coordinates must be sane when the producer hands them over.
     if (std::abs(line.x1) > 1.0e8 || std::abs(line.y1) > 1.0e8 ||
         std::abs(line.x2) > 1.0e8 || std::abs(line.y2) > 1.0e8) {
-        std::cout << "[cad2d][dbg] OUTLIER AT ENQUEUE line objectId=" << line.objectId
+        std::cout << "[cad2d][dbg] OUTLIER AT ENQUEUE line objectId=" << line.memoryID
                   << " container=" << containerMemoryId << " (" << line.x1 << ", " << line.y1
                   << ") -> (" << line.x2 << ", " << line.y2 << ")" << std::endl;
     }
@@ -450,7 +452,7 @@ void EnqueueCad2DLine(uint64_t tabID, uint64_t containerMemoryId, Cad2DLineRecor
 
     CommandToCopyThread2D command{};
     command.type = CommandToCopyThread2DType::AddLine;
-    command.id = line.objectId;
+    command.id = line.memoryID;
     command.tabID = tabID;
     command.containerMemoryId = containerMemoryId;
     command.line = line;
@@ -463,12 +465,11 @@ void EnqueueCad2DLine(uint64_t tabID, uint64_t containerMemoryId, Cad2DLineRecor
 }
 
 void EnqueueCad2DPolyline(uint64_t tabID, uint64_t containerMemoryId, Cad2DPolylineRecordCPU polyline) {
-    if (polyline.objectId == 0) polyline.objectId = MemoryID::next();
-    polyline.containerMemoryId = containerMemoryId;
+    polyline.memoryIDContainer = containerMemoryId;
 
     CommandToCopyThread2D command{};
     command.type = CommandToCopyThread2DType::AddPolyline;
-    command.id = polyline.objectId;
+    command.id = polyline.memoryID;
     command.tabID = tabID;
     command.containerMemoryId = containerMemoryId;
     command.polyline = std::move(polyline);
@@ -481,12 +482,11 @@ void EnqueueCad2DPolyline(uint64_t tabID, uint64_t containerMemoryId, Cad2DPolyl
 }
 
 void EnqueueCad2DPolygon(uint64_t tabID, uint64_t containerMemoryId, Cad2DPolygonRecordCPU polygon) {
-    if (polygon.objectId == 0) polygon.objectId = MemoryID::next();
-    polygon.containerMemoryId = containerMemoryId;
+    polygon.memoryIDContainer = containerMemoryId;
 
     CommandToCopyThread2D command{};
     command.type = CommandToCopyThread2DType::AddPolygon;
-    command.id = polygon.objectId;
+    command.id = polygon.memoryID;
     command.tabID = tabID;
     command.containerMemoryId = containerMemoryId;
     command.polygon = polygon;
@@ -499,12 +499,11 @@ void EnqueueCad2DPolygon(uint64_t tabID, uint64_t containerMemoryId, Cad2DPolygo
 }
 
 void EnqueueCad2DCircle(uint64_t tabID, uint64_t containerMemoryId, Cad2DCircleRecordCPU circle) {
-    if (circle.objectId == 0) circle.objectId = MemoryID::next();
-    circle.containerMemoryId = containerMemoryId;
+    circle.memoryIDContainer = containerMemoryId;
 
     CommandToCopyThread2D command{};
     command.type = CommandToCopyThread2DType::AddCircle;
-    command.id = circle.objectId;
+    command.id = circle.memoryID;
     command.tabID = tabID;
     command.containerMemoryId = containerMemoryId;
     command.circle = circle;
@@ -517,12 +516,11 @@ void EnqueueCad2DCircle(uint64_t tabID, uint64_t containerMemoryId, Cad2DCircleR
 }
 
 void EnqueueCad2DEllipse(uint64_t tabID, uint64_t containerMemoryId, Cad2DEllipseRecordCPU ellipse) {
-    if (ellipse.objectId == 0) ellipse.objectId = MemoryID::next();
-    ellipse.containerMemoryId = containerMemoryId;
+    ellipse.memoryIDContainer = containerMemoryId;
 
     CommandToCopyThread2D command{};
     command.type = CommandToCopyThread2DType::AddEllipse;
-    command.id = ellipse.objectId;
+    command.id = ellipse.memoryID;
     command.tabID = tabID;
     command.containerMemoryId = containerMemoryId;
     command.ellipse = ellipse;
@@ -535,12 +533,11 @@ void EnqueueCad2DEllipse(uint64_t tabID, uint64_t containerMemoryId, Cad2DEllips
 }
 
 void EnqueueCad2DArc(uint64_t tabID, uint64_t containerMemoryId, Cad2DArcRecordCPU arc) {
-    if (arc.objectId == 0) arc.objectId = MemoryID::next();
-    arc.containerMemoryId = containerMemoryId;
+    arc.memoryIDContainer = containerMemoryId;
 
     CommandToCopyThread2D command{};
     command.type = CommandToCopyThread2DType::AddArc;
-    command.id = arc.objectId;
+    command.id = arc.memoryID;
     command.tabID = tabID;
     command.containerMemoryId = containerMemoryId;
     command.arc = arc;
@@ -553,12 +550,11 @@ void EnqueueCad2DArc(uint64_t tabID, uint64_t containerMemoryId, Cad2DArcRecordC
 }
 
 void EnqueueCad2DText(uint64_t tabID, uint64_t containerMemoryId, Cad2DTextRecordCPU text) {
-    if (text.objectId == 0) text.objectId = MemoryID::next();
-    text.containerMemoryId = containerMemoryId;
+    text.memoryIDContainer = containerMemoryId;
 
     CommandToCopyThread2D command{};
     command.type = CommandToCopyThread2DType::AddText;
-    command.id = text.objectId;
+    command.id = text.memoryID;
     command.tabID = tabID;
     command.containerMemoryId = containerMemoryId;
     command.text = std::move(text);
@@ -751,7 +747,8 @@ void Cad2DCreateAssetFromSelection(DATASETTAB& tab) {
     std::lock_guard<std::mutex> lock(s.cpuRecordsMutex);
 
     auto wanted = [&](const auto& r) {
-        return !r.isDeleted && r.containerMemoryId == container && selected.count(r.objectId) != 0;
+        return !r.isDeleted && r.memoryIDContainer == container &&
+            selected.count(r.memoryID) != 0;
     };
 
     // Bounding box of the selected objects; its middle becomes the asset insert base point.
@@ -801,7 +798,7 @@ void Cad2DCreateAssetFromSelection(DATASETTAB& tab) {
     if (!hasBounds) return;
 
     Cad2DAssetDefinitionRecordCPU definition{};
-    definition.objectId = MemoryID::next();
+    definition.memoryID = MemoryID::next();
     definition.assetNumber = GenerateUniqueAssetNumberLocked(s);
     definition.baseX = (minX + maxX) * 0.5;
     definition.baseY = (minY + maxY) * 0.5;
@@ -809,9 +806,9 @@ void Cad2DCreateAssetFromSelection(DATASETTAB& tab) {
 
     // The originals become the first placed instance; drawing stays exactly as it is.
     Cad2DAssetInsertRecordCPU firstInsert{};
-    firstInsert.objectId = MemoryID::next();
-    firstInsert.containerMemoryId = container;
-    firstInsert.definitionObjectId = definition.objectId;
+    firstInsert.memoryID = MemoryID::next();
+    firstInsert.memoryIDContainer = container;
+    firstInsert.definitionObjectId = definition.memoryID;
     firstInsert.x = definition.baseX;
     firstInsert.y = definition.baseY;
     firstInsert.schemaVersion = VishwakarmaStorage::kAsset2DInsertSchemaVersion;
@@ -823,15 +820,15 @@ void Cad2DCreateAssetFromSelection(DATASETTAB& tab) {
         for (size_t i = 0; i < originalCount; ++i) {
             if (!wanted(records[i])) continue;
             auto master = records[i];
-            master.objectId = MemoryID::next();
+            master.memoryID = MemoryID::next();
             master.persistedId = 0;
             master.persistedParentId = 0;
-            master.parentObjectId = definition.objectId;
-            master.containerMemoryId = 0;
-            tab.allIDsInThisTab.push_back(master.objectId);
+            master.memoryIDGenerator = definition.memoryID;
+            master.memoryIDContainer = 0;
+            tab.allIDsInThisTab.push_back(master.memoryID);
             records.push_back(std::move(master)); // May reallocate; re-index the original below.
             Cad2DIndexAppendedRecord(s, records); // Third appender to the record vectors (id.md §11.4).
-            records[i].parentObjectId = firstInsert.objectId;
+            records[i].memoryIDGenerator = firstInsert.memoryID;
         }
     };
     convert(s.lineRecords);
@@ -846,8 +843,8 @@ void Cad2DCreateAssetFromSelection(DATASETTAB& tab) {
     Cad2DIndexAppendedRecord(s, s.assetDefinitionRecords);
     s.assetInsertRecords.push_back(firstInsert);
     Cad2DIndexAppendedRecord(s, s.assetInsertRecords);
-    tab.allIDsInThisTab.push_back(definition.objectId);
-    tab.allIDsInThisTab.push_back(firstInsert.objectId);
+    tab.allIDsInThisTab.push_back(definition.memoryID);
+    tab.allIDsInThisTab.push_back(firstInsert.memoryID);
 }
 
 void Cad2DBeginAssetInsert(DATASETTAB& tab) {
@@ -916,18 +913,18 @@ void Cad2DHandleSelectionClick(DATASETTAB& tab, double xCU, double yCU) {
             if (d < bestDist) { bestDist = d; bestId = id; bestParentId = parentId; }
         };
         for (const Cad2DLineRecordCPU& r : s.lineRecords) {
-            if (r.isDeleted || r.containerMemoryId != container) continue;
-            consider(DistPointToSegment(xCU, yCU, r.x1, r.y1, r.x2, r.y2), r.objectId, r.parentObjectId);
+            if (r.isDeleted || r.memoryIDContainer != container) continue;
+            consider(DistPointToSegment(xCU, yCU, r.x1, r.y1, r.x2, r.y2), r.memoryID, r.memoryIDGenerator);
         }
         for (const Cad2DPolylineRecordCPU& r : s.polylineRecords) {
-            if (r.isDeleted || r.containerMemoryId != container) continue;
+            if (r.isDeleted || r.memoryIDContainer != container) continue;
             for (size_t i = 1; i < r.points.size(); ++i) {
                 consider(DistPointToSegment(xCU, yCU, r.points[i - 1].x, r.points[i - 1].y,
-                    r.points[i].x, r.points[i].y), r.objectId, r.parentObjectId);
+                    r.points[i].x, r.points[i].y), r.memoryID, r.memoryIDGenerator);
             }
         }
         for (const Cad2DPolygonRecordCPU& r : s.polygonRecords) {
-            if (r.isDeleted || r.containerMemoryId != container || r.radius <= 0.0) continue;
+            if (r.isDeleted || r.memoryIDContainer != container || r.radius <= 0.0) continue;
             const uint32_t n = std::clamp(r.lineSegmentCount, 3u, 16u);
             const double step = 360.0 / (double)n;
             for (uint32_t i = 0; i < n; ++i) {
@@ -936,23 +933,23 @@ void Cad2DHandleSelectionClick(DATASETTAB& tab, double xCU, double yCU) {
                 consider(DistPointToSegment(xCU, yCU,
                     r.centerX + std::sin(a0) * r.radius, r.centerY + std::cos(a0) * r.radius,
                     r.centerX + std::sin(a1) * r.radius, r.centerY + std::cos(a1) * r.radius),
-                    r.objectId, r.parentObjectId);
+                    r.memoryID, r.memoryIDGenerator);
             }
         }
         for (const Cad2DCircleRecordCPU& r : s.circleRecords) {
-            if (r.isDeleted || r.containerMemoryId != container) continue;
-            consider(DistPointToCircle(xCU, yCU, r.centerX, r.centerY, r.radius), r.objectId,
-                r.parentObjectId);
+            if (r.isDeleted || r.memoryIDContainer != container) continue;
+            consider(DistPointToCircle(xCU, yCU, r.centerX, r.centerY, r.radius), r.memoryID,
+                r.memoryIDGenerator);
         }
         for (const Cad2DEllipseRecordCPU& r : s.ellipseRecords) {
-            if (r.isDeleted || r.containerMemoryId != container) continue;
+            if (r.isDeleted || r.memoryIDContainer != container) continue;
             consider(DistPointToEllipse(xCU, yCU, r.centerX, r.centerY, r.radiusX, r.radiusY,
-                r.rotationRadians), r.objectId, r.parentObjectId);
+                r.rotationRadians), r.memoryID, r.memoryIDGenerator);
         }
         for (const Cad2DArcRecordCPU& r : s.arcRecords) {
-            if (r.isDeleted || r.containerMemoryId != container) continue;
+            if (r.isDeleted || r.memoryIDContainer != container) continue;
             consider(DistPointToEllipse(xCU, yCU, r.centerX, r.centerY, r.radiusX, r.radiusY,
-                r.rotationRadians), r.objectId, r.parentObjectId);
+                r.rotationRadians), r.memoryID, r.memoryIDGenerator);
         }
 
         if (bestId != 0) {
@@ -961,7 +958,7 @@ void Cad2DHandleSelectionClick(DATASETTAB& tab, double xCU, double yCU) {
             bool parentIsAssetInsert = false;
             if (bestParentId != 0) {
                 for (const Cad2DAssetInsertRecordCPU& insert : s.assetInsertRecords) {
-                    if (!insert.isDeleted && insert.objectId == bestParentId) {
+                    if (!insert.isDeleted && insert.memoryID == bestParentId) {
                         parentIsAssetInsert = true;
                         break;
                     }
@@ -970,7 +967,9 @@ void Cad2DHandleSelectionClick(DATASETTAB& tab, double xCU, double yCU) {
             if (parentIsAssetInsert) {
                 auto gather = [&](const auto& records) {
                     for (const auto& r : records) {
-                        if (!r.isDeleted && r.parentObjectId == bestParentId) hitGroup.push_back(r.objectId);
+                        if (!r.isDeleted && r.memoryIDGenerator == bestParentId) {
+                            hitGroup.push_back(r.memoryID);
+                        }
                     }
                 };
                 gather(s.lineRecords);
@@ -1141,10 +1140,13 @@ void ApplyTransform2DToSelection(DATASETTAB& tab, Cad2DTransformKind kind,
     std::vector<Cad2DTextRecordCPU> texts;
 
     auto asNewObject = [&](auto& record) {
-        record.objectId = 0; // EnqueueCad2D* assigns a fresh memory id; save assigns persisted ids.
+        // A fresh id is taken here rather than left at 0 for EnqueueCad2D* to fill in: META_DATA
+        // issues one in its constructor, so "0 means unassigned" is no longer expressible for a
+        // migrated record. Save still assigns the persisted ids.
+        record.memoryID = MemoryID::next();
         record.persistedId = 0;
         record.persistedParentId = 0;
-        record.parentObjectId = 0; // Copies detach from any asset instance (plain page objects).
+        record.memoryIDGenerator = 0; // Copies detach from any asset instance (plain page objects).
     };
     auto wanted = [&](uint64_t objectId, bool isDeleted, uint64_t recContainer) {
         return !isDeleted && recContainer == container && selected.count(objectId) != 0;
@@ -1153,7 +1155,7 @@ void ApplyTransform2DToSelection(DATASETTAB& tab, Cad2DTransformKind kind,
     {
         std::lock_guard<std::mutex> lock(s.cpuRecordsMutex);
         for (const Cad2DLineRecordCPU& r : s.lineRecords) {
-            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            if (!wanted(r.memoryID, r.isDeleted, r.memoryIDContainer)) continue;
             Cad2DLineRecordCPU out = r;
             if (kind == Cad2DTransformKind::Offset) {
                 // Parallel line at the offset distance, toward the side of the second click.
@@ -1175,7 +1177,7 @@ void ApplyTransform2DToSelection(DATASETTAB& tab, Cad2DTransformKind kind,
             lines.push_back(out);
         }
         for (const Cad2DPolylineRecordCPU& r : s.polylineRecords) {
-            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            if (!wanted(r.memoryID, r.isDeleted, r.memoryIDContainer)) continue;
             Cad2DPolylineRecordCPU out = r;
             if (kind == Cad2DTransformKind::Offset) {
                 const std::vector<Cad2DPoint2D> cleaned = CleanPolylinePoints(r.points);
@@ -1189,7 +1191,7 @@ void ApplyTransform2DToSelection(DATASETTAB& tab, Cad2DTransformKind kind,
             polylines.push_back(std::move(out));
         }
         for (const Cad2DPolygonRecordCPU& r : s.polygonRecords) {
-            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            if (!wanted(r.memoryID, r.isDeleted, r.memoryIDContainer)) continue;
             Cad2DPolygonRecordCPU out = r;
             if (kind == Cad2DTransformKind::Offset) {
                 // Offset the edges: the apothem changes by the distance, so the circumradius
@@ -1218,7 +1220,7 @@ void ApplyTransform2DToSelection(DATASETTAB& tab, Cad2DTransformKind kind,
             polygons.push_back(out);
         }
         for (const Cad2DCircleRecordCPU& r : s.circleRecords) {
-            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            if (!wanted(r.memoryID, r.isDeleted, r.memoryIDContainer)) continue;
             Cad2DCircleRecordCPU out = r;
             if (kind == Cad2DTransformKind::Offset) {
                 const double grow =
@@ -1233,7 +1235,7 @@ void ApplyTransform2DToSelection(DATASETTAB& tab, Cad2DTransformKind kind,
             circles.push_back(out);
         }
         for (const Cad2DEllipseRecordCPU& r : s.ellipseRecords) {
-            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            if (!wanted(r.memoryID, r.isDeleted, r.memoryIDContainer)) continue;
             Cad2DEllipseRecordCPU out = r;
             if (kind == Cad2DTransformKind::Offset) {
                 const double sx = (std::max)(std::abs(r.radiusX), 1.0e-9);
@@ -1259,7 +1261,7 @@ void ApplyTransform2DToSelection(DATASETTAB& tab, Cad2DTransformKind kind,
             ellipses.push_back(out);
         }
         for (const Cad2DArcRecordCPU& r : s.arcRecords) {
-            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            if (!wanted(r.memoryID, r.isDeleted, r.memoryIDContainer)) continue;
             Cad2DArcRecordCPU out = r;
             if (kind == Cad2DTransformKind::Offset) {
                 const double sx = (std::max)(std::abs(r.radiusX), 1.0e-9);
@@ -1307,7 +1309,7 @@ void ApplyTransform2DToSelection(DATASETTAB& tab, Cad2DTransformKind kind,
         }
         if (kind != Cad2DTransformKind::Offset) { // Offset is not defined for text.
             for (const Cad2DTextRecordCPU& r : s.textRecords) {
-                if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+                if (!wanted(r.memoryID, r.isDeleted, r.memoryIDContainer)) continue;
                 Cad2DTextRecordCPU out = r;
                 // The rendered origin is (x + xOffsetCU, y + yOffsetCU); map that effective
                 // point so the offsets keep working unchanged.
@@ -1388,8 +1390,8 @@ void HandleAssetInsertClick(DATASETTAB& tab, double xCU, double yCU) {
         const uint64_t wantedId = s.assetInsertSelectedDefinitionId.load(std::memory_order_acquire);
         for (const Cad2DAssetDefinitionRecordCPU& d : s.assetDefinitionRecords) {
             if (d.isDeleted) continue;
-            if (definitionId == 0) definitionId = d.objectId;
-            if (wantedId != 0 && d.objectId == wantedId) { definitionId = d.objectId; break; }
+            if (definitionId == 0) definitionId = d.memoryID;
+            if (wantedId != 0 && d.memoryID == wantedId) { definitionId = d.memoryID; break; }
         }
     }
     if (definitionId == 0) return;
@@ -1466,15 +1468,15 @@ bool Cad2DInstantiateAsset(DATASETTAB& tab, uint64_t containerMemoryId, uint64_t
         double baseX = 0.0, baseY = 0.0;
         bool found = false;
         for (const Cad2DAssetDefinitionRecordCPU& d : s.assetDefinitionRecords) {
-            if (!d.isDeleted && d.objectId == definitionObjectId) {
+            if (!d.isDeleted && d.memoryID == definitionObjectId) {
                 baseX = d.baseX; baseY = d.baseY; found = true; break;
             }
         }
         if (!found) return false;
 
         Cad2DAssetInsertRecordCPU insert{};
-        insert.objectId = MemoryID::next();
-        insert.containerMemoryId = containerMemoryId;
+        insert.memoryID = MemoryID::next();
+        insert.memoryIDContainer = containerMemoryId;
         insert.definitionObjectId = definitionObjectId;
         insert.x = xCU;
         insert.y = yCU;
@@ -1517,13 +1519,18 @@ bool Cad2DInstantiateAsset(DATASETTAB& tab, uint64_t containerMemoryId, uint64_t
         // Copy every master record of this definition, transform it and re-parent to the insert.
         auto instantiate = [&](const auto& records, auto& out, auto&& transform) {
             for (const auto& r : records) {
-                if (r.isDeleted || r.parentObjectId != definitionObjectId) continue;
+                if (r.isDeleted || r.memoryIDGenerator != definitionObjectId) continue;
                 auto member = r;
-                member.objectId = 0; // EnqueueCad2D* assigns a fresh memory id.
+                /* A fresh id is taken HERE rather than left at 0 for EnqueueCad2D* to fill in.
+                META_DATA issues an id in its constructor, so a migrated record's memoryID is
+                never 0 and "0 means unassigned" has stopped being expressible. Assigning eagerly
+                is what both halves can agree on; the Enqueue path's own `== 0` test simply does
+                not fire. */
+                member.memoryID = MemoryID::next();
                 member.persistedId = 0;
                 member.persistedParentId = 0;
-                member.parentObjectId = insert.objectId;
-                member.containerMemoryId = containerMemoryId;
+                member.memoryIDGenerator = insert.memoryID;
+                member.memoryIDContainer = containerMemoryId;
                 transform(member);
                 out.push_back(std::move(member));
             }
@@ -1575,7 +1582,7 @@ bool Cad2DInstantiateAsset(DATASETTAB& tab, uint64_t containerMemoryId, uint64_t
 
         s.assetInsertRecords.push_back(insert);
         Cad2DIndexAppendedRecord(s, s.assetInsertRecords);
-        tab.allIDsInThisTab.push_back(insert.objectId);
+        tab.allIDsInThisTab.push_back(insert.memoryID);
     }
 
     for (Cad2DLineRecordCPU& r : lines) EnqueueCad2DLine(tab.tabID, containerMemoryId, r);
@@ -1599,7 +1606,7 @@ uint64_t Cad2DCreateAssetDefinition(DATASETTAB& tab, double baseX, double baseY,
     std::lock_guard<std::mutex> lock(s.cpuRecordsMutex);
 
     Cad2DAssetDefinitionRecordCPU definition{};
-    definition.objectId = MemoryID::next();
+    definition.memoryID = MemoryID::next();
     definition.assetNumber = GenerateUniqueAssetNumberLocked(s);
     definition.baseX = baseX;
     definition.baseY = baseY;
@@ -1609,12 +1616,12 @@ uint64_t Cad2DCreateAssetDefinition(DATASETTAB& tab, double baseX, double baseY,
     // hit-tested / zoom-fit); parentObjectId links it to the definition. Added directly (not
     // enqueued: the copy thread drops container-0 commands).
     auto addMaster = [&](auto master, auto& records) {
-        master.objectId = MemoryID::next();
+        master.memoryID = MemoryID::next();
         master.persistedId = 0;
         master.persistedParentId = 0;
-        master.parentObjectId = definition.objectId;
-        master.containerMemoryId = 0;
-        tab.allIDsInThisTab.push_back(master.objectId);
+        master.memoryIDGenerator = definition.memoryID;
+        master.memoryIDContainer = 0;
+        tab.allIDsInThisTab.push_back(master.memoryID);
         records.push_back(std::move(master));
         Cad2DIndexAppendedRecord(s, records); // Third appender to the record vectors (id.md §11.4).
     };
@@ -1624,8 +1631,8 @@ uint64_t Cad2DCreateAssetDefinition(DATASETTAB& tab, double baseX, double baseY,
 
     s.assetDefinitionRecords.push_back(definition);
     Cad2DIndexAppendedRecord(s, s.assetDefinitionRecords);
-    tab.allIDsInThisTab.push_back(definition.objectId);
-    return definition.objectId;
+    tab.allIDsInThisTab.push_back(definition.memoryID);
+    return definition.memoryID;
 }
 
 bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
@@ -1822,7 +1829,7 @@ void Cad2DAutoGenerateDemoContent(DATASETTAB& tab) {
 
     if (!tab.cad2d->demoTextQueued.exchange(true, std::memory_order_acq_rel)) {
         Cad2DTextRecordCPU text{};
-        text.containerMemoryId = page2DMemoryId;
+        text.memoryIDContainer = page2DMemoryId;
         text.x = -180.0;
         text.y = 110.0;
         text.textHeightCU = 9.0f;
@@ -1846,7 +1853,7 @@ void Cad2DAutoGenerateDemoContent(DATASETTAB& tab) {
     const double cy = ((double)((n / 9) % 7) - 3.0) * 16.0;
 
     Cad2DLineRecordCPU line{};
-    line.containerMemoryId = page2DMemoryId;
+    line.memoryIDContainer = page2DMemoryId;
     line.x1 = cx + std::cos(a0) * r0;
     line.y1 = cy + std::sin(a0) * r0;
     line.x2 = cx + std::cos(a1) * r1;
@@ -1883,8 +1890,8 @@ void Cad2DGenerateBulkLines(DATASETTAB& tab, uint32_t count) {
             const bool backslash = (cell & 1u) != 0;
 
             Cad2DLineRecordCPU line{};
-            line.objectId = MemoryID::next();
-            line.containerMemoryId = page2DMemoryId;
+            line.memoryID = MemoryID::next();
+            line.memoryIDContainer = page2DMemoryId;
             line.x1 = cellX + 1.0;
             line.y1 = backslash ? cellY + 9.0 : cellY + 1.0;
             line.x2 = cellX + 9.0;
@@ -1896,7 +1903,7 @@ void Cad2DGenerateBulkLines(DATASETTAB& tab, uint32_t count) {
 
             CommandToCopyThread2D command{};
             command.type = CommandToCopyThread2DType::AddLine;
-            command.id = line.objectId;
+            command.id = line.memoryID;
             command.tabID = tab.tabID;
             command.containerMemoryId = page2DMemoryId;
             command.line = std::move(line);
@@ -1938,7 +1945,7 @@ void Cad2DModifyBulkLines(DATASETTAB& tab, uint32_t count) {
         edited.reserve((std::min)(static_cast<size_t>(count), storage.lineRecords.size()));
         for (size_t i = storage.lineRecords.size(); i-- > 0 && edited.size() < count; ) {
             const Cad2DLineRecordCPU& record = storage.lineRecords[i];
-            if (record.isDeleted || record.containerMemoryId != page2DMemoryId) continue;
+            if (record.isDeleted || record.memoryIDContainer != page2DMemoryId) continue;
             Cad2DLineRecordCPU moved = record;
             // Half a CU up. Big enough to see at a zoom where individual strokes resolve, small
             // enough that repeated presses keep the drawing recognisable.
@@ -1955,7 +1962,7 @@ void Cad2DModifyBulkLines(DATASETTAB& tab, uint32_t count) {
         for (Cad2DLineRecordCPU& line : edited) {
             CommandToCopyThread2D command{};
             command.type = CommandToCopyThread2DType::AddLine;
-            command.id = line.objectId;
+            command.id = line.memoryID;
             command.tabID = tab.tabID;
             command.containerMemoryId = page2DMemoryId;
             command.line = std::move(line);
@@ -2015,25 +2022,25 @@ void Cad2DZoomToExtents(DATASETTAB& tab, bool selectedOnly) {
     {
         std::lock_guard<std::mutex> lock(s.cpuRecordsMutex);
         for (const Cad2DLineRecordCPU& r : s.lineRecords) {
-            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            if (!wanted(r.memoryID, r.isDeleted, r.memoryIDContainer)) continue;
             include(r.x1, r.y1); include(r.x2, r.y2);
         }
         for (const Cad2DPolylineRecordCPU& r : s.polylineRecords) {
-            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            if (!wanted(r.memoryID, r.isDeleted, r.memoryIDContainer)) continue;
             for (const Cad2DPoint2D& p : r.points) include(p.x, p.y);
         }
         for (const Cad2DPolygonRecordCPU& r : s.polygonRecords) {
-            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            if (!wanted(r.memoryID, r.isDeleted, r.memoryIDContainer)) continue;
             include(r.centerX - r.radius, r.centerY - r.radius);
             include(r.centerX + r.radius, r.centerY + r.radius);
         }
         for (const Cad2DCircleRecordCPU& r : s.circleRecords) {
-            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            if (!wanted(r.memoryID, r.isDeleted, r.memoryIDContainer)) continue;
             include(r.centerX - r.radius, r.centerY - r.radius);
             include(r.centerX + r.radius, r.centerY + r.radius);
         }
         for (const Cad2DEllipseRecordCPU& r : s.ellipseRecords) {
-            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            if (!wanted(r.memoryID, r.isDeleted, r.memoryIDContainer)) continue;
             // Axis-aligned bounding half-extents of the rotated ellipse.
             const double c = std::cos(r.rotationRadians), sn = std::sin(r.rotationRadians);
             const double hx = std::sqrt(r.radiusX * c * r.radiusX * c + r.radiusY * sn * r.radiusY * sn);
@@ -2042,13 +2049,13 @@ void Cad2DZoomToExtents(DATASETTAB& tab, bool selectedOnly) {
             include(r.centerX + hx, r.centerY + hy);
         }
         for (const Cad2DArcRecordCPU& r : s.arcRecords) {
-            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            if (!wanted(r.memoryID, r.isDeleted, r.memoryIDContainer)) continue;
             const double radius = (std::max)(std::abs(r.radiusX), std::abs(r.radiusY));
             include(r.centerX - radius, r.centerY - radius); // Full-ellipse box; conservative for partial arcs.
             include(r.centerX + radius, r.centerY + radius);
         }
         for (const Cad2DTextRecordCPU& r : s.textRecords) {
-            if (!wanted(r.objectId, r.isDeleted, r.containerMemoryId)) continue;
+            if (!wanted(r.memoryID, r.isDeleted, r.memoryIDContainer)) continue;
             include(r.x, r.y); include(r.x, r.y + (double)r.textHeightCU);
         }
     }
@@ -2069,10 +2076,10 @@ void Cad2DZoomToExtents(DATASETTAB& tab, bool selectedOnly) {
         std::lock_guard<std::mutex> lock(s.cpuRecordsMutex);
         for (const Cad2DLineRecordCPU& r : s.lineRecords) {
             if (reported >= 8) break;
-            if (r.isDeleted || r.containerMemoryId != container) continue;
+            if (r.isDeleted || r.memoryIDContainer != container) continue;
             if (suspicious(r.x1) || suspicious(r.y1) || suspicious(r.x2) || suspicious(r.y2)) {
-                std::cout << "[cad2d][dbg] OUTLIER line objectId=" << r.objectId
-                          << " parent=" << r.parentObjectId << " persisted=" << r.persistedId
+                std::cout << "[cad2d][dbg] OUTLIER line objectId=" << r.memoryID
+                          << " parent=" << r.memoryIDGenerator << " persisted=" << r.persistedId
                           << " (" << r.x1 << ", " << r.y1 << ") -> (" << r.x2 << ", " << r.y2
                           << ")" << std::endl;
                 ++reported;
@@ -2080,10 +2087,10 @@ void Cad2DZoomToExtents(DATASETTAB& tab, bool selectedOnly) {
         }
         for (const Cad2DTextRecordCPU& r : s.textRecords) {
             if (reported >= 8) break;
-            if (r.isDeleted || r.containerMemoryId != container) continue;
+            if (r.isDeleted || r.memoryIDContainer != container) continue;
             if (suspicious(r.x) || suspicious(r.y)) {
-                std::cout << "[cad2d][dbg] OUTLIER text objectId=" << r.objectId
-                          << " parent=" << r.parentObjectId << " persisted=" << r.persistedId
+                std::cout << "[cad2d][dbg] OUTLIER text objectId=" << r.memoryID
+                          << " parent=" << r.memoryIDGenerator << " persisted=" << r.persistedId
                           << " at (" << r.x << ", " << r.y << ") height=" << r.textHeightCU
                           << " text=\"" << r.text.substr(0, 40) << "\"" << std::endl;
                 ++reported;
@@ -2091,21 +2098,21 @@ void Cad2DZoomToExtents(DATASETTAB& tab, bool selectedOnly) {
         }
         for (const Cad2DPolygonRecordCPU& r : s.polygonRecords) {
             if (reported >= 8) break;
-            if (r.isDeleted || r.containerMemoryId != container) continue;
+            if (r.isDeleted || r.memoryIDContainer != container) continue;
             if (suspicious(r.centerX) || suspicious(r.centerY) || suspicious(r.radius)) {
-                std::cout << "[cad2d][dbg] OUTLIER polygon objectId=" << r.objectId
-                          << " parent=" << r.parentObjectId << " center(" << r.centerX
+                std::cout << "[cad2d][dbg] OUTLIER polygon objectId=" << r.memoryID
+                          << " parent=" << r.memoryIDGenerator << " center(" << r.centerX
                           << ", " << r.centerY << ") radius=" << r.radius << std::endl;
                 ++reported;
             }
         }
         for (const Cad2DPolylineRecordCPU& r : s.polylineRecords) {
             if (reported >= 8) break;
-            if (r.isDeleted || r.containerMemoryId != container) continue;
+            if (r.isDeleted || r.memoryIDContainer != container) continue;
             for (const Cad2DPoint2D& p : r.points) {
                 if (suspicious(p.x) || suspicious(p.y)) {
-                    std::cout << "[cad2d][dbg] OUTLIER polyline objectId=" << r.objectId
-                              << " parent=" << r.parentObjectId << " point(" << p.x
+                    std::cout << "[cad2d][dbg] OUTLIER polyline objectId=" << r.memoryID
+                              << " parent=" << r.memoryIDGenerator << " point(" << p.x
                               << ", " << p.y << ")" << std::endl;
                     ++reported;
                     break;
@@ -2114,30 +2121,30 @@ void Cad2DZoomToExtents(DATASETTAB& tab, bool selectedOnly) {
         }
         for (const Cad2DCircleRecordCPU& r : s.circleRecords) {
             if (reported >= 8) break;
-            if (r.isDeleted || r.containerMemoryId != container) continue;
+            if (r.isDeleted || r.memoryIDContainer != container) continue;
             if (suspicious(r.centerX) || suspicious(r.centerY) || suspicious(r.radius)) {
-                std::cout << "[cad2d][dbg] OUTLIER circle objectId=" << r.objectId
-                          << " parent=" << r.parentObjectId << " center(" << r.centerX
+                std::cout << "[cad2d][dbg] OUTLIER circle objectId=" << r.memoryID
+                          << " parent=" << r.memoryIDGenerator << " center(" << r.centerX
                           << ", " << r.centerY << ") radius=" << r.radius << std::endl;
                 ++reported;
             }
         }
         for (const Cad2DEllipseRecordCPU& r : s.ellipseRecords) {
             if (reported >= 8) break;
-            if (r.isDeleted || r.containerMemoryId != container) continue;
+            if (r.isDeleted || r.memoryIDContainer != container) continue;
             if (suspicious(r.centerX) || suspicious(r.centerY)) {
-                std::cout << "[cad2d][dbg] OUTLIER ellipse objectId=" << r.objectId
-                          << " parent=" << r.parentObjectId << " center(" << r.centerX
+                std::cout << "[cad2d][dbg] OUTLIER ellipse objectId=" << r.memoryID
+                          << " parent=" << r.memoryIDGenerator << " center(" << r.centerX
                           << ", " << r.centerY << ")" << std::endl;
                 ++reported;
             }
         }
         for (const Cad2DArcRecordCPU& r : s.arcRecords) {
             if (reported >= 8) break;
-            if (r.isDeleted || r.containerMemoryId != container) continue;
+            if (r.isDeleted || r.memoryIDContainer != container) continue;
             if (suspicious(r.centerX) || suspicious(r.centerY)) {
-                std::cout << "[cad2d][dbg] OUTLIER arc objectId=" << r.objectId
-                          << " parent=" << r.parentObjectId << " center(" << r.centerX
+                std::cout << "[cad2d][dbg] OUTLIER arc objectId=" << r.memoryID
+                          << " parent=" << r.memoryIDGenerator << " center(" << r.centerX
                           << ", " << r.centerY << ")" << std::endl;
                 ++reported;
             }

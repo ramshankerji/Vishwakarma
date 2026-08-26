@@ -427,6 +427,24 @@ int FindPublishedSubTabSlot(const DATASETTAB& tab, uint64_t containerMemoryId);
 int InputViewSlot(const DATASETTAB& tab);
 // Container memoryId of the input view slot (0 when none).
 uint64_t InputViewContainerId(const DATASETTAB& tab);
+/* True when the Debug save/load round-trip driver has been asked to run
+(VISHWAKARMA_ROUNDTRIP_IN / _OUT, handled in Input_UI_Network_File.h). THREE places need to know,
+because all three would otherwise put content into the file being tested: the driver itself,
+CreateEngineeringTab, and wWinMain's direct spawn of the startup tab - demo objects land in the
+tab being round-tripped and are then written into the output file, where the comparison correctly
+reports objects that appeared from nowhere.
+Always false in Release; the environment is not consulted there.
+See validations/yyy_roundtrip/README.md. */
+inline bool RoundTripModeRequested() {
+#ifdef _DEBUG
+    wchar_t buffer[MAX_PATH] = {};
+    return GetEnvironmentVariableW(L"VISHWAKARMA_ROUNDTRIP_IN", buffer, MAX_PATH) > 0 &&
+        GetEnvironmentVariableW(L"VISHWAKARMA_ROUNDTRIP_OUT", buffer, MAX_PATH) > 0;
+#else
+    return false;
+#endif
+}
+
 // Marks every open sub-tab slot for delayed GPU release and publishes an empty list.
 // storageObjectsMutex must already be held by the caller.
 void CloseAllInternalSubTabsLocked(DATASETTAB& tab);

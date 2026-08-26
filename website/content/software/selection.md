@@ -75,7 +75,7 @@ A small unit-cube vertex/index buffer (created once) drawn at `camera.target`, w
 
 **As built:** 2D selection lives in the existing 2D files (`RenderPage2D.h/.cpp` for the state, hit-testing and refresh command; `RenderPage2D-DirectX12.cpp` for the flag stamping) — there is no separate `Selection2D` module, matching the "2D stays where it is" decision.
 
-> **Superseded in part.** Page2D has since acquired the paged GPU store this section anticipated, and with it `SelectionRefresh` stopped forcing a rebuild: the copy thread now diffs the selection set against its own `stampedSelection` and writes the flag word directly into the affected records — four bytes per object, 0.51 ms on a two-million-line sheet. The hit test is still a CPU scan of the record vectors, as described. See "Page2D memory paging — as built" and section 11 in `2Drendering.md`; the rebuild-and-republish mechanism described above and in the bullet before it is the pre-paging design.
+> **Superseded in part.** Page2D has since acquired the paged GPU store this section anticipated, and with it `SelectionRefresh` stopped forcing a rebuild: the copy thread now diffs the selection set against its own `stampedSelection` and writes the flag word directly into the affected records — four bytes per object, 0.51 ms on a two-million-line sheet. The hit test is still a CPU scan of the record vectors, as described. See "Page2D memory paging — as built" and "Selection and hit testing — as built" in `2Drendering.md`; the rebuild-and-republish mechanism described above and in the bullet before it is the pre-paging design.
 
 ## Module ownership
 

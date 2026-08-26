@@ -49,30 +49,35 @@ In this article we learned about importance and planning of IDs in Mission Vishw
 
 
 This page records how engineering objects are laid out in CPU memory, why the 2D and 3D worlds
-currently do it differently, and what it would take to make them one. It is an **analysis and a
-proposal**: the measurements and the code findings in §2 are verified against the tree, the
-recommendation in §7 is a recommendation, and **none of the migration described here is
-implemented**. Read it before touching the object model, and before adding a second mechanism to
-either half.
+did it differently, and what it took to make them one. Read it before touching the object model,
+and before adding a second mechanism to either half.
 
-The short version: the two halves diverged for defensible reasons, the divergence is now costing
-something real, and the thing that decides it is not memory — it is that intelligent 2D objects will
-need optional properties, and there must not be two systems for that. §3 covers the related
-question of how one object refers to another at all.
+**Status, 2026-08-26.** §7 steps 0, 1 and 2 are shipped. Step 3 is half done: all nine 2D record
+types now derive `META_DATA`, so there is ONE object model — but they still live by value in
+`std::vector` on the heap, not in the arena, which is the half `Optional64` waits on (§2.6). §3 —
+inter-object references and the resolver — is entirely unbuilt, and is the largest thing here that
+is still only a plan.
 
-## 1. The question
+This page began as an analysis and a proposal; what survives is the reasoning that still decides
+something, plus the record of what was built. §1–§6 are why, §7 is what and what is next, §8 the
+live risks, §9 the loose ends. Step 2's design and numbers are not repeated here — they live in
+`2Drendering.md`, "Page2D memory paging — as built".
 
-3D engineering objects derive from `META_DATA` and are allocated out of the CPU RAM arena
-(`राम`, in `MemoryManagerCPU.h`). The nine Page2D record types do not: they are plain structs living
-by value in `std::vector` members of `TabCad2DStorage`.
+## 1. The question, and the answer
 
-That split has already cost twice. The Properties Pane had to widen its whole accessor contract to
-`void*` because the two worlds have no common base (`propertiesPane.md`, amendment). Snapping is
-about to pay again: `snapping.md` §14 plans a `SnapPointsForObject` dispatch over
-`tab.storageObjects3D` **and** a separate 2D candidate gatherer over `TabCad2DStorage`, because
-there is no one type to dispatch on.
+3D engineering objects derive `META_DATA` and are allocated out of the CPU RAM arena (`राम`, in
+`MemoryManagerCPU.h`). The nine Page2D record types did neither: they were plain structs living by
+value in `std::vector` members of `TabCad2DStorage`.
 
-So: should 2D objects join the `META_DATA` + arena model, and if so, when?
+That split cost twice. The Properties Pane had to widen its whole accessor contract to `void*`
+because the two worlds had no common base (`propertiesPane.md`, amendment), and `snapping.md` §14
+was about to plan a second candidate gatherer for the same reason — there was no one type to
+dispatch on.
+
+**Answered in two halves.** All nine types now derive `META_DATA`, so there is one object model and
+the second snapping gatherer was never written. They are still value types in `std::vector`, not
+arena objects, which is the half that remains and the half `Optional64` waits on (§2.6). §7 is the
+record; the rest of this section is what the decision rested on.
 
 ## 2. What exists today
 
@@ -98,6 +103,11 @@ rather than a walk plus a map lookup.
 
 ### 2.2 2D — value records in contiguous vectors
 
+**STILL TRUE, and it is the half of step 3 that has not happened.** The records derive `META_DATA`
+now, but deriving it changed only their identity: they are still value types in `std::vector`, on
+the CRT heap, and all three consequences below still hold. That is why `Optional64` is still out of
+reach (§2.6) — it is residency, not inheritance, that the arena question is about.
+
 `std::vector<Cad2DLineRecordCPU>`, `…Circle…`, and seven more, all members of `TabCad2DStorage`.
 They go to the CRT heap, not the arena. Three consequences follow from that, and they are the real
 argument for the current design:
@@ -113,48 +123,25 @@ argument for the current design:
 Per-tab isolation still holds, but structurally (membership in a per-tab struct) rather than through
 the arena's `memoryGroupNo`. Nothing leaks — the vectors die with the tab's `cad2d`.
 
-### 2.3 The identity fields already match
+### 2.3 The identity fields matched, so they were merged — DONE
 
-The 2D records are a structural clone of `META_DATA` under different names, and both draw ids from
-the same `MemoryID::next()` global atomic. That shared id space is why a pane lookup can match on
-`objectId` alone with no container filter.
+The 2D records were a structural clone of `META_DATA` under different names, drawing ids from the
+same `MemoryID::next()` global atomic. That is why the merge was cheap: `objectId` → `memoryID`,
+`containerMemoryId` → `memoryIDContainer`, `parentObjectId` → `memoryIDGenerator`, with
+`persistedId`, `persistedParentId`, `schemaVersion` and `isDeleted` already identically named.
+`dataVersion` and `dataType` arrived with the base — 2D had neither, and `undo-redo.md` needs the
+first regardless.
 
-| `META_DATA` | `Cad2D*RecordCPU` |
-|---|---|
-| `memoryID` | `objectId` |
-| `memoryIDContainer` | `containerMemoryId` — settled, §2.4 |
-| `memoryIDGenerator` | `parentObjectId` — same meaning, name differs until step 3 |
-| `persistedId` | `persistedId` |
-| `persistedParentId` | `persistedParentId` |
-| `schemaVersion` | `schemaVersion` |
-| `isDeleted` | `isDeleted` |
-| `dataVersion` | *absent* |
-| `dataType` | implied by which vector holds it |
-| `xxxFileIndex` | *absent* |
-| — | `containerMemoryId` — no equivalent |
+### 2.4 Container versus generator — SETTLED
 
-`dataVersion` being absent matters beyond tidiness: it is the change counter other threads read, and
-`undo-redo.md` will need it in 2D regardless of what is decided here.
+`memoryIDContainer` is **the container** — where an object is shown — and `memoryIDGenerator` is
+**the owner**, the asset instance or template it was stamped out of. Both are ordinary fields on
+`META_DATA`. The two were never semantically in conflict: 3D had one slot with two meanings
+competing for it while 2D had two slots under confusing names.
 
-### 2.4 The parenthood inversion — SETTLED
-
-**Resolved by §8 step 1: `memoryIDContainer` is the container and `memoryIDGenerator` is the owner,
-both on `META_DATA`.** The conflict below was never semantic — both worlds already modelled
-container *and* owner. It was only that 3D had one slot and two meanings competing for it while 2D
-had two slots under confusing names. What follows is the original statement of the problem.
-
-The one genuine semantic conflict, and the thing to settle before anything else.
-
-- **3D:** `memoryIDContainer` **is the container** — object creation sets it to `EnsureActiveScene3D`.
-- **2D:** `parentObjectId` is the **owning asset instance**, and page membership is the separate
-  `containerMemoryId`.
-
-So 2D has two-level parenthood and `META_DATA` has one slot, and the two worlds use the same field
-name for opposite meanings. Any unification has to pick one, and one side has to change.
-
-Note also that this is **not a 2D-only problem**: once 3D templates exist, a 3D object will need the
-same container-plus-owner pair. The dividing line is *"lives inside a container"* versus *"does
-not"* — a containment concern, not a dimensionality one.
+The dividing line is *"lives inside a container"* versus *"does not"* — a containment concern, not
+a dimensionality one, which is why 3D templates will want the same pair and why a separate
+`META_DATA2D` would have frozen the wrong axis into the type system.
 
 ### 2.5 memoryID resolution is a linear scan, and both indices are dead
 
@@ -174,20 +161,19 @@ substitute.
 This is worth stating plainly because it inverts an assumption: 2D is not missing an indexing
 mechanism that 3D has. Neither world has one.
 
-### 2.6 `Optional64` — was a specification, now implemented
+### 2.6 `Optional64` — built, and why 2D cannot use it yet
 
-**This section described the gap; step 0 of §8 has since closed it.** `Optional64` is real code in
-`OptionalProperties.h`, is in `Vishwakarma.vcxproj`, and `LINE_MEMBER` carries the first optional
-property in the application. What follows records the shape it took, because two of the
-assumptions the specification was written on turned out to be wrong in useful ways.
+Real code in `OptionalProperties.h`, in the vcxproj, driver-tested — and with **no consumer**. The
+`LINE_MEMBER` pilot property was removed again in step 1, so nothing in the application declares an
+optional property today. Say so rather than letting it look wired.
 
-**The arena change was smaller than feared.** The spec called
-`cpuRAMArena.allocate(&x, 32, xChunkIndex)` — an out-pointer plus a chunk index it wanted back in
-the destructor — and this page concluded that implementing it "requires an arena API change". It
-did, but not that one. `राम::Free` already derives the owning chunk from the pointer's own
-address, so **`xChunkIndex` and `yChunkIndex` were 8 bytes of duplicated information** and simply
-came out. What the arena genuinely could not answer was *which tab an allocation belongs to*, and
-the same address arithmetic answers that too. Four small additions did it:
+**40 bytes inline, and 0 arena bytes until something is set.** Allocation is lazy: `x` and `y` stay
+null until the first `set`, which matters because the eager version would have cost a 100k-element
+DXF import ~9.6 MB and 200k allocations for properties nobody set. The schema is declared through
+an x-macro list per type, generating the enumerators, the byte-size table, `has/get/set/unset` and
+a schema hash.
+
+It needed four additions to the arena, all deriving their answer from an address alone:
 
 ```text
 राम::MemoryGroupOf(anyPointer)        which tab owns the chunk this address is in
@@ -198,53 +184,62 @@ the same address arithmetic answers that too. Four small additions did it:
 
 `MemoryGroupOf` is what keeps the class at 40 bytes: an **interior** pointer reports the enclosing
 object's group, so `Optional64` finds its own tab from `this` and stores neither a group nor a
-chunk index. The other three are what let `ByteArrayData` stay position-independent — it holds
+chunk index. The other three let `ByteArrayData` stay position-independent — it holds
 `{chunkIndex, offset}` rather than a pointer, so `DefragmentRAMChunks` can move a dynamic
-property's bytes and rewrite the pair instead of hunting down every copy of an address. That is
-the same reasoning as §3.3, one level down.
+property's bytes and rewrite the pair instead of hunting down every copy of an address. Same
+reasoning as §3.3, one level down.
 
-**Allocation had to become lazy.** As specified, the constructor allocated 32 bytes for `x` and 4
-`ByteArrayData` for `y` immediately — so every object paid ~80 bytes and two arena allocations
-before setting anything, which is the opposite of §4's claim that a plain line "pays zero bytes
-for it". A 100k-element DXF import would have paid ~9.6 MB and 200k allocations for properties
-nobody set. `x` and `y` now stay null until the first `set`.
+**Copy and move are deleted**, deliberately — a shallow copy would double-free. That single fact is
+why the residency half exists: a type containing an `Optional64` cannot live in a `std::vector`,
+because growth moves its elements.
 
-Two smaller decisions, recorded so they are not silently reversed: copy and move are **deleted**
-(the spec lists deep copy as future work, and a shallow copy would double-free), and the schema is
-declared through an x-macro list per type that reads in the spec's own `ADD_OPTIONAL_PROPERTY`
-form, generating the enumerators, the byte-size table, `has/get/set/unset` per property, and a
-schema hash.
+**AND IT CANNOT BE REACHED FROM OUTSIDE THE ARENA — a correctness constraint, not a preference.**
+`Optional64::set` allocates with `cpu.Allocate(size, cpu.MemoryGroupOf(this))`, and
+`राम::MemoryGroupOf` **returns 0 for any pointer outside the chunk pool**. So an `Optional64` on a
+record living by value in a `std::vector` would not fail — it would silently allocate into **group
+0**, the Application Tab, which never closes. The properties would outlive their tab and
+`notifyTabClosed` would never de-commit them: a slow leak with cross-tab ownership, and no crash to
+find it by.
 
-**Still unrealised in 2D**, which is the point of the rest of this page: the mechanism now exists,
-and only the 3D half can reach it.
+Two consequences:
+
+1. **2D gets `Optional64` only after 2D objects live in the arena**, and after there is a lookup
+   mechanism to reach them by id. Until both exist, no 2D type declares an optional property.
+   Decided 2026-08-26.
+2. **`memoryGroupNo == tabNo` is load-bearing.** `CPU_RAM_4MB::reset(tabNo)` makes the group the
+   tab, and that identity is the whole reason the address-derived lookup works. Partitioning the
+   arena any other way — per world, per container — means `Optional64` needs a group-to-tab map and
+   stops being 40 bytes. This is the argument against giving 2D its own arena group when it moves:
+   separate accounting is worth a counter, not a partition.
 
 ### 2.7 Measured sizes
 
-Compiled against the real headers, x64 MSVC:
+Compiled against the real headers, x64 MSVC, 2026-08-26.
 
 ```text
-META_DATA base                              56 B
+META_DATA base                              64 B   (was 56 before step 1)
 arena per-allocation overhead                8 B
 Optional64                                  40 B   (inline; 0 arena bytes until a property is set)
 
-2D CPU records (contiguous, in std::vector)
-  Cad2DLineRecordCPU        88      Cad2DArcRecordCPU        128
-  Cad2DCircleRecordCPU      80      Cad2DPolylineRecordCPU    80  (+ heap for its points)
-  Cad2DEllipseRecordCPU     96      Cad2DPolygonRecordCPU     96
-                                    Cad2DTextRecordCPU       136  (+ heap for its string)
+2D CPU records, deriving META_DATA, still by value in std::vector on the heap
+  Cad2DLineRecordCPU       112  (was  88)    Cad2DArcRecordCPU              152  (was 128)
+  Cad2DCircleRecordCPU     104  (was  80)    Cad2DPolylineRecordCPU         112  (was  80)
+  Cad2DEllipseRecordCPU    120  (was  96)    Cad2DTextRecordCPU             160  (was 136)
+  Cad2DPolygonRecordCPU    120  (was  96)    Cad2DAssetDefinitionRecordCPU   88
+                                             Cad2DAssetInsertRecordCPU      112
+  (polyline and text carry heap allocations on top, for points and string)
 
 3D arena objects, for scale
   SPHERE 128    CYLINDER 160    CUBOID 152
-
-Cad2DLineRecordCPU if it inherited META_DATA
-  today                                     88 B
-  keeping containerMemoryId                112 B   (+24, or +32 with the arena header)
-  if one parent slot sufficed              104 B   (+16)
-  on a 100k-line DXF                    +3.1 MB, and 100k separate arena allocations
 ```
 
-**The bytes are not the problem.** 3.1 MB on the largest data set the application handles is noise.
-The costs that matter are the loss of streaming contiguity and the 100k separate allocations.
++24 bytes per record almost everywhere; polyline paid +32 because its old field order padded
+differently. `sizeof(Cad2DLineRecordCPU) == 112` is static_asserted, the way `META_DATA`'s 64 is.
+
+**The bytes were never the problem** — +2.4 MB on a 100k-line DXF, noise on the largest data set the
+application handles, and currently zero extra allocations because the records are not in the arena.
+What the residency half has to answer for is the 100k separate arena allocations it would add, which
+is what §8 still calls untested and what the fixed-block idea in §7 is meant to avoid.
 
 ## 3. Object references and directory scope
 
@@ -319,7 +314,7 @@ assert(tab.storageObjects3D.empty() ||
 ```
 
 Behind a `ResolveObject(memoryID)` function this also stays swappable: `lower_bound` today, a dense
-registry mirroring `InstanceRegistry` (§6, option D) later, without touching a call site.
+registry mirroring `InstanceRegistry` (§5, option D) later, without touching a call site.
 
 The 2D record vectors are *probably* sorted too — append-only through a FIFO queue with one producer
 per tab — but that is unverified and must not be relied on until it is.
@@ -335,7 +330,7 @@ but monotonic *issue* order is not monotonic *append* order once several produce
 vector: engineering thread A takes id 100, thread B takes 101, B appends first, and the directory is
 `[…, 101, 100]`. Per-tab directories are immune because each tab has exactly one engineering thread
 — single producer, so append order **is** id order. Give that up and §3.4 goes with it, forcing a
-hash map and its node overhead at 10M entries (§6, option B).
+hash map and its node overhead at 10M entries (§5, option B).
 
 **And tab close becomes expensive.** Dropping a per-tab directory is O(1). Erasing one tab's entries
 from a shared structure is O(closed tab size) under a lock every other engineering thread contends
@@ -394,7 +389,7 @@ references may only target the calling tab or tab 0.
 Open: whether to partition the memoryID space for O(1) routing, whether to adopt `ReferenceID`
 (minus `data`) or a plain `uint64_t`, and how reverse lookup is answered. None of it is built.
 
-## 4. Why unify — the argument that actually decides it
+## 4. Why the residency half still matters
 
 Not memory. **Optional properties on intelligent 2D objects.**
 
@@ -402,171 +397,159 @@ Page2D today is dumb geometry, so it has no optional properties and the arena bu
 ends with P&ID, SLD, PFD and interlock diagrams. A P&ID line is not a line: it carries service,
 fluid, line number, pipe class, insulation spec, tracing, tag, and from/to equipment. Most lines
 carry a few of those; no line carries all of them. That is precisely the case `Optional64` was
-specified for.
+specified for — and §2.6 is why it cannot be reached until the records live in the arena.
 
-Without unification there are two outcomes, and both are bad:
+The hazard if that half is skipped is not fat records, it is **a second, parallel optional-property
+mechanism for the 2D side**. Two of everything is the pain the Properties Pane already felt; a
+second `Optional64` would make it structural.
 
-- Fatten every `Cad2D*RecordCPU` with fields most instances never set — the thing the arena exists
-  to avoid; or
-- Build a **second, parallel optional-property mechanism for the 2D side**.
+## 5. Options — and which one landed
 
-The second is the real hazard. Two of everything is already the pain being felt in the Properties
-Pane and about to be felt in snapping; a second `Optional64` would make it structural.
+Four were weighed: **A** leave the split; **B** a common identity POD header in both types;
+**C** a separate `META_DATA2D`; **D** full unification, 2D deriving `META_DATA` and living in the
+arena behind a directory.
 
-## 5. Why the obvious objection is weaker than it looks
+**C was rejected outright** — everything it would hold is common to both worlds, so it would have
+guaranteed two of everything forever. **D is the destination.** What has actually been built is
+**B's outcome by D's mechanism**: the records derive `META_DATA` (D's inheritance, not a separate
+header) but stayed value types in `std::vector` (B's residency). That was not a compromise so much
+as the discovery that step 3 is two migrations wearing one number — and it leaves the route to D
+open, because finishing it is now "change where they are allocated" rather than "change the type
+again".
 
-The natural objection is §2.2's first point: unifying destroys the streaming rebuild scan.
+## 6. Settled — do not re-litigate
 
-That is true, and it was the author's own first position — but it defends an operation that should
-not survive to scale. **Page2D has no paging at all today.** The rebuild walks every record of every
-type, so appending five lines to a one-million-line sheet costs a full one-million-record rebuild.
-Contiguity there is an advantage at doing the wrong thing quickly.
+1. **No `META_DATA2D`.** One object model. §2.4 has the reason: the dividing line is containment,
+   not dimensionality.
+2. **`memoryIDContainer` is the container and `memoryIDGenerator` is the owner**, both ordinary
+   fields on `META_DATA`. This reversed the page's original proposal to make ownership an
+   *optional property*, which was wrong about what optional properties are for: `Optional64` exists
+   for the P&ID case — dozens declared, a handful set per instance — not for one field an object
+   either has or has not. A plain field is 8 bytes and one load; reaching it through
+   `enableProperty` and a packed-buffer shift would cost 40 bytes of machinery on exactly the
+   objects that carry it.
+3. **References store `memoryID`, never a raw pointer**, and directories stay per tab with tab 0 as
+   the shared catalog. §3 has the reasoning; none of it is built.
+4. **No 2D type declares an optional property** until 2D objects are in the arena and a lookup
+   mechanism exists (§2.6).
 
-`graphics.md`'s workload table already states the target for the 3D side:
+## 7. Sequencing — and what it came to
 
-| Workload | Must cost | Must **not** cost |
-|---|---|---|
-| Insert ~100 objects into a live 10M scene | clone the 1–2 append-target pages | anything proportional to 10M |
+Steps 0, 1 and 2 are shipped. Step 3 is half done. What follows is the state of each and the facts
+that constrain what is built next; the blow-by-blow of how each landed is in git history and, for
+step 2, in `2Drendering.md`.
 
-Once 2D acquires the same RCU-cloned page structure, the full linear scan stops happening, and the
-cost of a pointer indirection largely stops mattering. **Paging, not layout, is what makes the 2D
-side scale** — and it also happens to neutralise the main argument against unification.
+### Step 0 — `Optional64`. DONE
+Built, driver-tested, and with no consumer — §2.6 has what it is, what it cost the arena, and the
+constraint that governs when 2D can use it.
 
-## 6. Options considered
+### Step 1 — parenthood. DONE
+`memoryIDContainer` is the container and `META_DATA::memoryIDGenerator` is the owner, in both
+worlds. `META_DATA` went 56 → 64 bytes, now static_asserted; a `uint64_t` cannot fit the 7 trailing
+pad bytes in any field order, so those 7 survive and the next *small* field is still free.
 
-**A. Leave the split.** Zero risk today, and correct while 2D stays dumb geometry. Fails at the
-first intelligent 2D object (§4), and every unified traversal written before then — snapping, undo —
-gets written twice.
+**There is no `persistedGeneratorId`, and that is the load-bearing discovery.** The file stores ONE
+parent id — the generator if there is one, else the container — and the loader rebuilds the split
+by asking what TYPE the stored parent turned out to be. 3D needed no change at all: every existing
+read of `memoryIDContainer` was already container semantics. The 3D save path still does not
+perform the collapse, because no 3D type can generate anything until templates exist; a `_DEBUG`
+`[3d][warn]` fires if one ever sets the field.
 
-**B. A common identity header.** A plain POD carrying the identity quartet plus
-`dataVersion`/`dataType`/`schemaVersion`/`isDeleted`, as the first member of both `META_DATA` and
-each 2D record. Generic code reaches identity uniformly; records stay contiguous, value-copyable and
-out of the arena. Cheap and reversible — but it does **not** deliver `Optional64` to 2D, so it is a
-stopgap, not a destination. Worth taking on its own if the migration must wait, because it unblocks
-snapping and undo/redo now.
+### Step 2 — page the Page2D world. DONE
+**+5 lines on a 1M-line sheet: 3,386 ms → 1.29 ms, 30.5 MB staged → 164 bytes. A selection click on
+a 2M-line sheet costs 4 bytes and 0.51 ms.** The design, the cost table, compaction and the full
+before/after numbers are in **`2Drendering.md`, "Page2D memory paging — as built"** — they are not
+repeated here.
 
-**C. A separate `META_DATA2D`.** Rejected. Ask what it would hold that `META_DATA` does not:
-identity, `dataVersion`, `schemaVersion`, `isDeleted` and the eventual `Optional64` are all common.
-The only extra field is `containerMemoryId`, and §2.4 shows that field is about containment, not
-about being 2D — 3D templates will want it too. A `META_DATA2D` would freeze the wrong axis into the
-type system and guarantee two of everything forever.
+The RCU clone this step was named after never appeared: a 2D page holds fixed-stride records under
+ONE indirect command, so appends write the unpublished tail and patch `InstanceCount`, edits are
+≤8-byte flag stores, and the only copy is compaction's GPU-to-GPU pack. The word "clone" does not
+occur in the 2D code.
 
-**D. Full unification.** 2D objects derive `META_DATA`, live in the arena, and are reached through a
-`std::vector<StoredGeometryObject2D>` that mirrors `StoredGeometryObject3D` exactly. One object
-model, one `Optional64`, one undo record shape, one snap dispatch, stable pointers instead of the
-`buildIndex` index maps, and honest per-tab memory accounting.
+Four things that constrain anything built on top of it:
 
-## 7. Recommendation
+- **The `objectId -> page` registry is copy-thread-private and deliberately NOT the CPU object
+  directory §3 wants.** It maps to a GPU location, which is what §2.5 says `InstanceRegistry` is.
+  Same for `gpuLocation`, the per-page `placements` and `stampedSelection`: all unlocked, so
+  anything touching them lives inside `ProcessCad2DCopyBatch`.
+- **An object never straddles a page** — the registry names one run, so the filler places whole
+  objects and opens a new page for the remainder.
+- **Two commands for one object in one batch used to draw it twice.** The hide pre-pass cannot
+  catch it structurally, so `classify` drops a repeated MODIFY of an id it has already queued and
+  `RegisterPlacement` uses `insert` rather than `operator[]`. Reachable in practice — two clicks of
+  a polyline draining together.
+- **Editing an object moves it to the front of the overlap order**, because a modify is an append.
+  Invisible for opaque strokes on white; real for overlapping coloured geometry. Accepted.
 
-**Option D is the destination; option B is the stopgap if the schedule demands one.**
+What it cost that is new and resident: `recordIndex` ~50 MB at a million objects, `gpuLocation`
+another ~50 MB, per-page placement lists ~16 MB. All three are revisited by step 3's residency half.
 
-Two decisions should be treated as settled before any code moves:
+**One unreproduced crash, twice seen**, both times after the window sat minimised for about a
+minute with a large 2D drawing loaded — `2Drendering.md` carries the detail and the diagnostic that
+would settle it (`retireBacklog`, read *while* minimised). Not caused by step 2; surfaced during it.
 
-1. **No `META_DATA2D`.** One object model.
-2. **`memoryIDContainer` means the container, in both worlds**, and ownership gets a slot of its own
-   named **`memoryIDGenerator`** — the object that *generated* this one, an asset instance or a
-   template. **Both are ordinary fields on `META_DATA`.**
+### Step 3 — migrate the 2D object model. IDENTITY DONE, RESIDENCY NOT STARTED
+It is two migrations wearing one number, and only the second needs the arena:
 
-   This reverses what this page originally proposed, which was to make ownership an *optional
-   property* on the grounds that only asset members have an owner. That reasoning was wrong about
-   what optional properties are for. `Optional64` exists for the P&ID case — a schema where dozens
-   of properties are declared and any one instance sets a handful — not for a single field that
-   every object either has or does not. Reaching it through `enableProperty` and a packed-buffer
-   shift, to save 8 bytes on the objects that lack it while paying 40 for the machinery on the
-   objects that carry it, is worse in both directions. A plain field is 8 bytes, one load, and
-   readable.
+**(A) Identity — DONE 2026-08-26.** All nine `Cad2D*RecordCPU` types derive `META_DATA`. One object
+model, one type to dispatch on, `dataVersion` in 2D, `dataType` set by every constructor (which
+retired the nine-overload `Cad2DKindOf` table). Records stay value types in `std::vector`. Sizes in
+§2.7. The round-trip oracle (`validations/yyy_roundtrip`) stayed green throughout.
 
-   The cost is honest and bounded: `META_DATA` goes **56 → 64 bytes**, because a `uint64_t` cannot
-   fit the 7 trailing padding bytes whatever the field order. Those 7 bytes survive the change, so
-   the next *small* field — a flag word, `dataVersion` for 2D — is still free. `sizeof` is now
-   asserted so the next 8-byte one has to be a deliberate decision.
+Two things worth not re-deriving:
 
-## 8. Sequencing
+- **A phased migration needs an accessor bridge, and it is what a mechanical rename destroys.**
+  Migrating one type first meant generic code could name neither spelling, so getters and setters
+  overloaded on `const META_DATA&` versus each unmigrated type carried it — the overload set phases
+  itself. Eight generic sites needed it. The bridge was deleted the moment the ninth type landed.
+- **"0 means unassigned" stops being expressible**, because `META_DATA`'s constructor issues an id.
+  Every `objectId == 0` sentinel went unreachable and was retired, and three lambdas that set the
+  id to 0 for later assignment now take a fresh one eagerly. No compiler error points at any of it.
 
-The order matters more than the individual steps, because two of them make the others cheaper.
+**(B) Residency — not started.** Payloads into the arena behind a directory; `CommandToCopyThread2D`
+stops shipping records by value and becomes a variant (§9); `Optional64` becomes reachable, but
+only under §2.6's constraint and once a lookup mechanism exists. **Worth deciding before committing
+to option D as written: arena-allocated fixed BLOCKS of records rather than one allocation per
+record.** It keeps streaming contiguity inside a block, keeps `MemoryGroupOf` correct because the
+blocks come from the tab's own group, and turns a 100k-object DXF import into ~100 allocations
+rather than 100,000 — which is exactly the allocation pattern §8 still calls untested.
 
-```text
-0. Implement Optional64 — on a 3D object first.   ** DONE **
-     It is the whole justification and it is currently spec-only (§2.6). It needs an arena API
-     change regardless. Doing it where the object model already exists means testing one new
-     thing, not two.
-     -> verify: a 3D type carries an optional property that costs zero bytes when unset.
-     VERIFIED. LINE_MEMBER declares OwnerObjectId (§7.2's owner slot, chosen because step 1 is
-     its first real consumer). A hand-placed member sets no flag and allocates nothing; an owned
-     one takes 8 bytes out of its OWN tab's arena group, and 200 of them de-commit with the tab.
-     sizeof(LINE_MEMBER) 168 -> 208. Two standalone driver TUs, 293 checks, zero failures;
-     application build clean at zero warnings. §2.6 records what the arena change turned out
-     to be. NOT done, and deliberately: persistence of optional properties, and any 2D use.
+Left over, cheap, unblocking nothing: decide whether upsert should *increment* `dataVersion` rather
+than overwrite it, and whether `META_DATA` wants a constructor that issues no id — the 912-byte
+`CommandToCopyThread2D` holds all seven geometry types as members and so burns seven ids per
+command constructed.
 
-1. Settle parenthood (§7.2).   ** DONE, except the 2D rename **
-     memoryIDContainer = container everywhere; ownership becomes META_DATA::memoryIDGenerator.
-     Small, self-contained, and doable while 2D records are still plain structs.
-     -> verify: an asset instance round-trips through save/load with no dedicated parent field.
-     VERIFIED, and it already did: save collapses generator-else-container into the single
-     persistedParentId and load rebuilds the split from the stored parent's TYPE. So no
-     persistedGeneratorId was needed and META_DATA grew by 8, not 16. 3D turned out to need no
-     change at all - every existing read of memoryIDContainer was already container semantics.
-     STILL OPEN, deliberately: (a) the 2D records keep the names containerMemoryId and
-     parentObjectId - they are already semantically correct, and step 3 renames them for free
-     when they inherit META_DATA, so renaming now is 300+ call sites of churn for nothing;
-     (b) the 3D save path does not yet perform the collapse, because no 3D type can generate
-     anything until templates exist - a _DEBUG diagnostic fires if one ever sets the field.
-
-2. Page the Page2D world.   ** DONE **
-     RCU-cloned pages as in graphics.md. This is what removes the 1M-record rebuild, and it is
-     what makes step 3's pointer indirection irrelevant (§5). Doing it AFTER step 3 means
-     slowing the rebuild down and then fixing it.
-     -> verify: appending 5 lines to a 1M-line sheet touches O(pages), not O(records).
-     VERIFIED, and every sub-step criterion with it. +5 lines cost 164 bytes and 1.29 ms
-     against a baseline of 30.5 MB and 3,386 ms; a selection click - the operation a 2D user
-     performs most - costs FOUR bytes; a thousand objects modified cost 36 KB and 10 ms; and
-     the superseded records those edits leave behind are packed out once a page is a quarter
-     holes, so the page count does not grow. §11 is the plan and the history, sub-steps 2a
-     through 2f each with its own marker; 2Drendering.md now carries the renderer-side
-     narrative and the numbers.
-     WHAT IT ACTUALLY COST, against what §11 assumed going in. The RCU clone the plan is
-     named after never appeared: a 2D page holds fixed-stride records under ONE indirect
-     command, so appends write the unpublished tail and patch InstanceCount, edits are
-     <=8-byte flag stores, and the only copy in the whole step is compaction's GPU-to-GPU
-     pack. The word "clone" does not occur in the 2D code. The registry the plan wanted
-     before the paged store turned out to be unnecessary until 2d, and the CPU-side O(N)
-     that 2b removed was the larger half of the win. What it DID cost is memory that is new
-     and resident: recordIndex ~50 MB at a million objects, gpuLocation another ~50 MB, and
-     the per-page placement lists ~16 MB. Step 3 revisits all three when the records leave
-     std::vector.
-     WHAT WAS LEFT UNDONE, deliberately: per-page frustum reject on draw; eviction of
-     inactive containers' pages; any spatial index, so the CPU hit-test, snapping-candidate
-     and zoom-to-extents scans stay O(N); a user-facing 2D delete, though its plumbing is
-     now complete; and CommandToCopyThread2D's six dead members per command, which step 3
-     forces anyway. Left UNEXERCISED rather than decided: the printing path, compaction of
-     a CURVE page, and a pixel diff bracketing a compaction event.
-
-3. Migrate the 2D object model.
-     std::vector<StoredGeometryObject2D> mirroring the 3D directory; payloads in the arena.
-     CommandToCopyThread2D must change here anyway — the queue can no longer ship records by
-     value — which is the natural moment to make it a variant (§10).
-     -> verify: DXF import of a large file is no slower, and the Stats view now sees the memory.
-```
-
-## 9. Risks
+## 8. Risks
 
 - **Page2D is currently the more complete half of the application** — transforms, assets, DXF
   import, printing, persistence all live there. Step 3 is weeks, not days.
+  *RETIRED for the identity half, which took hours rather than weeks — 234 mechanical renames the
+  compiler located. It stands for the residency half, which is where the weeks are.*
 - **It runs through the save/load path**, where a defect corrupts user files silently rather than
   crashing. That path needs round-trip assertions before the migration, not after.
+  *DONE, and it earned its keep: `validations/yyy_roundtrip` was built first and stayed green
+  through every step. Two of its three initial red rounds were the TEST misunderstanding the
+  object model, not defects — which is exactly the confusion worth having before a migration
+  rather than during one.*
 - **Step 2 must justify itself on its own performance numbers** before step 3 is committed to. If
   paging does not land, step 3 buys the object model at the price of the rebuild.
+  *SATISFIED — the numbers are in `2Drendering.md`.*
 - **The arena has no defragmentation in service yet** (`DefragmentRAMChunks` exists; the chunk
   compaction path is not exercised at 2D volumes). A DXF import creating 100k arena objects is a
   much heavier allocation pattern than anything the arena has carried so far.
+  *STILL LIVE, and now the main risk left in step 3, because it belongs entirely to the residency
+  half. It is also the argument for arena-allocated fixed BLOCKS of records rather than one
+  allocation per record (§7 step 3): the same import becomes ~100 allocations instead of 100,000.*
 
-## 10. Incidental findings
+## 9. Incidental findings
 
 Recorded here because they surfaced during this analysis, not because they are part of the proposal.
 
-- **`CommandToCopyThread2D` is 736 bytes** and holds all seven record types as simultaneous members,
-  so six are dead on every command. A 100k-record DXF import pushes ~73 MB through the queue instead
-  of ~9 MB. A variant or union fixes it; step 3 forces the change anyway.
+- **`CommandToCopyThread2D` is 912 bytes** — it was 736, and grew by 176 when the seven geometry
+  records it holds as simultaneous members each gained a `META_DATA` base (§2.7). Six of the seven
+  are dead on every command, so a 100k-record DXF import now pushes ~91 MB through the queue
+  instead of ~11 MB. A variant or union fixes it; step 3's residency half forces the change anyway,
+  because a record that lives in the arena cannot be shipped by value.
 - **The Application Tab's Stats view under-reports.** It reads the arena's `liveChunkCount`, and 2D
   records are not in the arena — so a 100k-line drawing is invisible to it today.
 - **The 2D object model used to live in a rendering header, and the reason it did is structural.**
@@ -577,7 +560,7 @@ Recorded here because they surfaced during this analysis, not because they are p
   baked by `GeometryForObject` on the **engineering** thread — so 3D's render layer never learns
   what a `CUBOID` is. `CommandToCopyThread2D` carries the engineering records themselves and the
   copy thread generates the geometry, so 2D's render layer structurally must know the object model.
-  That is also why the command is 736 bytes. **Any fix that makes 2D's render layer stop depending
+  That is also why the command is so large. **Any fix that makes 2D's render layer stop depending
   on the object model has to move geometry generation to the engineering thread first**, which is
   the same territory as step 2 above. Until then the dependency is honest and merely points the
   right way.
@@ -600,581 +583,3 @@ Recorded here because they surfaced during this analysis, not because they are p
   bulk-inserts and carries no sortedness check — though the header comment claims both sites do.
   It is correct today (one thread, ids issued in order) but it is the import path, so it is the
   one most likely to acquire a second producer later.
-
-## 11. Step 2 in detail — the Page2D paging plan
-
-Decided 2026-08-24. Each sub-step in §11.4 carries its own status marker, the same way §8 steps 0
-and 1 do. Written at this length so a later session can resume without re-deriving any of it.
-
-### 11.1 What the rebuild costs today
-
-`ProcessCad2DCopyBatch` (`RenderPage2D-DirectX12.cpp`) rebuilds **every container of the tab from
-scratch on every drained batch**. The GPU side already owns the vocabulary — `Cad2DPageGPU`,
-`Cad2DPageSnapshot`, retirement queues, atomic publish — but one `Cad2DPageGPU` is one whole Page2D
-container, so there is no paging at all. One appended line into an N-object tab pays **seven O(N)
-stages**:
-
-| # | Stage |
-|---|---|
-| 1 | 7 × `buildIndex` — a fresh `objectId -> index` hash map over every record |
-| 2 | `knownIds` — a fresh `unordered_set` over `tab.allIDsInThisTab` |
-| 3 | 7 × full **deep copy** of the record vectors (`lines = storage.lineRecords`) |
-| 4 | 7 × **second deep copy** while bucketing into `containers` |
-| 5 | full re-expansion of every object into GPU records |
-| 6 | full re-upload through the ring, plus 6 fresh committed buffers per container |
-| 7 | `PublishCad2DPages` retires **every** page of **every** container |
-
-Stages 1–3 hold `cpuRecordsMutex`, so the engineering thread blocks behind them. And a **selection
-click pays the identical price**: `Cad2DHandleSelectionClick` enqueues `SelectionRefresh`, whose
-only job is to force the whole rebuild so the selection flags re-stamp.
-
-### 11.2 The page model
-
-**A page is (container, class, 1 MB).** The three classes are the three GPU record streams: line
-records (32 B), curve records (64 B), and text glyph quads (24 B vertices plus indices).
-
-**The load-bearing simplification is that no object emits more than one class.** Lines, polylines
-and polygons all expand to line records; circles, ellipses and arcs to curve records; text to glyph
-quads. So an object lives in exactly one page, the registry is
-`objectId -> {page*, firstRecord, count}` — a direct mirror of `InstanceRegistry` — and there are no
-multi-page objects to reconcile.
-
-**2D barely needs clones, and that is the non-obvious part.** 3D clones a geometry page on every
-change because its objects are variable-size and its argument buffer holds one command per object. A
-2D page holds fixed-stride records and **one** indirect command whose `InstanceCount` is the record
-count. That changes what invariant 2 permits:
-
-| Operation | Mechanism | Cost |
-|---|---|---|
-| **Append** | write records into the unpublished tail `[count, count+k)`, fence, then patch `InstanceCount` — one aligned 4-byte store, old and new both valid | O(k). No clone, no new snapshot |
-| **Modify** | append the new record, then set `kCad2DHiddenFlag` on the old — `flags` is a 4-byte aligned field the vertex shader already reads | O(1) |
-| **Delete** | the hide store alone | O(1) |
-| **Select / deselect** | `kCad2DSelectedFlag` store on the affected records only | 4 bytes |
-| **New page / compaction** | RCU clone and publish, exactly as 3D | O(1 page) |
-
-This is **not a second mechanism competing with 3D's.** It is 3D's own reasoning landing differently
-because the record layout is different — `InstanceSlotOf` and `VisibilityMask` are already "mutated
-in place, one aligned 4-byte store" (§ the per-tab store table in `graphics.md`). Text is the one
-exception: glyph quads carry no flags word, so modify and delete on a text rebuild its text page,
-which is small.
-
-*As built (2c):* the last row turned out not to need an RCU clone at all. A container rebuild
-**retires its pages and appends everything into fresh ones**, which is the same filling code the
-append path uses — so there is one filling path rather than a fast one and a slow one, and "clone"
-never appears in the 2D code. The clone proper is still what 2e's compaction will want.
-
-*As built (2d):* the middle three rows are real, and the table above is what they cost. Two things
-the table does not say. **An object never straddles a page** — the filler opens a new one rather
-than split a run — because "Modify" and "Delete" need to reach every record of an object from one
-registry entry. And **the flag word is staged once per OBJECT, not per record**: all of an object's
-records carry the same flags, so a 16-segment polygon costs 4 staged bytes and 16 copies from them.
-The exception the paragraph above predicts held exactly — text has no flags word, so a text modify
-is the one edit that still rebuilds its pages.
-
-*As built (2e):* the last row is the one that changed most. **The clone the table promised for
-compaction is a GPU-to-GPU copy, not an RCU clone of expanded records** — the survivors are already
-in VRAM exactly as they should be, flags included, so packing a page reads nothing from the CPU
-records, takes no lock, and stages no bytes at all. "Clone" still never appears in the 2D code.
-And the text row narrowed the rest of the way: a modified text re-lays-out its container's TEXT
-pages, which is what this section always said it should, leaving the line and curve pages of the
-same container — and the selection flags on them — untouched.
-
-### 11.3 Decisions taken, recorded so they are not re-litigated
-
-1. **Append-into-tail plus 4-byte stores**, not a clone per change. Appends and selection become
-   O(k) instead of O(records). Strict symmetry with `ProcessScene3DCopyBatch` was the alternative
-   and was rejected: it would clone a page per drawn line and per selection click.
-2. **1 MB pages** — 32,768 line records or 16,384 curve records. Compaction clones stay cheap, a
-   small Page2D wastes little, and a 1M-line sheet is ~32 pages, far below any draw-call concern.
-   4 MB (mirroring `GeometryPage`) and 256 KB→4 MB chained doubling were both considered.
-3. **Selection moves to flag stores in this step.** Without it the most frequent interactive 2D
-   operation still costs a full rebuild and the step's benefit is invisible in normal use.
-4. **The `objectId -> page` registry stays private to the copy thread.** It maps to GPU location,
-   which §2.5 says `InstanceRegistry` is — and explicitly is *not* a substitute for the CPU object
-   directory. §3's `ResolveObject` is not built here, and the 2D record vectors' unverified
-   sortedness (§3.4) is not relied on.
-5. **The quadratic `.yyy` loader is fixed with the same index**, as its own commit so it can
-   be reverted independently of the ingest change.
-6. **Delete gets plumbing but no command.** Hole accounting and the hidden flag are what modify and
-   compaction need; a user-facing 2D delete belongs with `undo-redo.md`, not here. The rebuild's
-   failure to filter `isDeleted` — real today, harmless only because nothing ever sets it — is
-   fixed in this step. *Done in 2d,* and in one place rather than fourteen: the filter sits in the
-   seven `add*` expansion lambdas, so a soft-deleted record expands to nothing and therefore leaves
-   the drawing by the same append-plus-hide path an edit uses. *Hole accounting arrived with 2e* —
-   `Cad2DPageGPU::holeRecords`, incremented at the two places that stop naming a placement rather
-   than derived by a scan. So the plumbing decision 6 asked for is now complete, and a user-facing
-   2D delete would be a command and a soft-delete flag, nothing more.
-7. **Inactive containers keep their GPU pages resident**, as today. Eviction is noted, not built.
-8. **The design and the measured numbers land in `2Drendering.md`**, and §8 step 2 gets a status
-   paragraph here the way steps 0 and 1 did.
-
-### 11.4 Sequencing
-
-```text
-2a. Instrument, change nothing.   ** DONE **
-      2D counters on gCopyStats (commands, recordsIndexed, recordsCopied, recordsExpanded,
-      bytesStaged, pagesBuilt, batchMicros) and a "generate N lines" debug key following the
-      existing ReportIngestStats pattern and Cad2DAutoGenerateDemoContent's math.
-      -> verify: the BEFORE numbers for +5 lines on a 1M-line sheet exist on paper. §9
-         requires exactly this before step 3 can be committed to.
-      VERIFIED. The numbers are §11.7. Each counter is named for the stage it measures, so a
-      later sub-step is checked by watching its own number fall. Two things the shape of the
-      work changed: the counters split into recordsIndexed / recordsCopied / recordsExpanded
-      (one per O(N) family, since 2b and 2c retire different ones), and pagesCloned was NOT
-      added - at the time every rebuild replaced every page, so it would have been a second
-      name for pagesBuilt. 2c added it under the name it earned there: `cad2dPagesRetired`,
-      the pages a container rebuild throws away, printed as `pages=+built/-retired`.
-
-2b. Delete the CPU-side O(N) per batch.   ** DONE **
-      A persistent objectId -> {type, index} map on TabCad2DStorage replaces the seven
-      buildIndex rebuilds and knownIds; the rebuild stops copying record vectors and
-      consumes only the batch's own records. Stages 1-4 of §11.1 all go.
-      -> verify: ingesting K commands into an N-record tab is O(K) hash operations.
-      VERIFIED literally: `indexed` now equals `cmds` (5 for the +5 event, 1 for a single
-      command) at any sheet size, and `copied` is 0. Numbers in §11.8.
-      Three things worth not re-deriving:
-      (a) THE EXPANSION MOVED UNDER cpuRecordsMutex. Stage 3 existed to get the records out
-          of the lock before the expensive part; expanding in place is what deletes it, and
-          it also CUTS lock hold time, because what the lock now covers is one pass of float
-          conversions rather than two full deep copies plus two index builds.
-      (b) The selection snapshot is taken BEFORE cpuRecordsMutex and its mutex released
-          first. Cad2DCreateAssetFromSelection takes them in that order on the engineering
-          thread, so holding both here is the one place the orders could invert.
-      (c) There are THREE appenders to the seven record vectors, not two - the asset-master
-          lambdas in Cad2DCreateAssetFromSelection and Cad2DCreateAssetDefinition push
-          directly and deliberately do not enqueue. All three now call
-          Cad2DIndexAppendedRecord; missing one means the next upsert of that id appends a
-          duplicate record instead of finding the original.
-      Also folded in, because it is the same defect one level up: the per-tab command
-      grouping stores POINTERS now. It used to copy every 736-byte command (§10), which was
-      ~73 MB for a 100k import before a single record was read.
-      COST, stated because it is real: the index is ~50 MB of hash map at a million records.
-      It replaces ~100 MB of per-batch transient allocation, so the churn is gone, but the
-      resident figure is new. Step 3 revisits it when the records leave std::vector.
-      NOT exercised at runtime, deliberately: the loader and asset-master call sites are
-      compile-verified and reasoned only. The loader gets its real test in 2b', where it
-      starts READING the index rather than only maintaining it.
-
-2b'. Same map into the loader.   ** DONE **   (separate commit, decision 5)
-      AppendLine2DToTab and its eight siblings drop their per-record find_if over the
-      record vector plus std::find over allIDsInThisTab.
-      -> verify: .yyy load time is linear across 10k / 50k / 100k records.
-      VERIFIED at 100k and 300k, but ONLY after separating the loader's own cost from the
-      time it spends blocked - see §11.8. Wall-clock for the append phase is 6.0x for 3x the
-      records, which looks like a failure and is not: 85% of it is the loader waiting on
-      cpuRecordsMutex while the copy thread rebuilds the very tab being loaded. The loader
-      enqueues every record it appends, so that rebuild is unavoidable until 2c. Its OWN
-      work is 13.5 -> 14.8 microseconds per record across a 3x size change.
-      Three things worth not re-deriving:
-      (a) The nine functions collapsed into one UpsertCad2DRecord template plus nine
-          six-line wrappers - 10,700 characters became 5,800. They were identical apart from
-          the vector, the schema constant and the enqueue call.
-      (b) The two ASSET vectors joined recordIndex here. They are never ingested by the copy
-          thread, which is why 2b left them out, but the loader resolves every incoming
-          record by id - and assetInsertRecords is allowed to hold a million rows.
-      (c) The id now joins allIDsInThisTab INSIDE cpuRecordsMutex. It used to be pushed
-          outside the lock while the copy thread pushed to the same vector under it, which
-          is a real race during a load, not a tidy-up.
-      Also fixed, because the index made it harmful: CleanupCad2DTabResources cleared the
-      seven geometry vectors but not the two asset ones. Tab slots are recycled and the
-      storage is not destroyed with the tab, so a cleared index beside a populated vector
-      would have made the next load of an existing asset id append a duplicate.
-
-2c. The paged GPU store.   ** DONE **
-      Cad2DPageGPU gains {kind, capacity, atomic count}; the append-into-tail path;
-      Cad2DPageSnapshot gains pagesByContainer as GeometryPageSnapshot already has.
-      PrinterController::Collect2DPages and the ApplicationTab Stats view both assume
-      few-pages-per-container today and must be updated with it.
-      -> verify: +5 lines on a 1M-line sheet stages 160 bytes, clones 0 pages, publishes
-         at most 1 snapshot, and the frame is pixel-identical to the pre-change build.
-      VERIFIED on the numbers: 164 bytes (the 5 records plus the 4-byte InstanceCount
-      patch), pages +0/-0, no snapshot, 1.29 ms. §11.8 has the table.
-      FOUR THINGS CAME OUT DIFFERENTLY FROM THE PLAN, all deliberate:
-      (a) NO REGISTRY AND NO PLACEMENT VECTORS were built. The plan assumed the copy
-          thread needs objectId -> GPU location to decide append-vs-rebuild, but 2b's
-          recordIndex already answers it: a command whose upsert INSERTED is a new object
-          and can be appended; anything else forces its container to rebuild. Both
-          structures are what 2d needs to hide an old record, so they arrive with it,
-          not before (CLAUDE.md §2).
-      (b) A rebuild is "retire this container's pages, then append everything", so there
-          is ONE filling path, not a fast one and a slow one. The fallback also narrowed
-          from the whole TAB to the affected CONTAINERS.
-      (c) Only a page opened by THIS batch needs its argument buffer written; a page that
-          was already published needs its InstanceCount patched, and that patch has to
-          land after the record copy has been fence-waited - hence a second submit, and
-          only when such a page exists. Text pages have no argument buffer at all: their
-          index count is DERIVED as count / 4 * 6 from the same atomic, so one load gives
-          a reader both numbers and there is no window where an index view outruns the
-          vertices it can see.
-      (d) Draw order within a page is now insertion order for appends and per-type order
-          for rebuilds, so the SAME drawing can order differently depending on how it was
-          produced. §11.6 accepted the change; this is the shape it actually took.
-      NOT exercised: the printing path (compiles, updated for per-kind pages, never run),
-      and the pixel-identity check was a visual one - the 31-page grid renders seamlessly
-      with no discontinuity at page boundaries, which is what a placement bug would show,
-      but it is not a pixel diff against a pre-change capture.
-      ONE UNREPRODUCED CRASH, recorded so it is not lost: Vishwakarma.exe died once at
-      1M lines about 30 s after a selection-click rebuild, exception 0x0000087d raised
-      from KERNELBASE (a RaiseException, not an access violation), Report Id
-      6a2e9748-ffbb-485b-835e-3fdff0b7d613. The identical sequence - 1M lines, selection
-      click, minimise, 60 s - did not reproduce it. Watch for it.
-      SEEN A SECOND TIME 2026-08-25, while measuring 2e - and it is worth its own look now,
-      because a second sighting makes the shape of it visible. SAME exception code
-      0x0000087d, SAME faulting module KERNELBASE.dll, Report Id
-      db626d65-2513-4643-8248-e8316ceaa18c, Vishwakarma.exe 0.0.0.279. What the two have in
-      common is not the edit that preceded them: it is that the window had been MINIMISED
-      and left that way for roughly a minute with a large 2D drawing loaded. It is not
-      caused by 2e - the first sighting predates 2e by a day - and it is not every minimise
-      either; the same session minimised the window a dozen times to read the console
-      without incident. The hypothesis worth testing first is the one graphics.md already
-      names: a monitor that stops presenting stops advancing its fence, `safeRetireFence`
-      freezes, and nothing deferred is ever freed. The heartbeat's
-      `retireBacklog(live/peak)` is the number that would show it, and it needs reading
-      WHILE minimised, which is exactly what no capture so far has done.
-2d. Modify / hide / selection as <=8-byte stores.   ** DONE **
-      kCad2DHiddenFlag plus a shader early-out in Shader2D_LineVertex/CurveVertex; modify
-      becomes append-plus-hide; SelectionRefresh stops forcing a rebuild; the rebuild
-      starts honouring isDeleted (decision 6).
-      -> verify: selecting one object in a 1M-line sheet uploads 4 bytes.
-      VERIFIED LITERALLY, on a 2M-line sheet rather than 1M: a selection click reads
-      `staged=4 B pages=+0/-0 flags=1 in 0.51 ms`, against 3,437 ms and 31 MB at the §11.7
-      baseline. Deselecting into an empty selection short-circuits before the command list
-      is even opened: `staged=0 B in 0.075 ms`. Numbers in §11.8.
-      FIVE THINGS THAT CAME OUT DIFFERENTLY FROM THE PLAN, all deliberate:
-      (a) AN OBJECT NEVER STRADDLES A PAGE. The registry names ONE run - {page,
-          firstRecord, count} - so the filler now places whole objects: the tail page takes
-          as many CONSECUTIVE objects as fit and the remainder opens a new page. That did
-          not cost a staging call per object, which was the fear: the expansion emits the
-          objects in order and their spans TILE the array, so a run of them is still one
-          contiguous copy. A 100k-line burst stages the same 3,200,052 bytes it did at 2c.
-      (b) SelectionRefresh CARRIES NO WORK AT ALL now - not even its container. The copy
-          thread diffs the tab's selection set against a copy-thread-private
-          `stampedSelection` of what the records were last stamped with. That is strictly
-          more correct than the per-container rebuild it replaces: a click that moved the
-          selection from container A to container B refreshed only B, so A kept its stale
-          highlight. A diff cannot miss the leavers.
-      (c) ONE STAGED WORD PER OBJECT, NOT PER RECORD. Every record of an object carries the
-          same flags, so StoreFlagWord allocates 4 bytes once and issues `count` copies
-          from that one source. Selecting a 16-segment polygon stages 4 bytes, not 64.
-      (d) THE HIDE IS RECORDED IN THE SECOND SUBMIT, beside the InstanceCount patch, not
-          the first. Both orderings are correct; this one is kinder to the eye. Hiding in
-          the first submit blanks the old records while the new ones are still uncounted,
-          so a modify would flash a one-frame HOLE; hiding after the fence wait leaves the
-          object drawn where it was until the patch lands, so it reads as a one-frame lag.
-      (e) NO "objects registered by this batch" SET. It was there to stop the selection
-          pass rewriting a flag the expansion had just stamped, and it cost more on a 100k
-          import than the redundant stores it saved - measured, 650-930 ms against 468.
-          The stores are idempotent (same value, same address) and the delta is the size of
-          the selection CHANGE, so the waste is bounded by it. Deleted.
-      A TEXT MODIFY STILL REBUILDS ITS CONTAINER, per (d) of the old plan - glyph quads have
-      no flags word, so there is nothing to hide them with. That is now the ONLY producer of
-      rebuildContainers, and the reason the whole-container rebuild path still exists. It is
-      also the one remaining O(container) interactive operation: typing into a text object
-      re-enqueues it per keystroke. Rebuilding only the container's TEXT pages would fix it
-      and is what §11.2's "modify and delete on a text rebuild its page" actually asks for -
-      but it would leave the whole-container rebuild with no caller at all, so it is a
-      decision for 2e, which has to touch the filler anyway.
-      COST, stated because it is real and it is the same shape as 2b's: the registry is a
-      second per-object hash map (~50 MB at a million objects) and the per-page placement
-      lists are 16 bytes an object (~16 MB). Both are copy-thread-private and neither is
-      persisted. Step 3 revisits them with recordIndex.
-      NOT exercised: printing (unchanged, and a hidden record cannot print because the print
-      path runs the same shaders); a modify of a POLYLINE or a CURVE (only a line was moved);
-      compaction, which does not exist yet - so a session that modifies one object 10,000
-      times leaves 10,000 hidden records resident. That is exactly what 2e is for.
-
-2d'. Cad2DReadPaneSelection got the same fix.   ** DONE **
-      It runs on the RENDER thread, once per frame per monitor while the properties pane
-      shows a 2D object, and it found the selected record by scanning up to all seven
-      vectors linearly under cpuRecordsMutex. recordIndex turns that into one lookup: the
-      stored type picks the vector, the stored position indexes it, and the nine-branch
-      scan collapsed to a switch. Done here rather than left optional because it is the
-      same defect 2b removed everywhere else and it holds the records mutex every frame.
-
-2e. Compaction.   ** DONE **
-      holeCount past ~25% of a page makes its next touch RCU-clone it packed, re-expanding
-      only that page's own objects from the CPU records.
-      -> verify: 10k modifies of one object leave the page count stable and holes bounded.
-      VERIFIED, on 12,000 modifies across a 100,000-line sheet rather than 10,000 of one
-      object - see the note on the harness below for why that is the harder test. `holes=`
-      climbed 1,000 per round to 9,000 and then read `pages=+1/-1 packed=1/1760 holes=0`:
-      the page count did not move and the holes went back to zero. Numbers in §11.8.
-      FIVE THINGS THAT CAME OUT DIFFERENTLY FROM THE PLAN, all deliberate:
-      (a) IT DOES NOT RE-EXPAND FROM THE CPU RECORDS. The surviving records are already in
-          VRAM, correct down to their selection flags, so packing is a GPU-to-GPU
-          CopyBufferRegion per contiguous run of survivors. Nothing is expanded, nothing
-          goes through the upload ring, and no lock is taken - cpuRecordsMutex was released
-          long before. A 1,760-record pack stages ZERO bytes, which is why `packed=` had to
-          be its own counter instead of showing up in `staged=`.
-      (b) ONE COPY PER RUN, NOT PER OBJECT. The placements tile the page in order, so
-          survivors with no hole between them are contiguous in the source too. A page that
-          is a quarter holes in a few clumps costs a handful of copies.
-      (c) THE PACKED PAGE GOES BACK IN THE STALE ONE'S SLOT. CreatePage appends, and leaving
-          it at the end would move every object on the page to the end of the container's
-          draw order - §11.6 accepts an EDITED object moving, not its neighbours moving
-          because something else was edited. It also keeps "only the last page of a kind has
-          room" true, which TailPage relies on.
-      (d) A SECOND TRIGGER FOR "NO SURVIVORS AT ANY SIZE" WAS TRIED AND REMOVED. It never
-          fires: a page can only lose all its objects once it has stopped taking appends,
-          which means it is full, which means its holes have reached capacity and the
-          ordinary test already caught it. Measured, not reasoned - a whole-drawing move
-          leaves one partially-filled page whose tail absorbed the new records, and that
-          page is 95% LIVE, not empty.
-      (e) THE COMPACTION RUNS FIRST IN THE BATCH, before the hides and appends, while every
-          page count is settled and nothing has been staged into a tail. That is what lets
-          the same batch's appends land in the room it just freed - the mechanism that keeps
-          a repeatedly-edited object inside one page. Holes made by a batch are packed by
-          the next one; the threshold is a bound, not a promise of immediacy.
-      ALSO FIXED HERE, because it is 2d's mess and 2e found it: TWO COMMANDS FOR ONE OBJECT
-      IN ONE BATCH drew the object TWICE. 2d's hide pre-pass cannot catch it - at the time
-      it runs the object is either brand new (nothing registered) or already erased by its
-      own hide - so the second append registered a second placement and the first stayed
-      visible. Two defences, each free on the path that matters: `classify` drops a repeated
-      MODIFY of an id it has already queued (a hash insert per modify, none per insert), and
-      RegisterPlacement uses `insert` rather than `operator[]` so the "already there" answer
-      costs nothing and supersedes the earlier run. Reachable in practice - two clicks of a
-      polyline draining together is exactly it.
-      AND THE TEXT REBUILD FINALLY NARROWED, as §11.4's 2d entry said it would have to wait
-      for: a modified text re-lays-out its container's TEXT pages only. The line and curve
-      pages of the same container, and the selection flags on them, now stand. That deletes
-      the whole-container rebuild - the last O(container) operation on the interactive path -
-      and with it the last caller of the code that retired every page of a container.
-      COST: `holeRecords` is 4 bytes per page, i.e. nothing. The compaction walk is O(pages)
-      per batch, ~62 iterations on a two-million-line sheet.
-      NOT exercised: a pixel diff bracketing one compaction event. The numbers close exactly
-      (§11.8) and the subsequent batches keep resolving their objects, but the input
-      automation could not be made to land keystrokes reliably enough to capture a clean
-      before/after pair. Also unexercised: compaction of a CURVE page (only line pages were
-      ever driven past the threshold), and printing, which is untouched but still never run.
-
-2f. Numbers and documentation.   ** DONE **
-      Re-run 2a's benchmark. Design and measured before/after into 2Drendering.md; §8
-      step 2 marked DONE here with what it actually cost and what was left undone.
-      DONE. 2Drendering.md gained "Page2D memory paging - as built": the page model, the
-      five-operation cost table, compaction, both measured tables, the draw-order change
-      and the out-of-scope list. §8 step 2 above now carries the cost-and-omissions
-      paragraphs. Three further corrections went in with it, because a reader following
-      that page would otherwise have been misled by it: its MVP item naming
-      MemoryManagerGPU2D.* as the source of record - four files that have never existed -
-      now names the RenderPage2D.* four; its MVP item forbidding 2D persistence is gone,
-      overtaken by the .yyy path; and ITS OWN sections 2, 7, 8, 10 and 12 are marked
-      Outdated / Not Implemented in place, unedited. Its section 11 (selection) was
-      REWRITTEN rather than marked, since selection is built and that page described the
-      opposite design - a GPU pick pass and an ID render target, neither of which exists.
-      NOT DONE, and it is the one criterion not met: the benchmark was NOT re-run. Every
-      figure in 2Drendering.md is the 2026-08-24/25 reading carried over from §11.7 and
-      §11.8 unchanged. Nothing has touched the 2D write path since those were taken, so
-      they should still hold - but "should still hold" is not a measurement, and a
-      confirmation run of `B` x10 then `b` is what would close it.
-      THE DEBUG-KEY DECISION: GATE THE BLOCK, and it is done. The [cad2d][perf] line was
-      already `#ifdef _DEBUG` and needed nothing. The `B`/`b`/`E`/`e` keys were NOT gated -
-      they shipped in Release, where `B` appends 100,000 lines to the user's drawing and
-      `e` modifies every line on it, both of which PERSIST. Gating only those four would
-      have left the surrounding 3D stress keys (`g`, `m`, `n`, `k`, `l`, `v`) equally
-      reachable and the guard looking like an oversight, so the WHOLE `ACTION_TYPE::CHAR`
-      debug block is now inside one `#ifdef _DEBUG`.
-      Two things deliberately kept out of it. The `c` camera reset stays ungated: it is a
-      user convenience, not a stress key, and it is the only way to re-centre the camera
-      from the keyboard. And Page2D TEXT ENTRY was never at risk - Cad2DHandleInput
-      consumes CHAR while a text object is being typed and `continue`s before this switch
-      is reached, so a Release build still types into 2D text.
-      Verified: Debug x64 builds clean at zero warnings. Release could NOT be built on this
-      machine (the prebuilt release protobuf tree does not exist here). Two static helpers,
-      FlushGeneratedGeometryBatch and TranslateSelectedSceneObjects, now have no caller in
-      a Release build; C4505 is a level-4 warning and code-core compiles at Level3, so it
-      should not surface - but that is reasoning, not a build.
-```
-
-### 11.5 Deliberately out of scope
-
-Stated as decisions rather than left as omissions: the O(N) CPU hit-test, snapping-candidate and
-zoom-to-extents scans (that is a spatial index, a different problem); the 736-byte
-`CommandToCopyThread2D` with its six dead members per command (§10 — step 3 forces that change
-anyway); a user-facing 2D delete (decision 6); per-page frustum reject on draw, which pages make
-cheap but which `2Drendering.md` MVP item 7 defers.
-
-### 11.6 One known behaviour change
-
-Draw order moves from "all lines, then all polylines, then all polygons" to insertion order.
-Invisible for opaque strokes on white, real if coloured 2D geometry overlaps. Accepted; the fallback
-if it ever matters is to keep per-class ordering *within* a page rather than across the container.
-
-*2d widened it, as it had to:* a modified object is appended like a new one, so **editing an object
-moves it to the front of the overlap order**. That is the same change with the same fallback, but it
-is now reachable without drawing anything — dragging a coloured object can change what it hides.
-
-*2e did NOT widen it further*, and that cost four lines worth having: packing a page puts the packed
-copy back in the stale one's slot rather than at the end of the list. Otherwise every object on a
-page would jump the order because some *other* object on it was edited, which is a different and
-much more surprising thing than the rule above.
-
-### 11.7 The measured baseline — 2026-08-24
-
-Debug x64, one Page2D holding **1,000,111 line records**, built by the step 2a debug key: `B`
-appends 100,000 lines, `b` appends 5. Lines land on a 10 CU grid, 1000 cells per row — so the
-million-line sheet spans X[0 .. 9999] Y[0 .. 10009] CU, which the zoom-extents diagnostic confirmed
-exactly. Auto Random off. Every figure below is one `[cad2d][perf]` line from the copy thread.
-
-| Event | cmds | indexed | copied | expanded | staged | pages | time |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| 100k lines into an empty sheet | 100,000 | 222 | 200,140 | 100,157 | 3,129 KB | 1 | 1,233 ms |
-| 100k lines into a 900k sheet | 100,000 | 1,800,222 | 2,000,140 | 1,000,157 | 31,254 KB | 1 | 4,272 ms |
-| **+5 lines into the 1M sheet** | **5** | **2,000,222** | **2,000,150** | **1,000,162** | **31,254 KB** | **1** | **3,386 ms** |
-| One selection click on that sheet | 1 | 2,000,232 | 2,000,150 | 1,000,162 | 31,254 KB | 1 | 3,437 ms |
-
-**Five appended lines cost 3.4 seconds, four million record touches and 30.5 MB re-uploaded** —
-about 200,000 records handled per line added, and the 5 lines themselves are 160 bytes. That is the
-number §8 step 2 exists to remove.
-
-Four things the measurement settled that reasoning about the code had only asserted:
-
-- **The selection click costs the same as the append** — 3,437 ms against 3,386 ms, on a batch
-  carrying no geometry at all. §11.1 predicted it; it is now measured, and it is the operation a
-  user performs most. This is the whole argument for decision 3.
-- **`indexed` and `copied` both land at ~2× the record count**, confirming that stages 1-2 and 3-4
-  really are two full passes each rather than one.
-- **`pages=1` throughout.** One `Cad2DPageGPU` per container is the entirety of today's paging, at
-  every sheet size.
-- **The cost is in the rebuild, not in drawing.** The frame rate held at 34-60 FPS with a million
-  lines on screen, while a five-line edit took 3.4 seconds. Paging is a *write*-path problem.
-
-Two notes for whoever runs this again. The whole 100k burst arrives as **one** batch, which is the
-single-lock enqueue doing its job — line-by-line enqueuing would let the copy thread drain partial
-bursts and rebuild the growing sheet dozens of times per press. And at Zoom Max a million lines
-render as a solid black square, so step 2c's frame comparison has to be taken at a zoom where
-individual strokes resolve, not at the extents fit.
-
-### 11.8 Progress against that baseline
-
-The same event — five lines appended to a ~1M-line sheet — measured again after each sub-step.
-Everything else about the run is as §11.7 describes.
-
-| After | cmds | indexed | copied | expanded | staged | pages | time |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| baseline (§11.7) | 5 | 2,000,222 | 2,000,150 | 1,000,162 | 32,004,096 B | 1 built | 3,386 ms |
-| **2b** | 5 | **5** | **0** | 1,000,352 | 32,010,240 B | 1 built | **921 ms** |
-| **2c** | 5 | 5 | 0 | **5** | **164 B** | **+0 / −0** | **1.29 ms** |
-
-**2b removed four million record touches and 2.5 seconds of the 3.4.** `indexed` stopped depending
-on the drawing's size at all — it is the command count, which is that sub-step's criterion met
-literally rather than approximately.
-
-**2c removed everything that was left.** Five appended lines now expand five records, stage 164
-bytes — 160 of records, plus the 4-byte `InstanceCount` patch that publishes them — and touch no
-page and no snapshot. Against the baseline that is **2,600× faster and 195,000× less staged**, and
-against 2b it is the difference between rebuilding a drawing and adding to it.
-
-Two supporting readings from the same run: a 100,000-line burst appends in 441 ms
-(`expanded=100000 staged=3200020 B pages=+1/-0` — one new page, the rest into the tails of
-existing ones), and the once-per-second demo line costs `staged=36 B` and ~1.1 ms at a million
-records, where it cost ~880 ms after 2b and ~2,100 ms before it.
-
-**What 2c did NOT make cheap is a selection click**, which still forced its container to rebuild —
-at 1M lines that is 31 pages retired and 31 rebuilt. It was the last O(N) operation on the 2D write
-path, and it is what step 2d removed.
-
-**The selection click, after 2d — 2026-08-25.** Same build and the same debug key, on a sheet of
-**2,000,000 lines** rather than 1M, because ten more `B` presses had gone in before the measurement
-and a bigger sheet only makes the point harder to fake:
-
-| Event | cmds | indexed | expanded | staged | pages | flags | time |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Selection click, §11.7 baseline (1M) | 1 | 2,000,232 | 1,000,162 | 32,004,096 B | 1 built | — | 3,437 ms |
-| Selection click, after 2c (1M) | 1 | 0 | 1,000,000 | 32 MB | +31 / −31 | — | not timed |
-| **Selection click, after 2d (2M)** | **1** | **0** | **0** | **4 B** | **+0 / −0** | **1** | **0.51 ms** |
-| Click that selects nothing, after 2d | 1 | 0 | 0 | **0 B** | +0 / −0 | 0 | **0.075 ms** |
-
-**Four bytes, on a sheet twice the size of the one the baseline was taken on.** Against §11.7 that
-is 6,700× faster and eight million times less staged, and `flags=1` says why: one record's 4-byte
-`flags` word was overwritten in place. The empty-selection row is the same path short-circuiting
-before the command list is opened at all — a click on blank canvas costs 75 microseconds.
-
-The 2c row is arithmetic, not a stopwatch reading — that build re-expanded the whole container and
-restaged it, which is where its 31 retired and 31 rebuilt pages come from; only the two 2d rows and
-the baseline were measured. And `indexed=0` on the 2d rows is not a regression from 2b's
-`indexed=cmds`: a `SelectionRefresh` carries no record, so it performs no lookup. It is the append
-rows that still read `indexed=cmds`.
-
-**Appending did not get slower**, which was the risk in making the filler place whole objects rather
-than bulk-copy a container's records: a 100,000-line burst reads `expanded=100000 staged=3200052 B
-pages=+3/-0 in 468 ms`, against 2c's `staged=3200020 B` and 441 ms. The 32 extra bytes are two more
-fresh pages' argument buffers, not per-object staging. (An intermediate build that also kept a
-per-batch set of registered objects ran the same burst in 650–930 ms; that set is what §11.4 (e)
-records deleting.)
-
-**The modify path, verified visually rather than numerically.** One line selected in the demo
-drawing, then `EDIT_MOVE` with a +300 px screen vector. The highlighted geometry's bounding box went
-from x∈[1199, 1258] to x∈[1499, 1558] — the same 59-pixel-wide, 302-pixel-tall shape, **translated**.
-That is the whole test: had the hide failed, the old records would still be drawn and the box would
-span [1199, 1558]. Append-plus-hide and the shader early-out are both doing their job. The batch's
-own `[cad2d][perf]` line scrolled out of the console before it could be captured, so the byte count
-for a modify is stated by construction and not measured: 32 for the new line record, 4 for the
-`InstanceCount` patch, 4 for the hide.
-
-**And selection still LOOKS right**, which the byte count alone does not prove: after the click,
-exactly 389 pixels of the viewport are the deep-blue selection colour, all of them on the single
-line passing through the clicked point.
-
-**Modifying in bulk, and the compaction — 2026-08-25.** Step 2d made an edit O(1) and left every
-superseded record resident; this is what 2e does about it. Debug x64, a 100,000-line sheet from the
-`B` key, then the `E` key — which moves 1,000 DISTINCT lines up by half a CU, one modify each.
-
-| Event | cmds | expanded | staged | pages | flags | holes after | packed | time |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `E` — 1,000 lines modified | 1,000 | 1,000 | 36,004 B | +0 / −0 | 1,000 | +1,000 | 0/0 | 8–12 ms |
-| …repeated, rounds 2–9 | 1,000 | 1,000 | 36,004 B | +0 / −0 | 1,000 | 2,000 … 9,000 | 0/0 | 8–25 ms |
-| **the next batch after 9,000** | 1 | 1 | 48 B | **+1 / −1** | 0 | **0** | **1 / 1,760** | 10.5 ms |
-| `e` — all 100,032 lines modified | 100,032 | 100,032 | 3,601,096 B | +3 / −0 | 100,032 | +100,032 | 0/0 | 1,310 ms |
-| **the next batch after that** | 3 | 3 | 100 B | **+0 / −3** | 0 | **1,725** | **3 / 0** | 125 ms |
-
-**`staged=36004` is the whole of what a thousand edits costs**: 32,000 bytes of new line records,
-4,000 of hide flag words — four bytes an object, per 2d — and the 4-byte `InstanceCount` patch that
-publishes them. No page was built or retired. At 100,032 objects the same arithmetic gives
-3,601,096: 3,201,024 + 400,128 + 48 for three new pages' argument buffers, and no patch.
-
-**The compaction rows are the point.** Nine rounds put 9,000 holes in a 32,768-record page — past
-the one-quarter threshold — and the next batch packed it: **one page built, one retired, 1,760
-records moved, holes back to zero**, in 10.5 ms. The 48 bytes it staged are the demo line that
-shared the batch plus the packed page's argument buffer. **The 1,760 records themselves staged
-nothing**, because packing is a GPU-to-GPU copy; that is why `packed=` is a separate counter.
-
-**The last row is the only one that gives memory back.** Moving every line at once leaves the three
-full pages holding nothing alive, and a page with no survivors is retired outright with no
-replacement: `pages=+0/-3 packed=3/0` — three megabytes, and zero records copied to earn them.
-
-**And `holes=1725` afterwards is the right answer, not a leftover.** 100,032 records is three full
-pages plus 1,728, and that fourth page's tail absorbed the first of the new records, so it ends
-~95% live. Its 1,725 dead records are 0.86% of the drawing and are correctly judged not worth a
-copy. That number then sits still, which is what "holes bounded" means.
-
-**Two things this did NOT cost.** A batch that changes nothing still walks the page list to check
-the threshold — ~62 iterations on a two-million-line sheet, invisible against the 0.075 ms an empty
-batch already takes. And the bulk append path is untouched: 100,000 fresh lines still read
-`staged=3,200,052 B pages=+3/-0` in 470–570 ms.
-
-**What is measured and what is not.** Every figure above is a `[cad2d][perf]` line. What could not
-be obtained is a pixel diff bracketing a single compaction: the desktop kept stealing focus from the
-window, and two attempts captured an unrelated window instead of the drawing (the ink counts those
-produced are discarded, not reported). The arithmetic closing exactly on both compaction rows —
-1,760 survivors where 1,696 originals plus 64 demo lines were expected, and 100,032 − 3 × 32,768 =
-1,728 residue — is the evidence in its place, together with the fact that the batches after a
-compaction keep resolving their objects and re-accumulating holes cleanly from zero.
-
-**Loading a `.yyy`, after 2b'.** Same build, two files, measured through `LoadYyyIntoTab`:
-
-| Records loaded | Append phase | of which blocked | Loader's own work | Per record |
-|---:|---:|---:|---:|---:|
-| 100,093 | 4,973 ms | 3,623 ms | 1,349 ms | 13.5 µs |
-| 300,106 | 30,051 ms | 25,615 ms | 4,435 ms | 14.8 µs |
-| **3× the records** | **6.04×** | **7.07×** | **3.29×** | **1.10×** |
-
-**Read the last two columns, not the first.** Wall-clock for the append phase is 6× for 3× the
-records, which looks like the step failed. It did not: **85% of that time is the loader blocked on
-`cpuRecordsMutex`**, because it enqueues every record it appends and the copy thread is therefore
-rebuilding the very tab being loaded — batches visibly climbing from 7 ms to 428 ms as the tab
-fills. That is stage 5-7 again. The loader's own work is 3.29× for 3× the records, i.e. flat per
-record, which is the criterion.
-
-Separating the two took a counter (`gLoaderLockWaitMicros`); without it the honest conclusion from
-wall-clock alone would have been "still superlinear, cause unknown". It stays for 2c, which should
-drive the blocked column down and leave the own-work column where it is.

@@ -138,6 +138,10 @@ The stored position stays valid because the record vectors are APPEND-ONLY: noth
 them, and soft delete (isDeleted) keeps the slot. Whoever eventually compacts those vectors has to
 rebuild this map in the same pass. */
 struct Cad2DRecordLocation {
+    /* Which of the nine vectors holds the record. It has to be stored rather than read from the
+    record, because you cannot reach the record's own dataType until you know which vector to
+    index - that circularity is the whole reason this field exists. It is FILLED from dataType,
+    in Cad2DIndexAppendedRecord below. */
     VishwakarmaStorage::ObjectType type = VishwakarmaStorage::ObjectType::Unknown;
     uint32_t index = 0;
 };
@@ -155,18 +159,6 @@ struct Cad2DGpuLocation {
     uint32_t firstRecord = 0;
     uint32_t count = 0;
 };
-
-// Which vector a record belongs to, deduced from its own type - so the generic appenders (the
-// asset-master lambdas, the copy-thread upsert) need no extra argument to index what they added.
-inline VishwakarmaStorage::ObjectType Cad2DKindOf(const Cad2DLineRecordCPU&) { return VishwakarmaStorage::ObjectType::Line2D; }
-inline VishwakarmaStorage::ObjectType Cad2DKindOf(const Cad2DPolylineRecordCPU&) { return VishwakarmaStorage::ObjectType::Polyline2D; }
-inline VishwakarmaStorage::ObjectType Cad2DKindOf(const Cad2DPolygonRecordCPU&) { return VishwakarmaStorage::ObjectType::Polygon2D; }
-inline VishwakarmaStorage::ObjectType Cad2DKindOf(const Cad2DCircleRecordCPU&) { return VishwakarmaStorage::ObjectType::Circle2D; }
-inline VishwakarmaStorage::ObjectType Cad2DKindOf(const Cad2DEllipseRecordCPU&) { return VishwakarmaStorage::ObjectType::Ellipse2D; }
-inline VishwakarmaStorage::ObjectType Cad2DKindOf(const Cad2DArcRecordCPU&) { return VishwakarmaStorage::ObjectType::Arc2D; }
-inline VishwakarmaStorage::ObjectType Cad2DKindOf(const Cad2DTextRecordCPU&) { return VishwakarmaStorage::ObjectType::Text2D; }
-inline VishwakarmaStorage::ObjectType Cad2DKindOf(const Cad2DAssetDefinitionRecordCPU&) { return VishwakarmaStorage::ObjectType::Asset2DDefinition; }
-inline VishwakarmaStorage::ObjectType Cad2DKindOf(const Cad2DAssetInsertRecordCPU&) { return VishwakarmaStorage::ObjectType::Asset2DInsert; }
 
 struct TabCad2DStorage {
     Page2DGpuResources dx;
@@ -287,8 +279,13 @@ struct TabCad2DStorage {
 // vector that just grew.
 template <class Record>
 inline void Cad2DIndexAppendedRecord(TabCad2DStorage& storage, const std::vector<Record>& records) {
-    storage.recordIndex[records.back().objectId] =
-        Cad2DRecordLocation{ Cad2DKindOf(records.back()), static_cast<uint32_t>(records.size() - 1) };
+    /* The type comes from the record ITSELF - META_DATA::dataType, set by every 2D record's
+    constructor. This used to call a nine-overload Cad2DKindOf table that hardcoded the same
+    mapping a second time; the table went when all nine types gained dataType, because two
+    statements of one truth is one too many. */
+    storage.recordIndex[records.back().memoryID] = Cad2DRecordLocation{
+        static_cast<VishwakarmaStorage::ObjectType>(records.back().dataType),
+        static_cast<uint32_t>(records.size() - 1) };
 }
 
 void InitCad2DTabResources(TabCad2DStorage& storage);

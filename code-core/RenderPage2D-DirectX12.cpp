@@ -775,43 +775,43 @@ static void ReportCad2DIngestStatsLocked(const TabCad2DStorage& storage, uint64_
 
     size_t lines = 0, polylines = 0, polygons = 0, circles = 0, ellipses = 0, arcs = 0, texts = 0;
     for (const Cad2DLineRecordCPU& r : storage.lineRecords) {
-        if (!wanted(r.isDeleted, r.containerMemoryId)) continue;
+        if (!wanted(r.isDeleted, r.memoryIDContainer)) continue;
         ++lines;
         include(r.x1, r.y1); include(r.x2, r.y2);
     }
     for (const Cad2DPolylineRecordCPU& r : storage.polylineRecords) {
-        if (!wanted(r.isDeleted, r.containerMemoryId)) continue;
+        if (!wanted(r.isDeleted, r.memoryIDContainer)) continue;
         ++polylines;
         for (const Cad2DPoint2D& p : r.points) include(p.x, p.y);
     }
     for (const Cad2DPolygonRecordCPU& r : storage.polygonRecords) {
-        if (!wanted(r.isDeleted, r.containerMemoryId)) continue;
+        if (!wanted(r.isDeleted, r.memoryIDContainer)) continue;
         ++polygons;
         include(r.centerX - r.radius, r.centerY - r.radius);
         include(r.centerX + r.radius, r.centerY + r.radius);
     }
     for (const Cad2DCircleRecordCPU& r : storage.circleRecords) {
-        if (!wanted(r.isDeleted, r.containerMemoryId)) continue;
+        if (!wanted(r.isDeleted, r.memoryIDContainer)) continue;
         ++circles;
         include(r.centerX - r.radius, r.centerY - r.radius);
         include(r.centerX + r.radius, r.centerY + r.radius);
     }
     for (const Cad2DEllipseRecordCPU& r : storage.ellipseRecords) {
-        if (!wanted(r.isDeleted, r.containerMemoryId)) continue;
+        if (!wanted(r.isDeleted, r.memoryIDContainer)) continue;
         ++ellipses;
         const double radius = (std::max)(std::abs(r.radiusX), std::abs(r.radiusY));
         include(r.centerX - radius, r.centerY - radius);
         include(r.centerX + radius, r.centerY + radius);
     }
     for (const Cad2DArcRecordCPU& r : storage.arcRecords) {
-        if (!wanted(r.isDeleted, r.containerMemoryId)) continue;
+        if (!wanted(r.isDeleted, r.memoryIDContainer)) continue;
         ++arcs;
         const double radius = (std::max)(std::abs(r.radiusX), std::abs(r.radiusY));
         include(r.centerX - radius, r.centerY - radius);
         include(r.centerX + radius, r.centerY + radius);
     }
     for (const Cad2DTextRecordCPU& r : storage.textRecords) {
-        if (!wanted(r.isDeleted, r.containerMemoryId)) continue;
+        if (!wanted(r.isDeleted, r.memoryIDContainer)) continue;
         ++texts;
         include(r.x, r.y); include(r.x, r.y + (double)r.textHeightCU);
     }
@@ -922,22 +922,22 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
             none. */
             auto upsert = [&](auto& records, const auto& incoming) -> bool {
                 ++statRecordsIndexed;
-                auto found = storage.recordIndex.find(incoming.objectId);
+                auto found = storage.recordIndex.find(incoming.memoryID);
                 if (found == storage.recordIndex.end()) {
                     records.push_back(incoming);
                     Cad2DIndexAppendedRecord(storage, records);
                     // First sighting by definition - the index is what the old per-batch knownIds
                     // set was rebuilt from tab.allIDsInThisTab to answer.
-                    tab.allIDsInThisTab.push_back(incoming.objectId);
+                    tab.allIDsInThisTab.push_back(incoming.memoryID);
                     return true;
                 }
-                if (found->second.type != Cad2DKindOf(incoming) ||
+                if (VishwakarmaStorage::ToNumber(found->second.type) != incoming.dataType ||
                     found->second.index >= records.size()) {
                     // Cannot happen while ids are unique and the vectors are append-only, but the
                     // consequence if it ever did is an out-of-range write into the wrong vector.
 #ifdef _DEBUG
                     std::cout << "[cad2d][warn] recordIndex inconsistent for objectId="
-                              << incoming.objectId << "; command dropped." << std::endl;
+                              << incoming.memoryID << "; command dropped." << std::endl;
 #endif
                     return false;
                 }
@@ -984,37 +984,37 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
                     if (std::abs(command->line.x1) > 1.0e8 || std::abs(command->line.y1) > 1.0e8 ||
                         std::abs(command->line.x2) > 1.0e8 || std::abs(command->line.y2) > 1.0e8) {
                         std::cout << "[cad2d][dbg] OUTLIER AT INGEST line objectId="
-                                  << command->line.objectId << " container=" << container
+                                  << command->line.memoryID << " container=" << container
                                   << " (" << command->line.x1 << ", " << command->line.y1
                                   << ") -> (" << command->line.x2 << ", " << command->line.y2
                                   << ")" << std::endl;
                     }
 #endif
-                    classify(container, command->line.objectId,
+                    classify(container, command->line.memoryID,
                         upsert(storage.lineRecords, command->line), false);
                     break;
                 case CommandToCopyThread2DType::AddPolyline:
-                    classify(container, command->polyline.objectId,
+                    classify(container, command->polyline.memoryID,
                         upsert(storage.polylineRecords, command->polyline), false);
                     break;
                 case CommandToCopyThread2DType::AddPolygon:
-                    classify(container, command->polygon.objectId,
+                    classify(container, command->polygon.memoryID,
                         upsert(storage.polygonRecords, command->polygon), false);
                     break;
                 case CommandToCopyThread2DType::AddCircle:
-                    classify(container, command->circle.objectId,
+                    classify(container, command->circle.memoryID,
                         upsert(storage.circleRecords, command->circle), false);
                     break;
                 case CommandToCopyThread2DType::AddEllipse:
-                    classify(container, command->ellipse.objectId,
+                    classify(container, command->ellipse.memoryID,
                         upsert(storage.ellipseRecords, command->ellipse), false);
                     break;
                 case CommandToCopyThread2DType::AddArc:
-                    classify(container, command->arc.objectId,
+                    classify(container, command->arc.memoryID,
                         upsert(storage.arcRecords, command->arc), false);
                     break;
                 case CommandToCopyThread2DType::AddText:
-                    classify(container, command->text.objectId,
+                    classify(container, command->text.memoryID,
                         upsert(storage.textRecords, command->text), true);
                     break;
                 case CommandToCopyThread2DType::SelectionRefresh:
@@ -1068,43 +1068,43 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
                 if (r.isDeleted) return;
                 const size_t before = out.lines.size();
                 out.lines.push_back(ToGpuLineRecord(r));
-                stampLines(out.lines, before, r.objectId);
-                closeLineSpan(out, r.objectId, before);
+                stampLines(out.lines, before, r.memoryID);
+                closeLineSpan(out, r.memoryID, before);
                 };
             auto addPolyline = [&](const Cad2DPolylineRecordCPU& r, Cad2DContainerGpu& out) {
                 if (r.isDeleted) return;
                 const size_t before = out.lines.size();
                 AppendPolylineLineRecords(r, out.lines);
-                stampLines(out.lines, before, r.objectId);
-                closeLineSpan(out, r.objectId, before);
+                stampLines(out.lines, before, r.memoryID);
+                closeLineSpan(out, r.memoryID, before);
                 };
             auto addPolygon = [&](const Cad2DPolygonRecordCPU& r, Cad2DContainerGpu& out) {
                 if (r.isDeleted) return;
                 const size_t before = out.lines.size();
                 AppendPolygonLineRecords(r, out.lines);
-                stampLines(out.lines, before, r.objectId);
-                closeLineSpan(out, r.objectId, before);
+                stampLines(out.lines, before, r.memoryID);
+                closeLineSpan(out, r.memoryID, before);
                 };
             auto addCircle = [&](const Cad2DCircleRecordCPU& r, Cad2DContainerGpu& out) {
                 if (r.isDeleted || r.radius <= 0.0) return;
                 const size_t before = out.curves.size();
                 out.curves.push_back(ToGpuCircleRecord(r));
-                stampCurve(out.curves, r.objectId);
-                closeCurveSpan(out, r.objectId, before);
+                stampCurve(out.curves, r.memoryID);
+                closeCurveSpan(out, r.memoryID, before);
                 };
             auto addEllipse = [&](const Cad2DEllipseRecordCPU& r, Cad2DContainerGpu& out) {
                 if (r.isDeleted || r.radiusX <= 0.0 || r.radiusY <= 0.0) return;
                 const size_t before = out.curves.size();
                 out.curves.push_back(ToGpuEllipseRecord(r));
-                stampCurve(out.curves, r.objectId);
-                closeCurveSpan(out, r.objectId, before);
+                stampCurve(out.curves, r.memoryID);
+                closeCurveSpan(out, r.memoryID, before);
                 };
             auto addArc = [&](const Cad2DArcRecordCPU& r, Cad2DContainerGpu& out) {
                 if (r.isDeleted || r.radiusX <= 0.0 || r.radiusY <= 0.0) return;
                 const size_t before = out.curves.size();
                 out.curves.push_back(ToGpuArcRecord(r));
-                stampCurve(out.curves, r.objectId);
-                closeCurveSpan(out, r.objectId, before);
+                stampCurve(out.curves, r.memoryID);
+                closeCurveSpan(out, r.memoryID, before);
                 };
             auto addText = [&](const Cad2DTextRecordCPU& r, Cad2DContainerGpu& out) {
                 if (r.isDeleted) return;
@@ -1119,7 +1119,7 @@ void ProcessCad2DCopyBatch(const std::vector<CommandToCopyThread2D>& batch,
             for (uint64_t container : textRebuildContainers) {
                 Cad2DContainerGpu& out = textRebuildWork[container];
                 for (const Cad2DTextRecordCPU& r : storage.textRecords) {
-                    if (r.containerMemoryId == container) addText(r, out);
+                    if (r.memoryIDContainer == container) addText(r, out);
                 }
             }
 

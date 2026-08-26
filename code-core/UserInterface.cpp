@@ -2036,7 +2036,7 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
                     auto res = std::to_chars(itemText[itemCount], itemText[itemCount] + 11, d.assetNumber);
                     *res.ptr = '\0';
                     itemPtrs[itemCount] = itemText[itemCount];
-                    itemDefinitionIds[itemCount] = d.objectId;
+                    itemDefinitionIds[itemCount] = d.memoryID;
                     ++itemCount;
                 }
             }

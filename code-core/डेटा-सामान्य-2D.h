@@ -69,12 +69,28 @@ struct Cad2DPoint2D {
     double y = 0.0;
 };
 
-struct Cad2DLineRecordCPU {
-    uint64_t objectId = 0;
-    uint64_t containerMemoryId = 0;
-    uint64_t persistedId = 0;
-    uint64_t persistedParentId = 0;
-    uint64_t parentObjectId = 0; // 0 = plain page object; else owning Asset2DInsert / Asset2DDefinition.
+/* ALL NINE 2D RECORD TYPES DERIVE META_DATA (mv.ramshanker.in/software/id section 8, step 3).
+This one went first, alone, so the true cost per type was known before the other eight followed.
+
+There is now ONE object model: 2D and 3D objects share identity, soft-delete, schema version and
+dataVersion, and generic code can dispatch on META_DATA instead of on which vector a record came
+out of. What is NOT yet shared is RESIDENCY - these records still live by value in std::vector on
+the heap, not in the arena - which is the second half of step 3 and what Optional64 waits on.
+
+The seven fields that came out of each type, and what they became:
+    objectId          -> memoryID              parentObjectId -> memoryIDGenerator
+    containerMemoryId -> memoryIDContainer     persistedId, persistedParentId,
+                                               schemaVersion, isDeleted  (same names, inherited)
+
+ONE BEHAVIOUR CHANGE TO KNOW ABOUT: META_DATA's constructor issues a memoryID, so `memoryID` is
+NEVER 0 on a fresh record. Code that tested `objectId == 0` to mean "not yet assigned" therefore
+cannot be transliterated - each such site had to be re-read and decided individually. */
+struct Cad2DLineRecordCPU : META_DATA {
+    Cad2DLineRecordCPU() {
+        // META_DATA asks every derived type to declare itself; nothing reads this for 2D yet, but
+        // it is what lets generic code stop switching on which vector a record came out of.
+        dataType = static_cast<uint16_t>(VishwakarmaStorage::ObjectType::Line2D);
+    }
     double x1 = 0.0;
     double y1 = 0.0;
     double x2 = 0.0;
@@ -82,30 +98,23 @@ struct Cad2DLineRecordCPU {
     float lineWeight = 0.25f;
     Cad2DLineWeightMode lineWeightMode = Cad2DLineWeightMode::PaperMM;
     uint32_t colorABGR = 0xFF000000u;
-    uint16_t schemaVersion = 0;
-    bool isDeleted = false;
 };
+/* 88 -> 112 bytes: 43 bytes of hand-rolled identity fields replaced by META_DATA's 64, plus
+padding. About +27%, or +24 MB on a two-million-line sheet - the cost id.md section 2.7 predicted
+and accepted. Asserted so the next field added here is a deliberate decision rather than a
+discovery, exactly as sizeof(META_DATA) is. */
+static_assert(sizeof(Cad2DLineRecordCPU) == 112, "Cad2DLineRecordCPU grew - see id.md section 2.7.");
 
-struct Cad2DPolylineRecordCPU {
-    uint64_t objectId = 0;
-    uint64_t containerMemoryId = 0;
-    uint64_t persistedId = 0;
-    uint64_t persistedParentId = 0;
-    uint64_t parentObjectId = 0; // 0 = plain page object; else owning Asset2DInsert / Asset2DDefinition.
+struct Cad2DPolylineRecordCPU : META_DATA {
+    Cad2DPolylineRecordCPU() { dataType = static_cast<uint16_t>(VishwakarmaStorage::ObjectType::Polyline2D); }
     std::vector<Cad2DPoint2D> points;
     float lineWeight = 0.25f;
     Cad2DLineWeightMode lineWeightMode = Cad2DLineWeightMode::PaperMM;
     uint32_t colorABGR = 0xFF000000u;
-    uint16_t schemaVersion = 0;
-    bool isDeleted = false;
 };
 
-struct Cad2DPolygonRecordCPU {
-    uint64_t objectId = 0;
-    uint64_t containerMemoryId = 0;
-    uint64_t persistedId = 0;
-    uint64_t persistedParentId = 0;
-    uint64_t parentObjectId = 0; // 0 = plain page object; else owning Asset2DInsert / Asset2DDefinition.
+struct Cad2DPolygonRecordCPU : META_DATA {
+    Cad2DPolygonRecordCPU() { dataType = static_cast<uint16_t>(VishwakarmaStorage::ObjectType::Polygon2D); }
     uint32_t lineSegmentCount = 4;
     double centerX = 0.0;
     double centerY = 0.0;
@@ -114,32 +123,20 @@ struct Cad2DPolygonRecordCPU {
     float lineWeight = 0.25f;
     Cad2DLineWeightMode lineWeightMode = Cad2DLineWeightMode::PaperMM;
     uint32_t colorABGR = 0xFF000000u;
-    uint16_t schemaVersion = 0;
-    bool isDeleted = false;
 };
 
-struct Cad2DCircleRecordCPU {
-    uint64_t objectId = 0;
-    uint64_t containerMemoryId = 0;
-    uint64_t persistedId = 0;
-    uint64_t persistedParentId = 0;
-    uint64_t parentObjectId = 0; // 0 = plain page object; else owning Asset2DInsert / Asset2DDefinition.
+struct Cad2DCircleRecordCPU : META_DATA {
+    Cad2DCircleRecordCPU() { dataType = static_cast<uint16_t>(VishwakarmaStorage::ObjectType::Circle2D); }
     double centerX = 0.0;
     double centerY = 0.0;
     double radius = 0.0;
     float lineWeight = 0.25f;
     Cad2DLineWeightMode lineWeightMode = Cad2DLineWeightMode::PaperMM;
     uint32_t colorABGR = 0xFF000000u;
-    uint16_t schemaVersion = 0;
-    bool isDeleted = false;
 };
 
-struct Cad2DEllipseRecordCPU {
-    uint64_t objectId = 0;
-    uint64_t containerMemoryId = 0;
-    uint64_t persistedId = 0;
-    uint64_t persistedParentId = 0;
-    uint64_t parentObjectId = 0; // 0 = plain page object; else owning Asset2DInsert / Asset2DDefinition.
+struct Cad2DEllipseRecordCPU : META_DATA {
+    Cad2DEllipseRecordCPU() { dataType = static_cast<uint16_t>(VishwakarmaStorage::ObjectType::Ellipse2D); }
     double centerX = 0.0;
     double centerY = 0.0;
     double radiusX = 0.0;
@@ -148,16 +145,10 @@ struct Cad2DEllipseRecordCPU {
     float lineWeight = 0.25f;
     Cad2DLineWeightMode lineWeightMode = Cad2DLineWeightMode::PaperMM;
     uint32_t colorABGR = 0xFF000000u;
-    uint16_t schemaVersion = 0;
-    bool isDeleted = false;
 };
 
-struct Cad2DArcRecordCPU {
-    uint64_t objectId = 0;
-    uint64_t containerMemoryId = 0;
-    uint64_t persistedId = 0;
-    uint64_t persistedParentId = 0;
-    uint64_t parentObjectId = 0; // 0 = plain page object; else owning Asset2DInsert / Asset2DDefinition.
+struct Cad2DArcRecordCPU : META_DATA {
+    Cad2DArcRecordCPU() { dataType = static_cast<uint16_t>(VishwakarmaStorage::ObjectType::Arc2D); }
     double centerX = 0.0;
     double centerY = 0.0;
     double radiusX = 0.0;
@@ -172,16 +163,10 @@ struct Cad2DArcRecordCPU {
     float lineWeight = 0.25f;
     Cad2DLineWeightMode lineWeightMode = Cad2DLineWeightMode::PaperMM;
     uint32_t colorABGR = 0xFF000000u;
-    uint16_t schemaVersion = 0;
-    bool isDeleted = false;
 };
 
-struct Cad2DTextRecordCPU {
-    uint64_t objectId = 0;
-    uint64_t containerMemoryId = 0;
-    uint64_t persistedId = 0;
-    uint64_t persistedParentId = 0;
-    uint64_t parentObjectId = 0; // 0 = plain page object; else owning Asset2DInsert / Asset2DDefinition.
+struct Cad2DTextRecordCPU : META_DATA {
+    Cad2DTextRecordCPU() { dataType = static_cast<uint16_t>(VishwakarmaStorage::ObjectType::Text2D); }
     double x = 0.0;
     double y = 0.0;
     float textHeightCU = 3.5f;
@@ -192,33 +177,32 @@ struct Cad2DTextRecordCPU {
     float xOffsetCU = 0.0f;
     float yOffsetCU = 0.0f;
     std::string text;
-    uint16_t schemaVersion = 0;
-    bool isDeleted = false;
 };
 
 // Non-parametric asset definition. Virtual container object: never rendered or hit-tested itself.
 // Its master geometry is regular Cad2D*RecordCPU records with parentObjectId = this objectId and
 // containerMemoryId = 0 (so no page ever draws them). assetNumber is the user-visible numeric id.
-struct Cad2DAssetDefinitionRecordCPU {
-    uint64_t objectId = 0;
-    uint64_t persistedId = 0;
-    uint64_t persistedParentId = 0;
+struct Cad2DAssetDefinitionRecordCPU : META_DATA {
+    Cad2DAssetDefinitionRecordCPU() {
+        dataType = static_cast<uint16_t>(VishwakarmaStorage::ObjectType::Asset2DDefinition);
+    }
+    // memoryIDContainer and memoryIDGenerator stay 0: a definition is TAB-level, so no page holds
+    // it and nothing generates it. BuildRowsFromTab writes its parent_id as 0 to match.
     uint32_t assetNumber = 0; // Random numeric id shown in the Insert Asset dropdown.
     double baseX = 0.0; // Insert base point: middle of the bounding box of the source objects.
     double baseY = 0.0; // Master geometry keeps source page coordinates; each insert places
                         // members at insert + R(rotation) * S(scale) * (master - base).
-    uint16_t schemaVersion = 0;
-    bool isDeleted = false;
 };
 
 // One placed instance of an asset on a Page2D. Virtual container object: never rendered itself;
 // its member records live on the page (containerMemoryId = page) with parentObjectId = this
 // objectId, so the draw side needs no asset awareness. Selection expands through the parent.
-struct Cad2DAssetInsertRecordCPU {
-    uint64_t objectId = 0;
-    uint64_t containerMemoryId = 0; // Owning Page2D.
-    uint64_t persistedId = 0;
-    uint64_t persistedParentId = 0;
+struct Cad2DAssetInsertRecordCPU : META_DATA {
+    Cad2DAssetInsertRecordCPU() {
+        dataType = static_cast<uint16_t>(VishwakarmaStorage::ObjectType::Asset2DInsert);
+    }
+    // memoryIDContainer is the owning Page2D. memoryIDGenerator stays 0: an insert is placed by a
+    // user, not stamped out of anything.
     uint64_t definitionObjectId = 0; // Memory id of the Cad2DAssetDefinitionRecordCPU.
     double x = 0.0; // Insert point in page ComputerUnits.
     double y = 0.0;
@@ -227,8 +211,6 @@ struct Cad2DAssetInsertRecordCPU {
     double scaleX = 1.0;
     double scaleY = 1.0;
     double rotationDegrees = 0.0; // Counter-clockwise.
-    uint16_t schemaVersion = 0;
-    bool isDeleted = false;
 };
 
 /* ================================================================================================

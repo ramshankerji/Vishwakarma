@@ -1643,7 +1643,7 @@ static void ImportDxfFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
 
     for (const auto& line : content->lines) {
         Cad2DLineRecordCPU record{};
-        record.containerMemoryId = pageMemoryId;
+        record.memoryIDContainer = pageMemoryId;
         record.x1 = line.x1;
         record.y1 = line.y1;
         record.x2 = line.x2;
@@ -1657,7 +1657,7 @@ static void ImportDxfFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
 
     for (const auto& text : content->texts) {
         Cad2DTextRecordCPU record{};
-        record.containerMemoryId = pageMemoryId;
+        record.memoryIDContainer = pageMemoryId;
         record.x = text.x;
         record.y = text.y;
         record.textHeightCU = text.heightCU;
@@ -1672,7 +1672,7 @@ static void ImportDxfFileIntoTab(DATASETTAB* myTab, uint64_t payloadId) {
 
     for (const auto& polygon : content->polygons) {
         Cad2DPolygonRecordCPU record{};
-        record.containerMemoryId = pageMemoryId;
+        record.memoryIDContainer = pageMemoryId;
         record.lineSegmentCount = polygon.segmentCount;
         record.centerX = polygon.centerX;
         record.centerY = polygon.centerY;

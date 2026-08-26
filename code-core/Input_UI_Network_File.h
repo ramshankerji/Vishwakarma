@@ -10,6 +10,7 @@
 #include "UserInputProcessing.h"
 #include "ExtensionCommunications.h"
 #include "RenderPage2D.h" // Cad2DFindTargetPage2DMemoryId for the DXF auto-import dev hook.
+#include "DataStorage.h" // SaveTabToYyy / LoadYyyIntoTab for the round-trip dev hook.
 
 
 extern std::atomic<bool> shutdownSignal; // Global flag to signal all threads to shut down.
@@ -112,6 +113,64 @@ void FileInputThread() {
             } else {
                 std::cout << "FILE: auto-import DXF found no Page2D." << std::endl;
             }
+        }
+    }
+
+    /* Dev/testing hook (Debug only): the SAVE/LOAD ROUND-TRIP DRIVER.
+
+    VISHWAKARMA_ROUNDTRIP_IN  = a .yyy to load
+    VISHWAKARMA_ROUNDTRIP_OUT = where to save it straight back
+
+    Load then save, with no GUI dialogs in between, so that
+    validations/yyy_roundtrip/check_roundtrip.py can compare the two files field by field. That
+    comparison is the oracle for id.md §8 step 3: the 2D object-model migration runs through this
+    exact path, and §9 warns that a defect there corrupts user files silently rather than
+    crashing. "It still draws correctly" is not evidence; this is.
+
+    It runs on the file thread rather than the engineering thread deliberately - SaveTabToYyy and
+    LoadYyyIntoTab both take the tab's own mutexes, so they are safe from here, and keeping the
+    driver out of the engineering loop means the measured path is the same one the Save and Open
+    menu items use.
+
+    The outcome is written to "<VISHWAKARMA_ROUNDTRIP_OUT>.status" as one line - "OK", or "FAILED:"
+    and the storage layer's own message. A status FILE rather than a console line because the app
+    calls AllocConsole and reopens stdout onto CONOUT$, so a parent process cannot redirect and
+    read this output; RunRoundTrip.ps1 polls for the file, then stops the process. Keeping the
+    exit in the script is what keeps this hook down to a load, a save and a status line. */
+    wchar_t roundTripIn[MAX_PATH] = {};
+    wchar_t roundTripOut[MAX_PATH] = {};
+    if (RoundTripModeRequested() &&
+        GetEnvironmentVariableW(L"VISHWAKARMA_ROUNDTRIP_IN", roundTripIn, MAX_PATH) > 0 &&
+        GetEnvironmentVariableW(L"VISHWAKARMA_ROUNDTRIP_OUT", roundTripOut, MAX_PATH) > 0) {
+        for (int attempt = 0; attempt < 300 && !shutdownSignal; ++attempt) {
+            if (FirstEngineeringTab()) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        std::string status;
+        DATASETTAB* roundTripTab = FirstEngineeringTab();
+        std::string error;
+        if (!roundTripTab) {
+            status = "FAILED: no engineering tab appeared";
+        } else if (!DataStorage::Instance().LoadYyyIntoTab(*roundTripTab, roundTripIn, &error)) {
+            status = "FAILED to load: " + error;
+        } else {
+            /* Let the copy thread drain before saving. The save reads the CPU records, not the
+            GPU pages, so this is not required for correctness - it is here so the round trip
+            exercises the same ingest a real Open does, and so a defect in the 2D ingest surfaces
+            as a round-trip failure rather than as a later mystery. */
+            for (int i = 0; i < 100 && HasPendingCad2DCopyCommands() && !shutdownSignal; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            status = DataStorage::Instance().SaveTabToYyy(*roundTripTab, roundTripOut, &error)
+                ? "OK"
+                : "FAILED to save: " + error;
+        }
+        std::cout << "[roundtrip] " << status << std::endl;
+        std::wstring statusPath = std::wstring(roundTripOut) + L".status";
+        FILE* statusFile = nullptr;
+        if (_wfopen_s(&statusFile, statusPath.c_str(), L"w") == 0 && statusFile) {
+            fputs(status.c_str(), statusFile);
+            fclose(statusFile);
         }
     }
 #endif

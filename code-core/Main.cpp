@@ -233,7 +233,9 @@ DATASETTAB* CreateEngineeringTab(const std::wstring& displayName = L"",
     tab.fileName = displayName.empty() ? L"Untitled " + std::to_wstring(tabID + 1) : displayName;
     tab.storageFilePath = storageFilePath;
     tab.mode = storageFilePath.empty() ? 0 : 1;
-    tab.autoGenerateRandomGeometry = autoGenerateRandomGeometry;
+    // The round-trip driver needs a tab that generates nothing of its own; see
+    // RoundTripModeRequested. Debug-only, and false in every ordinary run.
+    tab.autoGenerateRandomGeometry = autoGenerateRandomGeometry && !RoundTripModeRequested();
     tab.allIDsInThisTab.clear();
     tab.dataTreeView.isVisible.store(true, std::memory_order_release);
     tab.dataTreeView.everythingExpanded.store(true, std::memory_order_release);
@@ -917,6 +919,26 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, 
     // the application: one per engineering tab, created with the tab and joined when it closes.
     // Slot 0 (the Application Tab) deliberately gets no thread: the UI thread owns it.
     {
+        /* The startup tab is spawned DIRECTLY rather than through CreateEngineeringTab, so it
+        keeps DATASETTAB's defaults and the round-trip driver has to correct them here.
+
+        Two fields, and the second is the subtle one. Clearing autoGenerateRandomGeometry stops
+        the demo objects. Setting storageFilePath is what makes the engineering thread treat this
+        as a tab that came FROM A FILE: its start-up block runs EnsureDefaultLogicalHierarchy
+        when `autoGenerateRandomGeometry || storageFilePath.empty()`, and that helper adds a
+        Scene3D to any tab that has logical objects but no Scene3D. Racing the load, it appended
+        exactly one Scene3D to every fixture that did not already contain one - which the
+        comparison correctly reported as an object that appeared from nowhere. File > Open never
+        hits this because CreateEngineeringTab records the path; this makes the driver match.
+        Debug-only, and false in every ordinary run; see validations/yyy_roundtrip/README.md. */
+        if (RoundTripModeRequested()) {
+            allTabs[1].autoGenerateRandomGeometry = false;
+            wchar_t roundTripSource[MAX_PATH] = {};
+            if (GetEnvironmentVariableW(L"VISHWAKARMA_ROUNDTRIP_IN", roundTripSource, MAX_PATH) > 0) {
+                allTabs[1].storageFilePath = roundTripSource;
+                allTabs[1].mode = 1;
+            }
+        }
         std::thread t(विश्वकर्मा, (uint64_t)1);// Pass the tab index to the thread function
         AddEngineeringThread(1, std::move(t));
     }
