@@ -7,7 +7,7 @@
     VISHWAKARMA_ROUNDTRIP_OUT set, waits for the status file the dev hook writes, stops the
     process, and compares the two files field by field with check_roundtrip.py.
 
-    This is the oracle for id.md section 8 step 3. That migration moves the nine Cad2D*RecordCPU
+    This is the oracle for the 2D object-model migration (2Drendering.md). That migration moves the nine Cad2D*RecordCPU
     types onto META_DATA, and section 9 warns that it runs through the save/load path "where a
     defect corrupts user files silently rather than crashing". Run this BEFORE the migration to
     record a green baseline, and after every step of it.

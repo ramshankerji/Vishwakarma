@@ -283,14 +283,27 @@ of §5.6's decision to give each tab its own copy of a mounted catalog file:
 
 ```text
 ResolveObject(memoryID):
-    binary search the CALLING TAB's directory. That is the whole algorithm.
+    binary search each of the CALLING TAB's directories. That is the whole algorithm.
 ```
 
-**Every memoryID a tab's objects can legally reference lives in that tab's own directory** — its own
-objects, and the objects of any catalog file it has mounted, because under §5.6 option (i) a mounted
-catalog is loaded *into the mounting tab*. There is no fallback search, no tab-0 special case, no
-process-wide structure. A reference that does not resolve in the calling tab does not resolve at
-all, and that is a reportable state, not a reason to look elsewhere.
+**A tab has three directories, not one**, and the resolver searches all of them. They partition by
+what an object *is*, not by id — nothing about a memoryID says which one holds it:
+
+| Directory | Holds |
+|---|---|
+| `storageObjects3D` | 3D geometry |
+| `storageLogicalObjects` | containers — Scene3D, Page2D, Folder |
+| `storageLogicalData` | non-geometry, non-container data objects. **ForeignReference proxies live here** ( §5.3 ). New; decided 2026-08-26 |
+
+Three binary searches, ~72 comparisons at 10M, still zero extra memory. Each directory is sorted
+independently and each carries the §3.4 invariant on its own. Order the searches by expected hit
+rate — geometry first — since a hit short-circuits the rest.
+
+**Every memoryID a tab's objects can legally reference lives in one of that tab's directories** —
+its own objects, and the objects of any catalog file it has mounted, because under §5.6 option (i) a
+mounted catalog is loaded *into the mounting tab*. There is no fallback search, no tab-0 special
+case, no process-wide structure. A reference that does not resolve in the calling tab does not
+resolve at all, and that is a reportable state, not a reason to look elsewhere.
 
 **Tabs may not reference each other, and this makes it structural rather than policed.** A
 tab-3-object → tab-5-object reference cannot be resolved even in principle, so closing tab 3 can
@@ -369,6 +382,40 @@ and the August 2026 revisit left them intact. What changed is what they *mean* a
 Uniqueness is **within one file**. Two files may hold the same persistedId for entirely different
 objects — that is normal and expected, and it is precisely why memoryID exists ( §1, and the
 original essay's closing paragraphs ).
+
+**Implemented 2026-08-27, and it was not before.** Until then the `.yyy` writer assigned
+persistedIds by counting up from **1**, capped at 2^40 — so every id ever written sat below
+`MINIMUM_VALID_ID`, and the truncation guard the whole [0, 2^32) sacrifice was made to buy was
+**disarmed for user data**. `ID.h`'s floor was being enforced for catalogue ids only; the file
+writer never consulted it. Now:
+
+- assignment starts at `kFirstAssignableObjectId` = 2^40, the local band ( §4.2 ), because a
+  desktop client has no authority to mint permanent ids;
+- `kMaxLocalObjectId` is 2^48 − 1, the top of the usable space, not 2^40 − 1;
+- `object_store.object_id` carries `CHECK (object_id >= 2^32 AND object_id < 2^48)` in both the
+  application's schema and the round-trip harness's copy of it, so a truncated id is rejected by
+  SQLite rather than silently stored;
+- **an id outside the band is SILENTLY DROPPED on save.** `BuildRowsFromTab` zeroes any
+  out-of-band `persistedId` before the assignment sweep runs, so the object is written with a
+  fresh in-band id instead. The object itself is never dropped — only the offending number.
+
+Two things about that drop are worth not re-deriving. It tests the **band**, not the assignment
+base: `[2^32, 2^40)` is the application catalogue ( §4.3 ) and is valid even though this writer
+never mints one, so using 2^40 as the floor would silently reissue every catalogue id and rewrite
+every reference to one. And it is safe for references **because it runs before assignment** —
+`memoryIdToPersistedId` is built afterwards, and both parent ids and the `Asset2DInsert`
+definition reference are translated through that map when rows are written, so they follow the new
+ids with no extra machinery. This is enforcement at the one point that issues ids, and it is
+unrelated to the authority renumbering of §4.2.
+
+**No migration path exists, deliberately.** A file written before this date keeps its old
+`CHECK` — `EnsureSchema` uses `CREATE TABLE IF NOT EXISTS`, which is a no-op on a table that
+already exists — and SQLite enforces the constraint stored in the FILE, not the one in the
+source. Since the old ceiling was 2^40 and that is exactly `kFirstAssignableObjectId`, the first
+id assigned into such a file always fails, quoting a constraint no longer present anywhere in the
+code. A rebuild-on-save migration was built and then **removed**: every `.yyy` in existence was a
+regenerable fixture, so the decision is to delete such files rather than carry code that repairs
+them. Decided 2026-08-27.
 
 ### 4.2 The local band and the renumbering dance — RETAINED
 
@@ -456,6 +503,34 @@ adopted 2026-08-26 gives all three one home.
 So **every reference field, everywhere, in RAM and on disc, is one 64-bit same-file id.** The
 referring object never learns that foreign files exist. Only the proxy's payload does.
 
+**How 8 bytes are enough — the discriminator lives outside the field.** The obvious objection is
+that one 64-bit field cannot hold two kinds of number, and there is no spare bit to say which it is:
+§3.5 forbids giving any memoryID range a meaning, so no value can be recognised by inspection.
+
+It does not need to be. **The field always holds a memoryID of a live object in this tab's
+directory, and the resolved object's `dataType` is the discriminator.** Resolve it: an ordinary
+object means the reference hit its target; a `ForeignReference` means one more hop. The
+discriminator costs zero bits in the field because it lives in the object the field points at.
+
+That gives the invariant everything else in §5 and §6 rests on:
+
+> **Every reference field resolves to a live object, at all times, in every state.**
+
+There is no state in which a reference field holds a persistedId, a sentinel, or a zero it did not
+start with. What varies is only what kind of object it names:
+
+| State | Field holds | Resolves to |
+|---|---|---|
+| Same-file target, resolved | the target's memoryID | the object itself |
+| Same-file target, missing or deleted | a **repair proxy's** memoryID | a proxy carrying the original persistedId ( §5.3 ) |
+| Foreign target, its file loaded | the **authored proxy's** memoryID | the proxy, whose cache holds the target's memoryID |
+| Foreign target, its file not loaded | the **authored proxy's** memoryID | the proxy, state `file_not_loaded` |
+
+Rows three and four are the **same field value**. A foreign reference names its proxy permanently,
+so mounting, unmounting or updating a catalog changes only the proxy's internal cache and never the
+referring object. That is what lets the same file open correctly in sessions where different files
+are available.
+
 ### 5.2 Why a proxy rather than an inline foreign reference
 
 - **Uniformity.** One field shape, one resolution entry point, one thing for the properties pane,
@@ -472,20 +547,68 @@ referring object never learns that foreign files exist. Only the proxy's payload
 The cost is one indirection on a foreign hop, and it is paid against a cached memoryID, not a
 search. Accepted.
 
-### 5.3 Payload, and what never persists
+### 5.3 Two kinds of proxy, and the lifecycle rule
 
-The proxy is an **ordinary object**: it derives `META_DATA`, lives in the arena, appears in the
-tab's directory, carries a `dataType`, and is stored as an ordinary `object_store` row with an
+One type, one payload — but **two lifecycles that must not be confused**, because one is persisted
+and the other must never be. `fileAlias` is what tells them apart, and that is the whole rule:
+
+| | **Authored proxy** | **Repair proxy** |
+|---|---|---|
+| `fileAlias` | ≥ 2 | **0** |
+| Created by | the user, authoring a foreign reference | the **loader**, when a same-file id fails to resolve ( §6.2 ) |
+| Created when | edit time | load time, phase 2 |
+| Has a persistedId | **yes** — an ordinary `object_store` row | **no** |
+| Written to disc | **yes**, like any object | **never** |
+| Survives the session | yes, it is in the file | no, rebuilt next load if the fault is still there |
+| Expected frequency | common — every member→profile reference | rare — corruption, tampering, a partial write |
+
+**Authored proxies cost the loader nothing.** They arrive as ordinary rows and are assigned a
+memoryID like every other object, so the common case creates nothing during load. Only the rare,
+broken case allocates.
+
+**Repair proxies must never be persisted**, and this is the load-bearing half of the rule. Opening a
+file whose catalog is unmounted, or whose one corrupt row has not been repaired yet, must not add
+objects to that file. A repair proxy exists for exactly two reasons: to keep the referring field
+resolvable for the session ( §5.1's invariant ), and to carry the original persistedId to the save
+path so it round-trips ( §6.3 ). Persist them and a transient condition becomes a permanent file
+change — the failure §6.3 exists to prevent, arriving from the other direction.
+
+An authored proxy is an **ordinary object**: it derives `META_DATA`, lives in the arena, appears in
+a tab directory, carries a `dataType`, and is stored as an ordinary `object_store` row with an
 ordinary persistedId from its own file's space. It therefore rides transactions, sync, `change_seq`,
-tombstones and the two-phase loader **for free**, with no parallel machinery. This is also
-consistent with `storage.md` §14.6's own verdict that relationships are engineering data, not a
-database-layer table.
+tombstones and the two-phase loader **for free**, with no parallel machinery — consistent with
+`storage.md` §14.6's verdict that relationships are engineering data, not a database-layer table.
+A repair proxy is the same C++ type with the same fields; it simply never reaches the save path.
 
-Persisted payload — protobuf, no packing, varint-encoded:
+**Residency — decided 2026-08-26.** A proxy is neither geometry nor a container, so it goes in
+neither existing directory. It lives in the tab's **third directory, `storageLogicalData`** ( §3.5 ),
+which exists for exactly this: non-geometry, non-container data objects. It needs a new
+`ObjectType::ForeignReference`, which must be added **after** `LineMember` and must stay outside
+`IsGeometry3DObjectType` — whose range currently reads `>= Elbow && <= LineMember`, so anyone adding
+a further 3D type later must not simply extend that upper bound past the proxy.
+
+**`memoryIDContainer` is 0 on a proxy.** A proxy is not shown anywhere, and fan-in means no single
+referrer owns it, so there is no container to name. Zero also keeps it out of the model tree, which
+is the wanted behaviour: a proxy is plumbing, not something the user places.
+
+**Do NOT reuse `META_DATA::persistedId` to hold the target's id.** It is tempting — the field is
+inherited and sits unused on a repair proxy — but C++ offers no zero-cost way to *alias* an
+inherited member under a second name ( `using` renames types and functions, never data members; a
+reference member costs its own 8 bytes and makes the type non-trivially-copyable; an anonymous union
+cannot span a base class ). The only real mechanism is an accessor returning the inherited field,
+and that is naming, not aliasing — which puts the question back where it belongs: **should one field
+mean two things?** No. An authored proxy genuinely needs its own `persistedId`, because it *is* a
+row; only the repair proxy's is free, so reuse would make the field's meaning depend on the proxy
+kind. That is precisely the overloading §2.4 removed from `memoryIDContainer`, and the save path's
+assignment sweep already keys on `persistedId == 0` to mean "needs an id". `targetObjectId` stays a
+field of its own: 8 bytes, on the rarest object type in the model.
+
+Payload — protobuf, no packing, varint-encoded. Written to disc for authored proxies only:
 
 ```text
-fileAlias      uint64   which external file. 0 = this file (a dangling same-file ref, §6.2)
-targetObjectId uint64   the target's persistedId INSIDE that file
+fileAlias      uint64   which external file. >= 2 authored; 0 = repair proxy (§6.2)
+targetObjectId uint64   the target's persistedId INSIDE that file.
+                        For a repair proxy: the ORIGINAL id that failed to resolve
 expectedType   uint32   what type the reference was created against
 ```
 
@@ -494,7 +617,7 @@ reference was created against is a replaced-or-corrupt outcome, not a valid targ
 recycled-by-file-rewrite id resolves silently to the wrong kind of object — the failure §3.3 exists
 to prevent, arriving through the file boundary instead of through a pointer.
 
-RAM-only, never serialized, recomputed every session:
+RAM-only on **both** kinds, never serialized, recomputed every session:
 
 ```text
 state              the resolution outcome (storage.md §8's set)
@@ -526,9 +649,16 @@ transaction-scoped temporary reference that must never appear in a committed pay
    whose id is still local-band, or at an alias-1 temporary, fossilizes a number that is about to
    change ( §4.2 ). Assert at proxy creation, not at resolution.
 3. **One proxy per (alias, targetObjectId) per file.** A unique index enforces it going forward;
-   the loader merges duplicates found in files written before the rule.
+   the loader merges duplicates found in files written before the rule. This holds for repair
+   proxies too: a thousand referrers to one missing object share **one** repair proxy, keyed by the
+   id that failed.
 4. **A proxy is never shared between files.** It belongs to the file that refers outward.
 5. **Alias 1 never reaches disc.** RAM and transaction scope only.
+6. **`fileAlias == 0` means RAM-only, always** ( §5.3 ). A proxy with alias 0 is a repair proxy and
+   is never written as a row. Assert it on the save path rather than trusting the loader.
+7. **Repair proxies are created EAGERLY, during load phase 2** — never lazily, never on first
+   access. §5.1's invariant is what makes the save path total, and it only holds if every failed
+   reference has its proxy before the load returns.
 
 ### 5.6 Loading a shared catalog: one copy per tab now, a registry later
 
@@ -584,14 +714,25 @@ tampering, a partial write, or a genuinely deleted object. The response is grade
 2. **Not found → *missing*.** Combined with the payload CRC and the §4.5 validity floor, a target id
    below 2^32 is reported as *corrupt* rather than *missing*, because it is diagnostic: it means
    something truncated a 64-bit id.
-3. **Promote the dangling reference to a proxy.** Build a ForeignReference with `fileAlias = 0`
-   carrying the original target id and the outcome state. The referring field now holds a valid,
-   resolvable local id; the properties pane can say *"target #N missing"*; and — the point —
-   **saving round-trips the original id unchanged.**
+3. **Promote the dangling reference to a repair proxy.** Build one with `fileAlias = 0`, carrying
+   the original target id in `targetObjectId` and the outcome in `state`, and point the referring
+   field at it. **RAM-only — it is never written as a row** ( §5.3 ). The referring field now holds
+   a valid, resolvable local id; the properties pane can say *"target #N missing"*; and — the
+   point — **saving round-trips the original id unchanged** ( §6.3 ).
 
 That third step is why one object type serves foreign references, broken references and
 permission-denied references alike. The uniformity is not tidiness; it is what makes the recovery
-path exist at all.
+path exist at all — and it is what keeps §5.1's invariant true, since after phase 2 there is no
+reference field left that resolves to nothing.
+
+Two properties of repair proxies worth stating outright, both from §5.5:
+
+- **One per failed id, not one per referrer.** A thousand objects that referenced one deleted
+  nozzle share a single repair proxy. A corrupt file costs a handful of small RAM objects, not a
+  parallel copy of the model.
+- **Created eagerly, in phase 2, never lazily.** A field that could resolve to nothing at save time
+  is a field whose original id has nowhere to come from, and that is exactly the data loss §6.3
+  forbids.
 
 For a foreign target the same grading applies, driven by the proxy's `state` field over
 `storage.md` §8's outcomes: *resolved*, *missing*, *deleted*, *moved*, *replaced*,
@@ -604,9 +745,32 @@ session and that is correct behaviour.
 per-mounted-file **resolution epoch**, so remounting or updating a catalog cannot leave a stale
 *resolved* answer standing. Only the target's *identity* is ever persisted.
 
-### 6.3 Never write zero, never hard-fail
+### 6.3 Saving a reference — one branch, and it cannot lose anything
 
-Two rules, both about not converting a recoverable problem into a permanent one:
+Because §5.1's invariant holds, saving a reference field never has to ask whether it resolved. It
+resolves the memoryID once and branches on what came back:
+
+```text
+Save reference field holding memoryID M:
+    obj = ResolveObject(M)
+    ordinary object          -> write obj.persistedId
+    AUTHORED proxy (alias>=2)-> write the PROXY's own persistedId
+                                (the field genuinely references the proxy, which is a real row)
+    REPAIR proxy   (alias==0)-> write the ORIGINAL id the proxy carries
+                                (the proxy itself is never written)
+```
+
+Three cases, no side table, no second map, and nothing is lost — because eager promotion ( §6.2 )
+guarantees `ResolveObject(M)` always returns something. That is the whole reason the invariant is
+worth enforcing: it makes the save path **total**.
+
+Note the asymmetry between the two proxy kinds, and that it is deliberate. An authored proxy is a
+real object in the file, so the reference to it is written as a reference to it. A repair proxy is a
+session-local repair standing in for something that should have been there, so what is written is
+what the file said in the first place. Load, fail to resolve, save, load again: the file is
+byte-identical in that field.
+
+**Two rules that follow, both about not converting a recoverable problem into a permanent one:**
 
 - **A reference whose target was absent this session is never written back as 0.** The original id
   round-trips. The file may be opened tomorrow with the catalog mounted, the network up, or the
@@ -654,6 +818,18 @@ speculatively, but nothing may be designed that assumes a bool is enough.
 12. **Shared catalog: one copy per tab now, a `FileRegistry` later** ( §5.6 ).
 13. **A broken reference is promoted to a proxy and round-trips its original id. Never zeroed, never
     fatal** ( §6.2, §6.3 ).
+14. **Every reference field resolves to a live object, always** ( §5.1 ). A reference field never
+    holds a persistedId, a sentinel or a zero it did not start with; the discriminator is the
+    resolved object's `dataType`, not a bit in the field.
+15. **Two proxy kinds, told apart by `fileAlias`** ( §5.3 ). Authored (`>= 2`) is persisted as an
+    ordinary row; repair (`== 0`) is created eagerly by the loader and **never written to disc**.
+16. **Proxies live in a third directory, `storageLogicalData`**, with `memoryIDContainer = 0`
+    ( §3.5, §5.3 ). `ResolveObject` searches all three of a tab's directories.
+17. **No field on `META_DATA` is ever reused to mean something else** ( §5.3 ). `targetObjectId` is
+    its own field; `persistedId` always means "my own persisted identity", on every object type.
+18. **An out-of-band persistedId is silently dropped and reissued on save, and there is no
+    migration path for a file written under an older id range** ( §4.1 ). Such files are deleted,
+    not repaired.
 
 ## 8. Open, and deliberately deferred
 
@@ -670,9 +846,12 @@ speculatively, but nothing may be designed that assumes a bool is enough.
   `expected_schema_catalog_hash`. Decide whether a mismatch warns and re-resolves, or blocks the
   mount. Proxies re-resolve per session ( §6.2 ), so a stale cached resolution cannot survive an
   update — but a *silently different* catalog revision is a different problem.
-- **Proxy orphan collection.** When the last referrer to a proxy is deleted, the proxy is garbage.
-  It is small and harmless, so the choice is between never collecting, collecting at save, and
-  collecting during compaction. No urgency until delete exists.
+- **Proxy orphan collection, and undoing a foreign reference.** When the last referrer to a proxy
+  goes away the proxy is garbage; the choice is between never collecting, collecting at save, and
+  collecting during compaction. Undo reaches this before delete does — undoing the edit that
+  created a foreign reference should drop the proxy only if no other referrer remains. **Tracked in
+  `undo-redo.md` §13**, which owns the transaction semantics; this page owns only the rule that a
+  proxy is an ordinary object and is therefore whatever the undo log says it is.
 
 **Deferred, deliberately — these are decisions, not gaps:**
 

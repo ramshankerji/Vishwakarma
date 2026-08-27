@@ -5,8 +5,9 @@
 Writes into SampleFiles/ (gitignored). Re-run any time; every file is rewritten from scratch and
 the content is deterministic, so a fixture regenerated on another machine is byte-comparable.
 
-WHY THESE FIXTURES EXIST. id.md §8 step 3 moves the nine Cad2D*RecordCPU types onto META_DATA
-and, later, into the arena. §9 names the risk plainly: that migration runs through the save/load
+WHY THESE FIXTURES EXIST. The 2D object-model migration (2Drendering.md, "The 2D object model")
+moves the nine Cad2D*RecordCPU types onto META_DATA and, later, into the arena. Its risk list names
+the hazard plainly: that migration runs through the save/load
 path, "where a defect corrupts user files silently rather than crashing". A drawing that still
 LOOKS right after a reload is not evidence. These files plus check_roundtrip.py are the oracle
 that says so. The identity half has since landed with these staying green throughout; the
@@ -34,7 +35,7 @@ WHAT IS DELIBERATELY IN THEM. Each fixture targets a field step 3 touches:
                        and the README; RunRoundTrip.ps1 skips 90_ unless asked for it.
 
 Fixtures are small on purpose. This harness answers "is it correct", not "is it fast" -- the
-performance question already has its own numbers in id.md §11.7 and §11.8.
+performance question already has its own numbers in 2Drendering.md.
 """
 
 import os

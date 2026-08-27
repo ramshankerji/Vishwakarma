@@ -183,4 +183,4 @@ sets `PRAGMA foreign_keys = ON`, so a child inserted before its parent is reject
 containers first. `90_*` names are quarantined known-defect reproducers and are skipped by default.
 
 Keep fixtures small. This harness answers "is it correct", not "is it fast" — the performance
-question has its own numbers in id.md §11.7 and §11.8.
+question has its own numbers in 2Drendering.md.

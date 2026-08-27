@@ -234,7 +234,8 @@ CREATE TABLE IF NOT EXISTS file_info (
   value BLOB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS object_store (
-  object_id INTEGER PRIMARY KEY CHECK (object_id > 0 AND object_id < 1099511627776),
+  object_id INTEGER PRIMARY KEY
+    CHECK (object_id >= 4294967296 AND object_id < 281474976710656),
   parent_id INTEGER,
   object_type INTEGER NOT NULL,
   schema_version INTEGER NOT NULL DEFAULT 1,
@@ -305,12 +306,30 @@ def read_file_info(path):
         connection.close()
 
 
+# Fixture rows are written with small, readable ids (1, 2, 3...) and rebased onto the LOCAL band
+# here, so the files carry ids the application would actually mint. Nothing below 2^32 may ever be
+# persisted -- see mv.ramshanker.in/software/id section 4. Keeping the rebase in one place lets the
+# fixture tuples stay legible; the reference fields below have to be rebased with the ids they name.
+ID_BASE = 1 << 40
+REFERENCE_FIELDS = ("definition_id",)
+
+
+def rebase_id(value):
+    """Small fixture id -> LOCAL-band persisted id. Already-banded values pass through."""
+    if value is None or value == 0 or value >= ID_BASE:
+        return value
+    return ID_BASE + value
+
+
 def write(path, rows, object_counter_next=None):
     """Write a .yyy from an ordered list of (object_id, parent_id, type_name, fields) tuples.
 
     Rows are inserted in the order given, and the order MATTERS: `PRAGMA foreign_keys = ON` is set
     by the application, so a child inserted before its parent is rejected per statement. Emit
     containers first. Any row may also be a 6-tuple carrying (schema_version, lifecycle_state).
+
+    Ids in the tuples are small and readable; rebase_id above puts them in the LOCAL band on the
+    way to disc, including parent_id and any REFERENCE_FIELDS inside the payload.
     """
     import os
     if os.path.exists(path):
@@ -328,6 +347,13 @@ def write(path, rows, object_counter_next=None):
             object_id, parent_id, type_name, fields = row[0], row[1], row[2], row[3]
             schema_version = row[4] if len(row) > 4 else DEFAULT_SCHEMA_VERSION[type_name]
             lifecycle = row[5] if len(row) > 5 else 0
+            object_id = rebase_id(object_id)
+            parent_id = rebase_id(parent_id)
+            if any(name in fields for name in REFERENCE_FIELDS):
+                fields = dict(fields)
+                for name in REFERENCE_FIELDS:
+                    if name in fields:
+                        fields[name] = rebase_id(fields[name])
             connection.execute(
                 "INSERT INTO object_store"
                 "(object_id, parent_id, object_type, schema_version, lifecycle_state, data) "

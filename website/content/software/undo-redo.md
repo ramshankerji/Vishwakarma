@@ -582,3 +582,46 @@ marks files that do not exist yet.
 | `code-core/RenderPage2D.cpp` | 3,4,5 | Transform, creation-commit, and asset paths call the chokepoint; 2D `dataVersion` bumps; implement the two new enqueue functions; selection-set cleanup on delete. |
 | `code-core/RenderPage2D-DirectX12.h` | 4 | `CommandToCopyThread2DType::SoftDelete2D` / `Restore2D` and their id payload. |
 | `code-core/RenderPage2D-DirectX12.cpp` | 4 | Ingest switch handles the two new commands (flip `isDeleted` in the record vectors); the rebuild filter (757) already does the rest. |
+
+## 13. OPEN — undo of a foreign reference, and proxy orphans
+
+**OPEN. Not settled, and an implementer must not assume either answer.** Added 2026-08-27, from the
+reference design in `id.md` §5.
+
+A **ForeignReference proxy** is how one object refers to an object in another file: the referring
+field holds a plain id, and for a foreign target that id names a small proxy object carrying the
+target's file alias and id (`id.md` §5.1, §5.3). Two properties make it an undo question rather
+than an `id.md` question:
+
+1. **A proxy is an ordinary `META_DATA` object**, in the tab's `storageLogicalData` directory. So
+   creating one is an ordinary **insert** and falls under §2.1's chokepoint rule like any other.
+2. **Proxies are shared by fan-in.** One proxy serves every referrer that names the same foreign
+   target — ten members made from one catalogue profile share one proxy (`id.md` §5.2).
+
+The unresolved question is what an undo does with the shared object:
+
+> Authoring a foreign reference may create a proxy, or may attach to one that already exists.
+> Undoing that gesture must remove the proxy **only if no other referrer still names it** —
+> otherwise undoing one member's profile assignment silently breaks the other nine.
+
+Three candidate answers, none chosen:
+
+- **Never remove.** Undo reverts the referring field only; the proxy is left behind. Always
+  correct, never breaks a sibling, and leaks one small object per abandoned target. Consistent with
+  §6.4's already-accepted position that soft-deleted objects accumulate.
+- **Refcount at the proxy.** Exact, and it makes undo of a create symmetric with every other
+  insert. But it adds a mutable count to a shared object, which the transaction log then has to
+  capture and restore like any other field — and a refcount that drifts is a use-after-free class
+  of bug in a system that has none today.
+- **Scan referrers on undo.** No stored state; the undo path asks whether any live object still
+  names the proxy. Correct and cheap at the scale where it matters (one directory scan, and
+  `id.md` §3.6 already accepts linear referrer scans), but it puts an O(n) step inside an undo.
+
+**What is already settled and constrains the answer:** a repair proxy (`fileAlias == 0`) is
+RAM-only and never persisted (`id.md` §5.3), so it is never part of a transaction at all — this
+question concerns **authored** proxies only. And `id.md` §8 defers proxy orphan collection
+generally; undo simply reaches the problem before delete does, which is why it is recorded here
+rather than there.
+
+Not blocking: nothing in Phases 0–6 creates a foreign reference, because no reference field exists
+in the object model yet (`id.md` §3.1). This becomes live the first time one does.

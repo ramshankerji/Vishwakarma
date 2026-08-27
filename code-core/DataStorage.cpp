@@ -140,7 +140,11 @@ bool EnsureSchema(sqlite3* db, std::string* errorMessage) {
         "  value BLOB NOT NULL"
         ");"
         "CREATE TABLE IF NOT EXISTS object_store ("
-        "  object_id INTEGER PRIMARY KEY CHECK (object_id > 0 AND object_id < 1099511627776),"
+        // 4294967296 = 2^32 (MINIMUM_VALID_ID), 281474976710656 = 2^48 (top 16 bits reserved).
+        // The floor is what arms the truncation guard: a 64-bit id cut to 32 bits lands below it
+        // and is rejected here rather than silently addressing another object.
+        "  object_id INTEGER PRIMARY KEY"
+        "    CHECK (object_id >= 4294967296 AND object_id < 281474976710656),"
         "  parent_id INTEGER,"
         "  object_type INTEGER NOT NULL,"
         "  schema_version INTEGER NOT NULL DEFAULT 1,"
@@ -1269,6 +1273,43 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         cad2DLock = std::unique_lock<std::mutex>(cad2d->cpuRecordsMutex);
     }
 
+    /* An id outside the valid band is SILENTLY DROPPED to 0, so the assignment sweep below mints a
+    fresh in-band one for it. This enforces the range at the only point that issues ids; it is not
+    a migration path, and no attempt is made to rescue a file written under an older scheme.
+
+    Dropping is safe for references because it happens BEFORE assignment: memoryIdToPersistedId is
+    built afterwards, and parent ids and the Asset2DInsert definition reference are both translated
+    through that map when rows are written, so they follow the new ids automatically.
+
+    The BAND is checked, not the assignment base: [2^32, 2^40) is the application catalogue and is
+    valid despite this writer never minting one. mv.ramshanker.in/software/id section 4. */
+    auto dropIfOutOfBand = [](uint64_t& persistedId) {
+        if (persistedId != 0 && !VishwakarmaStorage::IsValidPersistedObjectId(persistedId)) {
+            persistedId = 0;
+        }
+    };
+    for (StoredLogicalObject& entry : tab.storageLogicalObjects) {
+        if (entry.object) dropIfOutOfBand(entry.object->persistedId);
+    }
+    for (StoredGeometryObject3D& entry : tab.storageObjects3D) {
+        if (entry.object) dropIfOutOfBand(entry.object->persistedId);
+    }
+    if (cad2d) {
+        for (Cad2DLineRecordCPU& r : cad2d->lineRecords) dropIfOutOfBand(r.persistedId);
+        for (Cad2DPolylineRecordCPU& r : cad2d->polylineRecords) dropIfOutOfBand(r.persistedId);
+        for (Cad2DPolygonRecordCPU& r : cad2d->polygonRecords) dropIfOutOfBand(r.persistedId);
+        for (Cad2DCircleRecordCPU& r : cad2d->circleRecords) dropIfOutOfBand(r.persistedId);
+        for (Cad2DEllipseRecordCPU& r : cad2d->ellipseRecords) dropIfOutOfBand(r.persistedId);
+        for (Cad2DArcRecordCPU& r : cad2d->arcRecords) dropIfOutOfBand(r.persistedId);
+        for (Cad2DTextRecordCPU& r : cad2d->textRecords) dropIfOutOfBand(r.persistedId);
+        for (Cad2DAssetDefinitionRecordCPU& r : cad2d->assetDefinitionRecords) {
+            dropIfOutOfBand(r.persistedId);
+        }
+        for (Cad2DAssetInsertRecordCPU& r : cad2d->assetInsertRecords) {
+            dropIfOutOfBand(r.persistedId);
+        }
+    }
+
     uint64_t maxExistingId = 0;
     for (const StoredLogicalObject& entry : tab.storageLogicalObjects) {
         if (entry.object && entry.object->persistedId > maxExistingId) {
@@ -1328,15 +1369,22 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         }
     }
 
+    /* Assignment starts in the LOCAL band, never at 1. Every id this writer mints must sit above
+    MINIMUM_VALID_ID so that a 64-to-32 bit truncation anywhere downstream lands below the floor
+    and fails loudly instead of addressing the wrong object - which is the whole reason the
+    [0, 2^32) range was declared invalid. A file that already holds higher ids continues from them.
+    mv.ramshanker.in/software/id section 4. */
     uint64_t assignNextId = maxExistingId + 1;
-    if (assignNextId == 0) assignNextId = 1;
+    if (assignNextId < VishwakarmaStorage::kFirstAssignableObjectId) {
+        assignNextId = VishwakarmaStorage::kFirstAssignableObjectId;
+    }
 
     for (StoredLogicalObject& entry : tab.storageLogicalObjects) {
         if (!entry.object) continue;
 
         if (entry.object->persistedId == 0) {
             if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
-                SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                SetError(errorMessage, "object_id counter exceeded the usable persisted ID range (2^48).");
                 return false;
             }
             entry.object->persistedId = assignNextId++;
@@ -1348,7 +1396,7 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
 
         if (entry.object->persistedId == 0) {
             if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
-                SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                SetError(errorMessage, "object_id counter exceeded the usable persisted ID range (2^48).");
                 return false;
             }
             entry.object->persistedId = assignNextId++;
@@ -1361,7 +1409,7 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         for (Cad2DAssetDefinitionRecordCPU& definition : cad2d->assetDefinitionRecords) {
             if (definition.persistedId == 0) {
                 if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
-                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    SetError(errorMessage, "object_id counter exceeded the usable persisted ID range (2^48).");
                     return false;
                 }
                 definition.persistedId = assignNextId++;
@@ -1373,7 +1421,7 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         for (Cad2DAssetInsertRecordCPU& insert : cad2d->assetInsertRecords) {
             if (insert.persistedId == 0) {
                 if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
-                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    SetError(errorMessage, "object_id counter exceeded the usable persisted ID range (2^48).");
                     return false;
                 }
                 insert.persistedId = assignNextId++;
@@ -1387,7 +1435,7 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
             // to be filled in here, and the same is now true of all nine record types below.
             if (line.persistedId == 0) {
                 if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
-                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    SetError(errorMessage, "object_id counter exceeded the usable persisted ID range (2^48).");
                     return false;
                 }
                 line.persistedId = assignNextId++;
@@ -1399,7 +1447,7 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         for (Cad2DPolylineRecordCPU& polyline : cad2d->polylineRecords) {
             if (polyline.persistedId == 0) {
                 if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
-                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    SetError(errorMessage, "object_id counter exceeded the usable persisted ID range (2^48).");
                     return false;
                 }
                 polyline.persistedId = assignNextId++;
@@ -1412,7 +1460,7 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
             polygon.lineSegmentCount = ClampedPolygonLineSegmentCount(polygon.lineSegmentCount);
             if (polygon.persistedId == 0) {
                 if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
-                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    SetError(errorMessage, "object_id counter exceeded the usable persisted ID range (2^48).");
                     return false;
                 }
                 polygon.persistedId = assignNextId++;
@@ -1424,7 +1472,7 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         for (Cad2DCircleRecordCPU& circle : cad2d->circleRecords) {
             if (circle.persistedId == 0) {
                 if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
-                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    SetError(errorMessage, "object_id counter exceeded the usable persisted ID range (2^48).");
                     return false;
                 }
                 circle.persistedId = assignNextId++;
@@ -1436,7 +1484,7 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         for (Cad2DEllipseRecordCPU& ellipse : cad2d->ellipseRecords) {
             if (ellipse.persistedId == 0) {
                 if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
-                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    SetError(errorMessage, "object_id counter exceeded the usable persisted ID range (2^48).");
                     return false;
                 }
                 ellipse.persistedId = assignNextId++;
@@ -1448,7 +1496,7 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         for (Cad2DArcRecordCPU& arc : cad2d->arcRecords) {
             if (arc.persistedId == 0) {
                 if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
-                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    SetError(errorMessage, "object_id counter exceeded the usable persisted ID range (2^48).");
                     return false;
                 }
                 arc.persistedId = assignNextId++;
@@ -1460,7 +1508,7 @@ bool BuildRowsFromTab(DATASETTAB& tab, std::vector<ObjectStoreRow>& rows, uint64
         for (Cad2DTextRecordCPU& text : cad2d->textRecords) {
             if (text.persistedId == 0) {
                 if (assignNextId > VishwakarmaStorage::kMaxLocalObjectId) {
-                    SetError(errorMessage, "MVP object_id counter exceeded the 40-bit local object ID range.");
+                    SetError(errorMessage, "object_id counter exceeded the usable persisted ID range (2^48).");
                     return false;
                 }
                 text.persistedId = assignNextId++;

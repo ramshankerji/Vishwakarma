@@ -157,6 +157,8 @@ Two consequences for this document. **A 40-bit CHECK constraint cannot hold a pe
 
 Local-band ids are **provisional**. When the work reaches the authority it assigns permanent ids and the client updates its memory; references inside that file are rewritten in the same transaction. This is file-internal only, because nothing outside a file may name a provisional id (§7.3 rule below).
 
+**An id outside the band is silently dropped when the file is written.** The writer zeroes it and assigns a fresh in-band one in the same pass; the object is kept, only the offending number is discarded. There is deliberately **no migration path** for a file written under an older id range — such a file keeps its own stored `CHECK` (`CREATE TABLE IF NOT EXISTS` does not replace it) and is discarded rather than repaired. `id.md` §4.1 carries both rules.
+
 Do not recycle object IDs during normal operation. Reason: Recycling IDs can make old external references resolve to a wrong new object. Wrong object resolution is worse than missing/deleted resolution.  
 
 7.3 Object references — NOT packed. Amended 2026-08-26. The earlier packed 64-bit reference (8 reserved bits, 16-bit file_alias, 40-bit local_object_id) is **withdrawn**. Three reasons, any one sufficient: a .zzz project may reference more than 2^32 files, so any fixed alias width is a ceiling that will be hit; permanent ids run to 2^48 and do not fit in 40 bits (§7.2); and packing forces every object schema to understand aliasing.
@@ -169,9 +171,9 @@ What replaces it:
 So **every reference field in every payload is one plain same-file id**, and only the proxy payload understands aliasing. Ten objects referring to the same foreign target share one proxy.
 
 Alias values keep only their two reserved meanings:
-file_alias = 0 :same .yyy file  
+file_alias = 0 :same .yyy file. On a proxy this means a **repair proxy** — a RAM-only stand-in the loader built for a same-file reference that failed to resolve, never written to disc (§14.4)
 file_alias = 1 :temporary same-file reference, RAM/transaction only, forbidden in committed persistent payload
-file_alias >= 2 : external file alias, resolved through external_file table. **No upper bound.**
+file_alias >= 2 : external file alias, resolved through external_file table. **No upper bound.** These are the **authored** proxies, and the only kind that is persisted
 
 Rules: a foreign reference may target a **mounted catalog .yyy, never a sibling project**. A foreign reference may only target a **permanent** id — pointing a proxy at a provisional local-band id or an alias-1 temporary fossilizes a number that is about to change. One proxy per (fileAlias, targetObjectId) per file.
 
@@ -404,7 +406,9 @@ CREATE TABLE object_store (
 
 Rules: object_id is a local ID. parent_id is same-file parent only. External parent ownership not allowed — a ForeignReference proxy is a reference, never a parent. object_version is used for conflict detection. change_seq is used for sync ordering. modified_time_utc is not sync truth. data is canonical Protobuf payload.
 
-Note: ForeignReference proxies (§7.3) are ordinary rows in this table, with their own object_type and their own object_id from this file's space. They need no separate table and ride transactions, sync and tombstones like any other object.
+Note: **authored** ForeignReference proxies (§7.3) are ordinary rows in this table, with their own object_type and their own object_id from this file's space. They need no separate table and ride transactions, sync and tombstones like any other object.
+
+**Repair proxies are NOT rows and must never be written here.** A repair proxy (file_alias = 0) is created in RAM by the loader when a same-file reference fails to resolve, and exists only to keep the referring field valid for the session and to carry the original id back to the save path. Persisting one would let a transient condition — an unmounted catalog, an unrepaired corrupt row — permanently add objects to the user's file. The save path asserts file_alias != 0 before writing a proxy row. See `id.md` §5.3.
 
 14.5 object_tombstone: Durable deletion/reference-resolution table.
 

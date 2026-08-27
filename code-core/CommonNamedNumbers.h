@@ -58,7 +58,25 @@ constexpr uint16_t kGeometry2DEllipseSchemaVersion = 2; // v2: added rotation_ra
 constexpr uint16_t kGeometry2DArcSchemaVersion = 2;     // v2: added rotation_radians.
 constexpr uint16_t kAsset2DDefinitionSchemaVersion = 1;
 constexpr uint16_t kAsset2DInsertSchemaVersion = 2; // v2: added scale_x/scale_y/rotation_degrees.
-constexpr uint64_t kMaxLocalObjectId = (1ULL << 40) - 1ULL;
+/* Persisted object id bounds. mv.ramshanker.in/software/id section 4.1 owns the band scheme;
+these two are the only parts of it the .yyy writer needs.
+
+kMaxLocalObjectId was (1ULL << 40) - 1 and the writer counted up from 1, which put every id ever
+written below MINIMUM_VALID_ID and left the truncation guard disarmed for user data. The ceiling is
+now the top of the usable space (top 16 bits reserved zero), and assignment starts in the LOCAL
+band, because a desktop client writing a .yyy has no authority to assign permanent ids - the server
+re-assigns these on first sync. Mirrors LOCAL_ID_START / ID_UPPER_BOUND in ID.h, which this header
+deliberately does not include: it stays dependency-free apart from <cstdint>. */
+constexpr uint64_t kMinimumValidObjectId = 1ULL << 32;      // MINIMUM_VALID_ID - the truncation floor
+constexpr uint64_t kFirstAssignableObjectId = 1ULL << 40;   // LOCAL_ID_START
+constexpr uint64_t kMaxLocalObjectId = (1ULL << 48) - 1ULL; // ID_UPPER_BOUND
+
+/* Is this a persisted id the file format accepts? The floor is the truncation guard, NOT the
+assignment base: [2^32, 2^40) is the application catalogue band, legitimately present in a file
+this writer never minted an id for. Anything outside the pair is reissued on save. */
+constexpr bool IsValidPersistedObjectId(uint64_t objectId) {
+    return objectId >= kMinimumValidObjectId && objectId <= kMaxLocalObjectId;
+}
 
 constexpr uint32_t ToNumber(ObjectType value) {
     return static_cast<uint32_t>(value);
