@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <shared_mutex>
 #include <sstream>
 #include <shellscalingapi.h>
 

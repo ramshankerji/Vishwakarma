@@ -293,6 +293,34 @@ size an assertion rather than a comment is what turns "DO NOT ADD ANY MORE FIELD
 the build enforces. If you meant to grow it, change the number here and say why above. */
 static_assert(sizeof(META_DATA) == 64, "META_DATA grew - see the field-budget note above it.");
 
+/* How one engineering object points at another - a pipe at the nozzle it connects to. Not used
+anywhere yet; the only references in the model today are structural - META_DATA::memoryIDContainer
+(which container holds it) and META_DATA::memoryIDGenerator (which template produced it).
+Stores the ID and never a pointer, because the arena relocates objects and a stale pointer would
+address whatever took the block. Resolution is a binary search over the owning tab's directory;
+holding the result for one operation is fine, storing it back into a persisted object is not.
+Reverse lookup is deliberately absent - back-references become an optional property instead.
+Rationale: mv.ramshanker.in/software/id sections 3.3 and 3.6.
+
+It lives HERE and not in ID.h - where it used to - because a base class must be a COMPLETE type,
+and ID.h is included by this file long before META_DATA is defined. A forward declaration is not
+enough, and ID.h cannot include this file back. */
+struct DataReference : META_DATA {
+    //WARNING: Do not add any more field to this struct. This is one of the core data types.
+    //It is repeated all over the place, having very high memory implication. Consult Ram Shanker.
+    // Inheriting META_DATA automatically gives use memoryID and persistedID.
+    // persistedID is usefull only for reference outside the current file.
+
+    /* Following is for memory size optimization. All files have unique 256 bit identity ID.
+    Storing reference to objects in external file is common use case.
+    There is a separate table inside each file mapping this fileReferenceID to actual external file.
+    0 value represents reference made to other object inside same file. */
+    uint64_t savedFileReference;
+    /* Every time a file is loaded, it is allocated a temporary memory ID.
+    TODO: Implement an optimization such that common files between tabs are loaded only once. How ?*/
+    uint64_t loadedFileReference;
+};
+
 // Following are some special data types designed to be dynamically allocated by our RAM Manager.
 
 class CustomString {// System Limit: 4 GB for individual dynamically allocated properties.

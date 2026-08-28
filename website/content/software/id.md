@@ -153,22 +153,24 @@ one, else the container — and the loader rebuilds the split by asking what TYP
 turned out to be. This is the one place where two RAM fields collapse into one persisted field, and
 it is deliberate.
 
-### 2.5 memoryID resolution is a linear scan, and all three indices are dead
+### 2.5 memoryID resolution is a linear scan, and the three indices are gone
 
 There is no working memoryID → object index anywhere in the application. Resolution is a linear
-scan over `storageObjects3D`. **Three** mechanisms were built for this job and none of them is
-alive:
+scan over `storageObjects3D`. **Three** mechanisms were built for this job, none of them was ever
+alive, and none of them survives as an index:
 
-- `राम::id2MemoryMap` (`std::unordered_map<uint64_t, std::byte*>`, `MemoryManagerCPU.h`) is
-  declared and `.clear()`ed on shutdown, but **nothing ever inserts into it**. The
-  `DefragmentRAMChunks` comment still names it as the thing compaction must update.
-- `MemoryIDMap` in `ID.h` — a 256-shard `std::shared_mutex` map, "highly scalable mapping:
-  memoryID → data pointer" — is **referenced nowhere**.
-- `ReferenceID` in `ID.h` — process-local `memoryID`, cached `data` pointer, persistent `realID`,
-  `savedFileReference` — is **referenced nowhere**.
+- `ReferenceID` in `ID.h` — process-local `memoryID`, persistent `realID`,
+  `savedFileReference` — **survives, renamed and relocated**. It is now `DataReference` in
+  `डेटा.h`, deriving `META_DATA` so that `memoryID` and `persistedId` come from the base, and
+  declaring only `realID`, `savedFileReference` and `loadedFileReference` of its own. The cached
+  `data` pointer is gone ( §3.3 ). It moved because a base class must be a **complete** type and
+  `डेटा.h` includes `ID.h`, never the reverse. It is still **referenced nowhere**: it is the
+  declared shape of a reference, not a live one, and §5 is what actually carries references between
+  files.
 
-**All three are to be deleted** ( §3.7 ). A declared-but-unpopulated index invites someone to trust
-it, and three of them invites someone to wire the wrong one.
+A declared-but-unpopulated index invites someone to trust it, and three of them invited someone to
+wire the wrong one. That is why two are deleted outright and the survivor is not an index — it holds
+ids, resolved by the search of §3.4, and no pointer at all.
 
 The only live id map is `InstanceRegistry::indexOfMemoryId`, and it maps memoryID →
 `gpuInstanceIndex`. That is copy-thread-owned GPU identity, not the CPU object, and it is not a
@@ -223,9 +225,11 @@ difference decides it.
 The same argument is why persistent ids are never recycled either ( `storage.md` §7.2 ): recycling
 makes an old reference resolve to a *wrong new object*, which is worse than resolving to nothing.
 
-This **inverts `ReferenceID`'s design**, which cached a `data` pointer alongside the id — and that
-cached pointer is exactly why `DefragmentRAMChunks` carries the note that every move must update the
-central map. Dropping the field removes the coupling entirely.
+This **inverts the original `ReferenceID` design**, which cached a `data` pointer alongside the id
+— and that cached pointer is exactly why `DefragmentRAMChunks` carried the note that every move must
+update the central map. The field is already gone: its successor `DataReference` ( `डेटा.h`, §2.5 )
+holds ids only, and the `DefragmentRAMChunks` comment now points at the owning tab's directory.
+Dropping the field removed the coupling entirely.
 
 **A transient cache is still fine, and §5 uses one**: the ForeignReference proxy caches its
 resolved target as a **memoryID, never a pointer**, and re-resolves per session. A cache that holds
@@ -354,10 +358,6 @@ Decided, and not to be re-litigated:
    process-wide index.
 4. **The sortedness invariant is asserted at all three append sites**, including
    `FlushGeneratedGeometryBatch`.
-5. **All three dead mechanisms are deleted**: `राम::id2MemoryMap` ( and the `DefragmentRAMChunks`
-   comment that names it, which should instead say "update the owning tab's directory entry" ),
-   `MemoryIDMap`, and the `ReferenceID` struct — whose useful content survives as the
-   ForeignReference payload in §5, and whose cached `data` pointer does not survive at all.
 6. **Reverse lookup is a linear scan** ( §3.6 ).
 
 None of it is built.
@@ -672,8 +672,9 @@ The cost is duplicated memory: a catalog mounted by four tabs is resident four t
 
 **(ii) A process-wide `FileRegistry` keyed by `file_uuid` — later.** First mount loads the file
 read-only; later tabs reuse it. `DATASETTAB` already carries the `fileID` field this would key on.
-It is the optimization the old `ReferenceID` TODO was reaching for, and it is worth doing when
-duplication is *measured* to matter — a large shared catalog open in many tabs — not before.
+It is the optimization the TODO on `DataReference::loadedFileReference` is reaching for — carried
+over verbatim from `ReferenceID` — and it is worth doing when duplication is *measured* to matter —
+a large shared catalog open in many tabs — not before.
 
 **The proxy design is indifferent to which is in force**, which is the point: it resolves through
 the alias and the registry either way, so (i) → (ii) changes no reference, no payload and no schema.

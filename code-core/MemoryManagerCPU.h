@@ -284,14 +284,6 @@ public:
     We do not take into account, other running applications, hence we may already be getting paged-out to disc when
     nearing the limit. It's not a hard limit. */
 
-    //TODO: Standard Library unordered_map does not take advantage of SIMD capabilities.
-    // Latter on we will have our own implementation. We want this performance to be extreme.
-    // This is core operation in our application. Ask AI for better options.
-    // We use a high-performance hash map for ID-to-location mapping.
-    // NOTE: For extreme performance, consider replacing with a more specialized hash map
-    // like absl::flat_hash_map or tsl::hopscotch_map which are more cache-friendly.
-    std::unordered_map<uint64_t, std::byte*> id2MemoryMap;
-
     राम(); // The constructor. Initialize the memory sub-system.
     ~राम(); // The destructor.Do all the cleanup.
     // Non-copyable, non-movable singleton
@@ -401,7 +393,6 @@ inline राम::~राम() {
     VirtualMemory::release_address_space(baseAddress, TOTAL_RESERVED_SPACE);
     baseAddress = nullptr;
 
-    id2MemoryMap.clear();
     RAMChunksAllocatedCount = 0;
     activeChunkIndex = 0;
     activeChunks.clear();
@@ -651,15 +642,13 @@ inline uint32_t राम::MemoryGroupOf(const void* anyPointer) const {
 }
 
 inline void राम::DefragmentRAMChunks(uint32_t chunkIndex) {
-    // Compress RAMChunks to free up CPU RAM. Update id2MemoryMap for all the IDs which have moved.
+    // Compress RAMChunks to free up CPU RAM. Update the owning tab's directory entry
     // This is a highly complex operation.
     // 1. Lock the chunk to prevent any modifications.
     // 2. Create a new, empty chunk.
     // 3. Iterate through the old chunk, identifying valid (not-deleted) objects.
     // 4. Copy each valid object contiguously into the new chunk.
-    // 5. CRITICAL: For each object moved, update its DATALocation in the global id2MemoryMap.
-    //    This requires a write lock on the map.
-    // 6. Once all objects are moved, swap the new chunk in for the old one and delete the old chunk.
+    // 5. Once all objects are moved, swap the new chunk in for the old one and delete the old chunk.
     std::cout << "defragmentation for chunk " << chunkIndex << " would run here." << std::endl;
 }
 
