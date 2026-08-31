@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Quadrant: the 0/90/180/270 points in the curve's own frame. Diamond marker. -->
+    <circle cx="32" cy="36" r="19" />
+    <circle cx="13" cy="36" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="51" cy="36" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="32" cy="55" r="2.5" fill="#2D3436" stroke="none" />
+    <path d="M32 8L41 17L32 26L23 17Z" stroke="#0984E3" />
+  </g>
+</svg>

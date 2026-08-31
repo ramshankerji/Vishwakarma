@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Oblique work plane: picked off an object surface. Drawn dashed - inert in phase 1. -->
+    <path d="M8 24L28 16L48 24L28 32Z" />
+    <path d="M8 24V42L28 50V32" />
+    <path d="M48 24V42L28 50" />
+    <path d="M28 32L48 24L48 42L28 50Z" fill="#0984E3" fill-opacity="0.15" stroke="#0984E3" stroke-width="3" stroke-dasharray="5 4" />
+    <path d="M38 37L54 46" stroke="#0984E3" stroke-width="3" stroke-dasharray="5 4" />
+    <path d="M46 45L54 46L49 40" stroke="#0984E3" stroke-width="3" />
+  </g>
+</svg>

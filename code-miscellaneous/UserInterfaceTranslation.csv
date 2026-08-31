@@ -38,6 +38,8 @@ WordID,ShortWordName,English,Comments
 76,LoadGenerators,LoadGenerators,
 77,Civil,Civil,
 78,General,General,
+79,Snap2D,Snap 2D,Ribbon subgroup: object snap toggles for the 2D page.
+80,Snap3D,Snap 3D,Ribbon subgroup: object snap toggles and work plane for the 3D scene.
 99,Unknown,Unknown,
 1001,ProjectOpen,Project Open,Open an existing project
 1003,ProjectSave,Project Save,Save current project
@@ -93,6 +95,7 @@ WordID,ShortWordName,English,Comments
 1053,ExportSTD,Export STD,Export standard file
 1055,ExportDWG,Export DWG,Export DWG file
 1057,RestartToUpdate,Restart to Update,Bottom-right toast shown while a downloaded update waits for the next app restart
+1058,SnapAmbientGrid,Grid,Snap marker label for the always-on ambient grid. It has no ribbon button: it cannot be switched off.
 2974120935,PROJECT_OPEN,Project Open,Project Open
 3662721928,PROJECT_SAVE,Project Save,Project Save
 3244059276,PROJECT_PRINT,Print,Print visible 2D page or 3D scene image to printer
@@ -295,6 +298,30 @@ WordID,ShortWordName,English,Comments
 2858667348,EXPORT_DWG,Export Dwg,Export Dwg
 4099564531,SCRIPT_PANNEL,Script Pannel,Script Pannel
 3271869050,SOFTWARE_UPDATE_CHECK,Check Update,Run the software-update check/download cycle right now
+2978692428,SNAP2D_TOGGLE,Object Snap,Master object-snap switch for the Page2D (F3). Ambient rounding stays on.
+1089496252,SNAP2D_END,Endpoint,Snap to segment / polyline / arc endpoints and polygon corners.
+3172963427,SNAP2D_MID,Midpoint,Snap to the midpoint of a bounded segment or arc sweep.
+4119334942,SNAP2D_CENTER,Center,Snap to the centre of a circle / arc / ellipse / polygon.
+3910828614,SNAP2D_QUADRANT,Quadrant,Snap to the 0/90/180/270 degree points of a curve in its own frame.
+3304394604,SNAP2D_INTERSECTION,Intersection,Snap to the crossing point of two curves inside the aperture.
+2326272722,SNAP2D_PERPENDICULAR,Perpendicular,Snap to the foot of the perpendicular dropped from the anchor.
+2250238832,SNAP2D_TANGENT,Tangent,Snap to the tangent point from the anchor onto a curve.
+3556175490,SNAP2D_NEAREST,Nearest,Snap to any point lying on the curve. Off by default: it drowns finer snaps.
+2368344485,SNAP2D_INSERTION,Insertion,Snap to the stored insertion point of a text record or asset insert.
+1742594271,SNAP2D_ORTHO,Ortho,Lock the direction from the anchor onto the nearest page axis (F8).
+2709470176,SNAP3D_TOGGLE,Object Snap,Master object-snap switch for the Scene3D (F3). Ambient rounding stays on.
+2432992757,SNAP3D_MEMBER_END,Member End,Snap to the axis ends of a line member / cylinder / pipe. Highest priority.
+2183241987,SNAP3D_MEMBER_MID,Member Mid,Snap to the axis midpoint of those same members.
+1415961681,SNAP3D_END,Endpoint,Snap to solid corners / cone apexes / base centres.
+2600194480,SNAP3D_EDGE_MID,Edge Mid,Snap to the midpoint of a solid's edge.
+2464129694,SNAP3D_FACE_CENTER,Face Center,Snap to the centroid of a planar face of a solid.
+2081998932,SNAP3D_CENTER,Center,Snap to the body centre of a solid or the centre of a circular face.
+3496196804,SNAP3D_QUADRANT,Quadrant,Snap to the axis extremes of spheres and the quadrants of circular faces.
+2875500550,SNAP3D_OBJECT_DEFINED,Object Point,Snap to the semantic points an intelligent object exports - piping connection faces.
+2562133884,SNAP3D_ORTHO,Ortho,Lock the direction from the anchor onto a work-plane axis or its normal (F8).
+2637136044,SNAP3D_WORKPLANE_X,Plane X,Resolve screen rays onto the plane whose normal is the X axis.
+3655861452,SNAP3D_WORKPLANE_Y,Plane Y,Resolve screen rays onto the plane whose normal is the Y axis.
+1841720498,SNAP3D_WORKPLANE_Z,Plane Z,Resolve screen rays onto the horizontal plane. The default.
 4294967295,INVALID,Invalid,Invalid
 1400,Properties,Properties,Right-side object properties pane.
 1401,PropObjectType,Object Type,Properties pane row label.

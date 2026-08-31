@@ -257,6 +257,41 @@ enum class Commands : uint32_t {
 
     SOFTWARE_UPDATE_CHECK = 3271869050, // Run the software-update check/download cycle right now.
 
+    /* Snapping (website/content/software/snapping.md). Two independent sets because the mask is
+    per world: a Page2D and a Scene3D are different containers with different drafting
+    conventions, and the kinds that matter differ too. Each of these is a LATCHED toggle - the
+    ribbon draws it highlighted while its bit is on - rather than the momentary buttons above.
+
+    The icons are shared where the meaning is (an End snap looks the same in both worlds), so
+    these rows name their icon explicitly instead of relying on the command-id lookup. */
+    SNAP2D_TOGGLE = 2978692428,        // Master object-snap switch for the Page2D (F3).
+    SNAP2D_END = 1089496252,
+    SNAP2D_MID = 3172963427,
+    SNAP2D_CENTER = 4119334942,
+    SNAP2D_QUADRANT = 3910828614,
+    SNAP2D_INTERSECTION = 3304394604,
+    SNAP2D_PERPENDICULAR = 2326272722,
+    SNAP2D_TANGENT = 2250238832,
+    SNAP2D_NEAREST = 3556175490,
+    SNAP2D_INSERTION = 2368344485,
+    SNAP2D_ORTHO = 1742594271,         // Persistent direction constraint (F8), not a mask bit.
+
+    SNAP3D_TOGGLE = 2709470176,        // Master object-snap switch for the Scene3D (F3).
+    SNAP3D_MEMBER_END = 2432992757,
+    SNAP3D_MEMBER_MID = 2183241987,
+    SNAP3D_END = 1415961681,
+    SNAP3D_EDGE_MID = 2600194480,
+    SNAP3D_FACE_CENTER = 2464129694,
+    SNAP3D_CENTER = 2081998932,
+    SNAP3D_QUADRANT = 3496196804,
+    SNAP3D_OBJECT_DEFINED = 2875500550,
+    SNAP3D_ORTHO = 2562133884,
+    // Work plane by its normal axis. Radio behaviour, not a toggle: a screen ray needs exactly one
+    // plane to resolve onto. Z (horizontal) is the default. Oblique is phase 2.
+    SNAP3D_WORKPLANE_X = 2637136044,
+    SNAP3D_WORKPLANE_Y = 3655861452,
+    SNAP3D_WORKPLANE_Z = 1841720498,
+
     // Add more future actions here with gaps if needed (e.g. 0x0000E000+)
 
     INVALID = 0xFFFFFFFF

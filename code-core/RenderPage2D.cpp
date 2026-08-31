@@ -103,26 +103,15 @@ bool Page2DCoordinateFromInput(DATASETTAB& tab, const ACTION_DETAILS& input,
 }
 
 /* The snapped form of the mapping above, and the one every creation / transform tool takes its point
-   from, so that a click lands on an exact value instead of on sixteen digits of float noise. Stage 1
-   of snapping.md resolves the ambient grid only.
+   from, so that a click lands on an exact value instead of on sixteen digits of float noise.
 
    Selection deliberately keeps calling the raw mapping (snapping.md locked decision 14):
    Cad2DHandleSelectionClick hit-tests with a small tolerance measured from the cursor, and a point
-   already pulled onto a grid intersection would select the wrong object. */
+   already pulled onto some object's endpoint would select the wrong object.
+
+   Defined further down, next to the record hit-testing it shares its geometry helpers with. */
 static bool Page2DSnappedPointFromInput(DATASETTAB& tab, const ACTION_DETAILS& input,
-    double& outXCU, double& outYCU) {
-    if (!Page2DCoordinateFromInput(tab, input, outXCU, outYCU)) return false;
-
-    const Cad2DViewState& view = Cad2DInputView(tab);
-    const double zoom = (std::max)(
-        (double)view.zoomPixelsPerCU.load(std::memory_order_acquire),
-        (double)kCad2DZoomMinPixelsPerCU);
-    const double step = Page2DAmbientStepCU(zoom);
-
-    outXCU = SnapToStep(outXCU, step);
-    outYCU = SnapToStep(outYCU, step);
-    return true;
-}
+    double& outXCU, double& outYCU, SnapResult* outResult = nullptr);
 
 void HandleLineCreationClick(DATASETTAB& tab, double xCU, double yCU) {
     TabCad2DStorage& storage = *tab.cad2d;
@@ -884,6 +873,660 @@ double DistPointToEllipse(double px, double py, double cx, double cy, double rx,
     return std::abs(r - 1.0) * (std::min)(sx, sy);
 }
 
+// --- Snapping (website/content/software/snapping.md) --------------------------------------------
+/* What this implements for the Page2D: the priority-then-distance resolution rule of section 5,
+the per-record snap point tables of section 7, the derived anchor-relative snaps of section 6, the
+ortho constraint of section 11, and the always-on ambient grid that guarantees every click lands on
+a defined value (locked decision 5).
+
+The broad phase is the linear scan section 8 knowingly ships: every record of the container is
+visited, but a bounding-box reject against the widest aperture means only the handful within reach
+of the cursor pay for snap point generation, and only those few enter the pairwise passes.
+Section 8's frame-to-frame coherence optimisation is NOT built. */
+
+constexpr double kSnapPi = 3.14159265358979323846;
+constexpr double kSnapTwoPi = 2.0 * kSnapPi;
+// Below this the two radii of a conic are the same number as far as double arithmetic cares, and
+// the closed-form circle solutions apply instead of the bounded numeric ones.
+constexpr double kSnapCircleEpsilon = 1.0e-9;
+
+/* Priorities the design document leaves open, because these points are DERIVED - against the
+anchor, or against a PAIR of records - rather than exported by one record (section 7 fixes only the
+exported ones). An intersection is as meaningful to a draughtsman as a midpoint, so it shares that
+level; a perpendicular foot or a tangent point is a construction aid the user aims at deliberately
+but which must not outrank a real vertex, so both sit below Quadrant. */
+constexpr uint8_t kSnapPriorityIntersection = 12;
+constexpr uint8_t kSnapPriorityPerpendicular = 10;
+constexpr uint8_t kSnapPriorityTangent = 10;
+
+/* Cap on the curves carried into the pairwise passes. Intersection is O(k^2) and the derived snaps
+are O(k), so an unbounded near-set would make a dense drawing cost more the more the user needs it
+to cost less. 48 curves within a 24 px aperture is already a congested area. */
+constexpr size_t kSnapMaxNearCurves = 48;
+
+struct Cad2DSnapSegment {
+    double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
+    uint64_t objectId = 0;
+};
+
+/* A circle, an ellipse, or an arc of either, in the parameterisation the curve shaders use
+(Shader2D_CurveVertex.hlsl): point(t) = center + R(rotation) * (rx cos t, ry sin t), and an arc
+keeps the CCW sweep from startAngle to endAngle in that same local frame. Matching the shader
+matters - a snap point the renderer does not draw on the curve is a bug the user sees. */
+struct Cad2DSnapConic {
+    double cx = 0.0, cy = 0.0, rx = 0.0, ry = 0.0, rotation = 0.0;
+    bool isArc = false;
+    double startAngle = 0.0, endAngle = 0.0;
+    uint64_t objectId = 0;
+
+    bool IsCircle() const { return std::abs(rx - ry) <= kSnapCircleEpsilon * (std::max)(std::abs(rx), 1.0); }
+    void PointAt(double t, double& x, double& y) const {
+        const double lx = rx * std::cos(t), ly = ry * std::sin(t);
+        const double c = std::cos(rotation), s = std::sin(rotation);
+        x = cx + lx * c - ly * s;
+        y = cy + lx * s + ly * c;
+    }
+    // d/dt of the above. Zero-length only for a degenerate conic, which never gets this far.
+    void TangentAt(double t, double& dx, double& dy) const {
+        const double lx = -rx * std::sin(t), ly = ry * std::cos(t);
+        const double c = std::cos(rotation), s = std::sin(rotation);
+        dx = lx * c - ly * s;
+        dy = lx * s + ly * c;
+    }
+    double ParameterOf(double x, double y) const {
+        const double sx = (std::max)(std::abs(rx), 1.0e-12);
+        const double sy = (std::max)(std::abs(ry), 1.0e-12);
+        const double dx = x - cx, dy = y - cy;
+        const double c = std::cos(rotation), s = std::sin(rotation);
+        return std::atan2((-dx * s + dy * c) / sy, (dx * c + dy * s) / sx);
+    }
+};
+
+double NormalizeAngleTwoPi(double angle) {
+    return std::fmod(std::fmod(angle, kSnapTwoPi) + kSnapTwoPi, kSnapTwoPi);
+}
+
+// The shader's AngleInCCWSweep, in double. A full circle / ellipse has no sweep and takes every t.
+bool SnapAngleInSweep(const Cad2DSnapConic& conic, double angle) {
+    if (!conic.isArc) return true;
+    double a = NormalizeAngleTwoPi(angle);
+    const double start = NormalizeAngleTwoPi(conic.startAngle);
+    double end = NormalizeAngleTwoPi(conic.endAngle);
+    if (end < start) end += kSnapTwoPi;
+    if (a < start) a += kSnapTwoPi;
+    return a <= end;
+}
+
+/* Accumulates candidates for one cursor position. Distances go in as SCREEN pixels - never world
+units, or the aperture would change meaning with the zoom (section 5).
+
+With ortho armed, a candidate is offered only if it lies ON the constrained ray: section 11 says the
+constraint fixes the direction and a higher-priority snap point on that ray still wins, which is
+exactly "filter, then resolve normally". */
+struct Cad2DSnapGatherer {
+    SnapCandidateSet* set = nullptr;
+    double cursorXCU = 0.0, cursorYCU = 0.0;
+    double zoom = 1.0;      // Pixels per ComputerUnit.
+    double reachCU = 0.0;   // Widest aperture in CU: the broad-phase reject radius.
+    bool orthoActive = false;
+    double anchorXCU = 0.0, anchorYCU = 0.0;
+    double orthoDirX = 0.0, orthoDirY = 0.0;  // Unit vector of the locked axis.
+
+    void Offer(double x, double y, SnapKind kind, uint8_t priority, uint64_t objectId,
+        uint64_t secondObjectId = 0) const {
+        if (orthoActive) {
+            // Perpendicular offset from the ray through the anchor; a point off the ray is not
+            // reachable while the direction is locked, so it is not a candidate at all.
+            const double vx = x - anchorXCU, vy = y - anchorYCU;
+            const double offRayCU = std::abs(vx * orthoDirY - vy * orthoDirX);
+            if (offRayCU * zoom > 1.0) return;   // One pixel of tolerance for float noise.
+        }
+        const double dx = x - cursorXCU, dy = y - cursorYCU;
+        SnapPoint point{};
+        point.x = x;
+        point.y = y;
+        point.objectId = objectId;
+        point.kind = kind;
+        point.priority = priority;
+        set->Consider(point, std::sqrt(dx * dx + dy * dy) * zoom, secondObjectId);
+    }
+
+    bool NearBox(double minX, double minY, double maxX, double maxY) const {
+        return cursorXCU >= minX - reachCU && cursorXCU <= maxX + reachCU &&
+            cursorYCU >= minY - reachCU && cursorYCU <= maxY + reachCU;
+    }
+};
+
+// The near-set the pairwise and anchor-relative passes work over.
+struct Cad2DSnapScene {
+    Cad2DSnapSegment segments[kSnapMaxNearCurves];
+    size_t segmentCount = 0;
+    Cad2DSnapConic conics[kSnapMaxNearCurves];
+    size_t conicCount = 0;
+
+    void AddSegment(double ax, double ay, double bx, double by, uint64_t objectId) {
+        if (segmentCount >= kSnapMaxNearCurves) return;
+        segments[segmentCount++] = { ax, ay, bx, by, objectId };
+    }
+    void AddConic(const Cad2DSnapConic& conic) {
+        if (conicCount >= kSnapMaxNearCurves) return;
+        conics[conicCount++] = conic;
+    }
+};
+
+// Nearest point on the SEGMENT (clamped): the Nearest snap must land on the drawn stroke.
+void ClosestPointOnSegment(double px, double py, const Cad2DSnapSegment& s,
+    double& outX, double& outY) {
+    const double vx = s.bx - s.ax, vy = s.by - s.ay;
+    const double len2 = vx * vx + vy * vy;
+    double t = len2 > 1.0e-18 ? ((px - s.ax) * vx + (py - s.ay) * vy) / len2 : 0.0;
+    t = std::clamp(t, 0.0, 1.0);
+    outX = s.ax + t * vx;
+    outY = s.ay + t * vy;
+}
+
+/* Roots of a smooth 2pi-periodic objective, found by coarse sampling for sign changes then
+bisection. This is the "bounded iteration" section 6 asks for on the ellipse: it cannot diverge and
+it cannot loop, unlike a raw Newton step near a curvature extreme. Circles never come here - they
+have closed forms above the call sites. */
+template <typename Objective>
+size_t SnapConicRoots(const Objective& objective, double outRoots[8]) {
+    constexpr int kSamples = 96;      // Comfortably above the 4 extrema an ellipse objective has.
+    constexpr int kBisections = 48;   // Takes a 2pi/96 bracket to well below double resolution.
+    size_t rootCount = 0;
+    double previousT = 0.0;
+    double previousValue = objective(0.0);
+    for (int i = 1; i <= kSamples && rootCount < 8; ++i) {
+        const double t = kSnapTwoPi * (double)i / (double)kSamples;
+        const double value = objective(t);
+        if (previousValue == 0.0) {
+            outRoots[rootCount++] = previousT;
+        } else if ((previousValue < 0.0) != (value < 0.0)) {
+            double lo = previousT, hi = t, loValue = previousValue;
+            for (int step = 0; step < kBisections; ++step) {
+                const double mid = 0.5 * (lo + hi);
+                const double midValue = objective(mid);
+                if ((loValue < 0.0) != (midValue < 0.0)) { hi = mid; }
+                else { lo = mid; loValue = midValue; }
+            }
+            outRoots[rootCount++] = 0.5 * (lo + hi);
+        }
+        previousT = t;
+        previousValue = value;
+    }
+    return rootCount;
+}
+
+// Points of `conic` whose tangent is perpendicular to the line from (px, py) - i.e. the feet of the
+// perpendicular from that point, which for the cursor are also the nearest points on the curve.
+size_t SnapConicPerpendicularFeet(const Cad2DSnapConic& conic, double px, double py,
+    double outX[8], double outY[8]) {
+    size_t count = 0;
+    if (conic.IsCircle()) {
+        const double dx = px - conic.cx, dy = py - conic.cy;
+        const double length = std::sqrt(dx * dx + dy * dy);
+        if (length <= 1.0e-12) return 0;   // At the centre every direction is perpendicular.
+        const double ux = dx / length, uy = dy / length;
+        outX[count] = conic.cx + conic.rx * ux; outY[count] = conic.cy + conic.rx * uy; ++count;
+        outX[count] = conic.cx - conic.rx * ux; outY[count] = conic.cy - conic.rx * uy; ++count;
+        return count;
+    }
+    double roots[8];
+    const size_t rootCount = SnapConicRoots([&](double t) {
+        double x = 0.0, y = 0.0, dx = 0.0, dy = 0.0;
+        conic.PointAt(t, x, y);
+        conic.TangentAt(t, dx, dy);
+        return (px - x) * dx + (py - y) * dy;   // Zero exactly where the offset is along the normal.
+    }, roots);
+    for (size_t i = 0; i < rootCount; ++i) conic.PointAt(roots[i], outX[i], outY[i]);
+    return rootCount;
+}
+
+// Points of `conic` where the line from (px, py) touches without crossing. Empty when the point is
+// inside the curve, where no tangent exists.
+size_t SnapConicTangentPoints(const Cad2DSnapConic& conic, double px, double py,
+    double outX[8], double outY[8]) {
+    if (conic.IsCircle()) {
+        const double dx = px - conic.cx, dy = py - conic.cy;
+        const double distance = std::sqrt(dx * dx + dy * dy);
+        const double radius = std::abs(conic.rx);
+        if (distance <= radius + 1.0e-12) return 0;   // Inside or on: no tangent from here.
+        const double cosA = radius / distance, sinA = std::sqrt((std::max)(0.0, 1.0 - cosA * cosA));
+        const double ux = dx / distance, uy = dy / distance;
+        outX[0] = conic.cx + radius * (ux * cosA - uy * sinA);
+        outY[0] = conic.cy + radius * (ux * sinA + uy * cosA);
+        outX[1] = conic.cx + radius * (ux * cosA + uy * sinA);
+        outY[1] = conic.cy + radius * (-ux * sinA + uy * cosA);
+        return 2;
+    }
+    double roots[8];
+    const size_t rootCount = SnapConicRoots([&](double t) {
+        double x = 0.0, y = 0.0, dx = 0.0, dy = 0.0;
+        conic.PointAt(t, x, y);
+        conic.TangentAt(t, dx, dy);
+        return (px - x) * dy - (py - y) * dx;   // Zero exactly where the chord is along the tangent.
+    }, roots);
+    for (size_t i = 0; i < rootCount; ++i) conic.PointAt(roots[i], outX[i], outY[i]);
+    return rootCount;
+}
+
+// Segment x segment, closed form. Parallel segments have no single crossing and are skipped.
+bool SnapSegmentIntersection(const Cad2DSnapSegment& a, const Cad2DSnapSegment& b,
+    double& outX, double& outY) {
+    const double r1x = a.bx - a.ax, r1y = a.by - a.ay;
+    const double r2x = b.bx - b.ax, r2y = b.by - b.ay;
+    const double denominator = r1x * r2y - r1y * r2x;
+    if (std::abs(denominator) <= 1.0e-15) return false;
+    const double t = ((b.ax - a.ax) * r2y - (b.ay - a.ay) * r2x) / denominator;
+    const double u = ((b.ax - a.ax) * r1y - (b.ay - a.ay) * r1x) / denominator;
+    // Both parameters must land inside their own segment: an "intersection" off the end of one of
+    // them is an apparent intersection, which is phase 2 and deliberately not offered here.
+    if (t < 0.0 || t > 1.0 || u < 0.0 || u > 1.0) return false;
+    outX = a.ax + t * r1x;
+    outY = a.ay + t * r1y;
+    return true;
+}
+
+/* Segment x conic, closed form: un-rotate and scale the segment into the frame where the conic is
+the unit circle, solve the quadratic there, then map the roots back. Exact for circles AND ellipses,
+which is why section 6's "line x circle/arc closed form" costs nothing extra here. Conic x conic
+stays deferred - that one really does need a solver. */
+size_t SnapSegmentConicIntersections(const Cad2DSnapSegment& segment, const Cad2DSnapConic& conic,
+    double outX[2], double outY[2]) {
+    const double rx = std::abs(conic.rx), ry = std::abs(conic.ry);
+    if (rx <= 1.0e-12 || ry <= 1.0e-12) return 0;
+    const double c = std::cos(conic.rotation), s = std::sin(conic.rotation);
+    auto toUnit = [&](double x, double y, double& ox, double& oy) {
+        const double dx = x - conic.cx, dy = y - conic.cy;
+        ox = (dx * c + dy * s) / rx;
+        oy = (-dx * s + dy * c) / ry;
+    };
+    double p0x = 0.0, p0y = 0.0, p1x = 0.0, p1y = 0.0;
+    toUnit(segment.ax, segment.ay, p0x, p0y);
+    toUnit(segment.bx, segment.by, p1x, p1y);
+
+    const double dx = p1x - p0x, dy = p1y - p0y;
+    const double a = dx * dx + dy * dy;
+    if (a <= 1.0e-18) return 0;
+    const double b = 2.0 * (p0x * dx + p0y * dy);
+    const double cc = p0x * p0x + p0y * p0y - 1.0;
+    const double discriminant = b * b - 4.0 * a * cc;
+    if (discriminant < 0.0) return 0;
+
+    const double root = std::sqrt(discriminant);
+    const double parameters[2] = { (-b - root) / (2.0 * a), (-b + root) / (2.0 * a) };
+    size_t count = 0;
+    for (double t : parameters) {
+        if (t < 0.0 || t > 1.0) continue;   // Off the drawn segment.
+        const double x = segment.ax + t * (segment.bx - segment.ax);
+        const double y = segment.ay + t * (segment.by - segment.ay);
+        if (!SnapAngleInSweep(conic, conic.ParameterOf(x, y))) continue;   // Off the drawn sweep.
+        outX[count] = x;
+        outY[count] = y;
+        ++count;
+    }
+    return count;
+}
+
+/* The anchor of whichever tool is running: the point every relative snap and both direction
+constraints are measured FROM (section 11). Each tool already holds one privately; this is the one
+place that knows where they all keep it. False when no tool has taken its first click yet, and the
+resolution loop then skips every relative snap because there is nothing to be relative to.
+
+polylineCreationPoints is guarded by cpuRecordsMutex, so this must be called with it held. */
+bool Cad2DSnapAnchorLocked(const TabCad2DStorage& s, double& outX, double& outY) {
+    auto take = [&](double x, double y) { outX = x; outY = y; return true; };
+    if (s.lineCreationMode.load(std::memory_order_acquire) &&
+        s.lineCreationHasPreviousPoint.load(std::memory_order_acquire)) {
+        return take(s.lineCreationPreviousXCU.load(std::memory_order_acquire),
+            s.lineCreationPreviousYCU.load(std::memory_order_acquire));
+    }
+    if (s.polylineCreationMode.load(std::memory_order_acquire) && !s.polylineCreationPoints.empty()) {
+        return take(s.polylineCreationPoints.back().x, s.polylineCreationPoints.back().y);
+    }
+    if (s.polygonCreationMode.load(std::memory_order_acquire) &&
+        s.polygonCreationHasCenter.load(std::memory_order_acquire)) {
+        return take(s.polygonCreationCenterXCU.load(std::memory_order_acquire),
+            s.polygonCreationCenterYCU.load(std::memory_order_acquire));
+    }
+    if (s.circleCreationMode.load(std::memory_order_acquire) &&
+        s.circleCreationHasCenter.load(std::memory_order_acquire)) {
+        return take(s.circleCreationCenterXCU.load(std::memory_order_acquire),
+            s.circleCreationCenterYCU.load(std::memory_order_acquire));
+    }
+    if (s.ellipseCreationMode.load(std::memory_order_acquire) &&
+        s.ellipseCreationStep.load(std::memory_order_acquire) > 0) {
+        return take(s.ellipseCreationCenterXCU.load(std::memory_order_acquire),
+            s.ellipseCreationCenterYCU.load(std::memory_order_acquire));
+    }
+    if (s.arcCreationMode.load(std::memory_order_acquire)) {
+        const uint32_t step = s.arcCreationStep.load(std::memory_order_acquire);
+        // Step 2 measures from the sweep start, not from the centre: that is the point the user is
+        // dragging away from.
+        if (step >= 2) {
+            return take(s.arcCreationStartXCU.load(std::memory_order_acquire),
+                s.arcCreationStartYCU.load(std::memory_order_acquire));
+        }
+        if (step == 1) {
+            return take(s.arcCreationCenterXCU.load(std::memory_order_acquire),
+                s.arcCreationCenterYCU.load(std::memory_order_acquire));
+        }
+    }
+    if (s.transform2DKind.load(std::memory_order_acquire) != 0) {
+        const uint32_t step = s.transform2DStep.load(std::memory_order_acquire);
+        if (step >= 2) {
+            return take(s.transform2DP2XCU.load(std::memory_order_acquire),
+                s.transform2DP2YCU.load(std::memory_order_acquire));
+        }
+        if (step == 1) {
+            return take(s.transform2DP1XCU.load(std::memory_order_acquire),
+                s.transform2DP1YCU.load(std::memory_order_acquire));
+        }
+    }
+    return false;
+}
+
+// Exports one container's snap points into the gatherer and collects its near curves. Caller holds
+// cpuRecordsMutex. The record tables are section 7's, priority for priority.
+void Cad2DGatherSnapPointsLocked(const TabCad2DStorage& s, uint64_t container,
+    const Cad2DSnapGatherer& g, Cad2DSnapScene& scene) {
+    auto wanted = [&](const META_DATA& r) { return !r.isDeleted && r.memoryIDContainer == container; };
+
+    for (const Cad2DLineRecordCPU& r : s.lineRecords) {
+        if (!wanted(r)) continue;
+        if (!g.NearBox((std::min)(r.x1, r.x2), (std::min)(r.y1, r.y2),
+            (std::max)(r.x1, r.x2), (std::max)(r.y1, r.y2))) continue;
+        g.Offer(r.x1, r.y1, SnapKind::End, 14, r.memoryID);
+        g.Offer(r.x2, r.y2, SnapKind::End, 14, r.memoryID);
+        g.Offer((r.x1 + r.x2) * 0.5, (r.y1 + r.y2) * 0.5, SnapKind::Mid, 12, r.memoryID);
+        scene.AddSegment(r.x1, r.y1, r.x2, r.y2, r.memoryID);
+    }
+
+    for (const Cad2DPolylineRecordCPU& r : s.polylineRecords) {
+        if (!wanted(r)) continue;
+        for (size_t i = 0; i < r.points.size(); ++i) {
+            const Cad2DPoint2D& p = r.points[i];
+            if (i + 1 < r.points.size()) {
+                const Cad2DPoint2D& q = r.points[i + 1];
+                if (g.NearBox((std::min)(p.x, q.x), (std::min)(p.y, q.y),
+                    (std::max)(p.x, q.x), (std::max)(p.y, q.y))) {
+                    g.Offer((p.x + q.x) * 0.5, (p.y + q.y) * 0.5, SnapKind::Mid, 12, r.memoryID);
+                    scene.AddSegment(p.x, p.y, q.x, q.y, r.memoryID);
+                }
+            }
+            if (g.NearBox(p.x, p.y, p.x, p.y)) g.Offer(p.x, p.y, SnapKind::End, 14, r.memoryID);
+        }
+    }
+
+    for (const Cad2DPolygonRecordCPU& r : s.polygonRecords) {
+        if (!wanted(r) || r.radius <= 0.0) continue;
+        if (!g.NearBox(r.centerX - r.radius, r.centerY - r.radius,
+            r.centerX + r.radius, r.centerY + r.radius)) continue;
+        g.Offer(r.centerX, r.centerY, SnapKind::Center, 13, r.memoryID);
+        // Same vertex parameterisation as the selection hit-test: sin drives x, cos drives y.
+        const uint32_t n = std::clamp(r.lineSegmentCount, 3u, 16u);
+        const double step = 360.0 / (double)n;
+        for (uint32_t i = 0; i < n; ++i) {
+            const double a0 = (r.rotationDegrees + step * i) * kSnapPi / 180.0;
+            const double a1 = (r.rotationDegrees + step * ((i + 1) % n)) * kSnapPi / 180.0;
+            const double x0 = r.centerX + std::sin(a0) * r.radius;
+            const double y0 = r.centerY + std::cos(a0) * r.radius;
+            const double x1 = r.centerX + std::sin(a1) * r.radius;
+            const double y1 = r.centerY + std::cos(a1) * r.radius;
+            g.Offer(x0, y0, SnapKind::End, 14, r.memoryID);
+            g.Offer((x0 + x1) * 0.5, (y0 + y1) * 0.5, SnapKind::Mid, 12, r.memoryID);
+            scene.AddSegment(x0, y0, x1, y1, r.memoryID);
+        }
+    }
+
+    // Circle, ellipse and arc share the conic parameterisation; only their sweep and radii differ.
+    auto addConic = [&](const Cad2DSnapConic& conic, bool exportEnds, double sx, double sy,
+        double ex, double ey) {
+        const double reachX = std::sqrt(conic.rx * conic.rx + conic.ry * conic.ry);
+        if (!g.NearBox(conic.cx - reachX, conic.cy - reachX, conic.cx + reachX, conic.cy + reachX)) {
+            return;
+        }
+        g.Offer(conic.cx, conic.cy, SnapKind::Center, 13, conic.objectId);
+        // The four quadrants are the 0/90/180/270 degree points of the curve's OWN rotated frame,
+        // which is what a vessel or flange drawing means by a quadrant.
+        for (int q = 0; q < 4; ++q) {
+            const double t = kSnapPi * 0.5 * (double)q;
+            if (!SnapAngleInSweep(conic, t)) continue;
+            double x = 0.0, y = 0.0;
+            conic.PointAt(t, x, y);
+            g.Offer(x, y, SnapKind::Quadrant, 11, conic.objectId);
+        }
+        if (exportEnds) {
+            g.Offer(sx, sy, SnapKind::End, 14, conic.objectId);
+            g.Offer(ex, ey, SnapKind::End, 14, conic.objectId);
+            // Midpoint of the sweep, walking CCW from start exactly as the shader fills it.
+            double start = NormalizeAngleTwoPi(conic.startAngle);
+            double end = NormalizeAngleTwoPi(conic.endAngle);
+            if (end < start) end += kSnapTwoPi;
+            double mx = 0.0, my = 0.0;
+            conic.PointAt(0.5 * (start + end), mx, my);
+            g.Offer(mx, my, SnapKind::Mid, 12, conic.objectId);
+        }
+        scene.AddConic(conic);
+    };
+
+    for (const Cad2DCircleRecordCPU& r : s.circleRecords) {
+        if (!wanted(r) || r.radius <= 0.0) continue;
+        Cad2DSnapConic conic{};
+        conic.cx = r.centerX; conic.cy = r.centerY;
+        conic.rx = r.radius;  conic.ry = r.radius;
+        conic.objectId = r.memoryID;
+        addConic(conic, false, 0.0, 0.0, 0.0, 0.0);
+    }
+    for (const Cad2DEllipseRecordCPU& r : s.ellipseRecords) {
+        if (!wanted(r) || r.radiusX <= 0.0 || r.radiusY <= 0.0) continue;
+        Cad2DSnapConic conic{};
+        conic.cx = r.centerX; conic.cy = r.centerY;
+        conic.rx = r.radiusX; conic.ry = r.radiusY;
+        conic.rotation = r.rotationRadians;
+        conic.objectId = r.memoryID;
+        addConic(conic, false, 0.0, 0.0, 0.0, 0.0);
+    }
+    for (const Cad2DArcRecordCPU& r : s.arcRecords) {
+        if (!wanted(r) || r.radiusX <= 0.0 || r.radiusY <= 0.0) continue;
+        Cad2DSnapConic conic{};
+        conic.cx = r.centerX; conic.cy = r.centerY;
+        conic.rx = r.radiusX; conic.ry = r.radiusY;
+        conic.rotation = r.rotationRadians;
+        conic.isArc = true;
+        conic.objectId = r.memoryID;
+        conic.startAngle = conic.ParameterOf(r.startX, r.startY);
+        conic.endAngle = conic.ParameterOf(r.endX, r.endY);
+        addConic(conic, true, r.startX, r.startY, r.endX, r.endY);
+    }
+
+    // Insertion points are nearly free: both records already carry an explicit one.
+    for (const Cad2DTextRecordCPU& r : s.textRecords) {
+        if (!wanted(r) || !g.NearBox(r.x, r.y, r.x, r.y)) continue;
+        g.Offer(r.x, r.y, SnapKind::Insertion, 13, r.memoryID);
+    }
+    for (const Cad2DAssetInsertRecordCPU& r : s.assetInsertRecords) {
+        if (r.isDeleted || r.memoryIDContainer != container) continue;
+        if (!g.NearBox(r.x, r.y, r.x, r.y)) continue;
+        g.Offer(r.x, r.y, SnapKind::Insertion, 13, r.memoryID);
+    }
+}
+
+// The passes that need more than one record, or need the anchor. Runs over the near-set only, so
+// its cost is bounded by kSnapMaxNearCurves regardless of drawing size.
+void Cad2DGatherDerivedSnaps(const Cad2DSnapScene& scene, const Cad2DSnapGatherer& g,
+    bool hasAnchor, double anchorX, double anchorY, uint32_t mask) {
+    if (SnapMaskHas(mask, SnapKind::Nearest)) {
+        for (size_t i = 0; i < scene.segmentCount; ++i) {
+            double x = 0.0, y = 0.0;
+            ClosestPointOnSegment(g.cursorXCU, g.cursorYCU, scene.segments[i], x, y);
+            g.Offer(x, y, SnapKind::Nearest, 6, scene.segments[i].objectId);
+        }
+        for (size_t i = 0; i < scene.conicCount; ++i) {
+            double xs[8], ys[8];
+            const size_t count = SnapConicPerpendicularFeet(scene.conics[i],
+                g.cursorXCU, g.cursorYCU, xs, ys);
+            for (size_t k = 0; k < count; ++k) {
+                if (!SnapAngleInSweep(scene.conics[i], scene.conics[i].ParameterOf(xs[k], ys[k]))) continue;
+                g.Offer(xs[k], ys[k], SnapKind::Nearest, 6, scene.conics[i].objectId);
+            }
+        }
+    }
+
+    if (SnapMaskHas(mask, SnapKind::Intersection)) {
+        for (size_t i = 0; i < scene.segmentCount; ++i) {
+            for (size_t j = i + 1; j < scene.segmentCount; ++j) {
+                if (scene.segments[i].objectId == scene.segments[j].objectId) continue;
+                double x = 0.0, y = 0.0;
+                if (!SnapSegmentIntersection(scene.segments[i], scene.segments[j], x, y)) continue;
+                g.Offer(x, y, SnapKind::Intersection, kSnapPriorityIntersection,
+                    scene.segments[i].objectId, scene.segments[j].objectId);
+            }
+            for (size_t j = 0; j < scene.conicCount; ++j) {
+                if (scene.segments[i].objectId == scene.conics[j].objectId) continue;
+                double xs[2], ys[2];
+                const size_t count = SnapSegmentConicIntersections(scene.segments[i],
+                    scene.conics[j], xs, ys);
+                for (size_t k = 0; k < count; ++k) {
+                    g.Offer(xs[k], ys[k], SnapKind::Intersection, kSnapPriorityIntersection,
+                        scene.segments[i].objectId, scene.conics[j].objectId);
+                }
+            }
+        }
+    }
+
+    // Everything below is measured FROM the anchor, so with no running tool there is nothing to do.
+    if (!hasAnchor) return;
+
+    if (SnapMaskHas(mask, SnapKind::Perpendicular)) {
+        for (size_t i = 0; i < scene.segmentCount; ++i) {
+            const Cad2DSnapSegment& s = scene.segments[i];
+            const double vx = s.bx - s.ax, vy = s.by - s.ay;
+            const double len2 = vx * vx + vy * vy;
+            if (len2 <= 1.0e-18) continue;
+            /* Deliberately NOT clamped to the segment: a perpendicular onto the extension of an
+            edge is a normal drafting move, and the aperture already rejects a foot the cursor is
+            nowhere near. */
+            const double t = ((anchorX - s.ax) * vx + (anchorY - s.ay) * vy) / len2;
+            g.Offer(s.ax + t * vx, s.ay + t * vy, SnapKind::Perpendicular,
+                kSnapPriorityPerpendicular, s.objectId);
+        }
+        for (size_t i = 0; i < scene.conicCount; ++i) {
+            double xs[8], ys[8];
+            const size_t count = SnapConicPerpendicularFeet(scene.conics[i], anchorX, anchorY, xs, ys);
+            for (size_t k = 0; k < count; ++k) {
+                if (!SnapAngleInSweep(scene.conics[i], scene.conics[i].ParameterOf(xs[k], ys[k]))) continue;
+                g.Offer(xs[k], ys[k], SnapKind::Perpendicular, kSnapPriorityPerpendicular,
+                    scene.conics[i].objectId);
+            }
+        }
+    }
+
+    if (SnapMaskHas(mask, SnapKind::Tangent)) {
+        for (size_t i = 0; i < scene.conicCount; ++i) {
+            double xs[8], ys[8];
+            const size_t count = SnapConicTangentPoints(scene.conics[i], anchorX, anchorY, xs, ys);
+            for (size_t k = 0; k < count; ++k) {
+                if (!SnapAngleInSweep(scene.conics[i], scene.conics[i].ParameterOf(xs[k], ys[k]))) continue;
+                g.Offer(xs[k], ys[k], SnapKind::Tangent, kSnapPriorityTangent,
+                    scene.conics[i].objectId);
+            }
+        }
+    }
+}
+
+/* Resolves the snap for one cursor pixel, and the single place both the click path and the hover
+path go through so a marker can never promise a point the click would not commit.
+
+Returns false only when the pixel is outside the 2D viewport. Otherwise it ALWAYS produces a point:
+the ambient grid is priority 0 with an unbounded aperture and cannot be switched off, which is what
+makes every click land on a round number rather than on float noise (locked decision 5). */
+bool Cad2DResolveSnap(DATASETTAB& tab, const ACTION_DETAILS& input,
+    double& outXCU, double& outYCU, SnapResult& outResult) {
+    outResult = SnapResult{};
+    double rawX = 0.0, rawY = 0.0;
+    if (!Page2DCoordinateFromInput(tab, input, rawX, rawY)) return false;
+
+    const Cad2DViewState& view = Cad2DInputView(tab);
+    const double zoom = (std::max)(
+        (double)view.zoomPixelsPerCU.load(std::memory_order_acquire),
+        (double)kCad2DZoomMinPixelsPerCU);
+    const double step = Page2DAmbientStepCU(zoom);
+    const double dpiScale = SnapDpiScaleForTab(tab);
+
+    /* The master switch clears the whole set rather than the mask, so switching it back on restores
+    the user's kind selection instead of a default (section 13). HELD Shift does the same thing
+    momentarily - indispensable in a congested area, and the exact inverse of snap-from-object. In
+    both cases the ambient grid survives, because it is not an object snap. */
+    const bool objectSnapsOn = tab.snapObjectEnabled2D.load(std::memory_order_acquire) &&
+        !tab.isShiftDown;
+    const uint32_t mask = objectSnapsOn ? tab.snapMask2D.load(std::memory_order_acquire) : 0u;
+
+    double anchorX = 0.0, anchorY = 0.0;
+    bool hasAnchor = false;
+    const uint64_t container = Cad2DFindTargetPage2DMemoryId(tab);
+
+    SnapCandidateSet candidates(mask, dpiScale);
+    Cad2DSnapGatherer gatherer{};
+    gatherer.set = &candidates;
+    gatherer.zoom = zoom;
+    gatherer.reachCU = kApertureMaxPx * dpiScale / zoom;
+    // Seeded here, not inside the block below: the ambient fallback reads these, and an empty page
+    // (or a tab with no 2D storage at all) would otherwise round every click onto the origin.
+    gatherer.cursorXCU = rawX;
+    gatherer.cursorYCU = rawY;
+
+    if (tab.cad2d && container != 0) {
+        TabCad2DStorage& s = *tab.cad2d;
+        Cad2DSnapScene scene;
+        {
+            std::lock_guard<std::mutex> lock(s.cpuRecordsMutex);
+            hasAnchor = Cad2DSnapAnchorLocked(s, anchorX, anchorY);
+
+            /* Ortho, before gathering, because it moves the point the candidates are measured
+            from: with the direction locked the user is pointing along the ray, not at the raw
+            pixel, and a candidate 30 px off the ray is not one they can reach (section 11). */
+            if (hasAnchor && tab.snapOrtho2D.load(std::memory_order_acquire)) {
+                const double dx = rawX - anchorX, dy = rawY - anchorY;
+                const bool alongX = std::abs(dx) >= std::abs(dy);
+                gatherer.orthoActive = true;
+                gatherer.anchorXCU = anchorX;
+                gatherer.anchorYCU = anchorY;
+                gatherer.orthoDirX = alongX ? 1.0 : 0.0;
+                gatherer.orthoDirY = alongX ? 0.0 : 1.0;
+                gatherer.cursorXCU = alongX ? rawX : anchorX;
+                gatherer.cursorYCU = alongX ? anchorY : rawY;
+            }
+
+            Cad2DGatherSnapPointsLocked(s, container, gatherer, scene);
+            Cad2DGatherDerivedSnaps(scene, gatherer, hasAnchor, anchorX, anchorY, mask);
+        }
+    }
+
+    if (candidates.Resolve(outResult)) {
+        outXCU = outResult.x;
+        outYCU = outResult.y;
+        return true;
+    }
+
+    /* Ambient grid: the guaranteed fallback. Under ortho the off-axis coordinate is the anchor's
+    exactly - rounding it would put a kink in a line the user asked to be straight - while the
+    along-axis one is still rounded, because an exact direction with a fuzzy length is half a
+    result (section 11). */
+    outXCU = SnapToStep(gatherer.cursorXCU, step);
+    outYCU = SnapToStep(gatherer.cursorYCU, step);
+    if (gatherer.orthoActive) {
+        if (gatherer.orthoDirX != 0.0) outYCU = anchorY;
+        else outXCU = anchorX;
+    }
+    outResult.hit = true;
+    outResult.kind = gatherer.orthoActive ? SnapKind::Ortho : SnapKind::AmbientGrid;
+    outResult.priority = 0;
+    outResult.x = outXCU;
+    outResult.y = outYCU;
+    return true;
+}
+
 void Cad2DHandleSelectionClick(DATASETTAB& tab, double xCU, double yCU) {
     if (!tab.cad2d) return;
     const uint64_t container = Cad2DFindTargetPage2DMemoryId(tab);
@@ -1390,7 +2033,71 @@ void HandleAssetInsertClick(DATASETTAB& tab, double xCU, double yCU) {
     if (definitionId == 0) return;
     Cad2DInstantiateAsset(tab, container, definitionId, xCU, yCU);
 }
+
+// Declared near Page2DCoordinateFromInput; see the contract there.
+static bool Page2DSnappedPointFromInput(DATASETTAB& tab, const ACTION_DETAILS& input,
+    double& outXCU, double& outYCU, SnapResult* outResult) {
+    SnapResult result{};
+    if (!Cad2DResolveSnap(tab, input, outXCU, outYCU, result)) return false;
+    if (outResult) *outResult = result;
+    return true;
+}
 } // namespace
+
+/* Publishes the hover marker for one cursor position (section 12). Engineering thread writes,
+render thread reads, one frame stale and one direction only - a click never reads this back.
+
+Resolution here is the SAME call the click makes, so the marker can never promise a point the click
+would not commit. Section 8's other mitigation is the caller's: this runs once per drain of the
+input queue, from the coalesced snapHoverInput, not once per mouse report. */
+void Cad2DPublishSnapHover(DATASETTAB& tab, const ACTION_DETAILS& input) {
+    if (!tab.cad2d || !Cad2DIsActivePage2D(tab) || tab.mouseMiddleDown) {
+        tab.snapHover.Clear();
+        return;
+    }
+
+    double xCU = 0.0, yCU = 0.0;
+    SnapResult result{};
+    if (!Cad2DResolveSnap(tab, input, xCU, yCU, result) || !result.hit) {
+        tab.snapHover.Clear();
+        return;
+    }
+
+    int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
+    if (!GetVisibleSceneViewportForTab(tab, viewportWidth, viewportHeight, viewportTop)) {
+        tab.snapHover.Clear();
+        return;
+    }
+    const Cad2DViewState& view = Cad2DInputView(tab);
+    const double zoom = (std::max)(
+        (double)view.zoomPixelsPerCU.load(std::memory_order_acquire),
+        (double)kCad2DZoomMinPixelsPerCU);
+    const double centerX = view.centerXCU.load(std::memory_order_acquire);
+    const double centerY = view.centerYCU.load(std::memory_order_acquire);
+    // The inverse of Page2DCoordinateFromInput: CU back to the client pixel the marker is drawn at.
+    const int screenX = (int)std::lround((xCU - centerX) * zoom + (double)viewportWidth * 0.5);
+    const int screenY = (int)std::lround((double)viewportTop + (double)viewportHeight * 0.5 -
+        (yCU - centerY) * zoom);
+
+    const uint8_t kind = static_cast<uint8_t>(result.kind);
+    // GetTickCount64 is the timestamp this codebase already shares between the engineering and
+    // render threads (SelectionState::lastNavInteractionMs). The label delay compares a value
+    // written here against one read there, so the two MUST be the same clock.
+    const uint64_t nowMs = GetTickCount64();
+    // The label delay times how long THIS point has been the answer, so a cursor sweeping a dense
+    // drawing does not strobe labels; sliding along one edge still shows one after 400 ms.
+    const bool sameAsBefore = tab.snapHover.valid.load(std::memory_order_acquire) &&
+        tab.snapHover.kind.load(std::memory_order_acquire) == kind &&
+        tab.snapHover.screenX.load(std::memory_order_acquire) == screenX &&
+        tab.snapHover.screenY.load(std::memory_order_acquire) == screenY;
+    if (!sameAsBefore) tab.snapHover.sinceMs.store(nowMs, std::memory_order_release);
+
+    tab.snapHover.screenX.store(screenX, std::memory_order_release);
+    tab.snapHover.screenY.store(screenY, std::memory_order_release);
+    tab.snapHover.kind.store(kind, std::memory_order_release);
+    tab.snapHover.subTabSlot.store(InputViewSlot(tab), std::memory_order_release);
+    tab.snapHover.valid.store(true, std::memory_order_release);
+}
 
 bool Cad2DReadPaneSelection(DATASETTAB& tab, Cad2DPaneSelection& out) {
     out = Cad2DPaneSelection{};
@@ -1650,6 +2357,20 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
 
     switch (input.actionType) {
     case ACTION_TYPE::KEYDOWN:
+        /* The industry-standard snapping function keys, so muscle memory transfers (section 13).
+        F3 is the master object-snap switch and F8 is ortho; the ambient grid has no key because it
+        has no off state. Checked before the text-creation swallow below - a user typing a text
+        string still expects F8 to mean ortho, not a character. */
+        if (input.x == VK_F3) {
+            const bool wasOn = tab.snapObjectEnabled2D.load(std::memory_order_acquire);
+            tab.snapObjectEnabled2D.store(!wasOn, std::memory_order_release);
+            return true;
+        }
+        if (input.x == VK_F8) {
+            const bool wasOn = tab.snapOrtho2D.load(std::memory_order_acquire);
+            tab.snapOrtho2D.store(!wasOn, std::memory_order_release);
+            return true;
+        }
         if (input.x == VK_ESCAPE &&
             (tab.cad2d->lineCreationMode.load(std::memory_order_acquire) ||
                 tab.cad2d->polylineCreationMode.load(std::memory_order_acquire) ||
@@ -1692,6 +2413,10 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
         }
         tab.lastMouseX = input.x;
         tab.lastMouseY = input.y;
+        // Coalesced, not resolved here: a 1000 Hz mouse would otherwise run a full candidate
+        // scan per report for a marker the screen redraws 60 times a second (section 8).
+        tab.snapHoverPending = true;
+        tab.snapHoverInput = input;
         return true;
     }
     case ACTION_TYPE::MOUSEWHEEL:
@@ -1716,6 +2441,10 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
             view.centerYCU.store(cursorY - offsetY / (double)nextZoom, std::memory_order_release);
         }
         view.zoomPixelsPerCU.store(nextZoom, std::memory_order_release);
+        // The ambient step is derived from the zoom, so a wheel notch moves the marker even though
+        // the cursor did not.
+        tab.snapHoverPending = true;
+        tab.snapHoverInput = input;
         return true;
     }
     case ACTION_TYPE::MBUTTONDOWN:
@@ -1806,6 +2535,9 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
         tab.mouseLeftDown = false;
         tab.mouseMiddleDown = false;
         tab.mouseRightDown = false;
+        // Lost capture means the cursor is no longer ours to reason about; a marker left behind
+        // would sit on the drawing claiming a snap that is not being offered.
+        tab.snapHover.Clear();
         return true;
     default:
         break;

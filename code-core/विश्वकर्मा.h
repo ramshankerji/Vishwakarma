@@ -13,6 +13,7 @@
 #include "CommonNamedNumbers.h"
 #include "DataTreeView.h"
 #include "डेटा.h"
+#include "Snap.h"
 
 #pragma once //It prevents multiple inclusions of the same header file.
 
@@ -96,7 +97,37 @@ struct Viewport {
     int16_t subTabSlot = -1;    // SubTab whose content this Viewport draws. -1 = unused slot.
     CameraState camera;         // Scene3D view state.
     Cad2DViewState page2DView;  // Page2D pan/zoom view state.
+    /* The plane a 3D screen ray resolves onto (snapping.md section 9). It lives HERE, beside the
+    camera, for the same reason the camera does: a view will eventually host several Scene3D
+    containers at once, so the plane cannot belong to any one of them. Working context, never
+    written to file - a reassigned slot resets it to the default horizontal plane.
+
+    Note the deliberate split: the snap MASK is per tab (persistent drafting convention), the work
+    PLANE is per view (transient working context). Do not conflate them. */
+    SnapWorkPlane workPlane;
 };
+
+/* One frame's worth of snap hover, published by the engineering thread and read by the render
+thread each frame under the same lock-free, one-frame-stale contract as CameraState. Plain data,
+one direction only: a CLICK never reads this back - the chokepoint re-resolves synchronously from
+the click's own pixel, so the committed coordinate is never stale (snapping.md section 12). */
+struct SnapHoverState {
+    std::atomic<bool> valid{ false };
+    std::atomic<int32_t> screenX{ 0 };   // Client pixels of the snapped point, for the marker.
+    std::atomic<int32_t> screenY{ 0 };
+    std::atomic<uint8_t> kind{ 0 };      // SnapKind that produced it; also the marker glyph selector.
+    std::atomic<int32_t> subTabSlot{ -1 };  // The view it belongs to; other views must not draw it.
+    // Steady-clock milliseconds at which this point first became the hover result. The text label
+    // appears only after kSnapHoverLabelDelayMs, so a cursor sweeping a dense drawing does not
+    // strobe labels (snapping.md section 16).
+    std::atomic<uint64_t> sinceMs{ 0 };
+
+    void Clear() {
+        valid.store(false, std::memory_order_release);
+        subTabSlot.store(-1, std::memory_order_release);
+    }
+};
+constexpr uint64_t kSnapHoverLabelDelayMs = 400;
 
 // Lifecycle of one fixed sub-tab slot inside DATASETTAB.
 // FREE -> OPEN -> PENDING_GPU_RELEASE -> FREE. A closed slot is only reused after every monitor's
@@ -194,6 +225,41 @@ struct DATASETTAB {
     bool zoomWindowHasFirstCorner = false;
     int zoomWindowFirstX = 0;
     int zoomWindowFirstY = 0;
+
+    /* SNAPPING SETTINGS (website/content/software/snapping.md sections 12 and 13).
+
+    Per TAB and hot: resolution runs at input rate on the engineering thread and the ribbon reads
+    the latched state on the render thread every frame, so these have to be plain atomics rather
+    than a locked scan through storageLogicalObjects. They are working state, not persisted -
+    section 12's file/container storage is a later stage.
+
+    TWO masks, not one, because the two worlds genuinely disagree: an Endpoint means a polyline
+    vertex in a drawing and a cuboid corner in a model, and a Member End has no 2D meaning at all.
+    The ribbon reflects that with separate Snap2D and Snap3D subgroups writing separate masks. */
+    std::atomic<uint32_t> snapMask2D{ kDefaultSnapMask2D };
+    std::atomic<uint32_t> snapMask3D{ kDefaultSnapMask3D };
+    /* The F3 master switch. OFF disables every OBJECT snap and leaves the ambient grid running,
+    which is why it is separate from the mask rather than a "clear every bit" operation: turning it
+    back on must restore the user's kind selection, not a default. */
+    std::atomic<bool> snapObjectEnabled2D{ true };
+    std::atomic<bool> snapObjectEnabled3D{ true };
+    /* Ortho (F8). Mode state rather than a mask bit by section 12 - it constrains the DIRECTION
+    from the anchor, it does not produce a candidate point of its own. */
+    std::atomic<bool> snapOrtho2D{ false };
+    std::atomic<bool> snapOrtho3D{ false };
+    /* The "from" point every 3D direction constraint is measured against (section 11). The 2D tools
+    each already hold their own anchor privately and Cad2DSnapAnchorLocked reads whichever is
+    running; 3D placement had nowhere to keep one, so it keeps it here. Engineering-thread only. */
+    bool snapHasPlacementAnchor3D = false;
+    DirectX::XMFLOAT3 snapPlacementAnchor3D{};
+    /* Coalesced hover request (section 8). A high-polling-rate mouse delivers MOUSEMOVE at up to
+    1000 Hz and resolving each one buys nothing the screen can show, so the input handlers only
+    record the LATEST cursor position here and the drain loop resolves it once afterwards.
+    Engineering-thread only. */
+    bool snapHoverPending = false;
+    ACTION_DETAILS snapHoverInput{};
+    // Hover marker, engineering -> render, one direction. See SnapHoverState.
+    SnapHoverState snapHover;
     std::unique_ptr<std::mutex> storageObjectsMutex;
 
 	PlatformTabGpu dx; // Per-tab GPU resources (DX12/Vulkan/Metal via GPUPlatformSelector.h).
@@ -421,6 +487,11 @@ void विश्वकर्मा(uint64_t tabID);
 // for the drop shadow). Called once per tab-host window at creation and after DPI changes (tabs.md).
 void ApplyFramelessFrame(HWND hWnd);
 bool GetVisibleSceneViewportForTab(const DATASETTAB& tab, int& widthPx, int& heightPx, int& topPx);
+/* Windows' scale factor for the monitor showing this tab's input view (1.0 at 96 DPI). Snap
+apertures are quoted in LOGICAL pixels, so on a 4K panel a fixed device-pixel aperture would feel
+half the size (snapping.md section 5). Resolved through the same window walk as the viewport above;
+returns 1.0 when no window can be resolved. */
+double SnapDpiScaleForTab(const DATASETTAB& tab);
 
 // Lock-free scan of the published sub-tab list. Returns the slot index, or -1 when not open.
 int FindPublishedSubTabSlot(const DATASETTAB& tab, uint64_t containerMemoryId);

@@ -9,6 +9,11 @@
     VISHWAKARMA_SVG_ICON(11u, "icon_11_window_maximize.svg") \
     VISHWAKARMA_SVG_ICON(12u, "icon_12_window_restore.svg") \
     VISHWAKARMA_SVG_ICON(13u, "icon_13_window_close.svg") \
+    VISHWAKARMA_SVG_ICON(1335776950u, "icon_1335776950_snap_quadrant.svg") \
+    VISHWAKARMA_SVG_ICON(1365587230u, "icon_1365587230_snap_member_mid.svg") \
+    VISHWAKARMA_SVG_ICON(1809721117u, "icon_1809721117_snap_ambient_grid.svg") \
+    VISHWAKARMA_SVG_ICON(1856258841u, "icon_1856258841_snap_toggle_object.svg") \
+    VISHWAKARMA_SVG_ICON(1979457375u, "icon_1979457375_snap_workplane_y.svg") \
     VISHWAKARMA_SVG_ICON(2162683985u, "icon_2162683985_line_element_column.svg") \
     VISHWAKARMA_SVG_ICON(2198107607u, "icon_2198107607_select_lines.svg") \
     VISHWAKARMA_SVG_ICON(2209549389u, "icon_2209549389_import_std.svg") \
@@ -17,6 +22,7 @@
     VISHWAKARMA_SVG_ICON(2230905462u, "icon_2230905462_edit_offset.svg") \
     VISHWAKARMA_SVG_ICON(2256630789u, "icon_2256630789_search_advanced.svg") \
     VISHWAKARMA_SVG_ICON(2269955686u, "icon_2269955686_analysis_time_history.svg") \
+    VISHWAKARMA_SVG_ICON(2270809863u, "icon_2270809863_snap_end.svg") \
     VISHWAKARMA_SVG_ICON(2281954899u, "icon_2281954899_sequence_play.svg") \
     VISHWAKARMA_SVG_ICON(2294808815u, "icon_2294808815_rf_surface_unlink.svg") \
     VISHWAKARMA_SVG_ICON(2296024348u, "icon_2296024348_create_circle.svg") \
@@ -26,6 +32,7 @@
     VISHWAKARMA_SVG_ICON(2358406449u, "icon_2358406449_export_std.svg") \
     VISHWAKARMA_SVG_ICON(2359984007u, "icon_2359984007_rf_single.svg") \
     VISHWAKARMA_SVG_ICON(2361768401u, "icon_2361768401_load_uniform.svg") \
+    VISHWAKARMA_SVG_ICON(2362355165u, "icon_2362355165_snap_from_object.svg") \
     VISHWAKARMA_SVG_ICON(2362776882u, "icon_2362776882_hide_reset.svg") \
     VISHWAKARMA_SVG_ICON(2377130800u, "icon_2377130800_edit_extend_3d.svg") \
     VISHWAKARMA_SVG_ICON(2388485190u, "icon_2388485190_import_cii.svg") \
@@ -41,6 +48,7 @@
     VISHWAKARMA_SVG_ICON(2533554672u, "icon_2533554672_create_nurbs_3d.svg") \
     VISHWAKARMA_SVG_ICON(2543903424u, "icon_2543903424_select_reinforcement.svg") \
     VISHWAKARMA_SVG_ICON(2574979154u, "icon_2574979154_load_trapezoidal.svg") \
+    VISHWAKARMA_SVG_ICON(2576371696u, "icon_2576371696_snap_edge_mid.svg") \
     VISHWAKARMA_SVG_ICON(2583278476u, "icon_2583278476_create_pyramid.svg") \
     VISHWAKARMA_SVG_ICON(2585159700u, "icon_2585159700_create_ellipsoid.svg") \
     VISHWAKARMA_SVG_ICON(2618728952u, "icon_2618728952_create_scene_3d.svg") \
@@ -64,6 +72,7 @@
     VISHWAKARMA_SVG_ICON(2731961674u, "icon_2731961674_code_civil_eurocode2.svg") \
     VISHWAKARMA_SVG_ICON(2734326432u, "icon_2734326432_line_element_wall.svg") \
     VISHWAKARMA_SVG_ICON(2748113010u, "icon_2748113010_hide_unselected.svg") \
+    VISHWAKARMA_SVG_ICON(2751539841u, "icon_2751539841_snap_parallel.svg") \
     VISHWAKARMA_SVG_ICON(2752552705u, "icon_2752552705_create_polyline.svg") \
     VISHWAKARMA_SVG_ICON(2767081087u, "icon_2767081087_create_polygon.svg") \
     VISHWAKARMA_SVG_ICON(2769288455u, "icon_2769288455_project_close.svg") \
@@ -73,6 +82,7 @@
     VISHWAKARMA_SVG_ICON(2783888025u, "icon_2783888025_rf_lap.svg") \
     VISHWAKARMA_SVG_ICON(2785135817u, "icon_2785135817_create_line.svg") \
     VISHWAKARMA_SVG_ICON(2801144044u, "icon_2801144044_create_hvessel_2d.svg") \
+    VISHWAKARMA_SVG_ICON(2806356305u, "icon_2806356305_snap_workplane_oblique.svg") \
     VISHWAKARMA_SVG_ICON(2808181540u, "icon_2808181540_code_civil_is3370.svg") \
     VISHWAKARMA_SVG_ICON(2826420556u, "icon_2826420556_view_projection.svg") \
     VISHWAKARMA_SVG_ICON(2840747433u, "icon_2840747433_create_pipe_2d.svg") \
@@ -85,12 +95,14 @@
     VISHWAKARMA_SVG_ICON(2860235357u, "icon_2860235357_create_nurbs.svg") \
     VISHWAKARMA_SVG_ICON(2877273443u, "icon_2877273443_split.svg") \
     VISHWAKARMA_SVG_ICON(2887127434u, "icon_2887127434_grating_poly.svg") \
+    VISHWAKARMA_SVG_ICON(2894911376u, "icon_2894911376_snap_nearest.svg") \
     VISHWAKARMA_SVG_ICON(2896880030u, "icon_2896880030_instrument_pg.svg") \
     VISHWAKARMA_SVG_ICON(2900670112u, "icon_2900670112_edge_fillet.svg") \
     VISHWAKARMA_SVG_ICON(2901120378u, "icon_2901120378_general_sheet.svg") \
     VISHWAKARMA_SVG_ICON(2914702845u, "icon_2914702845_zoom_max.svg") \
     VISHWAKARMA_SVG_ICON(2918679699u, "icon_2918679699_edit_chamfer.svg") \
     VISHWAKARMA_SVG_ICON(2938400871u, "icon_2938400871_general_tables.svg") \
+    VISHWAKARMA_SVG_ICON(2953131477u, "icon_2953131477_snap_mid.svg") \
     VISHWAKARMA_SVG_ICON(2961511288u, "icon_2961511288_support_roller.svg") \
     VISHWAKARMA_SVG_ICON(2974120935u, "icon_2974120935_project_open.svg") \
     VISHWAKARMA_SVG_ICON(3011627523u, "icon_3011627523_create_exchanger_3d.svg") \
@@ -106,10 +118,12 @@
     VISHWAKARMA_SVG_ICON(3133001911u, "icon_3133001911_support_pinned.svg") \
     VISHWAKARMA_SVG_ICON(3149027561u, "icon_3149027561_toggle_auto_random.svg") \
     VISHWAKARMA_SVG_ICON(3150246791u, "icon_3150246791_properties_pane.svg") \
+    VISHWAKARMA_SVG_ICON(3153611554u, "icon_3153611554_snap_workplane_x.svg") \
     VISHWAKARMA_SVG_ICON(3161340767u, "icon_3161340767_edit_fillet.svg") \
     VISHWAKARMA_SVG_ICON(3165697720u, "icon_3165697720_folder_visibility.svg") \
     VISHWAKARMA_SVG_ICON(3177379064u, "icon_3177379064_view_bottom.svg") \
     VISHWAKARMA_SVG_ICON(3190847058u, "icon_3190847058_hole_rectangular.svg") \
+    VISHWAKARMA_SVG_ICON(3204314225u, "icon_3204314225_snap_grid_object.svg") \
     VISHWAKARMA_SVG_ICON(3207100675u, "icon_3207100675_select_templates.svg") \
     VISHWAKARMA_SVG_ICON(3213983172u, "icon_3213983172_zoom_window.svg") \
     VISHWAKARMA_SVG_ICON(3217166961u, "icon_3217166961_code_civil_is13920.svg") \
@@ -127,6 +141,8 @@
     VISHWAKARMA_SVG_ICON(3379297168u, "icon_3379297168_view_rotate.svg") \
     VISHWAKARMA_SVG_ICON(3404812258u, "icon_3404812258_code_civil_is456_wsd.svg") \
     VISHWAKARMA_SVG_ICON(3408573092u, "icon_3408573092_create_temp_clip.svg") \
+    VISHWAKARMA_SVG_ICON(3414447954u, "icon_3414447954_snap_intersection.svg") \
+    VISHWAKARMA_SVG_ICON(3429703349u, "icon_3429703349_snap_text_bounds.svg") \
     VISHWAKARMA_SVG_ICON(3432407186u, "icon_3432407186_create_aircooler_2d.svg") \
     VISHWAKARMA_SVG_ICON(3448217138u, "icon_3448217138_create_torus.svg") \
     VISHWAKARMA_SVG_ICON(3454235754u, "icon_3454235754_view_3d_type.svg") \
@@ -167,6 +183,7 @@
     VISHWAKARMA_SVG_ICON(3707454780u, "icon_3707454780_search_next.svg") \
     VISHWAKARMA_SVG_ICON(3714475761u, "icon_3714475761_analysis_3d_frame.svg") \
     VISHWAKARMA_SVG_ICON(3719457408u, "icon_3719457408_load_point.svg") \
+    VISHWAKARMA_SVG_ICON(3725387458u, "icon_3725387458_snap_member_end.svg") \
     VISHWAKARMA_SVG_ICON(3736434677u, "icon_3736434677_general_isometric.svg") \
     VISHWAKARMA_SVG_ICON(3753813637u, "icon_3753813637_code_civil_eurocode3.svg") \
     VISHWAKARMA_SVG_ICON(3769120672u, "icon_3769120672_view_top.svg") \
@@ -179,12 +196,15 @@
     VISHWAKARMA_SVG_ICON(3864828924u, "icon_3864828924_concrete_slab_rect.svg") \
     VISHWAKARMA_SVG_ICON(3878858330u, "icon_3878858330_cutby_polygon.svg") \
     VISHWAKARMA_SVG_ICON(3882203228u, "icon_3882203228_view_back.svg") \
+    VISHWAKARMA_SVG_ICON(3892871195u, "icon_3892871195_snap_center.svg") \
     VISHWAKARMA_SVG_ICON(3899852618u, "icon_3899852618_analysis_thermal.svg") \
     VISHWAKARMA_SVG_ICON(3902390851u, "icon_3902390851_edit_extend.svg") \
+    VISHWAKARMA_SVG_ICON(3927847435u, "icon_3927847435_snap_insertion.svg") \
     VISHWAKARMA_SVG_ICON(3930566817u, "icon_3930566817_create_pump_3d.svg") \
     VISHWAKARMA_SVG_ICON(3930718075u, "icon_3930718075_line_element_beam.svg") \
     VISHWAKARMA_SVG_ICON(3932640333u, "icon_3932640333_create_vvessel_2d.svg") \
     VISHWAKARMA_SVG_ICON(3937232917u, "icon_3937232917_edit_move.svg") \
+    VISHWAKARMA_SVG_ICON(3944222408u, "icon_3944222408_snap_ortho.svg") \
     VISHWAKARMA_SVG_ICON(3950482947u, "icon_3950482947_VishwakaramText.svg") \
     VISHWAKARMA_SVG_ICON(3988350268u, "icon_3988350268_concrete_slab_poly.svg") \
     VISHWAKARMA_SVG_ICON(3996694081u, "icon_3996694081_create_elbow.svg") \
@@ -196,6 +216,7 @@
     VISHWAKARMA_SVG_ICON(4084964772u, "icon_4084964772_create_radius.svg") \
     VISHWAKARMA_SVG_ICON(4085157423u, "icon_4085157423_create_instrument_2d.svg") \
     VISHWAKARMA_SVG_ICON(4099564531u, "icon_4099564531_script_pannel.svg") \
+    VISHWAKARMA_SVG_ICON(4127554659u, "icon_4127554659_snap_object_defined.svg") \
     VISHWAKARMA_SVG_ICON(4138882481u, "icon_4138882481_create_arc.svg") \
     VISHWAKARMA_SVG_ICON(4139180641u, "icon_4139180641_select_anything.svg") \
     VISHWAKARMA_SVG_ICON(4152948280u, "icon_4152948280_create_text.svg") \
@@ -206,7 +227,11 @@
     VISHWAKARMA_SVG_ICON(4184007375u, "icon_4184007375_create_t.svg") \
     VISHWAKARMA_SVG_ICON(4186429141u, "icon_4186429141_view_left.svg") \
     VISHWAKARMA_SVG_ICON(4194619133u, "icon_4194619133_create_cone.svg") \
+    VISHWAKARMA_SVG_ICON(4199964416u, "icon_4199964416_snap_perpendicular.svg") \
     VISHWAKARMA_SVG_ICON(4206004955u, "icon_4206004955_create_structure.svg") \
     VISHWAKARMA_SVG_ICON(4219872277u, "icon_4219872277_select_piping.svg") \
+    VISHWAKARMA_SVG_ICON(4239757343u, "icon_4239757343_snap_tangent.svg") \
+    VISHWAKARMA_SVG_ICON(4265671677u, "icon_4265671677_snap_workplane_z.svg") \
     VISHWAKARMA_SVG_ICON(4270694089u, "icon_4270694089_bom_rates.svg") \
+    VISHWAKARMA_SVG_ICON(4274121661u, "icon_4274121661_snap_face_center.svg") \
     VISHWAKARMA_SVG_ICON(4290228579u, "icon_4290228579_general_drawing.svg")

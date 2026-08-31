@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Ortho (F8): lock the vector from the anchor onto the nearest work-plane axis. -->
+    <circle cx="16" cy="48" r="4" fill="#2D3436" stroke="none" />
+    <path d="M16 48L44 20" stroke-dasharray="5 5" stroke-width="3" />
+    <path d="M16 48H54M16 48V10" stroke="#0984E3" />
+    <path d="M46 40L54 48L46 56M8 18L16 10L24 18" stroke="#0984E3" />
+  </g>
+</svg>

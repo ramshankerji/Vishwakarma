@@ -140,8 +140,20 @@ enum class ACTION_TYPE : uint16_t { // Specifying uint16_t ensures that it is of
     // 10M plan Step 6). objectId = the Scene3D being added / removed; no geometry is copied - the
     // set is a list of container IDs the renderers iterate.
     ADD_CONTAINER_TO_SUBTAB = 30034,
-    REMOVE_CONTAINER_FROM_SUBTAB = 30035
+    REMOVE_CONTAINER_FROM_SUBTAB = 30035,
+    /* Snapping (website/content/software/snapping.md). One parameterised todo per world rather
+    than one per snap kind: the ribbon has two dozen snap toggles and they all do the same thing to
+    a different bit. x = SnapKind value, or kSnapTodoMasterSwitch / kSnapTodoOrtho for the two
+    pieces of mode state that are deliberately NOT mask bits (section 12). */
+    SNAP_TOGGLE_KIND2D = 30036,
+    SNAP_TOGGLE_KIND3D = 30037,
+    SNAP_SET_WORKPLANE = 30038   // x = kWorkPlaneAxis{X,Y,Z}. Radio, not a toggle.
 };
+
+/* x values of SNAP_TOGGLE_KIND2D / SNAP_TOGGLE_KIND3D that are not SnapKind values. Chosen above
+every SnapKind so they can never collide with one. */
+constexpr int kSnapTodoMasterSwitch = 100;  // F3: all object snaps off, ambient rounding stays.
+constexpr int kSnapTodoOrtho = 101;         // F8: lock onto the nearest axis from the anchor.
 
 struct ACTION_DETAILS_OLD {
     ACTION_TYPE actionType;

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Face Center: centroid of a planar face of a solid. -->
+    <path d="M10 22L32 14L54 22L32 30Z" />
+    <path d="M10 22V42L32 50V30" />
+    <path d="M54 22V42L32 50" />
+    <path d="M10 22L32 14L54 22L32 30Z" fill="#0984E3" fill-opacity="0.18" stroke="none" />
+    <circle cx="32" cy="22" r="6" stroke="#0984E3" />
+  </g>
+</svg>

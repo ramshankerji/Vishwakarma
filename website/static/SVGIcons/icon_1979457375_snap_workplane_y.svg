@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Work plane with normal Y: the vertical plane spanned by X and Z. -->
+    <path d="M22 11L46 25L46 57L22 43Z" fill="#0984E3" fill-opacity="0.15" />
+    <path d="M34 34L13 46" stroke="#0984E3" />
+    <path d="M19 39L13 46L22 45" stroke="#0984E3" />
+  </g>
+</svg>

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Intersection: crossing of two curves both inside the aperture. X marker. -->
+    <!-- Line x arc is closed form and ships in phase 1; conic x conic is deferred. -->
+    <path d="M4 32H58" />
+    <circle cx="42" cy="40" r="16" />
+    <path d="M19 23L37 41M37 23L19 41" stroke="#0984E3" />
+  </g>
+</svg>

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Nearest: any point lying on the curve itself. Hourglass marker. -->
+    <path d="M10 50L54 18" />
+    <circle cx="10" cy="50" r="3" fill="#2D3436" stroke="none" />
+    <circle cx="54" cy="18" r="3" fill="#2D3436" stroke="none" />
+    <path d="M23 26H41L23 42H41Z" stroke="#0984E3" />
+  </g>
+</svg>

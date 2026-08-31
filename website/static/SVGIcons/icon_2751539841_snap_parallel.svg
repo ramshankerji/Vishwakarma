@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Parallel: direction from the anchor locked parallel to a hovered reference line. -->
+    <path d="M8 44L36 12" />
+    <circle cx="22" cy="56" r="4" fill="#2D3436" stroke="none" />
+    <path d="M22 56L50 24" stroke="#0984E3" />
+    <path d="M40 54l6-8M48 54l6-8" stroke="#0984E3" stroke-width="3" />
+  </g>
+</svg>

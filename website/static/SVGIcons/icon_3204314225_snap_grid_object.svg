@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Grid object: an explicitly placed building/column grid (F9). -->
+    <path d="M24 16v40M44 16v40M14 26h44M14 46h44" />
+    <circle cx="24" cy="9" r="6" />
+    <circle cx="44" cy="9" r="6" />
+    <circle cx="7" cy="26" r="6" />
+    <circle cx="7" cy="46" r="6" />
+    <rect x="17" y="19" width="14" height="14" stroke="#0984E3" />
+  </g>
+</svg>

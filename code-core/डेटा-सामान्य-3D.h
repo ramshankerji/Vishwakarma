@@ -8,6 +8,7 @@
 #include <d3d12.h>
 #include "डेटा.h"
 #include "CommonNamedNumbers.h"
+#include "Snap.h"
 #include <random>
 constexpr float M_PI = 3.1415926535f; // TODO: Why it's not coming from cmath library ?
 
@@ -30,6 +31,22 @@ bool GeometryForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* obj
 Mutable on purpose: this is also how a move writes a new placement, so the two directions cannot
 drift apart into separate switches. Defined beside GeometryForObject in DataStorage.cpp. */
 Placement3D* PlacementForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* object);
+
+/* The exact points an engineer may want to snap to on this object, APPENDED to `out`
+(website/content/software/snapping.md section 9). Mirrors GeometryForObject deliberately: adding a
+new intelligent object means adding one case here and nothing at all to the snap engine, which is
+the whole reason the semantics live with the object rather than in a central table.
+
+Coordinates are AUTHORED, exactly like the object's own defining parameters, and exactly like the
+vertices GeometryForObject emits for the authored-space types. The caller composes the object's
+Placement3D on top - one place, the same one PlacementForObject serves - so a moved object cannot
+end up with snap points at its old location.
+
+Doubles, per locked decision 1: the GPU pick narrows the candidate set, the coordinate is always
+recomputed on the CPU from the object's own parameters. That the 3D types store XMFLOAT3 caps the
+precision at float, but nothing is lost a second time on the way through here. */
+bool SnapPointsForObject(VishwakarmaStorage::ObjectType objectType, META_DATA* object,
+    std::vector<SnapPoint>& out);
 
 /* THE object's full LOCAL -> WORLD matrix, and the ONLY place it is composed. This is what reaches
 the GPU as the object's 64-byte InstanceRecord, so anything that disagrees with it draws the object

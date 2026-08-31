@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Ambient grid: zoom-derived rounding lattice, always on (priority 0). -->
+    <circle cx="10" cy="10" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="24" cy="10" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="38" cy="10" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="52" cy="10" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="10" cy="24" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="24" cy="24" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="38" cy="24" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="52" cy="24" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="10" cy="38" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="24" cy="38" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="38" cy="38" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="52" cy="38" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="10" cy="52" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="24" cy="52" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="38" cy="52" r="2.5" fill="#2D3436" stroke="none" />
+    <circle cx="52" cy="52" r="2.5" fill="#2D3436" stroke="none" />
+    <rect x="31" y="31" width="14" height="14" stroke="#0984E3" />
+  </g>
+</svg>

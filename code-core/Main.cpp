@@ -418,6 +418,31 @@ void OpenStorageFileInNewTab() {
     }
 }
 
+/* Ribbon snap command -> the parameterised engineering todo that carries it (snapping.md section
+13). The per-command facts all live in kSnapCommandBindings (UserInterface.h), the same table the
+ribbon reads to draw the latched highlight, so a click and its highlight cannot disagree about what
+a button means. This is only the translation to the wire format.
+
+Returns false for any other command, so the caller's chain falls through unchanged. */
+static bool SnapTodoForCommand(uint32_t commandId, ACTION_TYPE& outTodo, int& outParameter) {
+    const SnapCommandBinding* binding = SnapBindingForCommand(commandId);
+    if (!binding) return false;
+
+    if (binding->kind == SnapBindingKind::WorkPlaneAxis) {
+        outTodo = ACTION_TYPE::SNAP_SET_WORKPLANE;
+        outParameter = binding->parameter;
+        return true;
+    }
+
+    outTodo = binding->threeD ? ACTION_TYPE::SNAP_TOGGLE_KIND3D : ACTION_TYPE::SNAP_TOGGLE_KIND2D;
+    switch (binding->kind) {
+    case SnapBindingKind::MasterSwitch: outParameter = kSnapTodoMasterSwitch; break;
+    case SnapBindingKind::Ortho:        outParameter = kSnapTodoOrtho; break;
+    default:                            outParameter = binding->parameter; break;
+    }
+    return true;
+}
+
 void ProcessPendingUIActions() {
     std::vector<UIActionEntry> actions;
     {
@@ -427,6 +452,9 @@ void ProcessPendingUIActions() {
             g_actionQueue.pop_front();
         }
     }
+
+    ACTION_TYPE snapTodo = ACTION_TYPE::SNAP_TOGGLE_KIND2D;
+    int snapTodoParameter = 0;
 
     for (const UIActionEntry& action : actions) {
         if (action.id == ACTION_ENGINEERING_CREATE) {
@@ -609,6 +637,10 @@ void ProcessPendingUIActions() {
             ExtensionCommunications::QueueImportDxfCommand(GetActiveTabForUIAction());
         } else if (action.id == static_cast<uint32_t>(Commands::SOFTWARE_UPDATE_CHECK)) {
             RequestImmediateSoftwareUpdateCheck(); // Wakes the update thread; no-op for dev builds.
+        } else if (SnapTodoForCommand(action.id, snapTodo, snapTodoParameter)) {
+            // Two dozen snap toggles all doing the same thing to a different bit; the table above
+            // says which, so this stays one branch instead of twenty-four (snapping.md section 13).
+            PushSystemTodoToTab(GetActiveTabForUIAction(), snapTodo, snapTodoParameter);
         } else if (action.id == kPropertyCommitUIAction) {
             // p1 = (tabIndex << 8) | fieldIndex, p2 = objectMemoryId, p3 = double value bits.
             const uint32_t tabIndex = static_cast<uint32_t>(action.p1 >> 8);

@@ -2,7 +2,9 @@
 title: "Snapping (2D and 3D)"
 weight: 100110
 ---
-This page is the Design Document for snapping in the 2D CAD page and the 3D modelling scene. To be referred by AI for coding as well as humans. It is a plan; sections marked as decisions are locked, defaults are changeable until first implementation. **Stage 1 of §15 — the 2D ambient grid — is implemented** (`Snap.h` / `Snap.cpp` plus the 2D chokepoint wrapper of §3); everything else here is still a plan.
+This page is the Design Document for snapping in the 2D CAD page and the 3D modelling scene. To be referred by AI for coding as well as humans. Sections marked as decisions are locked; defaults are changeable.
+
+**Implementation status: stages 1–4 and 6–8 of §15 are built, plus the closed-form half of stage 11 and the F3/F8 keys of stage 13.** In practice that means: the ambient grid in both worlds, the hover marker and label, the 2D object snaps, ortho, the ribbon toggles, the 3D work plane, and `SnapPointsForObject` over all fifteen 3D types. What is *not* built is listed in §19, which is the section to read before assuming anything on this page describes running code.
 
 Snapping is the mechanism that converts an imprecise cursor pixel into an **exact** engineering coordinate. It is the difference between a drawing that looks right and a model that *is* right. Selection (`selection.md`) answers "which object is under the cursor"; snapping answers "which exact point did the user mean". They share machinery but are different questions and must not be conflated.
 
@@ -325,27 +327,32 @@ Each stage is independently verifiable and independently useful.
 ```text
 1. Ambient grid, 2D only     -> DONE. draw a line at any zoom; both ends land on round mm.
                                 Zoom in 10x; the step subdivides through the 1-2-5 sequence.
-2. Hover marker + label      -> marker tracks the cursor and visibly jumps to the snapped point.
-3. 2D End/Mid/Center/        -> each kind demonstrably wins near its own feature; priority
+2. Hover marker + label      -> DONE. marker tracks the cursor and visibly jumps to the snapped
+                                point; the kind's name appears after 400 ms.
+3. 2D End/Mid/Center/        -> DONE. each kind demonstrably wins near its own feature; priority
    Quadrant/Nearest/            order observable by approaching a circle's center vs its edge.
    Insertion                    (Insertion is nearly free: the records carry the point already.)
-4. Ortho (F8) + SnapContext  -> a line from an existing point is exactly axis-aligned; the
+4. Ortho (F8) + SnapContext  -> DONE. a line from an existing point is exactly axis-aligned; the
                                 anchor comes from whichever tool is running.
-5. Settings + persistence    -> toggle, save, reopen: state survives. New Page2D inherits the
-                                file default; changing it afterwards does not affect the file.
-6. Ribbon toggles + palette  -> latched button state renders; right-click palette changes
-                                behaviour mid-command and reverts on ESC.
-7. 3D work plane + ambient   -> the horizontal plane is the default; the palette's z/offset
-                                controls move it; placement lands on round metres.
-8. 3D SnapPointsForObject    -> place a cuboid whose corner exactly coincides with another's
-                                corner; verify equality in the properties pane, not by eye.
-9. 3D GPU broad phase        -> identical results with 10 000 objects; per-frame cost flat.
-10. X/Y/Z axis constraints   -> during 3D placement, pressing Z restricts motion to vertical.
-11. Perpendicular / Parallel -> each verified against a hand-computed reference case.
-    / Tangent / Intersection
-12. Snap from object         -> in a deliberately congested area, only the chosen object's
-                                points are offered.
-13. Function keys + Space    -> F3/F8/F9 toggle without touching the ribbon; Space repeats.
+5. Settings + persistence    -> NOT BUILT. Settings live per TAB and per VIEW in memory (§12);
+                                nothing is written to the .yyy file yet.
+6. Ribbon toggles            -> DONE for the ribbon: Snap2D under 2D Basic and Snap3D under
+   (+ palette)                  3D Basic, drawn latched while on. The right-click PALETTE is
+                                not built.
+7. 3D work plane + ambient   -> DONE. the horizontal plane is the default and the three ribbon
+                                buttons move it; placement lands on round metres. The offset
+                                text box and the oblique plane are not built.
+8. 3D SnapPointsForObject    -> DONE for all fifteen 3D types. Place a cuboid whose corner
+                                coincides with another's; verify in the properties pane, not by eye.
+9. 3D GPU broad phase        -> NOT BUILT. Stage A is a CPU scan over storageObjects3D, filtered
+                                to the view's container set. Correct, but O(n) in model size.
+10. X/Y/Z axis constraints   -> NOT BUILT.
+11. Perpendicular / Parallel -> Perpendicular, Tangent and Intersection DONE in 2D, each verified
+    / Tangent / Intersection    against hand-computed reference cases. Parallel NOT BUILT: it
+                                needs a hovered reference line, which has no plumbing yet.
+12. Snap from object         -> NOT BUILT.
+13. Function keys + Space    -> F3 and F8 DONE in both worlds, plus hold-Shift suppression.
+                                F9/F10/F11 and Space repeat NOT BUILT.
 ```
 
 Stages 1–4 are the ones that make the application feel like CAD.
@@ -386,3 +393,48 @@ Two adjacent capabilities are deliberately **out of scope** here, because snappi
 - **Text bounds are not yet computable on the engineering thread** — glyph metrics live on the font/render side, and 2D text is not hit-testable at all today. TextBounds snap carries that prerequisite.
 - **Per-tab pick context.** `PickPassContext` is per tab, so the same tab shown in two windows already lets two render threads touch one context. Snap hover raises the pick rate substantially, which makes that pre-existing limitation much easier to hit.
 - **Snap settings in the document** change under the user when opening someone else's file (§12).
+
+## 19. What is built, and where it deviates from this page
+
+Written when stages 1-4 and 6-8 landed. Everything here is a deliberate difference from the plan
+above, not an oversight - the plan is left intact so the reasoning stays readable.
+
+**Settings are per TAB and in memory, not per container and persisted.** §12 specifies a mask on
+`PAGE2D` / `SCENE3D` with a `file_info` default. What is built is two `std::atomic<uint32_t>` on
+`DATASETTAB` - `snapMask2D` and `snapMask3D` - plus master-switch and ortho flags beside them. Two
+masks rather than one because the kinds genuinely differ: an Endpoint is a polyline vertex in a
+drawing and a cuboid corner in a model, and a Member End has no 2D meaning at all. The ribbon
+reflects that with two subgroups writing two masks. Schema fields, the file default and the
+propagation rule of §12 are stage 5 and remain unbuilt, so snap settings do not yet survive a
+save. The consequence §12 warns about - opening a colleague's file changing your snapping - cannot
+happen yet for the same reason.
+
+**The work plane did go to the view**, as §9 requires: `Viewport::workPlane`, beside that view's
+`CameraState`, reset with the slot and never written to file. Do not move it to the tab.
+
+**`SnapPointsForObject` lives in `DataStorage.cpp`**, beside `GeometryForObject` and
+`PlacementForObject`, rather than in the `Snap3D.cpp` of §14. §9 asks for a dispatch mirroring
+`GeometryForObject`; putting it next to the two dispatches it mirrors keeps all three switches in
+one file, and adding a new type means editing them together. It exports AUTHORED coordinates and
+the caller composes `Placement3D`, so a moved object cannot keep snap points at its old location.
+
+**2D candidate gathering lives in `RenderPage2D.cpp`**, not in `Snap.cpp`. `TabCad2DStorage` is
+declared in `RenderPage2D-DirectX12.h`, so gathering there would have dragged a graphics header
+into the one module §14 wants free of them. `Snap.h` / `Snap.cpp` keep the vocabulary, the mask,
+the aperture ladder and the resolution rule - and stay compilable, and tested, without a GPU.
+
+**Derived-snap priorities**, which §7 leaves open because these points come from the anchor or from
+a pair of records: Intersection 12 (a crossing is as meaningful as a midpoint), Perpendicular and
+Tangent 10 (construction aids the user aims at deliberately, but which must not outrank a vertex).
+
+**Ellipse perpendicular / tangent / nearest use a bounded sample-and-bisect**, as §6 asks. Circles
+take closed forms. Line x conic intersection is closed form for ellipses too - transforming the
+segment into the frame where the conic is the unit circle costs nothing extra - so §6's "line x
+circle/arc" ships slightly wider than specified. Conic x conic stays deferred.
+
+**The three tests that run without Windows.** The resolution rule, the 1-2-5 ladder and both
+ambient-step functions are covered by a host-compiled test of `Snap.cpp`; the 2D conic geometry is
+covered by a test that `#include`s the relevant span of `RenderPage2D.cpp` VERBATIM, so it cannot
+drift from what the application compiles; the 3D solids' edge and face tables are checked as pure
+combinatorics (3-regular graph, every face a cycle, every edge in exactly two faces). The rest of
+the change needs the Windows build to exercise.

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Member End: LINE_MEMBER / cylinder / pipe axis end. Priority 15, above generic geometry. -->
+    <path d="M8 27H44V41H8Z" />
+    <path d="M8 21V47M44 21V47" />
+    <circle cx="8" cy="34" r="3" fill="#2D3436" stroke="none" />
+    <rect x="36" y="26" width="16" height="16" stroke="#0984E3" />
+  </g>
+</svg>
