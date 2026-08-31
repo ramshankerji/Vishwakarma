@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Insertion: the stored insertion point of a text record or an Asset2DInsert. -->
+    <path d="M22 46L34 18L46 46M27 37H41" />
+    <rect x="10" y="34" width="16" height="16" stroke="#0984E3" />
+    <rect x="16" y="40" width="16" height="16" stroke="#0984E3" />
+  </g>
+</svg>

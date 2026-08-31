@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- TextBounds: the four corners and four edge midpoints of a text bounding box. -->
+    <path d="M12 18H52V46H12Z" stroke-width="2.5" />
+    <path d="M23 41L32 21L41 41M27 33H37" />
+    <circle cx="12" cy="18" r="4.5" fill="#0984E3" stroke="none" />
+    <circle cx="52" cy="18" r="4.5" fill="#0984E3" stroke="none" />
+    <circle cx="12" cy="46" r="4.5" fill="#0984E3" stroke="none" />
+    <circle cx="52" cy="46" r="4.5" fill="#0984E3" stroke="none" />
+    <circle cx="32" cy="18" r="3.5" fill="#0984E3" stroke="none" />
+    <circle cx="32" cy="46" r="3.5" fill="#0984E3" stroke="none" />
+    <circle cx="12" cy="32" r="3.5" fill="#0984E3" stroke="none" />
+    <circle cx="52" cy="32" r="3.5" fill="#0984E3" stroke="none" />
+  </g>
+</svg>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <g fill="none" stroke="#2D3436" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+
+    <!-- Tangent: from the anchor to a circle, arc or ellipse. -->
+    <circle cx="34" cy="42" r="16" />
+    <path d="M6 26H58" />
+    <circle cx="10" cy="26" r="4" fill="#2D3436" stroke="none" />
+    <circle cx="34" cy="26" r="8" stroke="#0984E3" />
+    <path d="M26 18H42" stroke="#0984E3" />
+  </g>
+</svg>
