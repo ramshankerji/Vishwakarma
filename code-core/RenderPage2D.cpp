@@ -25,13 +25,6 @@ constexpr double kMinPolygonRadiusCU = 1.0e-9;
 constexpr double kMinCurveRadiusCU = 1.0e-9;
 constexpr float kDefaultTextHeightCU = 9.0f;
 
-StoredLogicalObject* FindLogicalObjectByIdLocked(DATASETTAB& tab, uint64_t memoryId) {
-    for (StoredLogicalObject& entry : tab.storageLogicalObjects) {
-        if (entry.object && entry.object->memoryID == memoryId) return &entry;
-    }
-    return nullptr;
-}
-
 void ClearLineCreationState(TabCad2DStorage& storage) {
     storage.lineCreationMode.store(false, std::memory_order_release);
     storage.lineCreationHasPreviousPoint.store(false, std::memory_order_release);
@@ -620,9 +613,9 @@ uint64_t Cad2DFindTargetPage2DMemoryId(DATASETTAB& tab) {
 
     std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
     if (inputContainerId != 0) {
-        StoredLogicalObject* active = FindLogicalObjectByIdLocked(tab, inputContainerId);
-        if (active && active->objectType == VishwakarmaStorage::ObjectType::Page2D) {
-            return active->object->memoryID;
+        ResolvedObject active = FindLogicalObject(tab, inputContainerId);
+        if (active && active.objectType == VishwakarmaStorage::ObjectType::Page2D) {
+            return active.object->memoryID;
         }
     }
 
@@ -642,8 +635,8 @@ bool Cad2DIsActivePage2D(DATASETTAB& tab) {
     std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
     if (inputContainerId == 0) return false;
 
-    StoredLogicalObject* active = FindLogicalObjectByIdLocked(tab, inputContainerId);
-    return active && active->objectType == VishwakarmaStorage::ObjectType::Page2D;
+    ResolvedObject active = FindLogicalObject(tab, inputContainerId);
+    return active && active.objectType == VishwakarmaStorage::ObjectType::Page2D;
 }
 
 void Cad2DCancelCreation(DATASETTAB& tab) {

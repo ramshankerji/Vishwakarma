@@ -1897,12 +1897,9 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
                         if (chip.isHome) {
                             chip.label = DataTreeView::AsciiToDisplayText(subTab.title.c_str());
                         } else {
-                            for (const StoredLogicalObject& obj : tab.storageLogicalObjects) {
-                                if (obj.object && obj.memoryId == chip.id) {
-                                    chip.label = BuildTreeNodeLabel(obj.objectType, obj.object,
-                                        obj.memoryId);
-                                    break;
-                                }
+                            if (ResolvedObject obj = FindLogicalObject(tab, chip.id)) {
+                                chip.label = BuildTreeNodeLabel(obj.objectType, obj.object,
+                                    chip.id);
                             }
                             if (chip.label.empty()) chip.label = U"Scene3D";
                         }
@@ -2099,18 +2096,15 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
                     }
                     if (selectionCount == 1 && tab.storageObjectsMutex) {
                         std::lock_guard<std::mutex> lock(*tab.storageObjectsMutex);
-                        for (const StoredGeometryObject3D& stored : tab.storageObjects3D) {
-                            if (stored.memoryId == singleSelectedId && stored.object) {
-                                selType = stored.objectType;
-                                selId = stored.object->memoryID;
-                                table = FindPropertyTable(selType);
-                                if (table) {
-                                    fieldValueCount = table->fieldCount;
-                                    // World space, so a moved object reads out where it is displayed
-                                    // rather than where it was authored (10M plan Step 4).
-                                    ReadPropertyValuesForDisplay(*table, stored.object, fieldValues);
-                                }
-                                break;
+                        if (ResolvedObject resolved = FindGeometryObject3D(tab, singleSelectedId)) {
+                            selType = resolved.objectType;
+                            selId = resolved.object->memoryID;
+                            table = FindPropertyTable(selType);
+                            if (table) {
+                                fieldValueCount = table->fieldCount;
+                                // World space, so a moved object reads out where it is displayed
+                                // rather than where it was authored (10M plan Step 4).
+                                ReadPropertyValuesForDisplay(*table, resolved.object, fieldValues);
                             }
                         }
                     }

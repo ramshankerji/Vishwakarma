@@ -1,16 +1,18 @@
-﻿// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
+// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
 #pragma once
 
 #include <cstdint>
 #include <vector>
 #include <mutex>
 #include <string>
+#include <algorithm>
 #include "MemoryManagerCPU.h"
 #include "GPUPlatformSelector.h"
 #include "RenderPage2D-DirectX12.h"
 #include "UserInputProcessing.h"
 #include "CommonNamedNumbers.h"
 #include "DataTreeView.h"
+#include "डेटा.h"
 
 #pragma once //It prevents multiple inclusions of the same header file.
 
@@ -65,24 +67,6 @@ struct NETWORK_INTERFACE {
 // a "view", predating the fixed-slot subTabs[] registry that actually shipped, and by the end it was
 // referenced by nothing but its own declaration. The live concepts are InternalSubTab (what content
 // is shown) and Viewport (how it is shown - camera, rectangle, input ownership).
-
-/* INVARIANT: storageObjects3D stays sorted by memoryId. It is append-only, appended by the tab's
-single engineering thread, and MemoryID::next() hands out increasing ids - so append order is id
-order for free. Resolving a memoryID to its object binary searches on that (mv.ramshanker.in/
-software/id section 3.4), and breaking the order corrupts lookups silently rather than crashing.
-The two single-object append sites carry a _DEBUG check; the bulk one, FlushGeneratedGeometryBatch,
-does not yet. Do not sort, compact or erase from this vector. */
-struct StoredGeometryObject3D {
-    VishwakarmaStorage::ObjectType objectType = VishwakarmaStorage::ObjectType::Unknown;
-    uint64_t memoryId = 0;
-    META_DATA* object = nullptr;
-};
-
-struct StoredLogicalObject {
-    VishwakarmaStorage::ObjectType objectType = VishwakarmaStorage::ObjectType::Unknown;
-    uint64_t memoryId = 0;
-    META_DATA* object = nullptr;
-};
 
 /* One open SubTab: WHAT content is shown. A SubTab has exactly one content type - Scene3D or
 Page2D, never mixed, because a mixed SubTab would have ambiguous renderer and interaction
@@ -264,6 +248,24 @@ struct DATASETTAB {
     DATASETTAB(DATASETTAB&&) noexcept = default;// Allow move
     DATASETTAB& operator=(DATASETTAB&&) noexcept = default;
 };
+
+// Look up a 3D geometry object by memoryID in O(log N) via binary search (id.md §3.4).
+inline ResolvedObject FindGeometryObject3D(const DATASETTAB& tab, uint64_t memoryId) {
+    return FindObjectInStorage(tab.storageObjects3D, memoryId);
+}
+
+// Look up a logical container / organizational object by memoryID in O(log N) via binary search (id.md §3.4).
+inline ResolvedObject FindLogicalObject(const DATASETTAB& tab, uint64_t memoryId) {
+    return FindObjectInStorage(tab.storageLogicalObjects, memoryId);
+}
+
+// Resolve any object (3D geometry or logical) by memoryID in the calling tab (id.md §3.5).
+inline ResolvedObject ResolveObject(const DATASETTAB& tab, uint64_t memoryId) {
+    if (memoryId == 0) return {};
+    if (auto res = FindGeometryObject3D(tab, memoryId)) return res;
+    if (auto res = FindLogicalObject(tab, memoryId)) return res;
+    return {};
+}
 
 // Tab 0 id default application launch screen tab. It can't be closed.
 // Tab 0 is also used to do all the experiments and benchmark during development.

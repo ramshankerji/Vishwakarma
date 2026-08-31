@@ -277,12 +277,9 @@ static void SetActiveDataTreeBranch(DATASETTAB* targetTab, uint64_t memoryId) {
     if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
 
     std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
-    for (const StoredLogicalObject& entry : targetTab->storageLogicalObjects) {
-        if (entry.objectType == VishwakarmaStorage::ObjectType::Scene3D &&
-            entry.object && entry.object->memoryID == memoryId) {
-            targetTab->activeScene3DMemoryId = memoryId;
-            return;
-        }
+    ResolvedObject resolved = FindLogicalObject(*targetTab, memoryId);
+    if (resolved && resolved.objectType == VishwakarmaStorage::ObjectType::Scene3D) {
+        targetTab->activeScene3DMemoryId = memoryId;
     }
 }
 
@@ -428,59 +425,57 @@ static void OpenInternalSubTab(DATASETTAB* targetTab, uint64_t memoryId) {
     if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
 
     std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
-    for (const StoredLogicalObject& entry : targetTab->storageLogicalObjects) {
-        if (!entry.object || entry.object->memoryID != memoryId) continue;
-        if (entry.objectType != VishwakarmaStorage::ObjectType::Scene3D &&
-            entry.objectType != VishwakarmaStorage::ObjectType::Page2D) {
-            return;
-        }
-
-        // A container (in particular Page2D) is only ever open in 1 sub-tab: reuse it if found.
-        if (FindPublishedSubTabSlot(*targetTab, memoryId) < 0) {
-            int freeSlot = -1;
-            for (uint16_t slot = 0; slot < MV_MAX_SUBTABS; ++slot) {
-                if (targetTab->subTabStates[slot].load(std::memory_order_acquire) == SUBTAB_FREE) {
-                    freeSlot = slot;
-                    break;
-                }
-            }
-            if (freeSlot < 0) return; // All MV_MAX_SUBTABS slots occupied (open or draining).
-
-            const char* objectName = LogicalObjectNameForInternalSubTab(entry.objectType, entry.object);
-            InternalSubTab& subTab = targetTab->subTabs[freeSlot];
-            subTab.containerType = entry.objectType;
-            subTab.containerMemoryId = memoryId;
-            // The container SET the renderers iterate (10M plan Step 6). Opening a container seeds
-            // it with exactly that container; the set exists so more can be added later without
-            // the renderers - or the VisibilityMask - having to learn anything new.
-            subTab.containers.Clear();
-            subTab.containers.Add(memoryId);
-            subTab.title = objectName && objectName[0] != '\0'
-                ? objectName
-                : VishwakarmaStorage::ObjectTypeDisplayName(entry.objectType);
-            // Bind a Viewport to this SubTab and give it fresh view state (10M plan Step 6). The
-            // mapping is 1:1 today; subTabSlot is what makes that a stored fact rather than an
-            // assumption baked into every reader.
-            Viewport& viewport = targetTab->viewports[freeSlot];
-            viewport.subTabSlot = static_cast<int16_t>(freeSlot);
-            viewport.camera.Initialize(); // Fresh 3D camera.
-            viewport.page2DView.Reset();  // Fresh Page2D pan/zoom.
-            targetTab->subTabHostWindowSlots[freeSlot].store(-1, std::memory_order_release);
-            targetTab->subTabStates[freeSlot].store(SUBTAB_OPEN, std::memory_order_release);
-
-            uint16_t* currentList = targetTab->publishedSubTabIndexes.load(std::memory_order_acquire);
-            const uint16_t count = targetTab->publishedSubTabCount.load(std::memory_order_acquire);
-            uint16_t entries[MV_MAX_SUBTABS];
-            for (uint16_t i = 0; i < count; ++i) entries[i] = currentList[i];
-            entries[count] = static_cast<uint16_t>(freeSlot);
-            PublishSubTabList(*targetTab, entries, count + 1);
-        }
-
-        targetTab->activeInternalSubTabMemoryId = memoryId;
-        if (entry.objectType == VishwakarmaStorage::ObjectType::Scene3D) {
-            targetTab->activeScene3DMemoryId = memoryId;
-        }
+    ResolvedObject resolved = FindLogicalObject(*targetTab, memoryId);
+    if (!resolved) return;
+    if (resolved.objectType != VishwakarmaStorage::ObjectType::Scene3D &&
+        resolved.objectType != VishwakarmaStorage::ObjectType::Page2D) {
         return;
+    }
+
+    // A container (in particular Page2D) is only ever open in 1 sub-tab: reuse it if found.
+    if (FindPublishedSubTabSlot(*targetTab, memoryId) < 0) {
+        int freeSlot = -1;
+        for (uint16_t slot = 0; slot < MV_MAX_SUBTABS; ++slot) {
+            if (targetTab->subTabStates[slot].load(std::memory_order_acquire) == SUBTAB_FREE) {
+                freeSlot = slot;
+                break;
+            }
+        }
+        if (freeSlot < 0) return; // All MV_MAX_SUBTABS slots occupied (open or draining).
+
+        const char* objectName = LogicalObjectNameForInternalSubTab(resolved.objectType, resolved.object);
+        InternalSubTab& subTab = targetTab->subTabs[freeSlot];
+        subTab.containerType = resolved.objectType;
+        subTab.containerMemoryId = memoryId;
+        // The container SET the renderers iterate (10M plan Step 6). Opening a container seeds
+        // it with exactly that container; the set exists so more can be added later without
+        // the renderers - or the VisibilityMask - having to learn anything new.
+        subTab.containers.Clear();
+        subTab.containers.Add(memoryId);
+        subTab.title = objectName && objectName[0] != '\0'
+            ? objectName
+            : VishwakarmaStorage::ObjectTypeDisplayName(resolved.objectType);
+        // Bind a Viewport to this SubTab and give it fresh view state (10M plan Step 6). The
+        // mapping is 1:1 today; subTabSlot is what makes that a stored fact rather than an
+        // assumption baked into every reader.
+        Viewport& viewport = targetTab->viewports[freeSlot];
+        viewport.subTabSlot = static_cast<int16_t>(freeSlot);
+        viewport.camera.Initialize(); // Fresh 3D camera.
+        viewport.page2DView.Reset();  // Fresh Page2D pan/zoom.
+        targetTab->subTabHostWindowSlots[freeSlot].store(-1, std::memory_order_release);
+        targetTab->subTabStates[freeSlot].store(SUBTAB_OPEN, std::memory_order_release);
+
+        uint16_t* currentList = targetTab->publishedSubTabIndexes.load(std::memory_order_acquire);
+        const uint16_t count = targetTab->publishedSubTabCount.load(std::memory_order_acquire);
+        uint16_t entries[MV_MAX_SUBTABS];
+        for (uint16_t i = 0; i < count; ++i) entries[i] = currentList[i];
+        entries[count] = static_cast<uint16_t>(freeSlot);
+        PublishSubTabList(*targetTab, entries, count + 1);
+    }
+
+    targetTab->activeInternalSubTabMemoryId = memoryId;
+    if (resolved.objectType == VishwakarmaStorage::ObjectType::Scene3D) {
+        targetTab->activeScene3DMemoryId = memoryId;
     }
 }
 
@@ -513,12 +508,8 @@ static void AddContainerToActiveSubTab(DATASETTAB* targetTab, uint64_t container
     // Composition is Scene3D-only: a mixed-type SubTab has ambiguous renderer/interaction semantics.
     if (subTab.containerType != VishwakarmaStorage::ObjectType::Scene3D) return;
     // The dragged id must be an existing Scene3D in this tab (not a Page2D, folder or logical node).
-    bool isScene3D = false;
-    for (const StoredLogicalObject& entry : targetTab->storageLogicalObjects) {
-        if (entry.object && entry.memoryId == containerId &&
-            entry.objectType == VishwakarmaStorage::ObjectType::Scene3D) { isScene3D = true; break; }
-    }
-    if (!isScene3D) return;
+    ResolvedObject resolved = FindLogicalObject(*targetTab, containerId);
+    if (!resolved || resolved.objectType != VishwakarmaStorage::ObjectType::Scene3D) return;
     subTab.containers.Add(containerId); // Dedupes the home + duplicates, caps at 8.
 }
 
@@ -662,9 +653,9 @@ static uint64_t FindActiveScene3D(DATASETTAB* targetTab) {
     if (!targetTab->storageObjectsMutex) targetTab->storageObjectsMutex = std::make_unique<std::mutex>();
 
     std::lock_guard<std::mutex> lock(*targetTab->storageObjectsMutex);
-    for (const StoredLogicalObject& entry : targetTab->storageLogicalObjects) {
-        if (entry.objectType == VishwakarmaStorage::ObjectType::Scene3D && entry.object &&
-            entry.object->memoryID == targetTab->activeScene3DMemoryId) {
+    if (targetTab->activeScene3DMemoryId != 0) {
+        ResolvedObject resolved = FindLogicalObject(*targetTab, targetTab->activeScene3DMemoryId);
+        if (resolved && resolved.objectType == VishwakarmaStorage::ObjectType::Scene3D) {
             return targetTab->activeScene3DMemoryId;
         }
     }
@@ -872,16 +863,10 @@ static void ModifyObjectProperty(DATASETTAB* myTab, uint64_t objectId, uint8_t f
     if (!myTab || !myTab->storageObjectsMutex) return;
 
     // The engineering thread is the sole writer of storageObjects3D, so the lookup needs no lock.
-    META_DATA* object = nullptr;
-    VishwakarmaStorage::ObjectType objectType = VishwakarmaStorage::ObjectType::Unknown;
-    for (const StoredGeometryObject3D& stored : myTab->storageObjects3D) {
-        if (stored.memoryId == objectId) {
-            object = stored.object;
-            objectType = stored.objectType;
-            break;
-        }
-    }
-    if (!object) return;
+    ResolvedObject resolved = FindGeometryObject3D(*myTab, objectId);
+    if (!resolved) return;
+    META_DATA* object = resolved.object;
+    VishwakarmaStorage::ObjectType objectType = resolved.objectType;
 
     const PropertyTypeDescriptor* table = FindPropertyTable(objectType);
     if (!table || fieldIndex >= table->fieldCount) return;

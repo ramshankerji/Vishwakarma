@@ -1,10 +1,11 @@
-﻿// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
+// Copyright (c) 2025-Present : Ram Shanker: All rights reserved.
 
 // This files defines our basic data types to be used by other domain specific data types.
 #pragma once // Further to this, Global variables defined here need to be defined with "inline" prefix.
 #include <cstdint>
 #include <vector>
 #include <string>
+#include <algorithm>
 #include <variant>
 #include <any>
 #include <atomic>
@@ -320,6 +321,45 @@ struct DataReference : META_DATA {
     TODO: Implement an optimization such that common files between tabs are loaded only once. How ?*/
     uint64_t loadedFileReference;
 };
+
+/* Result of resolving a memoryID against a directory (id.md §3.4, §3.5).
+   Carries the type and the arena payload pointer. Evaluates to true if found. */
+struct ResolvedObject {
+    VishwakarmaStorage::ObjectType objectType = VishwakarmaStorage::ObjectType::Unknown;
+    META_DATA* object = nullptr;
+
+    explicit operator bool() const { return object != nullptr; }
+};
+
+/* INVARIANT: storage vectors stay sorted by memoryId. They are append-only, appended by the tab's
+single engineering thread, and MemoryID::next() hands out increasing ids - so append order is id
+order for free. Resolving a memoryID to its object binary searches on that (mv.ramshanker.in/
+software/id section 3.4), and breaking the order corrupts lookups silently rather than crashing. */
+struct StoredGeometryObject3D {
+    VishwakarmaStorage::ObjectType objectType = VishwakarmaStorage::ObjectType::Unknown;
+    uint64_t memoryId = 0;
+    META_DATA* object = nullptr;
+};
+
+struct StoredLogicalObject {
+    VishwakarmaStorage::ObjectType objectType = VishwakarmaStorage::ObjectType::Unknown;
+    uint64_t memoryId = 0;
+    META_DATA* object = nullptr;
+};
+
+// Binary search lookup over any sorted container of stored objects (id.md §3.4).
+template <typename TStored>
+inline ResolvedObject FindObjectInStorage(const std::vector<TStored>& storage, uint64_t memoryId) {
+    if (memoryId == 0 || storage.empty()) return {};
+    auto it = std::lower_bound(storage.begin(), storage.end(), memoryId,
+        [](const TStored& entry, uint64_t id) {
+            return entry.memoryId < id;
+        });
+    if (it != storage.end() && it->memoryId == memoryId) {
+        return { it->objectType, it->object };
+    }
+    return {};
+}
 
 // Following are some special data types designed to be dynamically allocated by our RAM Manager.
 
