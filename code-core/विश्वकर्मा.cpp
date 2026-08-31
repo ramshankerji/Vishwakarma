@@ -179,6 +179,33 @@ bool GetVisibleSceneViewportForTab(const DATASETTAB& tab, int& widthPx, int& hei
     return false;
 }
 
+// See the contract in विश्वकर्मा.h. Same window resolution as GetVisibleSceneViewportForTab above,
+// so the aperture scales with the monitor the user is actually pointing at rather than the primary.
+double SnapDpiScaleForTab(const DATASETTAB& tab) {
+    const int inputSlot = InputViewSlot(tab);
+    const int16_t viewWindowSlot = inputSlot >= 0
+        ? tab.subTabHostWindowSlots[inputSlot].load(std::memory_order_acquire)
+        : static_cast<int16_t>(-1);
+
+    uint16_t* windowList = publishedWindowIndexes.load(std::memory_order_acquire);
+    const uint16_t windowCount = publishedWindowCount.load(std::memory_order_acquire);
+    for (uint16_t i = 0; i < windowCount; ++i) {
+        const SingleUIWindow& window = allWindows[windowList[i]];
+        if (viewWindowSlot >= 0) {
+            if (windowList[i] != static_cast<uint16_t>(viewWindowSlot)) continue;
+        } else {
+            if (window.windowKind != WINDOW_KIND_TABHOST) continue;
+            if (window.activeTabIndex != static_cast<int>(tab.tabID)) continue;
+        }
+        if (window.currentMonitorIndex < 0 || window.currentMonitorIndex >= gpu.currentMonitorCount) {
+            return 1.0;
+        }
+        const double scale = gpu.screens[window.currentMonitorIndex].scaleFactor;
+        return scale > 0.0 ? scale : 1.0;
+    }
+    return 1.0;
+}
+
 // True when client-space x falls inside the right icon bar / properties pane overlay of the window
 // hosting this tab. Backup guard for scene interaction (see propertiesPane.md §6); the WndProc side
 // is the primary guard, this covers events already queued when the pane opens.
@@ -949,41 +976,71 @@ static void TranslatePoints(std::vector<XMFLOAT3>& points, const XMFLOAT3& offse
     }
 }
 
-static bool Scene3DPlacementPointFromInput(DATASETTAB& tab, const ACTION_DETAILS& input, XMFLOAT3& outPoint) {
-    int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
-    if (!GetVisibleSceneViewportForTab(tab, viewportWidth, viewportHeight, viewportTop)) {
+/* --- Snapping in the 3D world (website/content/software/snapping.md) --------------------------
+
+The chokepoint of section 3 splits in two here. Scene3DFocalPointFromInput keeps the old focal-plane
+math for NAVIGATION, and Scene3DPlacementPointFromInput below becomes the snapped resolver that
+every placement goes through.
+
+The split is locked decision 14 and it is not a detail. The focal plane rotates with the camera, so
+placing the same object from two camera angles used to give two different depths - not merely
+imprecise but unpredictable. Placement now lands on an explicit work plane instead. Zoom Window,
+which is recentring the camera rather than constructing anything, genuinely wants the focal plane
+and keeps it: recentring onto a work plane far below the viewed objects would send the camera
+flying. */
+
+// The camera basis and the ray through one client pixel. False for a pixel outside the viewport or
+// a degenerate camera; every 3D screen-to-world path starts here so they cannot disagree.
+static bool Scene3DRayFromInput(DATASETTAB& tab, const ACTION_DETAILS& input,
+    DirectX::XMVECTOR& outEye, DirectX::XMVECTOR& outRay, DirectX::XMVECTOR& outForward,
+    int& outViewportWidth, int& outViewportHeight, int& outViewportTop) {
+    if (!GetVisibleSceneViewportForTab(tab, outViewportWidth, outViewportHeight, outViewportTop)) {
         return false;
     }
-    if (input.x < 0 || input.x >= viewportWidth ||
-        input.y < viewportTop || input.y >= viewportTop + viewportHeight) {
+    if (input.x < 0 || input.x >= outViewportWidth ||
+        input.y < outViewportTop || input.y >= outViewportTop + outViewportHeight) {
         return false;
     }
 
-    const float mouseX = std::clamp(static_cast<float>(input.x), 0.0f, static_cast<float>(viewportWidth));
-    const float mouseY = std::clamp(static_cast<float>(input.y - viewportTop), 0.0f, static_cast<float>(viewportHeight));
-    const float ndcX = mouseX / static_cast<float>(viewportWidth) * 2.0f - 1.0f;
-    const float ndcY = 1.0f - mouseY / static_cast<float>(viewportHeight) * 2.0f;
-    const float aspect = static_cast<float>(viewportWidth) / static_cast<float>(viewportHeight);
+    const float mouseX = std::clamp(static_cast<float>(input.x), 0.0f, static_cast<float>(outViewportWidth));
+    const float mouseY = std::clamp(static_cast<float>(input.y - outViewportTop), 0.0f,
+        static_cast<float>(outViewportHeight));
+    const float ndcX = mouseX / static_cast<float>(outViewportWidth) * 2.0f - 1.0f;
+    const float ndcY = 1.0f - mouseY / static_cast<float>(outViewportHeight) * 2.0f;
+    const float aspect = static_cast<float>(outViewportWidth) / static_cast<float>(outViewportHeight);
     const CameraState& cam = ActiveSceneCamera(tab);
     const float tanHalfFov = std::tan(cam.fov * 0.5f);
 
-    DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&cam.position);
+    outEye = DirectX::XMLoadFloat3(&cam.position);
     DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&cam.target);
     DirectX::XMVECTOR worldUp = DirectX::XMLoadFloat3(&cam.up);
-    DirectX::XMVECTOR forward = DirectX::XMVector3Normalize(DirectX::XMVectorSubtract(target, eye));
-    DirectX::XMVECTOR right = DirectX::XMVector3Cross(worldUp, forward);
+    outForward = DirectX::XMVector3Normalize(DirectX::XMVectorSubtract(target, outEye));
+    DirectX::XMVECTOR right = DirectX::XMVector3Cross(worldUp, outForward);
     if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(right)) <= 0.000001f) {
         return false;
     }
     right = DirectX::XMVector3Normalize(right);
-    DirectX::XMVECTOR viewUp = DirectX::XMVector3Cross(forward, right);
-    DirectX::XMVECTOR ray = DirectX::XMVectorAdd(forward,
+    DirectX::XMVECTOR viewUp = DirectX::XMVector3Cross(outForward, right);
+    outRay = DirectX::XMVector3Normalize(DirectX::XMVectorAdd(outForward,
         DirectX::XMVectorAdd(
             DirectX::XMVectorScale(right, ndcX * tanHalfFov * aspect),
-            DirectX::XMVectorScale(viewUp, ndcY * tanHalfFov)));
-    ray = DirectX::XMVector3Normalize(ray);
+            DirectX::XMVectorScale(viewUp, ndcY * tanHalfFov))));
+    return true;
+}
 
-    const float distance = DirectX::XMVectorGetX(DirectX::XMVector3Length(DirectX::XMVectorSubtract(target, eye)));
+/* The RAW focal-plane mapping: the plane through camera.target, perpendicular to the view
+direction. This is what placement used to do and what navigation still wants (decision 14). */
+static bool Scene3DFocalPointFromInput(DATASETTAB& tab, const ACTION_DETAILS& input, XMFLOAT3& outPoint) {
+    DirectX::XMVECTOR eye{}, ray{}, forward{};
+    int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
+    if (!Scene3DRayFromInput(tab, input, eye, ray, forward, viewportWidth, viewportHeight, viewportTop)) {
+        return false;
+    }
+
+    const CameraState& cam = ActiveSceneCamera(tab);
+    DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&cam.target);
+    const float distance = DirectX::XMVectorGetX(
+        DirectX::XMVector3Length(DirectX::XMVectorSubtract(target, eye)));
     const float denom = DirectX::XMVectorGetX(DirectX::XMVector3Dot(ray, forward));
     if (distance <= 0.0001f || std::abs(denom) <= 0.000001f) {
         return false;
@@ -991,6 +1048,317 @@ static bool Scene3DPlacementPointFromInput(DATASETTAB& tab, const ACTION_DETAILS
 
     DirectX::XMStoreFloat3(&outPoint, DirectX::XMVectorAdd(eye, DirectX::XMVectorScale(ray, distance / denom)));
     return true;
+}
+
+/* Defined further down with the visibility producers. Every path acting on "what the user is
+looking at" must ask this rather than compare against the sub-tab's home container: a sub-tab's
+content is a SET, and an object in a composed container is just as visible - and so just as
+snappable - as one in the home container. */
+static bool SubTabDrawsContainer(const DATASETTAB& tab, int subTabSlot, uint64_t containerMemoryId);
+
+// The Viewport that owns the work plane for the view input currently targets, or nullptr.
+static Viewport* Scene3DInputViewport(DATASETTAB& tab) {
+    const int slot = InputViewSlot(tab);
+    if (slot < 0 || slot >= MV_MAX_SUBTABS) return nullptr;
+    return &tab.viewports[slot];
+}
+
+/* Where the screen ray meets the work plane. The plane is axis-aligned and named by its normal, so
+this is one component of the ray against one component of the origin - no matrix, no general plane.
+
+A ray nearly PARALLEL to the plane, or one meeting it BEHIND the camera, resolves to nothing and
+the click is ignored (section 9). No clamping and no guessing: a point invented for a ray that never
+reached the plane is a coordinate the user did not choose. */
+static bool Scene3DWorkPlaneHit(const SnapWorkPlane& plane, DirectX::FXMVECTOR eye,
+    DirectX::FXMVECTOR ray, XMFLOAT3& outPoint, float& outDistance) {
+    XMFLOAT3 eyePoint{}, direction{};
+    DirectX::XMStoreFloat3(&eyePoint, eye);
+    DirectX::XMStoreFloat3(&direction, ray);
+
+    const uint8_t axis = plane.axis <= kWorkPlaneAxisZ ? plane.axis : kWorkPlaneAxisZ;
+    const float rayComponent = axis == kWorkPlaneAxisX ? direction.x
+        : (axis == kWorkPlaneAxisY ? direction.y : direction.z);
+    const float eyeComponent = axis == kWorkPlaneAxisX ? eyePoint.x
+        : (axis == kWorkPlaneAxisY ? eyePoint.y : eyePoint.z);
+    if (std::abs(rayComponent) <= 1.0e-6f) return false;   // Parallel to the plane.
+
+    const float t = ((float)plane.offset - eyeComponent) / rayComponent;
+    if (t <= 0.0f) return false;                           // The plane is behind the camera.
+
+    DirectX::XMStoreFloat3(&outPoint, DirectX::XMVectorAdd(eye, DirectX::XMVectorScale(ray, t)));
+    outDistance = t;
+    return true;
+}
+
+/* The camera basis a frame's worth of projections share. Built ONCE per resolve: the basis costs
+two cross products and a normalize, and a dense model offers thousands of candidate points, so
+rebuilding it per point was most of the work being done. */
+struct Scene3DProjection {
+    DirectX::XMVECTOR eye{}, forward{}, right{}, viewUp{};
+    float tanHalfFov = 0.0f;
+    float aspect = 1.0f;
+    int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
+    bool valid = false;
+};
+
+static Scene3DProjection Scene3DBuildProjection(const CameraState& cam,
+    int viewportWidth, int viewportHeight, int viewportTop) {
+    Scene3DProjection projection{};
+    if (viewportWidth <= 0 || viewportHeight <= 0) return projection;
+
+    projection.eye = DirectX::XMLoadFloat3(&cam.position);
+    DirectX::XMVECTOR target = DirectX::XMLoadFloat3(&cam.target);
+    DirectX::XMVECTOR worldUp = DirectX::XMLoadFloat3(&cam.up);
+    projection.forward = DirectX::XMVector3Normalize(DirectX::XMVectorSubtract(target, projection.eye));
+    DirectX::XMVECTOR right = DirectX::XMVector3Cross(worldUp, projection.forward);
+    if (DirectX::XMVectorGetX(DirectX::XMVector3LengthSq(right)) <= 0.000001f) return projection;
+    projection.right = DirectX::XMVector3Normalize(right);
+    projection.viewUp = DirectX::XMVector3Cross(projection.forward, projection.right);
+    projection.tanHalfFov = std::tan(cam.fov * 0.5f);
+    if (!(projection.tanHalfFov > 0.0f)) return projection;
+    projection.aspect = static_cast<float>(viewportWidth) / static_cast<float>(viewportHeight);
+    projection.viewportWidth = viewportWidth;
+    projection.viewportHeight = viewportHeight;
+    projection.viewportTop = viewportTop;
+    projection.valid = true;
+    return projection;
+}
+
+/* World point -> client pixel. False when the point is BEHIND the camera: such a candidate has no
+screen distance and must be discarded rather than ranked (section 5). Exactly the inverse of the ray
+construction in Scene3DRayFromInput, so a point placed at a pixel projects back to that pixel. */
+static bool Scene3DProjectPoint(const Scene3DProjection& projection, const XMFLOAT3& world,
+    double& outX, double& outY) {
+    if (!projection.valid) return false;
+
+    DirectX::XMVECTOR offset = DirectX::XMVectorSubtract(DirectX::XMLoadFloat3(&world), projection.eye);
+    const float depth = DirectX::XMVectorGetX(DirectX::XMVector3Dot(offset, projection.forward));
+    if (depth <= 0.0001f) return false;
+
+    const float ndcX = DirectX::XMVectorGetX(DirectX::XMVector3Dot(offset, projection.right)) /
+        (depth * projection.tanHalfFov * projection.aspect);
+    const float ndcY = DirectX::XMVectorGetX(DirectX::XMVector3Dot(offset, projection.viewUp)) /
+        (depth * projection.tanHalfFov);
+    outX = ((double)ndcX * 0.5 + 0.5) * (double)projection.viewportWidth;
+    outY = (double)projection.viewportTop +
+        (0.5 - (double)ndcY * 0.5) * (double)projection.viewportHeight;
+    return true;
+}
+
+/* Stage B of section 9: expand the objects of this view's containers into their snap points and
+score them against the cursor in SCREEN pixels.
+
+Stage A here is a CPU scan over storageObjects3D, not the GPU pick the design document specifies.
+The engineering thread is the sole writer of that vector so it may walk it without a lock, and it
+gives correct results today; what it does not give is O(1) in model size. The GPU broad phase is
+stage 9 of section 15 and is deliberately not built yet. The bounded work per object is what keeps
+the scan affordable in the meantime.
+
+One imprecision accepted knowingly, exactly as section 9 states: a candidate object's far-side
+points project inside the aperture too and are offered like any other. Per-point occlusion would
+need another GPU pass, and drafting practice wants the hidden corner more often than not. */
+static void Scene3DGatherObjectSnaps(DATASETTAB& tab, const Scene3DProjection& projection,
+    double cursorX, double cursorY, SnapCandidateSet& candidates) {
+    if (!projection.valid) return;
+    const int viewSlot = InputViewSlot(tab);
+
+    std::vector<SnapPoint> points;
+    points.reserve(64);
+    // The engineering thread is the sole writer of storageObjects3D, so it may iterate without a
+    // lock (section 3).
+    for (const StoredGeometryObject3D& stored : tab.storageObjects3D) {
+        if (!stored.object || stored.object->isDeleted) continue;
+        // Only what this view actually draws. Snapping to an object in a container the user cannot
+        // see would pull their point to a coordinate with no visible cause.
+        if (!SubTabDrawsContainer(tab, viewSlot, stored.object->memoryIDContainer)) continue;
+
+        points.clear();
+        if (!SnapPointsForObject(stored.objectType, stored.object, points)) continue;
+
+        // AUTHORED -> WORLD, composed in the one place that composes it for snapping, mirroring
+        // WorldMatrixForObject's contract for geometry.
+        const Placement3D* placement = PlacementForObject(stored.objectType, stored.object);
+        const bool moved = placement && !placement->IsIdentity();
+
+        for (const SnapPoint& authored : points) {
+            XMFLOAT3 world = { (float)authored.x, (float)authored.y, (float)authored.z };
+            if (moved) {
+                DirectX::XMStoreFloat3(&world,
+                    placement->TransformPoint(DirectX::XMLoadFloat3(&world)));
+            }
+            double screenX = 0.0, screenY = 0.0;
+            if (!Scene3DProjectPoint(projection, world, screenX, screenY)) continue;
+            SnapPoint candidate = authored;
+            candidate.x = world.x;
+            candidate.y = world.y;
+            candidate.z = world.z;
+            candidate.objectId = stored.memoryId;
+            const double dx = screenX - cursorX, dy = screenY - cursorY;
+            candidates.Consider(candidate, std::sqrt(dx * dx + dy * dy));
+        }
+    }
+}
+
+/* THE 3D placement chokepoint, and now the snapped one. Object snap points first, work plane with
+ambient rounding as the guaranteed fallback.
+
+outResult, when given, says which rule produced the point - the hover marker needs that, a placement
+does not. */
+static bool Scene3DPlacementPointFromInput(DATASETTAB& tab, const ACTION_DETAILS& input,
+    XMFLOAT3& outPoint, SnapResult* outResult = nullptr) {
+    DirectX::XMVECTOR eye{}, ray{}, forward{};
+    int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
+    if (!Scene3DRayFromInput(tab, input, eye, ray, forward, viewportWidth, viewportHeight, viewportTop)) {
+        return false;
+    }
+
+    const Viewport* viewport = Scene3DInputViewport(tab);
+    const SnapWorkPlane plane = viewport ? viewport->workPlane : SnapWorkPlane{};
+    XMFLOAT3 planePoint{};
+    float planeDistance = 0.0f;
+    const bool onPlane = Scene3DWorkPlaneHit(plane, eye, ray, planePoint, planeDistance);
+
+    // As in 2D: the master switch and held Shift both silence the OBJECT snaps and leave the
+    // ambient grid running, because that one is not an object snap (section 13).
+    const uint32_t mask = (tab.snapObjectEnabled3D.load(std::memory_order_acquire) && !tab.isShiftDown)
+        ? tab.snapMask3D.load(std::memory_order_acquire)
+        : 0u;
+
+    const CameraState& cam = ActiveSceneCamera(tab);
+    SnapCandidateSet candidates(mask, SnapDpiScaleForTab(tab));
+    if (mask != 0u) {
+        const Scene3DProjection projection =
+            Scene3DBuildProjection(cam, viewportWidth, viewportHeight, viewportTop);
+        Scene3DGatherObjectSnaps(tab, projection, (double)input.x, (double)input.y, candidates);
+    }
+
+    SnapResult result{};
+    if (candidates.Resolve(result)) {
+        outPoint = { (float)result.x, (float)result.y, (float)result.z };
+        if (outResult) *outResult = result;
+        return true;
+    }
+
+    // No object snap won. The work plane is the only thing left that can turn a ray into a point,
+    // so a ray that never reached it produces nothing at all.
+    if (!onPlane) return false;
+
+    /* Ambient grid, in the plane. Only the two IN-PLANE coordinates are rounded: the third is the
+    plane's own offset and is exact by definition (section 9). The step comes from the distance to
+    the plane rather than to camera.target, so it tracks how big a metre actually is on screen where
+    the user is pointing. */
+    const double step = Scene3DAmbientStepM((double)viewportHeight, (double)planeDistance, (double)cam.fov);
+    const uint8_t axis = plane.axis <= kWorkPlaneAxisZ ? plane.axis : kWorkPlaneAxisZ;
+    if (axis != kWorkPlaneAxisX) planePoint.x = (float)SnapToStep((double)planePoint.x, step);
+    if (axis != kWorkPlaneAxisY) planePoint.y = (float)SnapToStep((double)planePoint.y, step);
+    if (axis != kWorkPlaneAxisZ) planePoint.z = (float)SnapToStep((double)planePoint.z, step);
+
+    // Ortho: lock the vector from the anchor onto whichever work-plane axis it is closest to, so a
+    // vertical member comes out exactly vertical (section 11). The anchor of a 3D placement is the
+    // previously placed point; with none, there is nothing to be relative to and ortho is skipped.
+    if (tab.snapOrtho3D.load(std::memory_order_acquire) && tab.snapHasPlacementAnchor3D) {
+        const XMFLOAT3 anchor = tab.snapPlacementAnchor3D;
+        const float delta[3] = { planePoint.x - anchor.x, planePoint.y - anchor.y,
+                                 planePoint.z - anchor.z };
+        int dominant = 0;
+        for (int i = 1; i < 3; ++i) {
+            if (std::abs(delta[i]) > std::abs(delta[dominant])) dominant = i;
+        }
+        if (dominant != 0) planePoint.x = anchor.x;
+        if (dominant != 1) planePoint.y = anchor.y;
+        if (dominant != 2) planePoint.z = anchor.z;
+    }
+
+    outPoint = planePoint;
+    if (outResult) {
+        outResult->hit = true;
+        outResult->kind = tab.snapOrtho3D.load(std::memory_order_acquire) && tab.snapHasPlacementAnchor3D
+            ? SnapKind::Ortho : SnapKind::AmbientGrid;
+        outResult->priority = 0;
+        outResult->x = outPoint.x;
+        outResult->y = outPoint.y;
+        outResult->z = outPoint.z;
+    }
+    return true;
+}
+
+/* Publishes the 3D hover marker (section 12), the same contract as the 2D one: engineering thread
+writes plain data, render thread reads it a frame later, and a click never reads it back. Nothing is
+resolved while the camera is being driven - the cursor is not picking a point during an orbit or a
+pan (section 8). */
+static void Scene3DUpdateSnapHover(DATASETTAB& tab, const ACTION_DETAILS& input) {
+    if (tab.mouseMiddleDown || (tab.isAltDown && tab.mouseLeftDown)) {
+        tab.snapHover.Clear();
+        return;
+    }
+
+    XMFLOAT3 point{};
+    SnapResult result{};
+    if (!Scene3DPlacementPointFromInput(tab, input, point, &result) || !result.hit) {
+        tab.snapHover.Clear();
+        return;
+    }
+
+    int viewportWidth = 0, viewportHeight = 0, viewportTop = 0;
+    if (!GetVisibleSceneViewportForTab(tab, viewportWidth, viewportHeight, viewportTop)) {
+        tab.snapHover.Clear();
+        return;
+    }
+    double screenX = 0.0, screenY = 0.0;
+    const Scene3DProjection projection =
+        Scene3DBuildProjection(ActiveSceneCamera(tab), viewportWidth, viewportHeight, viewportTop);
+    if (!Scene3DProjectPoint(projection, point, screenX, screenY)) {
+        tab.snapHover.Clear();
+        return;
+    }
+
+    const int markerX = (int)std::lround(screenX);
+    const int markerY = (int)std::lround(screenY);
+    const uint8_t kind = static_cast<uint8_t>(result.kind);
+    // GetTickCount64 is the timestamp this codebase already shares between the engineering and
+    // render threads (SelectionState::lastNavInteractionMs). The label delay compares a value
+    // written here against one read there, so the two MUST be the same clock.
+    const uint64_t nowMs = GetTickCount64();
+    const bool sameAsBefore = tab.snapHover.valid.load(std::memory_order_acquire) &&
+        tab.snapHover.kind.load(std::memory_order_acquire) == kind &&
+        tab.snapHover.screenX.load(std::memory_order_acquire) == markerX &&
+        tab.snapHover.screenY.load(std::memory_order_acquire) == markerY;
+    if (!sameAsBefore) tab.snapHover.sinceMs.store(nowMs, std::memory_order_release);
+
+    tab.snapHover.screenX.store(markerX, std::memory_order_release);
+    tab.snapHover.screenY.store(markerY, std::memory_order_release);
+    tab.snapHover.kind.store(kind, std::memory_order_release);
+    tab.snapHover.subTabSlot.store(InputViewSlot(tab), std::memory_order_release);
+    tab.snapHover.valid.store(true, std::memory_order_release);
+}
+
+/* Ribbon / keyboard snap settings, applied on the engineering thread so the atomics have a single
+writer. `parameter` is a SnapKind value, or one of the two kSnapTodo* mode codes for the pieces of
+state section 12 keeps deliberately out of the mask. */
+static void ApplySnapToggle(DATASETTAB& tab, bool threeD, int parameter) {
+    if (parameter == kSnapTodoMasterSwitch) {
+        std::atomic<bool>& flag = threeD ? tab.snapObjectEnabled3D : tab.snapObjectEnabled2D;
+        flag.store(!flag.load(std::memory_order_acquire), std::memory_order_release);
+        return;
+    }
+    if (parameter == kSnapTodoOrtho) {
+        std::atomic<bool>& flag = threeD ? tab.snapOrtho3D : tab.snapOrtho2D;
+        flag.store(!flag.load(std::memory_order_acquire), std::memory_order_release);
+        return;
+    }
+    if (parameter < 0 || parameter >= (int)kSnapKindCount) return;
+
+    const uint32_t bit = SnapMaskBit(static_cast<SnapKind>(parameter));
+    std::atomic<uint32_t>& mask = threeD ? tab.snapMask3D : tab.snapMask2D;
+    const uint32_t current = mask.load(std::memory_order_acquire);
+    mask.store(current ^ bit, std::memory_order_release);
+}
+
+// Work plane by normal axis. A RADIO, not a toggle: a screen ray resolves onto exactly one plane,
+// so re-pressing the active axis leaves it where it is rather than leaving placement with none.
+static void ApplySnapWorkPlaneAxis(DATASETTAB& tab, uint8_t axis) {
+    if (axis > kWorkPlaneAxisZ) return;
+    if (Viewport* viewport = Scene3DInputViewport(tab)) viewport->workPlane.axis = axis;
 }
 
 // --- 3D click-selection glue (see website/content/software/selection.md) ------------------------
@@ -1328,7 +1696,11 @@ static void ZoomSceneToWindow(DATASETTAB& tab, int x0, int y0, int x1, int y1) {
     centerPixel.x = (x0 + x1) / 2;
     centerPixel.y = (y0 + y1) / 2;
     XMFLOAT3 focus{};
-    if (!Scene3DPlacementPointFromInput(tab, centerPixel, focus)) return;
+    /* The RAW focal-plane mapping, deliberately (snapping.md locked decision 14). This is
+    navigation, not construction: recentring the camera onto a work plane far below the objects the
+    user just framed would send it flying, and a snapped centre would move the view somewhere the
+    rectangle did not point at. */
+    if (!Scene3DFocalPointFromInput(tab, centerPixel, focus)) return;
 
     CameraState& cam = ActiveSceneCamera(tab);
     DirectX::XMVECTOR eye = DirectX::XMLoadFloat3(&cam.position);
@@ -1773,6 +2145,9 @@ static void CancelPrimitive3DPlacement(DATASETTAB& tab) {
     tab.activePrimitive3DPlacementType.store(
         VishwakarmaStorage::ToNumber(VishwakarmaStorage::ObjectType::Unknown),
         std::memory_order_release);
+    // The anchor belongs to the running command, so it dies with it - exactly as
+    // ClearLineCreationState drops the 2D tools' private previous points.
+    tab.snapHasPlacementAnchor3D = false;
 }
 
 static bool HandlePrimitive3DPlacementInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
@@ -1794,6 +2169,10 @@ static bool HandlePrimitive3DPlacementInput(DATASETTAB& tab, const ACTION_DETAIL
     XMFLOAT3 placementPoint{};
     if (Scene3DPlacementPointFromInput(tab, input, placementPoint)) {
         CreatePrimitiveGeometryElement(&tab, objectType, placementPoint);
+        // The point just committed becomes the anchor the NEXT placement's ortho constraint is
+        // measured from, so a run of primitives can be laid out on an exact axis.
+        tab.snapPlacementAnchor3D = placementPoint;
+        tab.snapHasPlacementAnchor3D = true;
     }
     return true;
 }
@@ -2197,6 +2576,10 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
 
                 myTab->lastMouseX = input.x;
                 myTab->lastMouseY = input.y;
+                // Coalesced like the 2D half: the object scan behind this is far too heavy to run
+                // once per mouse report (section 8).
+                myTab->snapHoverPending = true;
+                myTab->snapHoverInput = input;
                 // Check if in render area (vs UI): compare input.x/y against the Viewport's rect.
                 break;
             case ACTION_TYPE::MOUSEWHEEL:
@@ -2302,6 +2685,11 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 else if (input.x == 18) {myTab->isAltDown = true;} // 18 is VK_MENU (ALT)
                 else if (input.x == 16) {myTab->isShiftDown = true;} // SHIFT (VK_SHIFT)
                 else if (input.x == 17) {myTab->isCtrlDown = true;} // CTRL (VK_CONTROL)
+                /* The industry-standard snapping keys, so muscle memory transfers (snapping.md
+                section 13). Cad2DHandleInput consumes these first when the view is a Page2D, so
+                what reaches here is always the 3D scene's copy of the same two switches. */
+                else if (input.x == VK_F3) { ApplySnapToggle(*myTab, true, kSnapTodoMasterSwitch); }
+                else if (input.x == VK_F8) { ApplySnapToggle(*myTab, true, kSnapTodoOrtho); }
                 break;
             case ACTION_TYPE::KEYUP:
                 if (input.x == 18) { myTab->isAltDown = false;}// 18 is VK_MENU (ALT)
@@ -2503,6 +2891,20 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         }
         // After loop: If inputCount high, log or adjust (e.g., sleep if bursty).
 
+        /* Snap hover, resolved ONCE for the whole burst of input just drained (snapping.md
+        section 8). The handlers above only recorded the latest cursor position; doing the work
+        here is what keeps a 1000 Hz mouse from running a thousand candidate scans for a marker the
+        screen redraws sixty times a second. Whichever world the input view is showing answers -
+        the 2D publisher no-ops when the view is not a Page2D. */
+        if (myTab->snapHoverPending) {
+            myTab->snapHoverPending = false;
+            if (Cad2DIsActivePage2D(*myTab)) {
+                Cad2DPublishSnapHover(*myTab, myTab->snapHoverInput);
+            } else {
+                Scene3DUpdateSnapHover(*myTab, myTab->snapHoverInput);
+            }
+        }
+
         // Apply any completed GPU pick result (selection highlight set + camera recentering).
         if (myTab->selection.resultReady.load(std::memory_order_acquire)) {
             bool hit; uint64_t objId; uint32_t purpose;
@@ -2613,6 +3015,12 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 ApplySceneVisibilityAction(myTab, SceneVisibilityAction::HideUnselected);
             } else if (nextWorkTODO.actionType == ACTION_TYPE::HIDE_RESET_OBJECTS) {
                 ApplySceneVisibilityAction(myTab, SceneVisibilityAction::ShowAll);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::SNAP_TOGGLE_KIND2D ||
+                       nextWorkTODO.actionType == ACTION_TYPE::SNAP_TOGGLE_KIND3D) {
+                ApplySnapToggle(*myTab,
+                    nextWorkTODO.actionType == ACTION_TYPE::SNAP_TOGGLE_KIND3D, nextWorkTODO.x);
+            } else if (nextWorkTODO.actionType == ACTION_TYPE::SNAP_SET_WORKPLANE) {
+                ApplySnapWorkPlaneAxis(*myTab, static_cast<uint8_t>(nextWorkTODO.x));
             }
         }
 

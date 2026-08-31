@@ -966,6 +966,90 @@ constexpr char32_t kWindowCloseCodepoint = SVGIconRenderer::IconForID(13u);
 
 std::atomic<uint64_t> g_splashOverlayStartTick{ 0 };
 
+/* True when this ribbon control is a snap setting that is currently ON, so the ribbon can draw it
+latched (snapping.md section 13). kSnapCommandBindings says what each button means; this only reads
+the state it names, which is why a click and its highlight cannot disagree.
+
+The work-plane buttons are a RADIO, so the latched one is the axis currently selected rather than a
+bit that happens to be set - and with no view resolved, Z is latched because Z is the default. */
+static bool SnapControlLatched(const DATASETTAB& tab, Commands command) {
+    const SnapCommandBinding* binding = SnapBindingForCommand(static_cast<uint32_t>(command));
+    if (!binding) return false;
+
+    switch (binding->kind) {
+    case SnapBindingKind::MasterSwitch:
+        return (binding->threeD ? tab.snapObjectEnabled3D : tab.snapObjectEnabled2D)
+            .load(std::memory_order_acquire);
+    case SnapBindingKind::Ortho:
+        return (binding->threeD ? tab.snapOrtho3D : tab.snapOrtho2D)
+            .load(std::memory_order_acquire);
+    case SnapBindingKind::MaskBit: {
+        const uint32_t mask = (binding->threeD ? tab.snapMask3D : tab.snapMask2D)
+            .load(std::memory_order_acquire);
+        return SnapMaskHas(mask, static_cast<SnapKind>(binding->parameter));
+    }
+    case SnapBindingKind::WorkPlaneAxis: {
+        const int slot = InputViewSlot(tab);
+        if (slot < 0 || slot >= MV_MAX_SUBTABS) return binding->parameter == kWorkPlaneAxisZ;
+        return tab.viewports[slot].workPlane.axis == binding->parameter;
+    }
+    }
+    return false;
+}
+
+/* The snap hover marker (snapping.md section 13): the per-kind glyph at the snapped screen point,
+plus its name once the point has held still for kSnapHoverLabelDelayMs.
+
+This is not polish. Without it the user cannot tell WHICH snap fired, and a snap they cannot
+identify is one they will not trust. The glyph is the same artwork as the kind's ribbon button, so
+what is highlighted in the ribbon is what appears under the cursor. */
+static uint32_t SnapMarkerIconForKind(SnapKind kind) {
+    switch (kind) {
+    case SnapKind::End:           return kIconSnapEnd;
+    case SnapKind::Mid:           return kIconSnapMid;
+    case SnapKind::Center:        return kIconSnapCenter;
+    case SnapKind::Quadrant:      return kIconSnapQuadrant;
+    case SnapKind::Nearest:       return kIconSnapNearest;
+    case SnapKind::Intersection:  return kIconSnapIntersection;
+    case SnapKind::Insertion:     return kIconSnapInsertion;
+    case SnapKind::Perpendicular: return kIconSnapPerpendicular;
+    case SnapKind::Tangent:       return kIconSnapTangent;
+    case SnapKind::Ortho:         return kIconSnapOrtho;
+    case SnapKind::MemberEnd:     return kIconSnapMemberEnd;
+    case SnapKind::MemberMid:     return kIconSnapMemberMid;
+    case SnapKind::EdgeMid:       return kIconSnapEdgeMid;
+    case SnapKind::FaceCenter:    return kIconSnapFaceCenter;
+    case SnapKind::ObjectDefined: return kIconSnapObjectDefined;
+    default:                      return kIconSnapAmbientGrid;   // Includes the always-on grid.
+    }
+}
+
+// The kind's own name, reusing the 2D ribbon button labels: they already say Endpoint, Midpoint,
+// Quadrant and so on in all 46 languages, and inventing a second wording would be worse than
+// reusing them even where the point came from a 3D object.
+static UITextID SnapMarkerLabelForKind(SnapKind kind) {
+    switch (kind) {
+    case SnapKind::End:           return UITextID::SNAP2D_END;
+    case SnapKind::Mid:           return UITextID::SNAP2D_MID;
+    case SnapKind::Center:        return UITextID::SNAP2D_CENTER;
+    case SnapKind::Quadrant:      return UITextID::SNAP2D_QUADRANT;
+    case SnapKind::Nearest:       return UITextID::SNAP2D_NEAREST;
+    case SnapKind::Intersection:  return UITextID::SNAP2D_INTERSECTION;
+    case SnapKind::Insertion:     return UITextID::SNAP2D_INSERTION;
+    case SnapKind::Perpendicular: return UITextID::SNAP2D_PERPENDICULAR;
+    case SnapKind::Tangent:       return UITextID::SNAP2D_TANGENT;
+    case SnapKind::Ortho:         return UITextID::SNAP2D_ORTHO;
+    case SnapKind::MemberEnd:     return UITextID::SNAP3D_MEMBER_END;
+    case SnapKind::MemberMid:     return UITextID::SNAP3D_MEMBER_MID;
+    case SnapKind::EdgeMid:       return UITextID::SNAP3D_EDGE_MID;
+    case SnapKind::FaceCenter:    return UITextID::SNAP3D_FACE_CENTER;
+    case SnapKind::ObjectDefined: return UITextID::SNAP3D_OBJECT_DEFINED;
+    // The ambient grid has no ribbon button - it cannot be switched off - so it carries its own
+    // label rather than borrowing one that would name the wrong thing.
+    default:                      return UITextID::SnapAmbientGrid;
+    }
+}
+
 // Portable half of RenderUIOverlay (UserInterface-<Platform>.cpp): lays out and hit-tests every
 // widget (tab bands, ribbon, data tree, property pane, cursor icons), fills ctx with the frame's
 // UI geometry and emits UIActions. The caller binds the pipeline and draws ctx afterwards.
@@ -1415,6 +1499,12 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
         }
     }
 
+    /* The tab whose snap settings the latched toggles below reflect. Read lock-free like every
+    other per-tab atomic this overlay touches; one frame stale is the standing contract. */
+    const DATASETTAB* ribbonTab =
+        (window.activeTabIndex >= 0 && window.activeTabIndex < MV_MAX_TABS)
+        ? &allTabs[window.activeTabIndex] : nullptr;
+
     for (size_t i = 0; i < TotalUIControls; ++i) {
         const auto& ctrl = AllUIControls[i];
         const UITopRibbonControlLayout& ctrlLayout = topRibbonLayout.controls[i];
@@ -1439,6 +1529,9 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
             ctx.iconData->iconGlyphLookup.find(resolvedIconChar) != ctx.iconData->iconGlyphLookup.end();
         const bool controlVisible = btnX + btnWidth >= 0.0f && btnX <= W;
         bool hovered = false;
+        // Snap toggles are the ribbon's only LATCHED controls: they keep a visible "currently on"
+        // state after the click, which every momentary button above deliberately does not.
+        const bool latched = ribbonTab && SnapControlLatched(*ribbonTab, ctrl.action);
 
         if (ctrl.type == 1 || ctrl.type == 2) {                     // Button or Dropdown trigger
             hovered = controlVisible && ctrl.isEnabled && (input.mouseX >= btnX && input.mouseX < btnX + btnWidth &&
@@ -1449,6 +1542,9 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
                 if (hovered) {
                     PushRoundedRectangle(ctx, btnX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
                         drawColor, uiRes);
+                } else if (latched) {
+                    PushRoundedRectangle(ctx, btnX, btnY, btnWidth, btnHeight, roundedCornerRadiusPx,
+                        uiActiveColors.actionLatchedBackground, uiRes);
                 } else if (!hasDedicatedSVGIcon) {
                     float highlightWidth = ctrl.showText ? iconReservedWidthPx : btnWidth;
                     PushRoundedRectangle(ctx, btnX, btnY, highlightWidth, btnHeight, roundedCornerRadiusPx,
@@ -1507,7 +1603,7 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
             float textX = btnX + textStartOffsetPx;
             float textWidth = btnWidth - textStartOffsetPx - textEndInsetPx;
             uint32_t textColor = 0xFFFFFFFF; // default hovered/active color (white)
-            if (!hovered) {
+            if (!hovered && !latched) {      // Latched draws on the accent, so it keeps white too.
                 textColor = ctrl.isEnabled ? uiActiveColors.actionText : kUIDisabledTextGray;
             }
             pushTextClipped(textX, textBaselineY(btnY, btnHeight, uiTextScale),
@@ -2490,6 +2586,44 @@ void BuildUIOverlay(SingleUIWindow& window, UIDrawContext& ctx, DX12ResourcesUI&
         const float iconY = std::clamp(
             input.mouseY + cursorIconGap, 0.0f, std::max(0.0f, H - cursorIconSize));
         PushIcon(ctx, iconX, iconY, cursorIconSize, cursorIconSize, cursorIcon, 0xFF000000u, uiRes);
+    }
+
+    /* SNAP HOVER MARKER (snapping.md sections 12 and 13). The engineering thread resolved this with
+    the same call the next click will make, so the glyph is a promise the click keeps.
+
+    Drawn only in the view that produced it: the state carries its sub-tab slot, and a marker from
+    another view would sit on this one's drawing pointing at nothing. */
+    if (activeTabIndex >= 0 && activeTabIndex < MV_MAX_TABS &&
+        (activeInternalSubTabType == VishwakarmaStorage::ObjectType::Scene3D ||
+         activeInternalSubTabType == VishwakarmaStorage::ObjectType::Page2D)) {
+        const DATASETTAB& tab = allTabs[activeTabIndex];
+        if (tab.snapHover.valid.load(std::memory_order_acquire) &&
+            tab.snapHover.subTabSlot.load(std::memory_order_acquire) == InputViewSlot(tab)) {
+            const auto kind = static_cast<SnapKind>(tab.snapHover.kind.load(std::memory_order_acquire));
+            const float markerSize = iconSizePx;
+            const float markerX = std::clamp(
+                (float)tab.snapHover.screenX.load(std::memory_order_acquire) - markerSize * 0.5f,
+                0.0f, std::max(0.0f, W - markerSize));
+            const float markerY = std::clamp(
+                (float)tab.snapHover.screenY.load(std::memory_order_acquire) - markerSize * 0.5f,
+                0.0f, std::max(0.0f, H - markerSize));
+            PushIcon(ctx, markerX, markerY, markerSize, markerSize,
+                SVGIconRenderer::IconForID(SnapMarkerIconForKind(kind)),
+                uiActiveColors.actionLatchedBackground, uiRes);
+
+            // The name, once the point has held still long enough that a label is information
+            // rather than flicker.
+            const uint64_t nowMs = GetTickCount64();   // Same clock the writer used.
+            const uint64_t sinceMs = tab.snapHover.sinceMs.load(std::memory_order_acquire);
+            if (nowMs >= sinceMs && nowMs - sinceMs >= kSnapHoverLabelDelayMs) {
+                const char32_t* labelText = LocalizedUIString(SnapMarkerLabelForKind(kind));
+                const float labelWidth = MeasureUIStringWidth(labelText, uiTextScale);
+                const float labelX = std::clamp(markerX + markerSize + 4.0f, 0.0f,
+                    std::max(0.0f, W - labelWidth));
+                pushTextClipped(labelX, textBaselineY(markerY, markerSize, uiTextScale),
+                    labelText, labelWidth + 1.0f, uiActiveColors.actionLatchedBackground, uiTextScale);
+            }
+        }
     }
 
     // "Restart to Update" toast: the update thread has downloaded, verified and staged a newer

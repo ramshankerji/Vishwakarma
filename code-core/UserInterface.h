@@ -10,6 +10,7 @@
 #include FT_FREETYPE_H
 
 #include "ListOfCommands.h"
+#include "Snap.h"
 #include "SVGIconRenderer.h"
 #include "FontManager.h" // FreeType font atlas generation
 #include "UserInterface-TextTranslations.h" // localization
@@ -332,6 +333,11 @@ struct UIColors { // Standard UI Colours (ABGR format for DX12)
     uint32_t actionText = 0xFF242424; //rgba(36, 36, 36) + Corner smoothening color?
     //Action icon color is stored inside the button itself. Different icons = different colors.
     uint32_t actionIconDisabled = 0xFF888888; //rgba(136, 136, 136)
+    /* Background of a LATCHED toggle - a snap kind that is currently on. Every other control in
+    the ribbon is momentary, so this is the one colour that says "still true after you let go".
+    It is the accent the snap icons themselves are drawn with (#0984E3), so the button and its
+    glyph read as one state. ABGR, hence the byte order. */
+    uint32_t actionLatchedBackground = 0xFFE38409; //rgba(9, 132, 227)
 };
 
 // The palette every overlay draws with (defined in UserInterface.cpp).
@@ -461,8 +467,89 @@ constexpr UIActionGroupNames topUIActionSubGroupNames[] = {
     { UITextID::ActiveExtensions, true, false },
     { UITextID::Civil, true, false },
     { UITextID::General, true, false },
+    { UITextID::Snap2D, true, false },   // Index 24: object snap toggles for the 2D page.
+    { UITextID::Snap3D, true, false },   // Index 25: object snap toggles + work plane for the 3D scene.
 };
 constexpr size_t TotalTopUIActionSubGroups = std::size(topUIActionSubGroupNames);
+
+/* Snap icons (website/static/SVGIcons). Named here rather than reached through UIIconForCommand
+because a snap kind means the same thing in both worlds and looks the same in both: SNAP2D_END and
+SNAP3D_END are different commands writing different masks, but one Endpoint icon serves both. */
+constexpr uint32_t kIconSnapToggleObject = 1856258841u;
+constexpr uint32_t kIconSnapEnd = 2270809863u;
+constexpr uint32_t kIconSnapMid = 2953131477u;
+constexpr uint32_t kIconSnapCenter = 3892871195u;
+constexpr uint32_t kIconSnapQuadrant = 1335776950u;
+constexpr uint32_t kIconSnapNearest = 2894911376u;
+constexpr uint32_t kIconSnapIntersection = 3414447954u;
+constexpr uint32_t kIconSnapInsertion = 3927847435u;
+constexpr uint32_t kIconSnapPerpendicular = 4199964416u;
+constexpr uint32_t kIconSnapTangent = 4239757343u;
+constexpr uint32_t kIconSnapOrtho = 3944222408u;
+constexpr uint32_t kIconSnapMemberEnd = 3725387458u;
+constexpr uint32_t kIconSnapMemberMid = 1365587230u;
+constexpr uint32_t kIconSnapEdgeMid = 2576371696u;
+constexpr uint32_t kIconSnapFaceCenter = 4274121661u;
+constexpr uint32_t kIconSnapObjectDefined = 4127554659u;
+constexpr uint32_t kIconSnapAmbientGrid = 1809721117u;
+constexpr uint32_t kIconSnapWorkPlaneX = 3153611554u;
+constexpr uint32_t kIconSnapWorkPlaneY = 1979457375u;
+constexpr uint32_t kIconSnapWorkPlaneZ = 4265671677u;
+
+/* What each ribbon snap command actually does, in ONE table (snapping.md section 13). Two dozen
+buttons all writing a different bit of the same settings would otherwise be spelled out twice - once
+where a click is dispatched and once where the latched highlight is drawn - and the two would drift.
+Both sides read this instead. */
+enum class SnapBindingKind : uint8_t {
+    MaskBit,        // Flips one SnapKind bit of the world's mask.
+    MasterSwitch,   // F3: every object snap off, ambient rounding untouched.
+    Ortho,          // F8: direction constraint. Mode state, not a mask bit (section 12).
+    WorkPlaneAxis   // Radio: which axis the 3D work plane's normal points along.
+};
+
+struct SnapCommandBinding {
+    Commands command;
+    bool threeD;               // Which world's settings this writes.
+    SnapBindingKind kind;
+    uint8_t parameter;         // MaskBit: a SnapKind value. WorkPlaneAxis: a kWorkPlaneAxis*. Else 0.
+};
+
+constexpr SnapCommandBinding kSnapCommandBindings[] = {
+    { Commands::SNAP2D_TOGGLE,         false, SnapBindingKind::MasterSwitch,  0 },
+    { Commands::SNAP2D_ORTHO,          false, SnapBindingKind::Ortho,         0 },
+    { Commands::SNAP2D_END,            false, SnapBindingKind::MaskBit, (uint8_t)SnapKind::End },
+    { Commands::SNAP2D_MID,            false, SnapBindingKind::MaskBit, (uint8_t)SnapKind::Mid },
+    { Commands::SNAP2D_CENTER,         false, SnapBindingKind::MaskBit, (uint8_t)SnapKind::Center },
+    { Commands::SNAP2D_QUADRANT,       false, SnapBindingKind::MaskBit, (uint8_t)SnapKind::Quadrant },
+    { Commands::SNAP2D_INTERSECTION,   false, SnapBindingKind::MaskBit, (uint8_t)SnapKind::Intersection },
+    { Commands::SNAP2D_PERPENDICULAR,  false, SnapBindingKind::MaskBit, (uint8_t)SnapKind::Perpendicular },
+    { Commands::SNAP2D_TANGENT,        false, SnapBindingKind::MaskBit, (uint8_t)SnapKind::Tangent },
+    { Commands::SNAP2D_NEAREST,        false, SnapBindingKind::MaskBit, (uint8_t)SnapKind::Nearest },
+    { Commands::SNAP2D_INSERTION,      false, SnapBindingKind::MaskBit, (uint8_t)SnapKind::Insertion },
+
+    { Commands::SNAP3D_TOGGLE,         true,  SnapBindingKind::MasterSwitch,  0 },
+    { Commands::SNAP3D_ORTHO,          true,  SnapBindingKind::Ortho,         0 },
+    { Commands::SNAP3D_MEMBER_END,     true,  SnapBindingKind::MaskBit, (uint8_t)SnapKind::MemberEnd },
+    { Commands::SNAP3D_MEMBER_MID,     true,  SnapBindingKind::MaskBit, (uint8_t)SnapKind::MemberMid },
+    { Commands::SNAP3D_END,            true,  SnapBindingKind::MaskBit, (uint8_t)SnapKind::End },
+    { Commands::SNAP3D_EDGE_MID,       true,  SnapBindingKind::MaskBit, (uint8_t)SnapKind::EdgeMid },
+    { Commands::SNAP3D_FACE_CENTER,    true,  SnapBindingKind::MaskBit, (uint8_t)SnapKind::FaceCenter },
+    { Commands::SNAP3D_CENTER,         true,  SnapBindingKind::MaskBit, (uint8_t)SnapKind::Center },
+    { Commands::SNAP3D_QUADRANT,       true,  SnapBindingKind::MaskBit, (uint8_t)SnapKind::Quadrant },
+    { Commands::SNAP3D_OBJECT_DEFINED, true,  SnapBindingKind::MaskBit, (uint8_t)SnapKind::ObjectDefined },
+
+    { Commands::SNAP3D_WORKPLANE_X,    true,  SnapBindingKind::WorkPlaneAxis, kWorkPlaneAxisX },
+    { Commands::SNAP3D_WORKPLANE_Y,    true,  SnapBindingKind::WorkPlaneAxis, kWorkPlaneAxisY },
+    { Commands::SNAP3D_WORKPLANE_Z,    true,  SnapBindingKind::WorkPlaneAxis, kWorkPlaneAxisZ },
+};
+
+// The binding for a command id, or nullptr when it is not a snap command.
+constexpr const SnapCommandBinding* SnapBindingForCommand(uint32_t commandId) noexcept {
+    for (const SnapCommandBinding& binding : kSnapCommandBindings) {
+        if (commandId == static_cast<uint32_t>(binding.command)) return &binding;
+    }
+    return nullptr;
+}
 
 // COMPILE-TIME GIANT ARRAY . Lists ALL top primary buttons (excliding right side pane) available in application.
 // This is the single source of truth. ~80+ controls shown here. we can extend to 500+ easily.
@@ -543,6 +630,26 @@ constexpr UIControlDefinition AllUIControls[] = {
     { Commands::EDIT_CHAMFER,           UITextID::EDIT_CHAMFER, U'x', 1, 3, 1, 0, true, false, 1 , 3 },
     { Commands::EDIT_EXPLODE,           UITextID::EDIT_EXPLODE, U'x', 1, 3, 2, 0, true, false, 1 , 3 },
 
+    /* SubGroup: Snap2D (website/content/software/snapping.md section 13). LATCHED toggles: the
+    ribbon draws the ones whose bit is on with a persistent highlight, unlike every momentary
+    button above. Columns are semantic - the two switches, then the point snaps by family - so a
+    partial column here is deliberate.
+
+    The ambient grid has no button by locked decision 5: it is always on and cannot be switched off,
+    which is what guarantees every click lands on an exact value. Nearest is present but off by
+    default; Parallel, TextBounds and Grid Object have no button because they are not implemented. */
+    { Commands::SNAP2D_TOGGLE,          UITextID::SNAP2D_TOGGLE, SVGIconRenderer::IconForID(kIconSnapToggleObject), 1, 3, 0, 0, true, true, 1 , 24 },
+    { Commands::SNAP2D_ORTHO,           UITextID::SNAP2D_ORTHO, SVGIconRenderer::IconForID(kIconSnapOrtho), 1, 3, 1, 0, true, true, 1 , 24 },
+    { Commands::SNAP2D_END,             UITextID::SNAP2D_END, SVGIconRenderer::IconForID(kIconSnapEnd), 1, 3, 0, 0, true, true, 1 , 24 },
+    { Commands::SNAP2D_MID,             UITextID::SNAP2D_MID, SVGIconRenderer::IconForID(kIconSnapMid), 1, 3, 1, 0, true, true, 1 , 24 },
+    { Commands::SNAP2D_CENTER,          UITextID::SNAP2D_CENTER, SVGIconRenderer::IconForID(kIconSnapCenter), 1, 3, 2, 0, true, true, 1 , 24 },
+    { Commands::SNAP2D_QUADRANT,        UITextID::SNAP2D_QUADRANT, SVGIconRenderer::IconForID(kIconSnapQuadrant), 1, 3, 0, 0, true, true, 1 , 24 },
+    { Commands::SNAP2D_INTERSECTION,    UITextID::SNAP2D_INTERSECTION, SVGIconRenderer::IconForID(kIconSnapIntersection), 1, 3, 1, 0, true, true, 1 , 24 },
+    { Commands::SNAP2D_INSERTION,       UITextID::SNAP2D_INSERTION, SVGIconRenderer::IconForID(kIconSnapInsertion), 1, 3, 2, 0, true, true, 1 , 24 },
+    { Commands::SNAP2D_PERPENDICULAR,   UITextID::SNAP2D_PERPENDICULAR, SVGIconRenderer::IconForID(kIconSnapPerpendicular), 1, 3, 0, 0, true, true, 1 , 24 },
+    { Commands::SNAP2D_TANGENT,         UITextID::SNAP2D_TANGENT, SVGIconRenderer::IconForID(kIconSnapTangent), 1, 3, 1, 0, true, true, 1 , 24 },
+    { Commands::SNAP2D_NEAREST,         UITextID::SNAP2D_NEAREST, SVGIconRenderer::IconForID(kIconSnapNearest), 1, 3, 2, 0, true, true, 1 , 24 },
+
     // ACTION GROUP 2: (2D) Advanced
     // Subgroup : Process Equipments
     // These are intelligent 2D symbols with embedded parameters. User can place them in 2D view.
@@ -596,6 +703,28 @@ constexpr UIControlDefinition AllUIControls[] = {
     { Commands::HIDE_SELECTED,          UITextID::HIDE_SELECTED, U'x', 1, 3, 0, 0, true, true, 3 , 18 },
     { Commands::HIDE_UNSELECTED,        UITextID::HIDE_UNSELECTED, U'x', 1, 3, 1, 0, true, true, 3 , 18 },
     { Commands::HIDE_RESET,             UITextID::HIDE_RESET, U'x', 1, 3, 2, 0, true, true, 3 , 18 },
+
+    /* Subgroup : Snap3D (website/content/software/snapping.md sections 9 and 13). Placed BEFORE
+    the Views run: that run already sits past the right window edge at 1080p, and these are
+    settings a user reaches for while placing, not once per session.
+
+    The last column is the work plane, and it is a RADIO rather than a set of toggles - a screen ray
+    determines a point only once you say which plane it lands on, so exactly one of the three is
+    always active. Z (horizontal) is the default because plant and structural work is floor-based.
+    Oblique is drawn nowhere yet: it is phase 2. */
+    { Commands::SNAP3D_TOGGLE,          UITextID::SNAP3D_TOGGLE, SVGIconRenderer::IconForID(kIconSnapToggleObject), 1, 3, 0, 0, true, true, 3 , 25 },
+    { Commands::SNAP3D_ORTHO,           UITextID::SNAP3D_ORTHO, SVGIconRenderer::IconForID(kIconSnapOrtho), 1, 3, 1, 0, true, true, 3 , 25 },
+    { Commands::SNAP3D_MEMBER_END,      UITextID::SNAP3D_MEMBER_END, SVGIconRenderer::IconForID(kIconSnapMemberEnd), 1, 3, 0, 0, true, true, 3 , 25 },
+    { Commands::SNAP3D_MEMBER_MID,      UITextID::SNAP3D_MEMBER_MID, SVGIconRenderer::IconForID(kIconSnapMemberMid), 1, 3, 1, 0, true, true, 3 , 25 },
+    { Commands::SNAP3D_END,             UITextID::SNAP3D_END, SVGIconRenderer::IconForID(kIconSnapEnd), 1, 3, 2, 0, true, true, 3 , 25 },
+    { Commands::SNAP3D_EDGE_MID,        UITextID::SNAP3D_EDGE_MID, SVGIconRenderer::IconForID(kIconSnapEdgeMid), 1, 3, 0, 0, true, true, 3 , 25 },
+    { Commands::SNAP3D_FACE_CENTER,     UITextID::SNAP3D_FACE_CENTER, SVGIconRenderer::IconForID(kIconSnapFaceCenter), 1, 3, 1, 0, true, true, 3 , 25 },
+    { Commands::SNAP3D_CENTER,          UITextID::SNAP3D_CENTER, SVGIconRenderer::IconForID(kIconSnapCenter), 1, 3, 2, 0, true, true, 3 , 25 },
+    { Commands::SNAP3D_QUADRANT,        UITextID::SNAP3D_QUADRANT, SVGIconRenderer::IconForID(kIconSnapQuadrant), 1, 3, 0, 0, true, true, 3 , 25 },
+    { Commands::SNAP3D_OBJECT_DEFINED,  UITextID::SNAP3D_OBJECT_DEFINED, SVGIconRenderer::IconForID(kIconSnapObjectDefined), 1, 3, 1, 0, true, true, 3 , 25 },
+    { Commands::SNAP3D_WORKPLANE_X,     UITextID::SNAP3D_WORKPLANE_X, SVGIconRenderer::IconForID(kIconSnapWorkPlaneX), 1, 3, 0, 0, true, true, 3 , 25 },
+    { Commands::SNAP3D_WORKPLANE_Y,     UITextID::SNAP3D_WORKPLANE_Y, SVGIconRenderer::IconForID(kIconSnapWorkPlaneY), 1, 3, 1, 0, true, true, 3 , 25 },
+    { Commands::SNAP3D_WORKPLANE_Z,     UITextID::SNAP3D_WORKPLANE_Z, SVGIconRenderer::IconForID(kIconSnapWorkPlaneZ), 1, 3, 2, 0, true, true, 3 , 25 },
 
     // Subgroup : Views
     { Commands::CREATE_VIEW_3D,         UITextID::CREATE_VIEW_3D, U'x', 1, 0, 0, 0, true, false, 3 , 1 }, //A plane with a inclusion offset distance.

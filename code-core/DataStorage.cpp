@@ -1068,6 +1068,304 @@ DirectX::XMMATRIX WorldMatrixForObject(VishwakarmaStorage::ObjectType objectType
     return world;
 }
 
+// --- Snap points per object (website/content/software/snapping.md section 9) --------------------
+namespace {
+
+void EmitSnapPoint(std::vector<SnapPoint>& out, const XMFLOAT3& p, SnapKind kind, uint8_t priority) {
+    SnapPoint point{};
+    point.x = p.x;
+    point.y = p.y;
+    point.z = p.z;
+    point.kind = kind;
+    point.priority = priority;
+    out.push_back(point);
+}
+
+XMFLOAT3 SnapMidpoint(const XMFLOAT3& a, const XMFLOAT3& b) {
+    return { (a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f, (a.z + b.z) * 0.5f };
+}
+
+/* An orthonormal pair spanning the plane perpendicular to `axis`, used to place the quadrant points
+of a circular face. The reference vector is swapped when the axis is nearly parallel to it, which is
+the same guard TEE::GetGeometry uses to build its branch frame - a cross product with a parallel
+vector has no direction to give. */
+void SnapPerpendicularBasis(FXMVECTOR axis, XMVECTOR& outU, XMVECTOR& outV) {
+    XMVECTOR reference = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+    if (std::fabs(XMVectorGetX(XMVector3Dot(axis, reference))) > 0.99f) {
+        reference = XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+    }
+    outU = XMVector3Normalize(XMVector3Cross(reference, axis));
+    outV = XMVector3Cross(axis, outU);
+}
+
+// The four 0/90/180/270 points of a circular face, in the face's own frame.
+void EmitCircleQuadrants(std::vector<SnapPoint>& out, const XMFLOAT3& center, FXMVECTOR axis,
+    float radius, uint8_t priority) {
+    if (!(radius > 0.0f)) return;
+    XMVECTOR u = XMVectorZero(), v = XMVectorZero();
+    SnapPerpendicularBasis(axis, u, v);
+    const XMVECTOR c = XMLoadFloat3(&center);
+    for (int q = 0; q < 4; ++q) {
+        const float angle = XM_PIDIV2 * (float)q;
+        XMFLOAT3 point{};
+        XMStoreFloat3(&point, c + radius * (std::cos(angle) * u + std::sin(angle) * v));
+        EmitSnapPoint(out, point, SnapKind::Quadrant, priority);
+    }
+}
+
+// A straight member: the two axis ends outrank generic geometry, which is the entire point of an
+// intelligent object (section 9). Shared by CYLINDER, PIPE and LINE_MEMBER.
+void EmitMemberAxis(std::vector<SnapPoint>& out, const XMFLOAT3& p1, const XMFLOAT3& p2) {
+    EmitSnapPoint(out, p1, SnapKind::MemberEnd, 15);
+    EmitSnapPoint(out, p2, SnapKind::MemberEnd, 15);
+    EmitSnapPoint(out, SnapMidpoint(p1, p2), SnapKind::MemberMid, 13);
+}
+
+// Corners, edge midpoints, face centres and body centre of a box given its 8 corners and the edge /
+// face topology of the type. Serves CUBOID, PARALLELEPIPED and FRUSTUM_OF_PYRAMID, which differ
+// only in how their corners are produced.
+void EmitBoxPoints(std::vector<SnapPoint>& out, const XMFLOAT3 corners[8],
+    const int edges[][2], size_t edgeCount, const int faces[][4], size_t faceCount) {
+    XMVECTOR bodyCenter = XMVectorZero();
+    for (int i = 0; i < 8; ++i) {
+        EmitSnapPoint(out, corners[i], SnapKind::End, 14);
+        bodyCenter += XMLoadFloat3(&corners[i]);
+    }
+    for (size_t e = 0; e < edgeCount; ++e) {
+        EmitSnapPoint(out, SnapMidpoint(corners[edges[e][0]], corners[edges[e][1]]),
+            SnapKind::EdgeMid, 12);
+    }
+    for (size_t f = 0; f < faceCount; ++f) {
+        XMVECTOR sum = XMVectorZero();
+        for (int k = 0; k < 4; ++k) sum += XMLoadFloat3(&corners[faces[f][k]]);
+        XMFLOAT3 faceCenter{};
+        XMStoreFloat3(&faceCenter, sum * 0.25f);
+        EmitSnapPoint(out, faceCenter, SnapKind::FaceCenter, 10);
+    }
+    XMFLOAT3 center{};
+    XMStoreFloat3(&center, bodyCenter * 0.125f);
+    EmitSnapPoint(out, center, SnapKind::Center, 9);
+}
+
+} // namespace
+
+bool SnapPointsForObject(ObjectType objectType, META_DATA* object, std::vector<SnapPoint>& out) {
+    if (!object) return false;
+
+    switch (objectType) {
+    case ObjectType::Cuboid: {
+        const CUBOID* box = static_cast<const CUBOID*>(object);
+        // Authored half-extents rotated by the authored orientation; the placement comes later.
+        const XMVECTOR rotation = XMLoadFloat4(&box->orientation);
+        const XMVECTOR center = XMLoadFloat3(&box->center);
+        XMFLOAT3 corners[8]{};
+        for (int i = 0; i < 8; ++i) {
+            const XMVECTOR half = XMVectorSet(
+                (i & 1) ? box->size.x * 0.5f : -box->size.x * 0.5f,
+                (i & 2) ? box->size.y * 0.5f : -box->size.y * 0.5f,
+                (i & 4) ? box->size.z * 0.5f : -box->size.z * 0.5f, 0.0f);
+            XMStoreFloat3(&corners[i], center + XMVector3Rotate(half, rotation));
+        }
+        // Bit i of the corner index is the sign along axis i, so an edge joins two indices that
+        // differ in exactly one bit and a face is the four sharing one bit value.
+        static constexpr int kEdges[12][2] = {
+            {0,1},{2,3},{4,5},{6,7}, {0,2},{1,3},{4,6},{5,7}, {0,4},{1,5},{2,6},{3,7} };
+        // Each face fixes one axis; listed as a CYCLE (consecutive entries are real edges) so the
+        // table stays a correct description of the box and not merely of its face centroids.
+        static constexpr int kFaces[6][4] = {
+            {0,2,6,4},{1,3,7,5}, {0,1,5,4},{2,3,7,6}, {0,1,3,2},{4,5,7,6} };
+        EmitBoxPoints(out, corners, kEdges, 12, kFaces, 6);
+        return true;
+    }
+    case ObjectType::Parallelepiped: {
+        const PARALLELEPIPED* box = static_cast<const PARALLELEPIPED*>(object);
+        if (box->vertices.size() < 8) return false;
+        XMFLOAT3 corners[8]{};
+        for (int i = 0; i < 8; ++i) corners[i] = box->vertices[i];
+        /* Vertex order is origin, A, B, C, A+B, A+C, B+C, A+B+C (PARALLELEPIPED::Randomize), so an
+        edge joins two vertices differing by exactly one of the three vectors. The faces are the
+        six AddFace quads of PARALLELEPIPED::GetGeometry, verbatim. */
+        static constexpr int kEdges[12][2] = {
+            {0,1},{0,2},{0,3}, {1,4},{1,5}, {2,4},{2,6}, {3,5},{3,6}, {4,7},{5,7},{6,7} };
+        static constexpr int kFaces[6][4] = {
+            {0,2,4,1},{0,3,6,2},{0,1,5,3},{7,5,1,4},{7,6,3,5},{7,4,2,6} };
+        EmitBoxPoints(out, corners, kEdges, 12, kFaces, 6);
+        return true;
+    }
+    case ObjectType::FrustumOfPyramid: {
+        const FRUSTUM_OF_PYRAMID* frustum = static_cast<const FRUSTUM_OF_PYRAMID*>(object);
+        if (frustum->vertices.size() < 8) return false;
+        XMFLOAT3 corners[8]{};
+        for (int i = 0; i < 8; ++i) corners[i] = frustum->vertices[i];
+        // 0-3 bottom ring, 4-7 top ring, i joined to i+4 (FRUSTUM_OF_PYRAMID::GetGeometry indices).
+        static constexpr int kEdges[12][2] = {
+            {0,1},{1,2},{2,3},{3,0}, {4,5},{5,6},{6,7},{7,4}, {0,4},{1,5},{2,6},{3,7} };
+        static constexpr int kFaces[6][4] = {
+            {0,1,2,3},{4,5,6,7}, {0,1,5,4},{1,2,6,5},{2,3,7,6},{3,0,4,7} };
+        EmitBoxPoints(out, corners, kEdges, 12, kFaces, 6);
+        return true;
+    }
+    case ObjectType::Pyramid: {
+        const PYRAMID* pyramid = static_cast<const PYRAMID*>(object);
+        if (pyramid->vertices.size() < 4) return false;   // 0,1,2 base and 3 apex: a tetrahedron.
+        for (int i = 0; i < 4; ++i) EmitSnapPoint(out, pyramid->vertices[i], SnapKind::End, 14);
+        static constexpr int kEdges[6][2] = { {0,1},{1,2},{2,0}, {0,3},{1,3},{2,3} };
+        for (const auto& edge : kEdges) {
+            EmitSnapPoint(out, SnapMidpoint(pyramid->vertices[edge[0]], pyramid->vertices[edge[1]]),
+                SnapKind::EdgeMid, 12);
+        }
+        return true;
+    }
+    case ObjectType::Cylinder: {
+        const CYLINDER* cylinder = static_cast<const CYLINDER*>(object);
+        EmitMemberAxis(out, cylinder->p1, cylinder->p2);
+        // The two base centres coincide with the axis ends. Offered again as Center so that a user
+        // who has turned Member End off still gets them.
+        EmitSnapPoint(out, cylinder->p1, SnapKind::Center, 13);
+        EmitSnapPoint(out, cylinder->p2, SnapKind::Center, 13);
+        const XMVECTOR axis = XMVector3Normalize(
+            XMLoadFloat3(&cylinder->p2) - XMLoadFloat3(&cylinder->p1));
+        EmitCircleQuadrants(out, cylinder->p1, axis, cylinder->radius, 11);
+        EmitCircleQuadrants(out, cylinder->p2, axis, cylinder->radius, 11);
+        return true;
+    }
+    case ObjectType::Pipe: {
+        const PIPE* pipe = static_cast<const PIPE*>(object);
+        EmitMemberAxis(out, pipe->center1, pipe->center2);
+        EmitSnapPoint(out, pipe->center1, SnapKind::Center, 13);
+        EmitSnapPoint(out, pipe->center2, SnapKind::Center, 13);
+        const XMVECTOR axis = XMVector3Normalize(
+            XMLoadFloat3(&pipe->center2) - XMLoadFloat3(&pipe->center1));
+        // Outside diameter: the surface an isometric dimensions to.
+        EmitCircleQuadrants(out, pipe->center1, axis, pipe->outsideDiameter * 0.5f, 11);
+        EmitCircleQuadrants(out, pipe->center2, axis, pipe->outsideDiameter * 0.5f, 11);
+        return true;
+    }
+    case ObjectType::Cone: {
+        const CONE* cone = static_cast<const CONE*>(object);
+        EmitSnapPoint(out, cone->apex, SnapKind::End, 14);
+        EmitSnapPoint(out, cone->baseCenter, SnapKind::End, 14);
+        const XMVECTOR axis = XMVector3Normalize(
+            XMLoadFloat3(&cone->apex) - XMLoadFloat3(&cone->baseCenter));
+        EmitCircleQuadrants(out, cone->baseCenter, axis, cone->radius, 11);
+        return true;
+    }
+    case ObjectType::FrustumOfCone: {
+        const FRUSTUM_OF_CONE* frustum = static_cast<const FRUSTUM_OF_CONE*>(object);
+        EmitSnapPoint(out, frustum->bottomCenter, SnapKind::End, 14);
+        EmitSnapPoint(out, frustum->topCenter, SnapKind::End, 14);
+        const XMVECTOR axis = XMVector3Normalize(
+            XMLoadFloat3(&frustum->topCenter) - XMLoadFloat3(&frustum->bottomCenter));
+        EmitCircleQuadrants(out, frustum->bottomCenter, axis, frustum->bottomRadius, 11);
+        EmitCircleQuadrants(out, frustum->topCenter, axis, frustum->topRadius, 11);
+        return true;
+    }
+    case ObjectType::Sphere: {
+        const SPHERE* sphere = static_cast<const SPHERE*>(object);
+        EmitSnapPoint(out, sphere->center, SnapKind::Center, 13);
+        const XMFLOAT3& c = sphere->center;
+        const float r = sphere->radius;
+        const XMFLOAT3 extremes[6] = {
+            { c.x - r, c.y, c.z }, { c.x + r, c.y, c.z },
+            { c.x, c.y - r, c.z }, { c.x, c.y + r, c.z },
+            { c.x, c.y, c.z - r }, { c.x, c.y, c.z + r } };
+        for (const XMFLOAT3& p : extremes) EmitSnapPoint(out, p, SnapKind::Quadrant, 11);
+        return true;
+    }
+    case ObjectType::Ellipsoid: {
+        const ELLIPSOID* ellipsoid = static_cast<const ELLIPSOID*>(object);
+        EmitSnapPoint(out, ellipsoid->center, SnapKind::Center, 13);
+        const XMFLOAT3& c = ellipsoid->center;
+        const XMFLOAT3 extremes[6] = {
+            { c.x - ellipsoid->radiusX, c.y, c.z }, { c.x + ellipsoid->radiusX, c.y, c.z },
+            { c.x, c.y - ellipsoid->radiusY, c.z }, { c.x, c.y + ellipsoid->radiusY, c.z },
+            { c.x, c.y, c.z - ellipsoid->radiusZ }, { c.x, c.y, c.z + ellipsoid->radiusZ } };
+        for (const XMFLOAT3& p : extremes) EmitSnapPoint(out, p, SnapKind::Quadrant, 11);
+        return true;
+    }
+    case ObjectType::Torus: {
+        const TORUS* torus = static_cast<const TORUS*>(object);
+        EmitSnapPoint(out, torus->center, SnapKind::Center, 13);
+        /* TORUS::GetGeometry sweeps the major circle in the XZ plane and offsets the tube along Y,
+        so the four tube circles sit at major angle 0/90/180/270 and each contributes its own outer,
+        inner, top and bottom point - the four an engineer dimensions to. */
+        for (int major = 0; major < 4; ++major) {
+            const float theta = XM_PIDIV2 * (float)major;
+            const float ct = std::cos(theta), st = std::sin(theta);
+            const float radii[4] = { torus->majorRadius + torus->minorRadius,
+                                     torus->majorRadius - torus->minorRadius,
+                                     torus->majorRadius, torus->majorRadius };
+            const float heights[4] = { 0.0f, 0.0f, torus->minorRadius, -torus->minorRadius };
+            for (int k = 0; k < 4; ++k) {
+                const XMFLOAT3 point = { torus->center.x + radii[k] * ct,
+                                         torus->center.y + heights[k],
+                                         torus->center.z + radii[k] * st };
+                EmitSnapPoint(out, point, SnapKind::Quadrant, 11);
+            }
+        }
+        return true;
+    }
+    case ObjectType::LineMember: {
+        const LINE_MEMBER* member = static_cast<const LINE_MEMBER*>(object);
+        EmitMemberAxis(out, member->point1, member->point2);
+        return true;
+    }
+    case ObjectType::Elbow: {
+        const ELBOW* elbow = static_cast<const ELBOW*>(object);
+        /* ELBOW::GetGeometry sweeps theta from 0 to sweepAngleRadians with the centreline at
+        center + (bendRadius cos t, 0, bendRadius sin t), so the two connection faces are the ends
+        of that sweep. Insertion at priority 15: on a piping drawing these ARE the points, and a
+        connection that lands anywhere else is a leak. */
+        const XMFLOAT3 start = { elbow->center.x + elbow->bendRadius, elbow->center.y,
+                                 elbow->center.z };
+        const XMFLOAT3 end = { elbow->center.x + elbow->bendRadius * std::cos(elbow->sweepAngleRadians),
+                               elbow->center.y,
+                               elbow->center.z + elbow->bendRadius * std::sin(elbow->sweepAngleRadians) };
+        EmitSnapPoint(out, start, SnapKind::Insertion, 15);
+        EmitSnapPoint(out, end, SnapKind::Insertion, 15);
+        EmitSnapPoint(out, elbow->center, SnapKind::Center, 13);
+        return true;
+    }
+    case ObjectType::Tee: {
+        const TEE* tee = static_cast<const TEE*>(object);
+        EmitSnapPoint(out, tee->center1, SnapKind::Insertion, 15);
+        EmitSnapPoint(out, tee->center2, SnapKind::Insertion, 15);
+        // Branch frame reproduced from TEE::GetGeometry, including its parallel-axis guard: a
+        // branch end computed from a different frame would not be where the branch is drawn.
+        const XMVECTOR p1 = XMLoadFloat3(&tee->center1);
+        const XMVECTOR p2 = XMLoadFloat3(&tee->center2);
+        const XMVECTOR axis = XMVector3Normalize(p2 - p1);
+        XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+        if (std::fabs(XMVectorGetX(XMVector3Dot(axis, up))) > 0.99f) {
+            up = XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f);
+        }
+        const XMVECTOR side = XMVector3Normalize(XMVector3Cross(up, axis));
+        const float angle = tee->branchAngleDegrees * (XM_PI / 180.0f);
+        const XMVECTOR branchDirection =
+            XMVector3Normalize(std::cos(angle) * axis + std::sin(angle) * side);
+        const XMVECTOR mid = 0.5f * (p1 + p2);
+        XMFLOAT3 branchEnd{}, branchStart{};
+        XMStoreFloat3(&branchStart, mid);
+        XMStoreFloat3(&branchEnd, mid + branchDirection * tee->branchLength);
+        EmitSnapPoint(out, branchEnd, SnapKind::Insertion, 15);
+        EmitSnapPoint(out, branchStart, SnapKind::MemberMid, 13);
+        return true;
+    }
+    case ObjectType::Flange: {
+        const FLANGE* flange = static_cast<const FLANGE*>(object);
+        EmitSnapPoint(out, flange->center1, SnapKind::Insertion, 15);
+        EmitSnapPoint(out, flange->center2, SnapKind::Insertion, 15);
+        const XMVECTOR axis = XMVector3Normalize(
+            XMLoadFloat3(&flange->center2) - XMLoadFloat3(&flange->center1));
+        EmitCircleQuadrants(out, flange->center1, axis, flange->flangeOuterDiameter * 0.5f, 11);
+        EmitCircleQuadrants(out, flange->center2, axis, flange->flangeOuterDiameter * 0.5f, 11);
+        return true;
+    }
+    default:
+        return false;   // No snap semantics for this type yet; the ambient grid still serves it.
+    }
+}
+
 namespace { // Reopen the anonymous namespace for the remaining internal helpers.
 
 void AppendObjectToTab(DATASETTAB& tab, ObjectType objectType, META_DATA* object) {
