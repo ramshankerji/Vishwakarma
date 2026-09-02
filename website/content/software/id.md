@@ -153,11 +153,16 @@ one, else the container — and the loader rebuilds the split by asking what TYP
 turned out to be. This is the one place where two RAM fields collapse into one persisted field, and
 it is deliberate.
 
-### 2.5 memoryID resolution is a linear scan, and the three indices are gone
+### 2.5 memoryID resolution is an O(log N) binary search — DONE
 
-There is no working memoryID → object index anywhere in the application. Resolution is a linear
-scan over `storageObjects3D`. **Three** mechanisms were built for this job, none of them was ever
-alive, and none of them survives as an index:
+`FindObjectInStorage` in `डेटा.h` is a `std::lower_bound` over any sorted directory of stored
+objects; `FindGeometryObject3D`, `FindLogicalObject` and `ResolveObject` in `विश्वकर्मा.h` are the
+entry points that use it. Resolution is O(log N) with **no extra memory at all**, on the sortedness
+guarantee of §3.4. There is still no index, and there is not meant to be one — the directory's own
+order *is* the index.
+
+**Three** mechanisms were built for this job before it, none of them was ever alive, and none of
+them survives as an index:
 
 - `ReferenceID` in `ID.h` — process-local `memoryID`, persistent `realID`,
   `savedFileReference` — **survives, renamed and relocated**. It is now `DataReference` in
@@ -177,11 +182,13 @@ The only live id map is `InstanceRegistry::indexOfMemoryId`, and it maps memoryI
 substitute. Page2D's `TabCad2DStorage::recordIndex` is the same kind of thing one level over: an
 index into a record vector, copy-path-owned.
 
-**The linear scan is smaller than it looks.** Twelve sites scan `storageObjects3D`; ten of them are
-genuine full traversals — persistedId assignment, save, zoom-to-fit, hide/move-selected, tree build
-— that want every object and are already optimal. Only **two** are id-to-object lookups:
-`ModifyObjectProperty` and the properties-pane read. `ResolveObject` is therefore a two-call-site
-change on the 3D side.
+**The scan that remains is not a lookup.** Twelve sites still walk `storageObjects3D` end to end —
+persistedId assignment, save, zoom-to-fit, hide/move-selected, tree build, snap-candidate gathering
+— and every one of them wants every object, so a scan is already optimal there. None of the twelve
+is an id-to-object lookup. Those were converted, and there were more of them than the 3D side
+suggested: nine call sites resolve by id today, and most are on `storageLogicalObjects` rather than
+on the geometry directory, because the container lookups had been hiding inside one shared
+`FindLogicalObjectByIdLocked` helper.
 
 ## 3. In-RAM references and directory scope
 
@@ -243,19 +250,25 @@ already sorted by memoryID**, and `std::lower_bound` resolves in O(log n) — 24
 30 at 1B — with **no extra memory at all**. Soft-delete leaves tombstones in place, which preserves
 the ordering.
 
-That property currently holds *by accident*. It must be enforced, because a later "compact the
-vector" or "sort by type for cache locality" would break it silently and the failure mode is a wrong
-lookup rather than a crash:
+That property would otherwise hold *by accident*. It has to be enforced, because a later "compact
+the vector" or "sort by type for cache locality" would break it silently and the failure mode is a
+wrong lookup rather than a crash. What guards it is a `_DEBUG` warning at the append site, not an
+`assert` — an out-of-order append makes lookups wrong, but the application is still usable, and
+killing a modelling session over it would cost the user more than the bad lookup does:
 
 ```cpp
-// At every append site. Two lines that turn an emergent property into an invariant.
-assert(tab.storageObjects3D.empty() ||
-       tab.storageObjects3D.back().memoryId < object->memoryID);
+// At every append site, under _DEBUG. Turns an emergent property into a stated invariant.
+if (!tab.storageObjects3D.empty() &&
+    tab.storageObjects3D.back().memoryId >= object->memoryID) {
+    std::cout << "[3d][warn] storageObjects3D out of memoryId order: ..." << std::endl;
+}
 ```
 
-**There are three append sites, not two**, and the third has no check: `FlushGeneratedGeometryBatch`
-bulk-inserts. It is correct today — one thread, ids issued in order — but it is the import path, so
-it is the one most likely to acquire a second producer later. It gets the assert.
+**Two gaps remain, both known.** `FlushGeneratedGeometryBatch` bulk-inserts and carries no check.
+It is correct today — one thread, ids issued in order — but it is the import path, so
+it is the one most likely to acquire a second producer later. And `storageLogicalObjects`, which
+§3.5 now binary searches on equal terms, has no check at either of its two append sites. Both want
+the same guard the geometry directory already has.
 
 **Why binary search and not a hash map, at 1 Billion.** A `std::unordered_map` costs ~50 bytes per
 entry measured on this codebase's own 2D record index: ~500 MB at 10M and **~50 GB at 1B**, to
@@ -290,18 +303,20 @@ ResolveObject(memoryID):
     binary search each of the CALLING TAB's directories. That is the whole algorithm.
 ```
 
-**A tab has three directories, not one**, and the resolver searches all of them. They partition by
-what an object *is*, not by id — nothing about a memoryID says which one holds it:
+**A tab has three directories, not one**, and the resolver searches every one that exists. They
+partition by what an object *is*, not by id — nothing about a memoryID says which one holds it:
 
-| Directory | Holds |
-|---|---|
-| `storageObjects3D` | 3D geometry |
-| `storageLogicalObjects` | containers — Scene3D, Page2D, Folder |
-| `storageLogicalData` | non-geometry, non-container data objects. **ForeignReference proxies live here** ( §5.3 ). New; decided 2026-08-26 |
+| Directory | Holds | Built |
+|---|---|---|
+| `storageObjects3D` | 3D geometry | yes |
+| `storageLogicalObjects` | containers — Scene3D, Page2D, Folder | yes |
+| `storageLogicalData` | non-geometry, non-container data objects. **ForeignReference proxies live here** ( §5.3 ) | no — arrives with the proxies, and nothing needs it before them |
 
-Three binary searches, ~72 comparisons at 10M, still zero extra memory. Each directory is sorted
-independently and each carries the §3.4 invariant on its own. Order the searches by expected hit
-rate — geometry first — since a hit short-circuits the rest.
+`ResolveObject` searches the two that exist, geometry first: hits short-circuit, and geometry is the
+common case. Adding the third is one more call in the same function. Three binary searches come to
+~72 comparisons at 10M, still zero extra memory. Each directory is sorted independently and each
+carries the §3.4 invariant on its own — `storageLogicalObjects` is searched on those terms today
+without yet being guarded on them, which is the second gap §3.4 names.
 
 **Every memoryID a tab's objects can legally reference lives in one of that tab's directories** —
 its own objects, and the objects of any catalog file it has mounted, because under §5.6 option (i) a
@@ -356,11 +371,12 @@ Decided, and not to be re-litigated:
 2. **The memoryID space is never partitioned** ( §3.5 ). FINAL.
 3. **`ResolveObject(memoryID)` binary searches the calling tab's directory only.** No fallback, no
    process-wide index.
-4. **The sortedness invariant is asserted at all three append sites**, including
-   `FlushGeneratedGeometryBatch`.
-6. **Reverse lookup is a linear scan** ( §3.6 ).
+4. **The sortedness invariant is guarded at every append site**, the bulk-insert import path
+   included. A `_DEBUG` warning, not an `assert` ( §3.4 ).
+5. **Reverse lookup is a linear scan** ( §3.6 ).
 
-None of it is built.
+Built: 1, 2 and 3. Item 4 is guarded on the two single-object geometry appends and nowhere else —
+`FlushGeneratedGeometryBatch` and both `storageLogicalObjects` appends are still open ( §3.4 ).
 
 ## 4. persistedId — the bands
 
@@ -825,7 +841,8 @@ speculatively, but nothing may be designed that assumes a bool is enough.
 15. **Two proxy kinds, told apart by `fileAlias`** ( §5.3 ). Authored (`>= 2`) is persisted as an
     ordinary row; repair (`== 0`) is created eagerly by the loader and **never written to disc**.
 16. **Proxies live in a third directory, `storageLogicalData`**, with `memoryIDContainer = 0`
-    ( §3.5, §5.3 ). `ResolveObject` searches all three of a tab's directories.
+    ( §3.5, §5.3 ). `ResolveObject` searches every one of a tab's directories — two exist today and
+    the third is created with the proxies themselves.
 17. **No field on `META_DATA` is ever reused to mean something else** ( §5.3 ). `targetObjectId` is
     its own field; `persistedId` always means "my own persisted identity", on every object type.
 18. **An out-of-band persistedId is silently dropped and reissued on save, and there is no

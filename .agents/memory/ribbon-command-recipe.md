@@ -91,6 +91,23 @@ filtered by the app's pid, pick the window whose class is `ConsoleWindowClass`, 
 the console's rect), then screenshot the console by its rect. Only the visible tail is readable that
 way, which is enough to confirm a diagnostic is absent while the app churns.
 
+**Driving the 2D canvas by script (2026-09-02, verifying the live tool preview).** Three traps, each
+of which looked like a broken feature:
+- **`SetForegroundWindow` alone does not raise the app** when another window sits on its rect — the
+  screenshot cheerfully captures whatever is on top. What works is `ShowWindow(SW_RESTORE)` then
+  `AttachThreadInput(myThread, foregroundThread, true)` + `BringWindowToTop` + `SetForegroundWindow`.
+  `SW_RESTORE` un-maximises, so follow with `ShowWindow(SW_MAXIMIZE)` if you want the big canvas.
+- **A PowerShell helper named `Move` silently becomes `Move-Item`** (built-in alias) and "moves" the
+  cursor coordinates into a file path. Name mouse helpers `MoveTo` / `WMove`.
+- **Clicks are SNAPPED, selection clicks are not.** A point clicked to create geometry lands on the
+  ambient grid, so the drawn line sits several pixels off the cursor, and the later selection click
+  at the same coordinates misses the 6 px `tolCU` in `Cad2DHandleSelectionClick`. Screenshot first,
+  find the stroke's actual pixel, click THAT. Confirm selection by sampling for the selection blue
+  `13,38,166` (RGB of ABGR `0xFFA6260D`) rather than by eye — at 1 px it reads as black.
+- **Sample pixels, do not eyeball thin strokes.** A 4-edge polygon preview looked like "2 amber
+  edges + 2 grey ones" in a downscaled screenshot and cost a real bug hunt; every edge sampled
+  exactly `255,128,26`. The scaling in the image viewer, not the renderer, was the liar.
+
 Gotchas: engineering thread is sole writer of `storageObjects3D` → iterate without lock from that thread. 2D active check = `Cad2DIsActivePage2D(tab)`; 2D view state = `tab.cad2d->view` (centerXCU/centerYCU/zoomPixelsPerCU, clamp zoom 0.02..5000). 3D camera = `tab.camera` (position/target/up, fov 60°, wheel-zoom clamps distance 1.0..farZ-10). Viewport via `GetVisibleSceneViewportForTab`. See [[commandline-build]] for the msbuild invocation.
 
 **Verifying generated MESH data without the app (2026-08-21).** Screen-reading cannot tell a winding

@@ -632,6 +632,22 @@ struct DX12ResourcesPerWindow {// Presentation Logic
     ComPtr<ID3D12Resource> cad2dViewConstantBuffer;
     UINT8* pCad2DViewConstantDataBegin = nullptr;
 
+    /* Per-window upload buffers for the in-progress 2D creation / transform preview, created lazily
+    beside the view constants and per window for the same reason. Each holds FRAMES_PER_RENDERTARGETS
+    slots indexed by frameIndex, exactly like renderTextures: the contents change on every mouse
+    move, so writing one shared slot would let the CPU overwrite records the previous frame is still
+    reading. */
+    ComPtr<ID3D12Resource> cad2dPreviewLineBuffer;
+    UINT8* pCad2DPreviewLineDataBegin = nullptr;
+    ComPtr<ID3D12Resource> cad2dPreviewCurveBuffer;
+    UINT8* pCad2DPreviewCurveDataBegin = nullptr;
+    // Text is the one preview class that needs an index buffer as well: its converter emits glyph
+    // quads, not shader-expanded records.
+    ComPtr<ID3D12Resource> cad2dPreviewTextVertexBuffer;
+    UINT8* pCad2DPreviewTextVertexDataBegin = nullptr;
+    ComPtr<ID3D12Resource> cad2dPreviewTextIndexBuffer;
+    UINT8* pCad2DPreviewTextIndexDataBegin = nullptr;
+
 	UINT frameIndex = 0; // Remember this is different from allocatorIndex in Render Thread.
     // It can change even during windows resize.
 };

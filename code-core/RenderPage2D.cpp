@@ -9,6 +9,7 @@
 
 #include "CommonNamedNumbers.h"
 #include "GPUPlatformSelector.h"
+#include "colors.h"
 #include "PropertyPane.h"
 #include "RenderPage2D.h"
 #include "Snap.h"
@@ -25,7 +26,17 @@ constexpr double kMinPolygonRadiusCU = 1.0e-9;
 constexpr double kMinCurveRadiusCU = 1.0e-9;
 constexpr float kDefaultTextHeightCU = 9.0f;
 
+/* Takes the in-progress preview off the screen. Every path that disarms a tool goes through here,
+because a rubber band still hanging in the drawing after ESC is a promise about a click that will
+never happen. */
+void Cad2DClearPreview(TabCad2DStorage& storage) {
+    storage.previewActive.store(false, std::memory_order_release);
+    std::lock_guard<std::mutex> lock(storage.previewMutex);
+    storage.preview.Clear();
+}
+
 void ClearLineCreationState(TabCad2DStorage& storage) {
+    Cad2DClearPreview(storage);
     storage.lineCreationMode.store(false, std::memory_order_release);
     storage.lineCreationHasPreviousPoint.store(false, std::memory_order_release);
     storage.polylineCreationMode.store(false, std::memory_order_release);
@@ -113,6 +124,141 @@ bool Page2DCoordinateFromInput(DATASETTAB& tab, const ACTION_DETAILS& input,
 static bool Page2DSnappedPointFromInput(DATASETTAB& tab, const ACTION_DETAILS& input,
     double& outXCU, double& outYCU, SnapResult* outResult = nullptr);
 
+/* ---- What the next click would create ---------------------------------------------------------
+Each Build*Record below answers one question: given the anchors this tool already holds, what record
+would a click at (xCU, yCU) commit? The click handlers enqueue that answer; the preview publisher
+draws it. There is deliberately no second copy of this geometry anywhere - a preview computed from
+its own arithmetic is a preview that drifts from what lands.
+
+false means there is nothing to build - the tool has not collected enough clicks, or the point is
+degenerate and the click would be rejected - which is also exactly "nothing to preview".
+
+The tools keep their intermediate points in the storage atomics, so these read state rather than
+take it as parameters. The polyline is the exception and has no builder: its points live in a vector
+under cpuRecordsMutex, and what it would gain from a click is one segment, not a whole record. */
+
+bool BuildLineCreationRecord(const TabCad2DStorage& storage, uint64_t containerMemoryId,
+    double xCU, double yCU, Cad2DLineRecordCPU& out) {
+    if (!storage.lineCreationHasPreviousPoint.load(std::memory_order_acquire)) return false;
+
+    out = Cad2DLineRecordCPU{};
+    out.memoryIDContainer = containerMemoryId;
+    out.x1 = storage.lineCreationPreviousXCU.load(std::memory_order_acquire);
+    out.y1 = storage.lineCreationPreviousYCU.load(std::memory_order_acquire);
+    out.x2 = xCU;
+    out.y2 = yCU;
+    out.lineWeight = 1.0f;
+    out.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+    out.colorABGR = 0xFF000000u;
+    out.schemaVersion = VishwakarmaStorage::kGeometry2DLineSchemaVersion;
+    return true;
+}
+
+bool BuildPolygonCreationRecord(const TabCad2DStorage& storage, uint64_t containerMemoryId,
+    double xCU, double yCU, Cad2DPolygonRecordCPU& out) {
+    if (!storage.polygonCreationHasCenter.load(std::memory_order_acquire)) return false;
+
+    const double centerX = storage.polygonCreationCenterXCU.load(std::memory_order_acquire);
+    const double centerY = storage.polygonCreationCenterYCU.load(std::memory_order_acquire);
+    const double radius = std::hypot(xCU - centerX, yCU - centerY);
+    if (radius <= kMinPolygonRadiusCU) return false;
+
+    out = Cad2DPolygonRecordCPU{};
+    out.memoryIDContainer = containerMemoryId;
+    out.lineSegmentCount = kDefaultPolygonLineSegmentCount;
+    out.centerX = centerX;
+    out.centerY = centerY;
+    out.radius = radius;
+    out.rotationDegrees = kDefaultPolygonRotationDegrees;
+    out.lineWeight = 1.0f;
+    out.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+    out.colorABGR = 0xFF000000u;
+    out.schemaVersion = VishwakarmaStorage::kGeometry2DPolygonSchemaVersion;
+    return true;
+}
+
+bool BuildCircleCreationRecord(const TabCad2DStorage& storage, uint64_t containerMemoryId,
+    double xCU, double yCU, Cad2DCircleRecordCPU& out) {
+    if (!storage.circleCreationHasCenter.load(std::memory_order_acquire)) return false;
+
+    const double centerX = storage.circleCreationCenterXCU.load(std::memory_order_acquire);
+    const double centerY = storage.circleCreationCenterYCU.load(std::memory_order_acquire);
+    const double radius = std::hypot(xCU - centerX, yCU - centerY);
+    if (radius <= kMinCurveRadiusCU) return false;
+
+    out = Cad2DCircleRecordCPU{};
+    out.memoryIDContainer = containerMemoryId;
+    out.centerX = centerX;
+    out.centerY = centerY;
+    out.radius = radius;
+    out.lineWeight = 1.0f;
+    out.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+    out.colorABGR = 0xFF000000u;
+    out.schemaVersion = VishwakarmaStorage::kGeometry2DCircleSchemaVersion;
+    return true;
+}
+
+// Step 2 only - the step that fixes radiusY and completes the ellipse. Step 1 is picking radiusX
+// and has no ellipse yet; the preview shows the radius rubber band for it instead.
+bool BuildEllipseCreationRecord(const TabCad2DStorage& storage, uint64_t containerMemoryId,
+    double xCU, double yCU, Cad2DEllipseRecordCPU& out) {
+    if (storage.ellipseCreationStep.load(std::memory_order_acquire) != 2) return false;
+
+    const double centerX = storage.ellipseCreationCenterXCU.load(std::memory_order_acquire);
+    const double centerY = storage.ellipseCreationCenterYCU.load(std::memory_order_acquire);
+    double radiusY = std::abs(yCU - centerY);
+    if (radiusY <= kMinCurveRadiusCU) radiusY = std::hypot(xCU - centerX, yCU - centerY);
+    const double radiusX = storage.ellipseCreationRadiusXCU.load(std::memory_order_acquire);
+    if (radiusX <= kMinCurveRadiusCU || radiusY <= kMinCurveRadiusCU) return false;
+
+    out = Cad2DEllipseRecordCPU{};
+    out.memoryIDContainer = containerMemoryId;
+    out.centerX = centerX;
+    out.centerY = centerY;
+    out.radiusX = radiusX;
+    out.radiusY = radiusY;
+    out.lineWeight = 1.0f;
+    out.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+    out.colorABGR = 0xFF000000u;
+    out.schemaVersion = VishwakarmaStorage::kGeometry2DEllipseSchemaVersion;
+    return true;
+}
+
+// Step 2 only - the sweep step. Step 1 is picking the radius and the start point at once, which is
+// a rubber band from the centre, not an arc.
+bool BuildArcCreationRecord(const TabCad2DStorage& storage, uint64_t containerMemoryId,
+    double xCU, double yCU, Cad2DArcRecordCPU& out) {
+    if (storage.arcCreationStep.load(std::memory_order_acquire) != 2) return false;
+
+    const double centerX = storage.arcCreationCenterXCU.load(std::memory_order_acquire);
+    const double centerY = storage.arcCreationCenterYCU.load(std::memory_order_acquire);
+    const double startX = storage.arcCreationStartXCU.load(std::memory_order_acquire);
+    const double startY = storage.arcCreationStartYCU.load(std::memory_order_acquire);
+    const double radius = std::hypot(startX - centerX, startY - centerY);
+    const double endDistance = std::hypot(xCU - centerX, yCU - centerY);
+    if (radius <= kMinCurveRadiusCU || endDistance <= kMinCurveRadiusCU) return false;
+
+    const double startAngle = std::atan2(startY - centerY, startX - centerX);
+    const double endAngle = std::atan2(yCU - centerY, xCU - centerX);
+    if (std::abs(std::sin((endAngle - startAngle) * 0.5)) <= 1.0e-7) return false;
+
+    out = Cad2DArcRecordCPU{};
+    out.memoryIDContainer = containerMemoryId;
+    out.centerX = centerX;
+    out.centerY = centerY;
+    out.radiusX = radius;
+    out.radiusY = radius;
+    out.startX = startX;
+    out.startY = startY;
+    out.endX = centerX + std::cos(endAngle) * radius;
+    out.endY = centerY + std::sin(endAngle) * radius;
+    out.lineWeight = 1.0f;
+    out.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+    out.colorABGR = 0xFF000000u;
+    out.schemaVersion = VishwakarmaStorage::kGeometry2DArcSchemaVersion;
+    return true;
+}
+
 void HandleLineCreationClick(DATASETTAB& tab, double xCU, double yCU) {
     TabCad2DStorage& storage = *tab.cad2d;
     if (!storage.lineCreationHasPreviousPoint.load(std::memory_order_acquire)) {
@@ -126,17 +272,10 @@ void HandleLineCreationClick(DATASETTAB& tab, double xCU, double yCU) {
     if (page2DMemoryId == 0) return;
 
     Cad2DLineRecordCPU line{};
-    line.memoryIDContainer = page2DMemoryId;
-    line.x1 = storage.lineCreationPreviousXCU.load(std::memory_order_acquire);
-    line.y1 = storage.lineCreationPreviousYCU.load(std::memory_order_acquire);
-    line.x2 = xCU;
-    line.y2 = yCU;
-    line.lineWeight = 1.0f;
-    line.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
-    line.colorABGR = 0xFF000000u;
-    line.schemaVersion = VishwakarmaStorage::kGeometry2DLineSchemaVersion;
+    if (!BuildLineCreationRecord(storage, page2DMemoryId, xCU, yCU, line)) return;
     EnqueueCad2DLine(tab.tabID, page2DMemoryId, line);
 
+    // The chain continues from here: the next segment starts where this one ended.
     storage.lineCreationPreviousXCU.store(xCU, std::memory_order_release);
     storage.lineCreationPreviousYCU.store(yCU, std::memory_order_release);
 }
@@ -184,22 +323,8 @@ void HandlePolygonCreationClick(DATASETTAB& tab, double xCU, double yCU) {
     const uint64_t page2DMemoryId = Cad2DFindTargetPage2DMemoryId(tab);
     if (page2DMemoryId == 0) return;
 
-    const double centerX = storage.polygonCreationCenterXCU.load(std::memory_order_acquire);
-    const double centerY = storage.polygonCreationCenterYCU.load(std::memory_order_acquire);
-    const double radius = std::hypot(xCU - centerX, yCU - centerY);
-    if (radius <= kMinPolygonRadiusCU) return;
-
     Cad2DPolygonRecordCPU polygon{};
-    polygon.memoryIDContainer = page2DMemoryId;
-    polygon.lineSegmentCount = kDefaultPolygonLineSegmentCount;
-    polygon.centerX = centerX;
-    polygon.centerY = centerY;
-    polygon.radius = radius;
-    polygon.rotationDegrees = kDefaultPolygonRotationDegrees;
-    polygon.lineWeight = 1.0f;
-    polygon.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
-    polygon.colorABGR = 0xFF000000u;
-    polygon.schemaVersion = VishwakarmaStorage::kGeometry2DPolygonSchemaVersion;
+    if (!BuildPolygonCreationRecord(storage, page2DMemoryId, xCU, yCU, polygon)) return;
     EnqueueCad2DPolygon(tab.tabID, page2DMemoryId, polygon);
 
     storage.polygonCreationHasCenter.store(false, std::memory_order_release);
@@ -217,20 +342,8 @@ void HandleCircleCreationClick(DATASETTAB& tab, double xCU, double yCU) {
     const uint64_t page2DMemoryId = Cad2DFindTargetPage2DMemoryId(tab);
     if (page2DMemoryId == 0) return;
 
-    const double centerX = storage.circleCreationCenterXCU.load(std::memory_order_acquire);
-    const double centerY = storage.circleCreationCenterYCU.load(std::memory_order_acquire);
-    const double radius = std::hypot(xCU - centerX, yCU - centerY);
-    if (radius <= kMinCurveRadiusCU) return;
-
     Cad2DCircleRecordCPU circle{};
-    circle.memoryIDContainer = page2DMemoryId;
-    circle.centerX = centerX;
-    circle.centerY = centerY;
-    circle.radius = radius;
-    circle.lineWeight = 1.0f;
-    circle.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
-    circle.colorABGR = 0xFF000000u;
-    circle.schemaVersion = VishwakarmaStorage::kGeometry2DCircleSchemaVersion;
+    if (!BuildCircleCreationRecord(storage, page2DMemoryId, xCU, yCU, circle)) return;
     EnqueueCad2DCircle(tab.tabID, page2DMemoryId, circle);
 
     storage.circleCreationHasCenter.store(false, std::memory_order_release);
@@ -247,9 +360,9 @@ void HandleEllipseCreationClick(DATASETTAB& tab, double xCU, double yCU) {
         return;
     }
 
-    const double centerX = storage.ellipseCreationCenterXCU.load(std::memory_order_acquire);
-    const double centerY = storage.ellipseCreationCenterYCU.load(std::memory_order_acquire);
     if (step == 1) {
+        const double centerX = storage.ellipseCreationCenterXCU.load(std::memory_order_acquire);
+        const double centerY = storage.ellipseCreationCenterYCU.load(std::memory_order_acquire);
         double radiusX = std::abs(xCU - centerX);
         if (radiusX <= kMinCurveRadiusCU) radiusX = std::hypot(xCU - centerX, yCU - centerY);
         if (radiusX <= kMinCurveRadiusCU) return;
@@ -258,24 +371,11 @@ void HandleEllipseCreationClick(DATASETTAB& tab, double xCU, double yCU) {
         return;
     }
 
-    double radiusY = std::abs(yCU - centerY);
-    if (radiusY <= kMinCurveRadiusCU) radiusY = std::hypot(xCU - centerX, yCU - centerY);
-    const double radiusX = storage.ellipseCreationRadiusXCU.load(std::memory_order_acquire);
-    if (radiusX <= kMinCurveRadiusCU || radiusY <= kMinCurveRadiusCU) return;
-
     const uint64_t page2DMemoryId = Cad2DFindTargetPage2DMemoryId(tab);
     if (page2DMemoryId == 0) return;
 
     Cad2DEllipseRecordCPU ellipse{};
-    ellipse.memoryIDContainer = page2DMemoryId;
-    ellipse.centerX = centerX;
-    ellipse.centerY = centerY;
-    ellipse.radiusX = radiusX;
-    ellipse.radiusY = radiusY;
-    ellipse.lineWeight = 1.0f;
-    ellipse.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
-    ellipse.colorABGR = 0xFF000000u;
-    ellipse.schemaVersion = VishwakarmaStorage::kGeometry2DEllipseSchemaVersion;
+    if (!BuildEllipseCreationRecord(storage, page2DMemoryId, xCU, yCU, ellipse)) return;
     EnqueueCad2DEllipse(tab.tabID, page2DMemoryId, ellipse);
 
     storage.ellipseCreationStep.store(0, std::memory_order_release);
@@ -292,9 +392,9 @@ void HandleArcCreationClick(DATASETTAB& tab, double xCU, double yCU) {
         return;
     }
 
-    const double centerX = storage.arcCreationCenterXCU.load(std::memory_order_acquire);
-    const double centerY = storage.arcCreationCenterYCU.load(std::memory_order_acquire);
     if (step == 1) {
+        const double centerX = storage.arcCreationCenterXCU.load(std::memory_order_acquire);
+        const double centerY = storage.arcCreationCenterYCU.load(std::memory_order_acquire);
         if (std::hypot(xCU - centerX, yCU - centerY) <= kMinCurveRadiusCU) return;
         storage.arcCreationStartXCU.store(xCU, std::memory_order_release);
         storage.arcCreationStartYCU.store(yCU, std::memory_order_release);
@@ -302,32 +402,12 @@ void HandleArcCreationClick(DATASETTAB& tab, double xCU, double yCU) {
         return;
     }
 
-    const double startX = storage.arcCreationStartXCU.load(std::memory_order_acquire);
-    const double startY = storage.arcCreationStartYCU.load(std::memory_order_acquire);
-    const double radius = std::hypot(startX - centerX, startY - centerY);
-    const double endDistance = std::hypot(xCU - centerX, yCU - centerY);
-    if (radius <= kMinCurveRadiusCU || endDistance <= kMinCurveRadiusCU) return;
-
-    const double startAngle = std::atan2(startY - centerY, startX - centerX);
-    const double endAngle = std::atan2(yCU - centerY, xCU - centerX);
-    if (std::abs(std::sin((endAngle - startAngle) * 0.5)) <= 1.0e-7) return;
+    const uint64_t page2DMemoryId = Cad2DFindTargetPage2DMemoryId(tab);
+    if (page2DMemoryId == 0) return;
 
     Cad2DArcRecordCPU arc{};
-    arc.memoryIDContainer = Cad2DFindTargetPage2DMemoryId(tab);
-    if (arc.memoryIDContainer == 0) return;
-    arc.centerX = centerX;
-    arc.centerY = centerY;
-    arc.radiusX = radius;
-    arc.radiusY = radius;
-    arc.startX = startX;
-    arc.startY = startY;
-    arc.endX = centerX + std::cos(endAngle) * radius;
-    arc.endY = centerY + std::sin(endAngle) * radius;
-    arc.lineWeight = 1.0f;
-    arc.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
-    arc.colorABGR = 0xFF000000u;
-    arc.schemaVersion = VishwakarmaStorage::kGeometry2DArcSchemaVersion;
-    EnqueueCad2DArc(tab.tabID, arc.memoryIDContainer, arc);
+    if (!BuildArcCreationRecord(storage, page2DMemoryId, xCU, yCU, arc)) return;
+    EnqueueCad2DArc(tab.tabID, page2DMemoryId, arc);
 
     storage.arcCreationStep.store(0, std::memory_order_release);
 }
@@ -1441,6 +1521,180 @@ path go through so a marker can never promise a point the click would not commit
 Returns false only when the pixel is outside the 2D viewport. Otherwise it ALWAYS produces a point:
 the ambient grid is priority 0 with an unbounded aperture and cannot be switched off, which is what
 makes every click land on a round number rather than on float noise (locked decision 5). */
+/* Ceiling on the drawing size a transform preview will scan. BuildTransform2DResult walks every
+record vector testing ids against the selection - fine once per click, but the preview asks for it
+on every mouse move, and a million-record drawing would turn that into tens of milliseconds of
+input lag for a picture. Above this the transform still commits exactly as before; only the preview
+is skipped. Lifting it properly means resolving the selection through recordIndex instead of
+scanning, which is a change to the commit path and not to this one. */
+constexpr size_t kCad2DTransformPreviewMaxRecords = 100000;
+
+uint64_t BuildTransform2DResult(DATASETTAB& tab, Cad2DTransformKind kind,
+    double p1x, double p1y, double p2x, double p2y, double p3x, double p3y,
+    bool assignNewIds, Cad2DPreviewContent& out);
+
+/* A preview-only line record. Two jobs, same geometry: the polyline's next segment, and the rubber
+band the ellipse and arc show while they are still picking a radius and have no entity to draw yet.
+Never enqueued, never given a container - it exists for one frame and is thrown away. */
+Cad2DLineRecordCPU MakePreviewLine(double ax, double ay, double bx, double by) {
+    Cad2DLineRecordCPU line{};
+    line.x1 = ax;
+    line.y1 = ay;
+    line.x2 = bx;
+    line.y2 = by;
+    line.lineWeight = 1.0f;
+    line.lineWeightMode = Cad2DLineWeightMode::ScreenPixel;
+    line.colorABGR = kCad2DPreviewColorABGR;
+    return line;
+}
+
+/* Preview for the armed EDIT_* transform: the whole selection where it would land, built by the
+same code the committing click runs and at the reference points the cursor is currently offering.
+
+Fills `out` (which BuildTransform2DResult clears first), then adds the rubber band on top. */
+void AppendTransformPreview(DATASETTAB& tab, TabCad2DStorage& s, double xCU, double yCU,
+    Cad2DPreviewContent& out) {
+    const auto kind =
+        static_cast<Cad2DTransformKind>(s.transform2DKind.load(std::memory_order_acquire));
+    if (kind == Cad2DTransformKind::None) return;
+    if (s.transform2DStep.load(std::memory_order_acquire) == 0) return; // No reference point yet.
+
+    const double p1x = s.transform2DP1XCU.load(std::memory_order_acquire);
+    const double p1y = s.transform2DP1YCU.load(std::memory_order_acquire);
+    // The same rejection the click makes, so the preview never shows a transform that will not run.
+    if (std::hypot(xCU - p1x, yCU - p1y) <= 1.0e-9) return;
+
+    {
+        std::lock_guard<std::mutex> lock(s.cpuRecordsMutex);
+        const size_t records = s.lineRecords.size() + s.polylineRecords.size() +
+            s.polygonRecords.size() + s.circleRecords.size() + s.ellipseRecords.size() +
+            s.arcRecords.size() + s.textRecords.size();
+        if (records > kCad2DTransformPreviewMaxRecords) return;
+    }
+
+    /* Rotate is the only three-click transform, and it spends step 1 picking the direction the
+    rotation is measured FROM - there is no rotated selection to show yet, only the arm the user is
+    pointing along. */
+    const bool needsThree = kind == Cad2DTransformKind::Rotate;
+    double p2x = xCU, p2y = yCU, p3x = 0.0, p3y = 0.0;
+    if (needsThree) {
+        if (s.transform2DStep.load(std::memory_order_acquire) < 2) {
+            out.lines.push_back(MakePreviewLine(p1x, p1y, xCU, yCU));
+            return;
+        }
+        p2x = s.transform2DP2XCU.load(std::memory_order_acquire);
+        p2y = s.transform2DP2YCU.load(std::memory_order_acquire);
+        p3x = xCU;
+        p3y = yCU;
+    }
+
+    if (BuildTransform2DResult(tab, kind, p1x, p1y, p2x, p2y, p3x, p3y,
+            /*assignNewIds=*/false, out) == 0) {
+        return;
+    }
+
+    /* The construction line the user is actually dragging, added AFTER the build because the build
+    clears `out`. Mirror's is its axis and Rotate's is the arm it is swinging to - in both the line
+    is what the cursor controls, and the transformed selection alone leaves it invisible. Move,
+    Copy and Offset need none: for them the moved geometry IS the feedback. */
+    if (kind == Cad2DTransformKind::Mirror || needsThree) {
+        out.lines.push_back(MakePreviewLine(p1x, p1y, xCU, yCU));
+    }
+}
+
+/* Publishes what the armed 2D tool would do at (xCU, yCU) - the point the caller already resolved,
+which is the point a click on this pixel would commit. Engineering thread.
+
+Structured as one if / else-if chain over the tool modes because they are mutually exclusive by
+construction: every Cad2DBegin* clears the others through ClearLineCreationState first. */
+void PublishToolPreview(DATASETTAB& tab, double xCU, double yCU) {
+    TabCad2DStorage& s = *tab.cad2d;
+    Cad2DPreviewContent& out = s.previewScratch; // Engineering-thread private; holds last publish.
+    out.Clear();
+
+    const uint64_t container = Cad2DFindTargetPage2DMemoryId(tab);
+    if (container == 0) {
+        Cad2DClearPreview(s);
+        return;
+    }
+    out.containerMemoryId = container;
+    out.subTabSlot = InputViewSlot(tab);
+
+    if (s.lineCreationMode.load(std::memory_order_acquire)) {
+        Cad2DLineRecordCPU line{};
+        if (BuildLineCreationRecord(s, container, xCU, yCU, line)) out.lines.push_back(line);
+    }
+    else if (s.polylineCreationMode.load(std::memory_order_acquire)) {
+        /* Only the segment being dragged. Every earlier segment is already in the drawing: the
+        polyline is upserted under one objectId on every click, so the committed record holds them
+        all and previewing them again would just double-draw. */
+        double lastX = 0.0, lastY = 0.0;
+        bool hasLast = false;
+        {
+            std::lock_guard<std::mutex> lock(s.cpuRecordsMutex);
+            if (!s.polylineCreationPoints.empty()) {
+                lastX = s.polylineCreationPoints.back().x;
+                lastY = s.polylineCreationPoints.back().y;
+                hasLast = true;
+            }
+        }
+        if (hasLast) out.lines.push_back(MakePreviewLine(lastX, lastY, xCU, yCU));
+    }
+    else if (s.polygonCreationMode.load(std::memory_order_acquire)) {
+        Cad2DPolygonRecordCPU polygon{};
+        if (BuildPolygonCreationRecord(s, container, xCU, yCU, polygon)) out.polygons.push_back(polygon);
+    }
+    else if (s.circleCreationMode.load(std::memory_order_acquire)) {
+        Cad2DCircleRecordCPU circle{};
+        if (BuildCircleCreationRecord(s, container, xCU, yCU, circle)) out.circles.push_back(circle);
+    }
+    else if (s.ellipseCreationMode.load(std::memory_order_acquire)) {
+        // Step 1 is picking radiusX: the rubber band IS the radius the click will take.
+        if (s.ellipseCreationStep.load(std::memory_order_acquire) == 1) {
+            out.lines.push_back(MakePreviewLine(
+                s.ellipseCreationCenterXCU.load(std::memory_order_acquire),
+                s.ellipseCreationCenterYCU.load(std::memory_order_acquire), xCU, yCU));
+        }
+        else {
+            Cad2DEllipseRecordCPU ellipse{};
+            if (BuildEllipseCreationRecord(s, container, xCU, yCU, ellipse)) out.ellipses.push_back(ellipse);
+        }
+    }
+    else if (s.arcCreationMode.load(std::memory_order_acquire)) {
+        // Step 1 picks the radius and the sweep start together, so the rubber band is that radius.
+        if (s.arcCreationStep.load(std::memory_order_acquire) == 1) {
+            out.lines.push_back(MakePreviewLine(
+                s.arcCreationCenterXCU.load(std::memory_order_acquire),
+                s.arcCreationCenterYCU.load(std::memory_order_acquire), xCU, yCU));
+        }
+        else {
+            Cad2DArcRecordCPU arc{};
+            if (BuildArcCreationRecord(s, container, xCU, yCU, arc)) out.arcs.push_back(arc);
+        }
+    }
+    else if (s.transform2DKind.load(std::memory_order_acquire) != 0) {
+        AppendTransformPreview(tab, s, xCU, yCU, out);
+    }
+
+    /* The one way the preview deliberately differs from what lands. Everything above was built to
+    commit, in the drawing's own black; recolouring it here means an in-progress entity can never be
+    mistaken for one already in the drawing (nor for a selected one, which is blue). */
+    for (Cad2DLineRecordCPU& r : out.lines) r.colorABGR = kCad2DPreviewColorABGR;
+    for (Cad2DPolylineRecordCPU& r : out.polylines) r.colorABGR = kCad2DPreviewColorABGR;
+    for (Cad2DPolygonRecordCPU& r : out.polygons) r.colorABGR = kCad2DPreviewColorABGR;
+    for (Cad2DCircleRecordCPU& r : out.circles) r.colorABGR = kCad2DPreviewColorABGR;
+    for (Cad2DEllipseRecordCPU& r : out.ellipses) r.colorABGR = kCad2DPreviewColorABGR;
+    for (Cad2DArcRecordCPU& r : out.arcs) r.colorABGR = kCad2DPreviewColorABGR;
+    for (Cad2DTextRecordCPU& r : out.texts) r.colorABGR = kCad2DPreviewColorABGR;
+
+    const bool active = !out.Empty();
+    {
+        std::lock_guard<std::mutex> lock(s.previewMutex);
+        s.preview.Swap(out); // Scratch takes back the buffers the render threads have finished with.
+    }
+    s.previewActive.store(active, std::memory_order_release);
+}
+
 bool Cad2DResolveSnap(DATASETTAB& tab, const ACTION_DETAILS& input,
     double& outXCU, double& outYCU, SnapResult& outResult) {
     outResult = SnapResult{};
@@ -1728,18 +1982,30 @@ bool OffsetPolylinePoints(const std::vector<Cad2DPoint2D>& points, double distan
 
 // Applies the armed transform to every selected object of the active Page2D. Move/Rotate update
 // the records in place (ids preserved); Copy/Offset/Mirror enqueue brand-new objects.
-void ApplyTransform2DToSelection(DATASETTAB& tab, Cad2DTransformKind kind,
-    double p1x, double p1y, double p2x, double p2y, double p3x, double p3y) {
+/* What a transform WOULD produce, before anything is enqueued - the transform half of the same
+"build then use" split the creation tools got. ApplyTransform2DToSelection commits the answer; the
+preview publisher draws it, at the reference points the cursor is currently offering.
+
+Fills only the record vectors of `out`; the subTabSlot / containerMemoryId fields belong to whoever
+publishes it and are left alone. Returns the container the records belong to, 0 when there is
+nothing to build.
+
+assignNewIds is false for a preview and only for a preview. The copying transforms mint a fresh
+memoryID per output record, and a preview rebuilt on every mouse move would burn thousands of ids a
+second for records that are drawn once and dropped. */
+uint64_t BuildTransform2DResult(DATASETTAB& tab, Cad2DTransformKind kind,
+    double p1x, double p1y, double p2x, double p2y, double p3x, double p3y,
+    bool assignNewIds, Cad2DPreviewContent& out) {
     TabCad2DStorage& s = *tab.cad2d;
     const uint64_t container = Cad2DFindTargetPage2DMemoryId(tab);
-    if (container == 0) return;
+    if (container == 0) return 0;
 
     std::unordered_set<uint64_t> selected;
     {
         std::lock_guard<std::mutex> lock(s.selection2DMutex);
         selected = s.selectedObjectIds;
     }
-    if (selected.empty()) return;
+    if (selected.empty()) return 0;
 
     const bool makesCopy = kind == Cad2DTransformKind::Copy ||
         kind == Cad2DTransformKind::Offset || kind == Cad2DTransformKind::Mirror;
@@ -1757,25 +2023,36 @@ void ApplyTransform2DToSelection(DATASETTAB& tab, Cad2DTransformKind kind,
         map.m00 = c; map.m01 = -sn; map.m10 = sn; map.m11 = c;
     } else if (kind == Cad2DTransformKind::Mirror) {
         const double len = std::hypot(p2x - p1x, p2y - p1y);
-        if (len <= 1.0e-9) return;
+        if (len <= 1.0e-9) return 0;
         const double ux = (p2x - p1x) / len, uy = (p2y - p1y) / len;
         mirrorLineAngleRadians = std::atan2(uy, ux);
         map.pivotX = p1x; map.pivotY = p1y; map.baseX = p1x; map.baseY = p1y;
         map.m00 = 2.0 * ux * ux - 1.0; map.m01 = 2.0 * ux * uy;
         map.m10 = 2.0 * ux * uy;       map.m11 = 2.0 * uy * uy - 1.0;
     } else if (offsetDistance <= 1.0e-9) {
-        return;
+        return 0;
     }
 
-    std::vector<Cad2DLineRecordCPU> lines;
-    std::vector<Cad2DPolylineRecordCPU> polylines;
-    std::vector<Cad2DPolygonRecordCPU> polygons;
-    std::vector<Cad2DCircleRecordCPU> circles;
-    std::vector<Cad2DEllipseRecordCPU> ellipses;
-    std::vector<Cad2DArcRecordCPU> arcs;
-    std::vector<Cad2DTextRecordCPU> texts;
+    // Aliases onto `out`, so the per-type bodies below read exactly as they did when these were
+    // seven locals. Cleared rather than reassigned: `out` is reused between calls and keeps its
+    // capacity, which is what makes rebuilding this on every mouse move affordable.
+    std::vector<Cad2DLineRecordCPU>& lines = out.lines;
+    std::vector<Cad2DPolylineRecordCPU>& polylines = out.polylines;
+    std::vector<Cad2DPolygonRecordCPU>& polygons = out.polygons;
+    std::vector<Cad2DCircleRecordCPU>& circles = out.circles;
+    std::vector<Cad2DEllipseRecordCPU>& ellipses = out.ellipses;
+    std::vector<Cad2DArcRecordCPU>& arcs = out.arcs;
+    std::vector<Cad2DTextRecordCPU>& texts = out.texts;
+    lines.clear();
+    polylines.clear();
+    polygons.clear();
+    circles.clear();
+    ellipses.clear();
+    arcs.clear();
+    texts.clear();
 
     auto asNewObject = [&](auto& record) {
+        if (!assignNewIds) return; // Preview: these records never reach the store, see above.
         // A fresh id is taken here rather than left at 0 for EnqueueCad2D* to fill in: META_DATA
         // issues one in its constructor, so "0 means unassigned" is no longer expressible for a
         // migrated record. Save still assigns the persisted ids.
@@ -1966,13 +2243,23 @@ void ApplyTransform2DToSelection(DATASETTAB& tab, Cad2DTransformKind kind,
         }
     }
 
-    for (Cad2DLineRecordCPU& r : lines) EnqueueCad2DLine(tab.tabID, container, r);
-    for (Cad2DPolylineRecordCPU& r : polylines) EnqueueCad2DPolyline(tab.tabID, container, std::move(r));
-    for (Cad2DPolygonRecordCPU& r : polygons) EnqueueCad2DPolygon(tab.tabID, container, r);
-    for (Cad2DCircleRecordCPU& r : circles) EnqueueCad2DCircle(tab.tabID, container, r);
-    for (Cad2DEllipseRecordCPU& r : ellipses) EnqueueCad2DEllipse(tab.tabID, container, r);
-    for (Cad2DArcRecordCPU& r : arcs) EnqueueCad2DArc(tab.tabID, container, r);
-    for (Cad2DTextRecordCPU& r : texts) EnqueueCad2DText(tab.tabID, container, std::move(r));
+    return container;
+}
+
+void ApplyTransform2DToSelection(DATASETTAB& tab, Cad2DTransformKind kind,
+    double p1x, double p1y, double p2x, double p2y, double p3x, double p3y) {
+    Cad2DPreviewContent result;
+    const uint64_t container = BuildTransform2DResult(tab, kind, p1x, p1y, p2x, p2y, p3x, p3y,
+        /*assignNewIds=*/true, result);
+    if (container == 0) return;
+
+    for (Cad2DLineRecordCPU& r : result.lines) EnqueueCad2DLine(tab.tabID, container, r);
+    for (Cad2DPolylineRecordCPU& r : result.polylines) EnqueueCad2DPolyline(tab.tabID, container, std::move(r));
+    for (Cad2DPolygonRecordCPU& r : result.polygons) EnqueueCad2DPolygon(tab.tabID, container, r);
+    for (Cad2DCircleRecordCPU& r : result.circles) EnqueueCad2DCircle(tab.tabID, container, r);
+    for (Cad2DEllipseRecordCPU& r : result.ellipses) EnqueueCad2DEllipse(tab.tabID, container, r);
+    for (Cad2DArcRecordCPU& r : result.arcs) EnqueueCad2DArc(tab.tabID, container, r);
+    for (Cad2DTextRecordCPU& r : result.texts) EnqueueCad2DText(tab.tabID, container, std::move(r));
 }
 
 void HandleTransform2DClick(DATASETTAB& tab, double xCU, double yCU) {
@@ -2044,21 +2331,40 @@ static bool Page2DSnappedPointFromInput(DATASETTAB& tab, const ACTION_DETAILS& i
 }
 } // namespace
 
-/* Publishes the hover marker for one cursor position (section 12). Engineering thread writes,
-render thread reads, one frame stale and one direction only - a click never reads this back.
+/* Publishes the two things one cursor position decides: the hover marker (snapping.md section 12)
+and the in-progress creation preview (2Drendering.md). Engineering thread writes, render threads
+read, one frame stale and one direction only - a click never reads either back.
 
-Resolution here is the SAME call the click makes, so the marker can never promise a point the click
-would not commit. Section 8's other mitigation is the caller's: this runs once per drain of the
-input queue, from the coalesced snapHoverInput, not once per mouse report. */
-void Cad2DPublishSnapHover(DATASETTAB& tab, const ACTION_DETAILS& input) {
-    if (!tab.cad2d || !Cad2DIsActivePage2D(tab) || tab.mouseMiddleDown) {
+Resolution here is the SAME call the click makes, so neither the marker nor the preview can promise
+a point the click would not commit, and it happens ONCE for both: the candidate scan is the
+expensive part, and two scans could not even disagree usefully. Section 8's other mitigation is the
+caller's - this runs once per drain of the input queue, from the coalesced snapHoverInput, not once
+per mouse report. */
+void Cad2DPublishHoverAndPreview(DATASETTAB& tab, const ACTION_DETAILS& input) {
+    if (!tab.cad2d) {
         tab.snapHover.Clear();
+        return;
+    }
+    if (!Cad2DIsActivePage2D(tab) || tab.mouseMiddleDown) {
+        tab.snapHover.Clear();
+        Cad2DClearPreview(*tab.cad2d);
         return;
     }
 
     double xCU = 0.0, yCU = 0.0;
     SnapResult result{};
-    if (!Cad2DResolveSnap(tab, input, xCU, yCU, result) || !result.hit) {
+    if (!Cad2DResolveSnap(tab, input, xCU, yCU, result)) {
+        tab.snapHover.Clear();
+        Cad2DClearPreview(*tab.cad2d);
+        return;
+    }
+
+    /* The preview follows the resolved point whether or not a snap CANDIDATE won it: with nothing
+    in reach the point is the ambient-grid one, and that is still exactly where a click would land.
+    Only the MARKER needs a hit - without one there is no glyph to draw. */
+    PublishToolPreview(tab, xCU, yCU);
+
+    if (!result.hit) {
         tab.snapHover.Clear();
         return;
     }
@@ -2520,6 +2826,11 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
                 Cad2DHandleSelectionClick(tab, xCU, yCU);
             }
         }
+        /* Re-publish from this same pixel at the end of the drain. The click just changed WHICH
+        entity the tool is building - a new anchor, or none at all - and without this the rubber
+        band from before the click would stay on screen until the mouse next moved. */
+        tab.snapHoverPending = true;
+        tab.snapHoverInput = input;
         return true;
     case ACTION_TYPE::LBUTTONUP:
         tab.mouseLeftDown = false;
@@ -2535,9 +2846,10 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
         tab.mouseLeftDown = false;
         tab.mouseMiddleDown = false;
         tab.mouseRightDown = false;
-        // Lost capture means the cursor is no longer ours to reason about; a marker left behind
-        // would sit on the drawing claiming a snap that is not being offered.
+        // Lost capture means the cursor is no longer ours to reason about; a marker or a rubber
+        // band left behind would sit on the drawing claiming a point that is not being offered.
         tab.snapHover.Clear();
+        Cad2DClearPreview(*tab.cad2d);
         return true;
     default:
         break;

@@ -23,3 +23,10 @@ constexpr float kSceneSkyHorizonB = 1.00f;
 constexpr float kCad2DBackgroundR = 230.0f / 255.0f;
 constexpr float kCad2DBackgroundG = 230.0f / 255.0f;
 constexpr float kCad2DBackgroundB = 230.0f / 255.0f;
+
+/* Stroke colour of the in-progress creation / transform preview - the entity the next click would
+commit, drawn every frame while a 2D tool holds an anchor. Amber rather than the geometry black or
+the selection blue, because the preview is neither: it is not yet in the drawing and it is not
+selected, and a user mid-drag has to be able to tell all three apart at a glance. ABGR, matching
+Cad2D*RecordCPU::colorABGR. */
+constexpr uint32_t kCad2DPreviewColorABGR = 0xFF1A80FF; // rgb(255, 128, 26)

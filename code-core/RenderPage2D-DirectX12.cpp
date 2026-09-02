@@ -614,6 +614,14 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage) {
     storage.transform2DP1YCU.store(0.0, std::memory_order_release);
     storage.transform2DP2XCU.store(0.0, std::memory_order_release);
     storage.transform2DP2YCU.store(0.0, std::memory_order_release);
+    // Tab slots are recycled: a preview left here would be drawn over the next drawing loaded
+    // into this slot, in a view that never armed a tool.
+    storage.previewActive.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> previewLock(storage.previewMutex);
+        storage.preview.Clear();
+    }
+    storage.previewScratch.Clear();
 }
 
 // Creates this window's Page2D view constant buffer on first use. Per window (not per tab) so two
@@ -631,9 +639,194 @@ static void EnsureWindowCad2DViewBuffer(DX12ResourcesPerWindow& winRes) {
         reinterpret_cast<void**>(&winRes.pCad2DViewConstantDataBegin)));
 }
 
+/* The two upload buffers the in-progress preview is written into, created on the first frame that
+actually has a preview to draw - a session that never arms a 2D tool never allocates them.
+
+FRAMES_PER_RENDERTARGETS slots each, indexed by frameIndex exactly as the render textures are. The
+preview changes on every mouse move, so one shared slot would let this frame's memcpy overwrite
+records the previous frame's draw is still reading. */
+static void EnsureWindowCad2DPreviewBuffers(DX12ResourcesPerWindow& winRes) {
+    if (winRes.cad2dPreviewLineBuffer) return;
+    CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_UPLOAD);
+    CD3DX12_RANGE readRange(0, 0);
+
+    auto lineDesc = CD3DX12_RESOURCE_DESC::Buffer(
+        (UINT64)kCad2DPreviewMaxLines * FRAMES_PER_RENDERTARGETS * sizeof(Cad2DLineGPURecord));
+    ThrowIfFailed(gpu.device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
+        &lineDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&winRes.cad2dPreviewLineBuffer)));
+    ThrowIfFailed(winRes.cad2dPreviewLineBuffer->Map(0, &readRange,
+        reinterpret_cast<void**>(&winRes.pCad2DPreviewLineDataBegin)));
+
+    auto curveDesc = CD3DX12_RESOURCE_DESC::Buffer(
+        (UINT64)kCad2DPreviewMaxCurves * FRAMES_PER_RENDERTARGETS * sizeof(Cad2DCurveGPURecord));
+    ThrowIfFailed(gpu.device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
+        &curveDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&winRes.cad2dPreviewCurveBuffer)));
+    ThrowIfFailed(winRes.cad2dPreviewCurveBuffer->Map(0, &readRange,
+        reinterpret_cast<void**>(&winRes.pCad2DPreviewCurveDataBegin)));
+
+    auto textVertexDesc = CD3DX12_RESOURCE_DESC::Buffer(
+        (UINT64)kCad2DPreviewMaxTextVertices * FRAMES_PER_RENDERTARGETS * sizeof(Cad2DTextVertex));
+    ThrowIfFailed(gpu.device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
+        &textVertexDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&winRes.cad2dPreviewTextVertexBuffer)));
+    ThrowIfFailed(winRes.cad2dPreviewTextVertexBuffer->Map(0, &readRange,
+        reinterpret_cast<void**>(&winRes.pCad2DPreviewTextVertexDataBegin)));
+
+    auto textIndexDesc = CD3DX12_RESOURCE_DESC::Buffer(
+        (UINT64)kCad2DPreviewMaxTextIndices * FRAMES_PER_RENDERTARGETS * sizeof(uint32_t));
+    ThrowIfFailed(gpu.device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
+        &textIndexDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&winRes.cad2dPreviewTextIndexBuffer)));
+    ThrowIfFailed(winRes.cad2dPreviewTextIndexBuffer->Map(0, &readRange,
+        reinterpret_cast<void**>(&winRes.pCad2DPreviewTextIndexDataBegin)));
+}
+
+/* Draws the in-progress creation / transform preview over the container's committed geometry.
+
+Deliberately NOT a page. The paging allocator, the placement bookkeeping and the ExecuteIndirect
+argument buffer are all machinery for records that PERSIST; the preview is rewritten on every mouse
+move and thrown away, so it goes straight into this window's mapped upload buffer and draws with a
+plain DrawInstanced. Same PSOs, same shaders, same 6-vertex quad expansion the pages get.
+
+It converts with the same ToGpu* / Append* converters the copy thread runs on committed records, so
+a previewed entity is drawn by exactly the code that will draw it once it lands. */
+static void RecordCad2DPreview(ID3D12GraphicsCommandList* commandList,
+    DX12ResourcesPerWindow& winRes, TabCad2DStorage& storage, DX12ResourcesUI& uiResources,
+    int monitorId, uint64_t activeContainerMemoryId, int renderSlot,
+    D3D12_GPU_VIRTUAL_ADDRESS viewCBV) {
+    // The overwhelmingly common case - no 2D tool holding an anchor - costs one atomic load and no
+    // lock at all.
+    if (!storage.previewActive.load(std::memory_order_acquire)) return;
+
+    /* Per render thread and reused across frames. The polyline and polygon converters append into a
+    vector, so there has to be one; keeping it alive between frames is what stops a drag allocating
+    once per frame per window. */
+    static thread_local std::vector<Cad2DLineGPURecord> previewLines;
+    static thread_local std::vector<Cad2DCurveGPURecord> previewCurves;
+    static thread_local std::vector<Cad2DTextVertex> previewTextVertices;
+    static thread_local std::vector<uint32_t> previewTextIndices;
+    previewLines.clear();
+    previewCurves.clear();
+    previewTextVertices.clear();
+    previewTextIndices.clear();
+
+    {
+        std::lock_guard<std::mutex> lock(storage.previewMutex);
+        const Cad2DPreviewContent& preview = storage.preview;
+        /* The preview belongs to the view whose cursor produced it AND to the container it was
+        built against - exactly the pair of tests the snap marker makes. A second window onto this
+        same Page2D must not draw another view's rubber band, and a view that has since switched
+        sub-tabs must not draw a rubber band built for the drawing it left. */
+        if (preview.subTabSlot != renderSlot ||
+            preview.containerMemoryId != activeContainerMemoryId) {
+            return;
+        }
+        for (const Cad2DLineRecordCPU& r : preview.lines) previewLines.push_back(ToGpuLineRecord(r));
+        for (const Cad2DPolylineRecordCPU& r : preview.polylines) AppendPolylineLineRecords(r, previewLines);
+        for (const Cad2DPolygonRecordCPU& r : preview.polygons) AppendPolygonLineRecords(r, previewLines);
+        for (const Cad2DCircleRecordCPU& r : preview.circles) previewCurves.push_back(ToGpuCircleRecord(r));
+        for (const Cad2DEllipseRecordCPU& r : preview.ellipses) previewCurves.push_back(ToGpuEllipseRecord(r));
+        for (const Cad2DArcRecordCPU& r : preview.arcs) previewCurves.push_back(ToGpuArcRecord(r));
+        for (const Cad2DTextRecordCPU& r : preview.texts) {
+            AppendTextRecordGeometry(r, previewTextVertices, previewTextIndices);
+        }
+    }
+
+    // Truncation rather than refusal: a preview that overflows the budget still shows most of what
+    // is about to happen, and the COMMIT is never capped by this.
+    const uint32_t lineCount = (std::min)((uint32_t)previewLines.size(), kCad2DPreviewMaxLines);
+    const uint32_t curveCount = (std::min)((uint32_t)previewCurves.size(), kCad2DPreviewMaxCurves);
+    // Dropped whole, not truncated: the indices are absolute into the vertex array.
+    const bool textFits = previewTextVertices.size() <= kCad2DPreviewMaxTextVertices &&
+        previewTextIndices.size() <= kCad2DPreviewMaxTextIndices;
+    const uint32_t textIndexCount = textFits ? (uint32_t)previewTextIndices.size() : 0u;
+    if (lineCount == 0 && curveCount == 0 && textIndexCount == 0) return;
+
+    EnsureWindowCad2DPreviewBuffers(winRes);
+    if (!winRes.pCad2DPreviewLineDataBegin || !winRes.pCad2DPreviewCurveDataBegin) return;
+
+    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    if (lineCount > 0) {
+        const size_t byteOffset =
+            (size_t)winRes.frameIndex * kCad2DPreviewMaxLines * sizeof(Cad2DLineGPURecord);
+        memcpy(winRes.pCad2DPreviewLineDataBegin + byteOffset, previewLines.data(),
+            (size_t)lineCount * sizeof(Cad2DLineGPURecord));
+
+        commandList->SetGraphicsRootSignature(storage.dx.lineRootSignature.Get());
+        commandList->SetPipelineState(storage.dx.linePSO.Get());
+        commandList->SetGraphicsRootConstantBufferView(0, viewCBV);
+        commandList->SetGraphicsRootShaderResourceView(1,
+            winRes.cad2dPreviewLineBuffer->GetGPUVirtualAddress() + byteOffset);
+        // 6 vertices per record, one instance per record: the same numbers the pages' indirect
+        // command carries, written out directly because a one-frame draw has no use for one.
+        commandList->DrawInstanced(6, lineCount, 0, 0);
+    }
+
+    if (curveCount > 0 && storage.dx.curveRootSignature && storage.dx.curvePSO) {
+        const size_t byteOffset =
+            (size_t)winRes.frameIndex * kCad2DPreviewMaxCurves * sizeof(Cad2DCurveGPURecord);
+        memcpy(winRes.pCad2DPreviewCurveDataBegin + byteOffset, previewCurves.data(),
+            (size_t)curveCount * sizeof(Cad2DCurveGPURecord));
+
+        commandList->SetGraphicsRootSignature(storage.dx.curveRootSignature.Get());
+        commandList->SetPipelineState(storage.dx.curvePSO.Get());
+        commandList->SetGraphicsRootConstantBufferView(0, viewCBV);
+        commandList->SetGraphicsRootShaderResourceView(1,
+            winRes.cad2dPreviewCurveBuffer->GetGPUVirtualAddress() + byteOffset);
+        commandList->DrawInstanced(6, curveCount, 0, 0);
+    }
+
+    if (textIndexCount == 0) return;
+
+    /* Preview text repeats the committed text pass's prerequisites rather than borrowing them: the
+    pass lives after this one so its atlas is not yet proven ready here, and a ghosted label must
+    not be the thing that makes the whole preview wait on a font. */
+    const uint64_t atlasReadyFence = atlasFence.load(std::memory_order_acquire);
+    const bool textAtlasReady = atlasReadyFence != 0 && gpu.copyFence &&
+        gpu.copyFence->GetCompletedValue() >= atlasReadyFence;
+    ID3D12DescriptorHeap* monitorSrvHeap =
+        (monitorId >= 0 && monitorId < MV_MAX_MONITORS) ? gpu.screens[monitorId].uiSrvHeap.Get() : nullptr;
+    if (!textAtlasReady || !monitorSrvHeap || !storage.dx.textRootSignature || !storage.dx.textPSO) return;
+    if (!winRes.pCad2DPreviewTextVertexDataBegin || !winRes.pCad2DPreviewTextIndexDataBegin) return;
+
+    const size_t vertexByteOffset =
+        (size_t)winRes.frameIndex * kCad2DPreviewMaxTextVertices * sizeof(Cad2DTextVertex);
+    const size_t indexByteOffset =
+        (size_t)winRes.frameIndex * kCad2DPreviewMaxTextIndices * sizeof(uint32_t);
+    const uint32_t vertexCount = (uint32_t)previewTextVertices.size();
+    memcpy(winRes.pCad2DPreviewTextVertexDataBegin + vertexByteOffset, previewTextVertices.data(),
+        (size_t)vertexCount * sizeof(Cad2DTextVertex));
+    memcpy(winRes.pCad2DPreviewTextIndexDataBegin + indexByteOffset, previewTextIndices.data(),
+        (size_t)textIndexCount * sizeof(uint32_t));
+
+    D3D12_VERTEX_BUFFER_VIEW vbv{};
+    vbv.BufferLocation = winRes.cad2dPreviewTextVertexBuffer->GetGPUVirtualAddress() + vertexByteOffset;
+    vbv.SizeInBytes = vertexCount * sizeof(Cad2DTextVertex);
+    vbv.StrideInBytes = sizeof(Cad2DTextVertex);
+
+    D3D12_INDEX_BUFFER_VIEW ibv{};
+    ibv.BufferLocation = winRes.cad2dPreviewTextIndexBuffer->GetGPUVirtualAddress() + indexByteOffset;
+    ibv.SizeInBytes = textIndexCount * sizeof(uint32_t);
+    ibv.Format = DXGI_FORMAT_R32_UINT;
+
+    commandList->SetGraphicsRootSignature(storage.dx.textRootSignature.Get());
+    commandList->SetPipelineState(storage.dx.textPSO.Get());
+    ID3D12DescriptorHeap* heaps[] = { monitorSrvHeap, uiResources.samplerHeap.Get() };
+    commandList->SetDescriptorHeaps(_countof(heaps), heaps);
+    commandList->SetGraphicsRootConstantBufferView(0, viewCBV);
+    commandList->SetGraphicsRootDescriptorTable(1, monitorSrvHeap->GetGPUDescriptorHandleForHeapStart());
+    commandList->SetGraphicsRootDescriptorTable(2, uiResources.samplerHeap->GetGPUDescriptorHandleForHeapStart());
+    commandList->IASetVertexBuffers(0, 1, &vbv);
+    commandList->IASetIndexBuffer(&ibv);
+    commandList->DrawIndexedInstanced(textIndexCount, 1, 0, 0, 0);
+}
+
 void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     TabCad2DStorage& storage, DX12ResourcesUI& uiResources, int monitorId,
-    uint64_t activeContainerMemoryId, const Cad2DViewState& view) {
+    uint64_t activeContainerMemoryId, const Cad2DViewState& view, int renderSlot) {
     if (!commandList || activeContainerMemoryId == 0 || winRes.WindowHeight <= 0) return;
     if (!storage.dx.lineRootSignature) return;
 
@@ -712,6 +905,12 @@ void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow
                 page->indirectBuffer.Get(), 0, nullptr, 0);
         }
     }
+
+    /* Preview here rather than after the text pass, which owns the rest of this function and exits
+    early on an atlas that is not ready yet - a rubber band must not depend on the font. It is
+    therefore drawn over all committed lines and curves, and under text. */
+    RecordCad2DPreview(commandList, winRes, storage, uiResources, monitorId,
+        activeContainerMemoryId, renderSlot, viewCBV);
 
     const bool textAtlasReady = atlasFence.load(std::memory_order_acquire) != 0 &&
         gpu.copyFence && gpu.copyFence->GetCompletedValue() >= atlasFence.load(std::memory_order_acquire);

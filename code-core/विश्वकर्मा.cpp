@@ -2880,11 +2880,13 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
         section 8). The handlers above only recorded the latest cursor position; doing the work
         here is what keeps a 1000 Hz mouse from running a thousand candidate scans for a marker the
         screen redraws sixty times a second. Whichever world the input view is showing answers -
-        the 2D publisher no-ops when the view is not a Page2D. */
+        the 2D publisher no-ops when the view is not a Page2D. On the 2D side the same resolved
+        point also publishes the in-progress creation preview, which is why it is the only one of
+        the two that says "AndPreview". */
         if (myTab->snapHoverPending) {
             myTab->snapHoverPending = false;
             if (Cad2DIsActivePage2D(*myTab)) {
-                Cad2DPublishSnapHover(*myTab, myTab->snapHoverInput);
+                Cad2DPublishHoverAndPreview(*myTab, myTab->snapHoverInput);
             } else {
                 Scene3DUpdateSnapHover(*myTab, myTab->snapHoverInput);
             }

@@ -40,6 +40,20 @@ constexpr uint32_t kCad2DTextPageVertexCapacity =
     (kCad2DPageBytes / sizeof(Cad2DTextVertex)) / 4 * 4;
 constexpr uint32_t kCad2DTextPageIndexCapacity = kCad2DTextPageVertexCapacity / 4 * 6;
 
+/* Preview upload budget, per window and per frame in flight (128 KB + 64 KB). The preview does not
+go through the paging allocator at all: it is rewritten every frame, so it lives in a small mapped
+upload buffer and draws with a plain DrawInstanced instead of a page + ExecuteIndirect.
+
+It is also the cap. A creation preview is one record (a polygon, up to 16 lines); a transform
+preview is the whole selection, and a selection whose preview would not fit simply is not
+previewed. The COMMIT is never capped - only the picture of it. */
+constexpr uint32_t kCad2DPreviewMaxLines = 4096;
+constexpr uint32_t kCad2DPreviewMaxCurves = 1024;
+// 1024 glyphs. Text is dropped from the preview rather than truncated when it overflows: the
+// indices are absolute into the vertex array, so half a glyph run is not a drawable thing.
+constexpr uint32_t kCad2DPreviewMaxTextVertices = 4096;
+constexpr uint32_t kCad2DPreviewMaxTextIndices = kCad2DPreviewMaxTextVertices / 4 * 6;
+
 /* Which run of a page's records one object owns. An object is never split across pages - the
 filler opens a new page rather than straddle one - so a single run says all of it, which is what
 lets a modify find the records to hide from the objectId alone. */
@@ -259,6 +273,21 @@ struct TabCad2DStorage {
     std::atomic<double> transform2DP1YCU{ 0.0 };
     std::atomic<double> transform2DP2XCU{ 0.0 };
     std::atomic<double> transform2DP2YCU{ 0.0 };
+
+    /* The entity the armed tool would commit at the current cursor, published once per input drain
+    and drawn by every render thread showing this Page2D. See Cad2DPreviewContent.
+
+    previewActive is only the render thread's lock-free early-out - no tool holding an anchor means
+    the mutex is never taken, which is every frame that is not mid-entity. Correctness comes from
+    the mutex alone; a stale read of the flag costs at most one frame of preview either way. */
+    std::atomic<bool> previewActive{ false };
+    std::mutex previewMutex;
+    Cad2DPreviewContent preview;
+
+    /* ENGINEERING-THREAD PRIVATE, like the copy thread's two maps above. The preview is built in
+    here and then SWAPPED with `preview` under the mutex, so the two keep each other's buffers and
+    publishing at input rate allocates nothing. The render threads never touch it. */
+    Cad2DPreviewContent previewScratch;
 };
 
 // Records the append in recordIndex. Call it IMMEDIATELY after a push_back on one of the seven
@@ -280,9 +309,12 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage);
 // Takes the pan/zoom as a parameter, mirroring how the Scene3D renderer takes a camera: the two
 // renderers receive a container, a view state and a viewport, and never reach for view state
 // themselves (graphics.md, "Key boundary rule" + 10M plan Step 6).
+// renderSlot is the sub-tab this window displays. It is needed for the creation preview and only
+// for that: the preview belongs to the view whose cursor produced it, exactly as the snap marker
+// does, and a second window onto the same Page2D must not draw another view's rubber band.
 void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     TabCad2DStorage& storage, DX12ResourcesUI& uiResources, int monitorId,
-    uint64_t activeContainerMemoryId, const Cad2DViewState& view);
+    uint64_t activeContainerMemoryId, const Cad2DViewState& view, int renderSlot);
 // 2D half of the copy thread. Staging goes through the global upload ring and the COPY-type
 // allocator/list are owned by GpuCopyThread and passed in, exactly as ProcessScene3DCopyBatch takes
 // them (graphics.md, 10M plan Step 0). Contract: the list is CLOSED on entry and CLOSED on return.

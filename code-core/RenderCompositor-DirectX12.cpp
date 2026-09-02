@@ -301,7 +301,7 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                     // Hand the Viewport's pan/zoom down, exactly as the camera is handed to Scene3D.
                     RenderPage2D(threadRes.commandList.Get(), winRes, *tab.cad2d,
                         gpu.uiResources, monitorId, activeInternalSubTabMemoryId,
-                        tab.viewports[renderSlot].page2DView);
+                        tab.viewports[renderSlot].page2DView, renderSlot);
                 }
                 else {
                     ClearSceneSkyGradient(threadRes.commandList.Get(), winRes, monitorId);
@@ -739,12 +739,32 @@ void शंकर::CleanupWindowResources(DX12ResourcesPerWindow& winRes) {
     winRes.uiIndexBuffer.Reset();
     winRes.uiOrthoConstantBuffer.Reset();
 
-    // Per-window Page2D view constant buffer.
+    // Per-window Page2D view constant buffer, and the creation-preview upload buffers beside it.
     if (winRes.pCad2DViewConstantDataBegin) {
         winRes.cad2dViewConstantBuffer->Unmap(0, nullptr);
         winRes.pCad2DViewConstantDataBegin = nullptr;
     }
     winRes.cad2dViewConstantBuffer.Reset();
+    if (winRes.pCad2DPreviewLineDataBegin) {
+        winRes.cad2dPreviewLineBuffer->Unmap(0, nullptr);
+        winRes.pCad2DPreviewLineDataBegin = nullptr;
+    }
+    winRes.cad2dPreviewLineBuffer.Reset();
+    if (winRes.pCad2DPreviewCurveDataBegin) {
+        winRes.cad2dPreviewCurveBuffer->Unmap(0, nullptr);
+        winRes.pCad2DPreviewCurveDataBegin = nullptr;
+    }
+    winRes.cad2dPreviewCurveBuffer.Reset();
+    if (winRes.pCad2DPreviewTextVertexDataBegin) {
+        winRes.cad2dPreviewTextVertexBuffer->Unmap(0, nullptr);
+        winRes.pCad2DPreviewTextVertexDataBegin = nullptr;
+    }
+    winRes.cad2dPreviewTextVertexBuffer.Reset();
+    if (winRes.pCad2DPreviewTextIndexDataBegin) {
+        winRes.cad2dPreviewTextIndexBuffer->Unmap(0, nullptr);
+        winRes.pCad2DPreviewTextIndexDataBegin = nullptr;
+    }
+    winRes.cad2dPreviewTextIndexBuffer.Reset();
 
     for (int i = 0; i < FRAMES_PER_RENDERTARGETS; ++i) {
         winRes.renderTextures[i].Reset();

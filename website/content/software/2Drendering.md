@@ -284,6 +284,93 @@ seven vectors.
 shader this section proposed. The case that would still earn them is hover-highlight at interactive
 rates over a very dense drawing, where the CPU scan above is the thing in the way.
 
+## Live tool preview — as built
+
+Before this, clicking the first point of a line and moving the mouse showed *nothing*: the entity
+appeared only when the closing click enqueued it. Every armed tool now draws what the next click
+would commit, updating with the cursor.
+
+**The rule the design is built around: the preview must be the thing that lands.** That is not a
+slogan, it is what decides the split.
+
+- The engineering thread BUILDS it, using the same `Build*Record` / `BuildTransform2DResult`
+  functions the committing click uses. Those were factored *out of* the click handlers, not written
+  beside them, so there is no second copy of the geometry to drift.
+- The render thread CONVERTS it, using the same `ToGpu*Record` / `Append*LineRecords` /
+  `AppendTextRecordGeometry` converters the copy thread runs on committed records.
+- What travels between them is therefore an engineering record — `Cad2DPreviewContent`, the seven
+  record vectors plus which view and container they belong to — not a parametric description and not
+  ready-made GPU records. Either of those would have meant a second implementation of the geometry
+  on one side or the other.
+
+**Publishing.** Same contract as the snap hover marker: engineering thread writes, render threads
+read, one frame stale, one direction, and a click never reads it back. It is published from inside
+`Cad2DPublishHoverAndPreview` off the *same* `Cad2DResolveSnap` call that publishes the marker — one
+resolve, two publications. Two resolves would have cost a second candidate scan per input drain to
+produce an answer that must be identical anyway; a preview drawn to a different point than the
+marker promises would be worse than no preview at all. `LBUTTONDOWN` re-arms the coalesced hover
+request so the band re-publishes immediately after a click instead of waiting for the next move.
+
+Correctness is a small dedicated mutex (`previewMutex`), matching `selection2DMutex` next to it. The
+`previewActive` atomic beside it is only a lock-free early-out for the render thread — no tool
+holding an anchor means the mutex is never taken, which is every frame that is not mid-entity. The
+engineering thread builds into a private `previewScratch` and SWAPS, so both keep their buffers and
+publishing at input rate allocates nothing after the first time.
+
+**Drawing.** Deliberately not a page. The paging allocator, the placement bookkeeping and the
+ExecuteIndirect argument buffer exist for records that persist; a preview is rewritten every mouse
+move and thrown away. So it goes into a small per-window mapped upload buffer — `FRAMES_PER_RENDERTARGETS`
+slots indexed by `frameIndex`, exactly like the render textures, because one shared slot would let
+this frame's `memcpy` overwrite records the previous frame is still reading — and draws with a plain
+`DrawInstanced(6, N)`. Same PSOs, same shaders, same 6-vertex quad expansion the pages get, minus
+the indirect buffer a one-frame draw has no use for. Budget and cap: 4096 lines, 1024 curves, 1024
+glyphs per window per frame. Lines and curves truncate at the cap; text is dropped whole, because
+its indices are absolute into the vertex array and half a glyph run is not a drawable thing.
+
+It draws after all committed lines and curves and *before* the text pass, which owns the rest of
+`RenderPage2D` and exits early on an atlas that is not ready — a rubber band must not depend on the
+font. Preview text repeats those prerequisites locally for the same reason.
+
+**Colour is the one place the preview deliberately differs from what lands.** Everything is built to
+commit, in the drawing's own black, and then recoloured to amber (`kCad2DPreviewColorABGR`). Black
+would be honest and useless: mid-drag the user has to be able to tell an entity that is not in the
+drawing yet from one that is, and from a selected one (deep blue).
+
+**What each tool shows.**
+
+| Tool | After | Preview |
+| --- | --- | --- |
+| Line | 1st click | the segment, previous point → cursor |
+| Polyline | any click | only the segment being dragged — the earlier ones are already committed, since the polyline is upserted under one objectId on every click |
+| Polygon / Circle | centre | the shape at the cursor's radius |
+| Ellipse | centre | rubber band (it is picking radiusX) |
+| Ellipse | + radiusX | the ellipse |
+| Arc | centre | rubber band (it is picking radius and sweep start together) |
+| Arc | + start | the arc, start → cursor angle |
+| Move / Copy / Offset | 1st click | the whole selection where it would land |
+| Mirror | 1st click | the mirrored copy, plus the axis being dragged |
+| Rotate | centre | rubber band (it is picking the direction to measure FROM) |
+| Rotate | + direction | the rotated selection, plus the arm being swung |
+
+Multi-click tools show a rubber band at the steps where the entity is not yet determined, rather
+than nothing: the distance being picked is exactly what the user is looking at. The two transforms
+whose defining line the cursor controls — Mirror's axis, Rotate's arm — keep that line on screen
+alongside the transformed geometry, because the geometry alone leaves it invisible.
+
+**The one performance concession.** `BuildTransform2DResult` finds the selection by scanning every
+record vector — fine once per click, but the preview asks on every mouse move. Above
+`kCad2DTransformPreviewMaxRecords` (100,000 live records) the transform preview is skipped; the
+transform itself still commits exactly as before. Lifting that properly means resolving the
+selection through `recordIndex` instead of scanning, which is a change to the *commit* path.
+
+**Not previewed:** asset insert (the instance under the cursor before the placing click) and text
+creation, which needs no preview because the draft is already upserted on every keystroke.
+
+**Untested:** the text half of a transform preview. It is implemented and it is reachable — an
+asset instance's selection expands to include its text records — but 2D text cannot be selected by
+clicking, because `Cad2DHandleSelectionClick` hit-tests lines, polylines, polygons, circles,
+ellipses and arcs and never `textRecords`. That gap predates this work.
+
 ## Precision — NOT implemented
 
 Only the CPU half is done. Page2D coordinates are `double` end to end on the CPU, but **the GPU
