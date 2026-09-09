@@ -983,6 +983,8 @@ static bool SnapControlLatched(const DATASETTAB& tab, Commands command) {
     case SnapBindingKind::Ortho:
         return (binding->threeD ? tab.snapOrtho3D : tab.snapOrtho2D)
             .load(std::memory_order_acquire);
+    case SnapBindingKind::GridSwitch:
+        return !binding->threeD && tab.snapGridEnabled2D.load(std::memory_order_acquire);
     case SnapBindingKind::MaskBit: {
         const uint32_t mask = (binding->threeD ? tab.snapMask3D : tab.snapMask2D)
             .load(std::memory_order_acquire);

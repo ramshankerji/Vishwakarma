@@ -30,3 +30,8 @@ the selection blue, because the preview is neither: it is not yet in the drawing
 selected, and a user mid-drag has to be able to tell all three apart at a glance. ABGR, matching
 Cad2D*RecordCPU::colorABGR. */
 constexpr uint32_t kCad2DPreviewColorABGR = 0xFF1A80FF; // rgb(255, 128, 26)
+
+// Page2D grid line colors in ABGR (ABGR order: 0xAABBGGRR).
+// Major lines are darker gray, minor lines are subtle gray against the 230/255 background.
+constexpr uint32_t kCad2DGridMinorColorABGR = 0xFFD0D0D0; // rgb(208, 208, 208)
+constexpr uint32_t kCad2DGridMajorColorABGR = 0xFFA0A0A0; // rgb(160, 160, 160)

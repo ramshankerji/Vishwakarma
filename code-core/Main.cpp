@@ -438,6 +438,7 @@ static bool SnapTodoForCommand(uint32_t commandId, ACTION_TYPE& outTodo, int& ou
     switch (binding->kind) {
     case SnapBindingKind::MasterSwitch: outParameter = kSnapTodoMasterSwitch; break;
     case SnapBindingKind::Ortho:        outParameter = kSnapTodoOrtho; break;
+    case SnapBindingKind::GridSwitch:   outParameter = kSnapTodoGrid; break;
     default:                            outParameter = binding->parameter; break;
     }
     return true;

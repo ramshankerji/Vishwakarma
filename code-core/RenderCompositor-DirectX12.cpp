@@ -301,7 +301,8 @@ void GpuRenderThread(int monitorId, int refreshRate) {
                     // Hand the Viewport's pan/zoom down, exactly as the camera is handed to Scene3D.
                     RenderPage2D(threadRes.commandList.Get(), winRes, *tab.cad2d,
                         gpu.uiResources, monitorId, activeInternalSubTabMemoryId,
-                        tab.viewports[renderSlot].page2DView, renderSlot);
+                        tab.viewports[renderSlot].page2DView, renderSlot,
+                        tab.snapGridEnabled2D.load(std::memory_order_acquire));
                 }
                 else {
                     ClearSceneSkyGradient(threadRes.commandList.Get(), winRes, monitorId);

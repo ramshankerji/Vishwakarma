@@ -2,6 +2,9 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
+
+#include "ID.h"
 
 /* Snapping: turning an imprecise cursor pixel into an exact engineering coordinate.
    Design: website/content/software/snapping.md
@@ -158,3 +161,56 @@ struct SnapWorkPlane {
     uint8_t axis = kWorkPlaneAxisZ;   // Which axis the plane's normal points along.
     double  offset = 0.0;             // Signed distance from the origin along that normal, metres.
 };
+
+/* Visible 2D grid lines: emitted when grid snap is ON.
+   Major lines at X spacing, minor lines at X/10 spacing, in both horizontal and vertical axes.
+   Adjusts endpoints of emitted lines on zoom while reserving and preserving memoryIDs.
+   Extends up to 50% beyond the visible screen width in all 4 directions.
+   Stored per Page2D sub-tab slot. Deleted from GPU memory upon snap OFF. */
+struct SnapGridLine {
+    uint64_t memoryID = 0;
+    double   x1 = 0.0, y1 = 0.0;
+    double   x2 = 0.0, y2 = 0.0;
+    bool     isMajor = false;
+    bool     isVertical = false; // true = vertical (constant x), false = horizontal (constant y)
+    double   coord = 0.0;        // fixed x or y
+};
+
+class SnapGrid2D {
+public:
+    SnapGrid2D() = default;
+
+    /* Updates the emitted grid lines for the given view center (CU), zoom (px/CU),
+       and viewport dimensions (px). Modifies existing lines on their respective memoryIDs
+       as zoom/pan moves, allocating new memoryIDs only as new lines enter the visible extents
+       (extended by 50% in all 4 directions). */
+    void Update(double centerXCU, double centerYCU, double zoomPixelsPerCU,
+                double viewportWidthPx, double viewportHeightPx);
+
+    // Clears all emitted lines (upon snap OFF).
+    void Clear();
+
+    bool IsEnabled() const noexcept { return enabled_; }
+    void SetEnabled(bool enabled) { enabled_ = enabled; if (!enabled) Clear(); }
+
+    double MinorSpacing() const noexcept { return minorSpacing_; }
+    double MajorSpacing() const noexcept { return majorSpacing_; }
+
+    const std::vector<SnapGridLine>& Lines() const noexcept { return lines_; }
+    size_t LineCount() const noexcept { return lines_.size(); }
+
+    double MinX() const noexcept { return minX_; }
+    double MaxX() const noexcept { return maxX_; }
+    double MinY() const noexcept { return minY_; }
+    double MaxY() const noexcept { return maxY_; }
+
+private:
+    bool   enabled_ = true;
+    double minorSpacing_ = 0.0;
+    double majorSpacing_ = 0.0;
+    double minX_ = 0.0, maxX_ = 0.0;
+    double minY_ = 0.0, maxY_ = 0.0;
+
+    std::vector<SnapGridLine> lines_;
+};
+

@@ -1331,6 +1331,12 @@ static void ApplySnapToggle(DATASETTAB& tab, bool threeD, int parameter) {
         flag.store(!flag.load(std::memory_order_acquire), std::memory_order_release);
         return;
     }
+    if (parameter == kSnapTodoGrid) {
+        if (!threeD) {
+            tab.snapGridEnabled2D.store(!tab.snapGridEnabled2D.load(std::memory_order_acquire), std::memory_order_release);
+        }
+        return;
+    }
     if (parameter < 0 || parameter >= (int)kSnapKindCount) return;
 
     const uint32_t bit = SnapMaskBit(static_cast<SnapKind>(parameter));
@@ -2675,6 +2681,7 @@ void विश्वकर्मा(uint64_t tabID) { //Main logic/engineering t
                 what reaches here is always the 3D scene's copy of the same two switches. */
                 else if (input.x == VK_F3) { ApplySnapToggle(*myTab, true, kSnapTodoMasterSwitch); }
                 else if (input.x == VK_F8) { ApplySnapToggle(*myTab, true, kSnapTodoOrtho); }
+                else if (input.x == VK_F7) { ApplySnapToggle(*myTab, false, kSnapTodoGrid); }
                 break;
             case ACTION_TYPE::KEYUP:
                 if (input.x == 18) { myTab->isAltDown = false;}// 18 is VK_MENU (ALT)

@@ -504,6 +504,7 @@ enum class SnapBindingKind : uint8_t {
     MaskBit,        // Flips one SnapKind bit of the world's mask.
     MasterSwitch,   // F3: every object snap off, ambient rounding untouched.
     Ortho,          // F8: direction constraint. Mode state, not a mask bit (section 12).
+    GridSwitch,     // F7: toggle grid snap and visible grid lines.
     WorkPlaneAxis   // Radio: which axis the 3D work plane's normal points along.
 };
 
@@ -517,6 +518,7 @@ struct SnapCommandBinding {
 constexpr SnapCommandBinding kSnapCommandBindings[] = {
     { Commands::SNAP2D_TOGGLE,         false, SnapBindingKind::MasterSwitch,  0 },
     { Commands::SNAP2D_ORTHO,          false, SnapBindingKind::Ortho,         0 },
+    { Commands::SNAP2D_GRID,           false, SnapBindingKind::GridSwitch,    0 },
     { Commands::SNAP2D_END,            false, SnapBindingKind::MaskBit, (uint8_t)SnapKind::End },
     { Commands::SNAP2D_MID,            false, SnapBindingKind::MaskBit, (uint8_t)SnapKind::Mid },
     { Commands::SNAP2D_CENTER,         false, SnapBindingKind::MaskBit, (uint8_t)SnapKind::Center },
@@ -640,6 +642,7 @@ constexpr UIControlDefinition AllUIControls[] = {
     default; Parallel, TextBounds and Grid Object have no button because they are not implemented. */
     { Commands::SNAP2D_TOGGLE,          UITextID::SNAP2D_TOGGLE, SVGIconRenderer::IconForID(kIconSnapToggleObject), 1, 3, 0, 0, true, true, 1 , 24 },
     { Commands::SNAP2D_ORTHO,           UITextID::SNAP2D_ORTHO, SVGIconRenderer::IconForID(kIconSnapOrtho), 1, 3, 1, 0, true, true, 1 , 24 },
+    { Commands::SNAP2D_GRID,            UITextID::SnapAmbientGrid, SVGIconRenderer::IconForID(kIconSnapAmbientGrid), 1, 3, 2, 0, true, true, 1 , 24 },
     { Commands::SNAP2D_END,             UITextID::SNAP2D_END, SVGIconRenderer::IconForID(kIconSnapEnd), 1, 3, 0, 0, true, true, 1 , 24 },
     { Commands::SNAP2D_MID,             UITextID::SNAP2D_MID, SVGIconRenderer::IconForID(kIconSnapMid), 1, 3, 1, 0, true, true, 1 , 24 },
     { Commands::SNAP2D_CENTER,          UITextID::SNAP2D_CENTER, SVGIconRenderer::IconForID(kIconSnapCenter), 1, 3, 2, 0, true, true, 1 , 24 },

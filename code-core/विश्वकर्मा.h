@@ -247,6 +247,8 @@ struct DATASETTAB {
     from the anchor, it does not produce a candidate point of its own. */
     std::atomic<bool> snapOrtho2D{ false };
     std::atomic<bool> snapOrtho3D{ false };
+    /* Grid snap & visible grid lines (F7). Default ON for 2D. */
+    std::atomic<bool> snapGridEnabled2D{ true };
     /* The "from" point every 3D direction constraint is measured against (section 11). The 2D tools
     each already hold their own anchor privately and Cad2DSnapAnchorLocked reads whichever is
     running; 3D placement had nowhere to keep one, so it keeps it here. Engineering-thread only. */

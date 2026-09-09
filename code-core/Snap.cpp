@@ -112,3 +112,91 @@ bool SnapCandidateSet::Resolve(SnapResult& out) const {
     }
     return false;
 }
+
+void SnapGrid2D::Clear() {
+    lines_.clear();
+    minorSpacing_ = 0.0;
+    majorSpacing_ = 0.0;
+    minX_ = 0.0;
+    maxX_ = 0.0;
+    minY_ = 0.0;
+    maxY_ = 0.0;
+}
+
+void SnapGrid2D::Update(double centerXCU, double centerYCU, double zoomPixelsPerCU,
+                        double viewportWidthPx, double viewportHeightPx) {
+    if (!enabled_ || !(zoomPixelsPerCU > 0.0) || !(viewportWidthPx > 0.0) || !(viewportHeightPx > 0.0)) {
+        return;
+    }
+
+    const double newMinor = Page2DAmbientStepCU(zoomPixelsPerCU);
+    const double newMajor = 10.0 * newMinor;
+
+    // Viewport extents in CU
+    const double halfW = (viewportWidthPx * 0.5) / zoomPixelsPerCU;
+    const double halfH = (viewportHeightPx * 0.5) / zoomPixelsPerCU;
+
+    // 50% beyond visible screen width in all 4 directions
+    const double extraX = halfW;
+    const double extraY = halfH;
+
+    const double newMinX = centerXCU - halfW - extraX;
+    const double newMaxX = centerXCU + halfW + extraX;
+    const double newMinY = centerYCU - halfH - extraY;
+    const double newMaxY = centerYCU + halfH + extraY;
+
+    const int64_t startIdxX = static_cast<int64_t>(std::floor(newMinX / newMinor));
+    const int64_t endIdxX = static_cast<int64_t>(std::ceil(newMaxX / newMinor));
+    const int64_t startIdxY = static_cast<int64_t>(std::floor(newMinY / newMinor));
+    const int64_t endIdxY = static_cast<int64_t>(std::ceil(newMaxY / newMinor));
+
+    constexpr int64_t kMaxLinesPerAxis = 1000;
+    if ((endIdxX - startIdxX) > kMaxLinesPerAxis || (endIdxY - startIdxY) > kMaxLinesPerAxis) {
+        return;
+    }
+
+    std::vector<SnapGridLine> newLines;
+    newLines.reserve(static_cast<size_t>((endIdxX - startIdxX + 1) + (endIdxY - startIdxY + 1)));
+
+    auto findExistingId = [&](bool isVertical, double coord, double tolerance) -> uint64_t {
+        for (const SnapGridLine& existing : lines_) {
+            if (existing.isVertical == isVertical && std::abs(existing.coord - coord) <= tolerance) {
+                return existing.memoryID;
+            }
+        }
+        return 0;
+    };
+
+    const double matchTol = 0.01 * newMinor;
+
+    // Vertical lines: x = coord, y from newMinY to newMaxY
+    for (int64_t i = startIdxX; i <= endIdxX; ++i) {
+        const double x = i * newMinor;
+        uint64_t id = findExistingId(true, x, matchTol);
+        if (id == 0) {
+            id = MemoryID::next();
+        }
+        const bool isMajor = (i % 10 == 0);
+        newLines.push_back(SnapGridLine{ id, x, newMinY, x, newMaxY, isMajor, true, x });
+    }
+
+    // Horizontal lines: y = coord, x from newMinX to newMaxX
+    for (int64_t j = startIdxY; j <= endIdxY; ++j) {
+        const double y = j * newMinor;
+        uint64_t id = findExistingId(false, y, matchTol);
+        if (id == 0) {
+            id = MemoryID::next();
+        }
+        const bool isMajor = (j % 10 == 0);
+        newLines.push_back(SnapGridLine{ id, newMinX, y, newMaxX, y, isMajor, false, y });
+    }
+
+    minorSpacing_ = newMinor;
+    majorSpacing_ = newMajor;
+    minX_ = newMinX;
+    maxX_ = newMaxX;
+    minY_ = newMinY;
+    maxY_ = newMaxY;
+    lines_ = std::move(newLines);
+}
+

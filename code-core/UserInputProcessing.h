@@ -154,6 +154,7 @@ enum class ACTION_TYPE : uint16_t { // Specifying uint16_t ensures that it is of
 every SnapKind so they can never collide with one. */
 constexpr int kSnapTodoMasterSwitch = 100;  // F3: all object snaps off, ambient rounding stays.
 constexpr int kSnapTodoOrtho = 101;         // F8: lock onto the nearest axis from the anchor.
+constexpr int kSnapTodoGrid = 102;          // F7: toggle grid snap and visible grid lines.
 
 struct ACTION_DETAILS_OLD {
     ACTION_TYPE actionType;

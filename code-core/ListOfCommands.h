@@ -275,6 +275,7 @@ enum class Commands : uint32_t {
     SNAP2D_NEAREST = 3556175490,
     SNAP2D_INSERTION = 2368344485,
     SNAP2D_ORTHO = 1742594271,         // Persistent direction constraint (F8), not a mask bit.
+    SNAP2D_GRID = 3591827405,          // Toggle grid snap and visible grid lines (F7).
 
     SNAP3D_TOGGLE = 2709470176,        // Master object-snap switch for the Scene3D (F3).
     SNAP3D_MEMBER_END = 2432992757,

@@ -550,6 +550,11 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage) {
     storage.gpuLocation.clear();
     storage.stampedSelection.clear();
 
+    for (int i = 0; i < MV_MAX_SUBTABS; ++i) {
+        storage.gridGpu[i].Release();
+        storage.gridStates[i].Clear();
+    }
+
     storage.dx.lineCommandSignature.Reset();
     storage.dx.linePSO.Reset();
     storage.dx.lineRootSignature.Reset();
@@ -826,7 +831,8 @@ static void RecordCad2DPreview(ID3D12GraphicsCommandList* commandList,
 
 void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     TabCad2DStorage& storage, DX12ResourcesUI& uiResources, int monitorId,
-    uint64_t activeContainerMemoryId, const Cad2DViewState& view, int renderSlot) {
+    uint64_t activeContainerMemoryId, const Cad2DViewState& view, int renderSlot,
+    bool gridSnapEnabled) {
     if (!commandList || activeContainerMemoryId == 0 || winRes.WindowHeight <= 0) return;
     if (!storage.dx.lineRootSignature) return;
 
@@ -866,6 +872,76 @@ void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow
     constants.minLineWeightPx = 1.0f;
     memcpy(winRes.pCad2DViewConstantDataBegin, &constants, sizeof(constants));
     const D3D12_GPU_VIRTUAL_ADDRESS viewCBV = winRes.cad2dViewConstantBuffer->GetGPUVirtualAddress();
+
+    // Grid lines emission and rendering for this Page2D sub-tab slot.
+    // When Grid Snap is OFF, GPU resources are released and lines are cleared from memory.
+    // When Grid Snap is ON, lines aligned with current zoom level are emitted/updated and drawn.
+    if (renderSlot >= 0 && renderSlot < MV_MAX_SUBTABS) {
+        Page2DGridGpu& gpuGrid = storage.gridGpu[renderSlot];
+        SnapGrid2D& gridState = storage.gridStates[renderSlot];
+
+        if (!gridSnapEnabled) {
+            if (gpuGrid.active || gpuGrid.buffer) {
+                gpuGrid.Release();
+                gridState.Clear();
+            }
+        }
+        else {
+            gridState.Update(constants.viewCenterCU.x, constants.viewCenterCU.y,
+                constants.zoomPixelsPerCU, constants.viewportSizePx.x, constants.viewportSizePx.y);
+
+            const auto& lines = gridState.Lines();
+            const uint32_t lineCount = static_cast<uint32_t>(lines.size());
+            if (lineCount > 0) {
+                if (!gpuGrid.buffer || gpuGrid.capacity < lineCount) {
+                    gpuGrid.Release();
+                    gpuGrid.capacity = (std::max)(lineCount + 128u, gpuGrid.capacity * 2u);
+                    CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_UPLOAD);
+                    CD3DX12_RANGE readRange(0, 0);
+                    auto desc = CD3DX12_RESOURCE_DESC::Buffer(
+                        (UINT64)gpuGrid.capacity * FRAMES_PER_RENDERTARGETS * sizeof(Cad2DLineGPURecord));
+                    HRESULT hr = gpu.device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE,
+                        &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                        IID_PPV_ARGS(&gpuGrid.buffer));
+                    if (SUCCEEDED(hr)) {
+                        hr = gpuGrid.buffer->Map(0, &readRange, reinterpret_cast<void**>(&gpuGrid.pMappedData));
+                    }
+                    if (FAILED(hr)) {
+                        gpuGrid.Release();
+                    }
+                }
+
+                if (gpuGrid.buffer && gpuGrid.pMappedData) {
+                    gpuGrid.count = lineCount;
+                    gpuGrid.active = true;
+
+                    const size_t frameSlot = winRes.frameIndex % FRAMES_PER_RENDERTARGETS;
+                    const size_t byteOffset = frameSlot * gpuGrid.capacity * sizeof(Cad2DLineGPURecord);
+                    Cad2DLineGPURecord* dst = reinterpret_cast<Cad2DLineGPURecord*>(gpuGrid.pMappedData + byteOffset);
+
+                    for (size_t i = 0; i < lineCount; ++i) {
+                        const auto& line = lines[i];
+                        dst[i].x1 = static_cast<float>(line.x1);
+                        dst[i].y1 = static_cast<float>(line.y1);
+                        dst[i].x2 = static_cast<float>(line.x2);
+                        dst[i].y2 = static_cast<float>(line.y2);
+                        dst[i].lineWeight = 1.0f;
+                        dst[i].lineWeightMode = 1; // ScreenPixel
+                        dst[i].colorABGR = line.isMajor ? kCad2DGridMajorColorABGR : kCad2DGridMinorColorABGR;
+                        dst[i].flags = 0;
+                    }
+
+                    commandList->SetGraphicsRootSignature(storage.dx.lineRootSignature.Get());
+                    commandList->SetPipelineState(storage.dx.linePSO.Get());
+                    commandList->SetGraphicsRootConstantBufferView(0, viewCBV);
+                    commandList->SetGraphicsRootShaderResourceView(1,
+                        gpuGrid.buffer->GetGPUVirtualAddress() + byteOffset);
+                    commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                    commandList->DrawInstanced(6, lineCount, 0, 0);
+                }
+            }
+        }
+    }
 
     /* Only this container's pages, through the snapshot's directory rather than a scan over every
     page in the tab. The three passes below filter by KIND, which preserves the draw order the

@@ -135,6 +135,90 @@ int main() {
     CHECK(kSnapKindCount <= 32);
     CHECK(SnapMaskBit(SnapKind::ObjectDefined) == (1u << 19));
 
+    // --- SnapGrid2D 2D visible grid line tests ----------------------------------------------
+    {
+        SnapGrid2D grid;
+        CHECK(grid.IsEnabled());
+        CHECK(grid.LineCount() == 0);
+
+        // Update with 1920x1080 at zoom = 2.0 px/CU, center at (0, 0)
+        grid.Update(0.0, 0.0, 2.0, 1920.0, 1080.0);
+        CHECK(grid.LineCount() > 0);
+        CHECK(grid.MinorSpacing() > 0.0);
+        // Major spacing must be exactly 10x minor spacing
+        CHECK(std::abs(grid.MajorSpacing() - 10.0 * grid.MinorSpacing()) < 1e-6);
+
+        // Visible width in CU = 1920 / 2.0 = 960 CU (halfW = 480 CU).
+        // 50% beyond screen width in all 4 directions means span is 2x visible = 1920 CU (minX = -960, maxX = 960)
+        CHECK(std::abs(grid.MinX() - (-960.0)) < 1e-6);
+        CHECK(std::abs(grid.MaxX() - 960.0) < 1e-6);
+
+        // Visible height in CU = 1080 / 2.0 = 540 CU (halfH = 270 CU).
+        // 50% beyond visible screen height means span is 2x visible = 1080 CU (minY = -540, maxY = 540)
+        CHECK(std::abs(grid.MinY() - (-540.0)) < 1e-6);
+        CHECK(std::abs(grid.MaxY() - 540.0) < 1e-6);
+
+        bool hasMajor = false, hasMinor = false, hasHoriz = false, hasVert = false;
+        for (const SnapGridLine& line : grid.Lines()) {
+            CHECK(line.memoryID != 0);
+            if (line.isMajor) hasMajor = true;
+            else hasMinor = true;
+            if (line.isVertical) {
+                hasVert = true;
+                CHECK(std::abs(line.x1 - line.x2) < 1e-6);
+                CHECK(std::abs(line.y1 - grid.MinY()) < 1e-6);
+                CHECK(std::abs(line.y2 - grid.MaxY()) < 1e-6);
+            } else {
+                hasHoriz = true;
+                CHECK(std::abs(line.y1 - line.y2) < 1e-6);
+                CHECK(std::abs(line.x1 - grid.MinX()) < 1e-6);
+                CHECK(std::abs(line.x2 - grid.MaxX()) < 1e-6);
+            }
+        }
+        CHECK(hasMajor);
+        CHECK(hasMinor);
+        CHECK(hasHoriz);
+        CHECK(hasVert);
+
+        // Record a line's memoryID and coord before zoom
+        uint64_t savedId = 0;
+        double savedCoord = 0.0;
+        for (const SnapGridLine& line : grid.Lines()) {
+            if (line.isVertical && std::abs(line.coord) < 1e-6) {
+                savedId = line.memoryID;
+                savedCoord = line.coord;
+                break;
+            }
+        }
+        CHECK(savedId != 0);
+
+        // Zoom slightly to 2.2 px/CU (same minor step ladder)
+        grid.Update(0.0, 0.0, 2.2, 1920.0, 1080.0);
+        uint64_t afterZoomId = 0;
+        for (const SnapGridLine& line : grid.Lines()) {
+            if (line.isVertical && std::abs(line.coord - savedCoord) < 1e-6) {
+                afterZoomId = line.memoryID;
+                // Endpoints must have adjusted to the new zoom extents
+                CHECK(std::abs(line.y1 - grid.MinY()) < 1e-6);
+                CHECK(std::abs(line.y2 - grid.MaxY()) < 1e-6);
+                break;
+            }
+        }
+        // MemoryID must be preserved on adjustment!
+        CHECK(afterZoomId == savedId);
+
+        // Clear (simulating snap OFF)
+        grid.Clear();
+        CHECK(grid.LineCount() == 0);
+
+        // Re-enable/Update: lines are recreated
+        grid.Update(0.0, 0.0, 2.0, 1920.0, 1080.0);
+        CHECK(grid.LineCount() > 0);
+        for (const SnapGridLine& line : grid.Lines()) {
+            CHECK(line.memoryID != 0);
+        }
+    }
+
     std::printf(failures == 0 ? "snap core: ALL PASS\n" : "snap core: %d FAILURES\n", failures);
     return failures == 0 ? 0 : 1;
 }

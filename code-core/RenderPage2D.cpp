@@ -1767,14 +1767,15 @@ bool Cad2DResolveSnap(DATASETTAB& tab, const ACTION_DETAILS& input,
     exactly - rounding it would put a kink in a line the user asked to be straight - while the
     along-axis one is still rounded, because an exact direction with a fuzzy length is half a
     result (section 11). */
-    outXCU = SnapToStep(gatherer.cursorXCU, step);
-    outYCU = SnapToStep(gatherer.cursorYCU, step);
+    const bool gridSnapOn = tab.snapGridEnabled2D.load(std::memory_order_acquire);
+    outXCU = gridSnapOn ? SnapToStep(gatherer.cursorXCU, step) : gatherer.cursorXCU;
+    outYCU = gridSnapOn ? SnapToStep(gatherer.cursorYCU, step) : gatherer.cursorYCU;
     if (gatherer.orthoActive) {
         if (gatherer.orthoDirX != 0.0) outYCU = anchorY;
         else outXCU = anchorX;
     }
     outResult.hit = true;
-    outResult.kind = gatherer.orthoActive ? SnapKind::Ortho : SnapKind::AmbientGrid;
+    outResult.kind = gatherer.orthoActive ? SnapKind::Ortho : (gridSnapOn ? SnapKind::AmbientGrid : SnapKind::None);
     outResult.priority = 0;
     outResult.x = outXCU;
     outResult.y = outYCU;
@@ -2675,6 +2676,11 @@ bool Cad2DHandleInput(DATASETTAB& tab, const ACTION_DETAILS& input) {
         if (input.x == VK_F8) {
             const bool wasOn = tab.snapOrtho2D.load(std::memory_order_acquire);
             tab.snapOrtho2D.store(!wasOn, std::memory_order_release);
+            return true;
+        }
+        if (input.x == VK_F7) {
+            const bool wasOn = tab.snapGridEnabled2D.load(std::memory_order_acquire);
+            tab.snapGridEnabled2D.store(!wasOn, std::memory_order_release);
             return true;
         }
         if (input.x == VK_ESCAPE &&

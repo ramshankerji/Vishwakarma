@@ -18,6 +18,7 @@
 
 #include "ConstantsApplication.h" // MV_MAX_SUBTABS: one Cad2DViewState per sub-tab slot.
 #include "RenderPage2D.h" // GPU record ABI layouts (Cad2D*GPURecord, Cad2DViewConstants, Cad2DViewState).
+#include "Snap.h"
 
 struct DX12ResourcesPerWindow;
 struct DX12ResourcesUI;
@@ -162,8 +163,29 @@ struct Cad2DGpuLocation {
     uint32_t count = 0;
 };
 
+struct Page2DGridGpu {
+    ComPtr<ID3D12Resource> buffer;
+    uint8_t* pMappedData = nullptr;
+    uint32_t count = 0;
+    uint32_t capacity = 0;
+    bool active = false;
+
+    void Release() {
+        if (buffer && pMappedData) {
+            buffer->Unmap(0, nullptr);
+            pMappedData = nullptr;
+        }
+        buffer.Reset();
+        count = 0;
+        capacity = 0;
+        active = false;
+    }
+};
+
 struct TabCad2DStorage {
     Page2DGpuResources dx;
+    SnapGrid2D gridStates[MV_MAX_SUBTABS];
+    Page2DGridGpu gridGpu[MV_MAX_SUBTABS];
     // Pan/zoom moved OUT of here into DATASETTAB::viewports[slot].page2DView (graphics.md, 10M plan
     // Step 6, item 2). It is view state, not content state, and it now sits beside the Scene3D
     // camera in the Viewport that owns both - which is what lets several Viewports show one Page2D
@@ -314,7 +336,8 @@ void CleanupCad2DTabResources(TabCad2DStorage& storage);
 // does, and a second window onto the same Page2D must not draw another view's rubber band.
 void RenderPage2D(ID3D12GraphicsCommandList* commandList, DX12ResourcesPerWindow& winRes,
     TabCad2DStorage& storage, DX12ResourcesUI& uiResources, int monitorId,
-    uint64_t activeContainerMemoryId, const Cad2DViewState& view, int renderSlot);
+    uint64_t activeContainerMemoryId, const Cad2DViewState& view, int renderSlot,
+    bool gridSnapEnabled = true);
 // 2D half of the copy thread. Staging goes through the global upload ring and the COPY-type
 // allocator/list are owned by GpuCopyThread and passed in, exactly as ProcessScene3DCopyBatch takes
 // them (graphics.md, 10M plan Step 0). Contract: the list is CLOSED on entry and CLOSED on return.
